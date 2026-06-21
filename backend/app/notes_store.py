@@ -6,6 +6,7 @@ from pathlib import Path
 import frontmatter
 from ulid import ULID
 
+from . import images
 from .config import get_settings
 from .models import Note, NoteCreate, NoteSummary, NoteUpdate, NoteStatus
 
@@ -45,10 +46,13 @@ def _to_note(post: frontmatter.Post, note_id: str) -> Note:
         updated_at=meta.get("updated_at", _now()),
         snippet=_snippet(body),
         body=body,
+        images=meta.get("images", {}) or {},
     )
 
 
 def _write(note: Note) -> None:
+    # Refresh cached image text from the sidecars for whatever images the body references.
+    note.images = images.collect_image_texts(note.body)
     post = frontmatter.Post(
         note.body,
         id=note.id,
@@ -57,6 +61,7 @@ def _write(note: Note) -> None:
         tags=note.tags,
         created_at=note.created_at.isoformat(),
         updated_at=note.updated_at.isoformat(),
+        images=note.images,
     )
     _path(note.id).write_bytes(frontmatter.dumps(post).encode("utf-8"))
 

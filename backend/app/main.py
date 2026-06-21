@@ -1,11 +1,13 @@
 import asyncio
 import contextlib
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from . import analysis, embeddings, llm, notes_store, search
+from . import analysis, embeddings, images, llm, notes_store, search, vision
 from .config import get_settings
 from .models import (
     ConsistencyReport,
@@ -22,6 +24,22 @@ from .models import (
 
 settings = get_settings()
 
+# Hold references to fire-and-forget tasks so they aren't garbage-collected mid-run.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _background_tasks.discard(t)
+        exc = t.exception()
+        if exc:
+            logging.getLogger("fortress").exception("background task failed", exc_info=exc)
+
+    task.add_done_callback(_done)
+
 
 async def _reindex_loop() -> None:
     """Periodically pre-warm embeddings for changed notes so searches stay instant."""
@@ -36,6 +54,10 @@ async def lifespan(_app: FastAPI):
     task = (
         asyncio.create_task(_reindex_loop()) if settings.embeddings_enabled else None
     )
+    # Pre-load the vision models in a background thread so the app serves immediately
+    # and the first image upload isn't a cold start.
+    if settings.vision_enabled:
+        _spawn(asyncio.to_thread(vision.warm))
     try:
         yield
     finally:
@@ -54,6 +76,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve stored images at /media/<file>.
+app.mount("/media", StaticFiles(directory=settings.assets_path), name="media")
+
 
 @app.get("/api/health")
 def health() -> dict:
@@ -61,7 +86,21 @@ def health() -> dict:
         "status": "ok",
         "embeddings_enabled": settings.embeddings_enabled,
         "model_loaded": embeddings.model_loaded(),
+        "vision_enabled": settings.vision_enabled,
+        "vision_loaded": vision.loaded(),
     }
+
+
+@app.post("/api/images")
+async def upload_image(file: UploadFile = File(...)):
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(400, "Not an image")
+    data = await file.read()
+    # Save the file and return immediately so the image appears instantly. Caption + OCR
+    # (slow, only needed for search) run in the background to populate the sidecar cache.
+    url, path = images.save_bytes(data, file.content_type or "image/png")
+    _spawn(asyncio.to_thread(images.extract_and_store, path))
+    return {"url": url, "text": ""}
 
 
 @app.get("/api/notes", response_model=list[NoteSummary])

@@ -98,7 +98,7 @@ def warm_index() -> int:
     model = _get_model()
     if model is None:
         return 0
-    from . import notes_store  # local import to avoid an import cycle
+    from . import images, notes_store  # local import to avoid an import cycle
 
     encoded = 0
     live_ids: set[str] = set()
@@ -111,7 +111,7 @@ def warm_index() -> int:
         cached = _cache.docs.get(note.id)
         if cached and cached[0] == iso:
             continue
-        _encode_doc(model, note.id, iso, f"{note.title}\n\n{note.body}")
+        _encode_doc(model, note.id, iso, images.note_search_text(note.title, note.body))
         encoded += 1
 
     # Drop embeddings for notes that no longer exist.

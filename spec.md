@@ -8,7 +8,7 @@ late-interaction embedding search), live related-notes, rough→polished workflo
 an LLM "review" of the current note.
 
 Non-goals (for v1): multi-user, auth, real-time collaboration, mobile, cloud sync,
-attachments/images, nested folders.
+nested folders.
 
 ## 2. Data model
 
@@ -23,10 +23,16 @@ status: rough           # "rough" | "polished"
 tags: [ideas, project]
 created_at: 2026-06-20T10:00:00Z
 updated_at: 2026-06-20T10:05:00Z
+images:                  # cached caption+OCR per referenced image (see §6)
+  01J...: "A bar chart. Text in image: Q1 revenue"
 ---
 
 The note body in Markdown.
 ```
+
+Pasted images are stored as files in `NOTES_DIR/assets/<id>.<ext>` and referenced from
+the body as raw `<img src="/media/<id>.<ext>" width=…>` HTML (kept as HTML so the
+resized width survives the round-trip).
 
 - **id**: ULID (sortable, unique). Filename = `<id>.md`.
 - **status**: `rough` (braindump/brainstorm) or `polished`. Drives UI badge + filter
@@ -47,7 +53,7 @@ in-memory cache + search index that it rebuilds on change.
 - `embeddings.py` — ColBERT late-interaction via PyLate; encode + MaxSim scoring,
   with a keyword fallback when disabled/unavailable.
 - `search.py` — full-text search + orchestration of embedding search & related notes.
-- `llm.py` — OpenRouter chat completion (`xiaomi/mimo-v2.5-pro`) for note review.
+- `llm.py` — OpenRouter chat completion (`deepseek/deepseek-v4-flash`) for note review.
 - `main.py` — FastAPI app, routes, CORS.
 
 ### API
@@ -65,6 +71,8 @@ in-memory cache + search index that it rebuilds on change.
 | `POST` | `/api/notes/{id}/review` | `?kind=factcheck\|clarify\|object` | `ReviewResponse` |
 | `POST` | `/api/notes/{id}/consistency` | `?k=5` | `ConsistencyReport` |
 | `POST` | `/api/notes/{id}/heal` | — | `HealReport` |
+| `POST` | `/api/images` | multipart `file` | `{url, text}` (saves image, runs caption+OCR) |
+| `GET` | `/media/{file}` | — | image bytes (StaticFiles) |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
 
 ### Late-interaction search (PyLate)
@@ -157,16 +165,34 @@ Two parallel passes returning `HealReport { summary, dead_links[], stale_facts[]
 
 Heal reports suggestions only; it does not auto-edit the note (safer; user applies).
 
-## 6. Roadmap / potential features
+## 6. Images & vision (`images.py`, `vision.py`)
+
+- **Paste/drop**: the editor's `handlePaste`/`handleDrop` (logic in `paste.ts`,
+  unit-tested) pull image files from the clipboard/drop, `POST /api/images`, and insert
+  an `<img>` with the returned `/media/…` URL. Markdown stays small — images are files.
+- **Fast & non-blocking**: `/api/images` saves the file and returns **immediately**
+  (~ms); caption/OCR runs in a tracked background task (`asyncio.to_thread`, references
+  held so it isn't GC'd) so the image appears instantly and the event loop never blocks.
+- **Resize**: `ImageResize` (extends Tiptap `Image`) adds a drag handle that writes a
+  `width` attribute; turndown `keep(['img'])` preserves `<img width=…>` as raw HTML so
+  the size round-trips through Markdown.
+- **Searchable images**: **RapidOCR** (~1s/image) runs once per image and writes a
+  `assets/<id>.txt` sidecar (compute-once cache — never re-run). `note_search_text`
+  folds title + body + sidecar text so full-text and embedding search cover image text;
+  the text is also mirrored into the note's `images:` frontmatter on save. An optional
+  tiny VLM caption (**SmolVLM-256M**) is gated behind `VLM_CAPTION_ENABLED` (off by
+  default — ~3 min/image on CPU; GPU only). Models lazy-load + pre-warm in the
+  background at startup, with graceful fallback when disabled.
+
+## 7. Roadmap / potential features
 
 - **Auto-apply heal suggestions** (with a diff/confirm step).
-- **"Code review" for reasoning**: detect missing steps / faulty reasoning chains.
 - **Backlinks & wiki-links** (`[[note]]`), graph view.
 - **PLAID/Voyager index** for embedding search at larger scale.
 - **Tag management**, saved searches, keyboard navigation.
-- Image/attachment support; export.
+- Export; larger leaderboard-class OCR/VLM (e.g. PaddleOCR-VL) as an opt-in.
 
-## 7. Open questions
+## 8. Open questions
 - Chunking strategy for very long notes (per-paragraph vs whole-note vectors).
 - Whether to persist the embedding cache to disk between runs (v1: in-memory).
 - Debounce window + conflict handling if a file changes on disk while editing.

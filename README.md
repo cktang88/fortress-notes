@@ -23,7 +23,7 @@ you're reading.
   showing the most semantically related notes (late-interaction similarity).
 - **Rough vs. polished notes** — a `status` flag distinguishes braindump/brainstorm
   notes from polished ones. Promote a rough note to polished in one click.
-- **AI review** — a button feeds the current note to an LLM (`xiaomi/mimo-v2.5-pro`
+- **AI review** — a button feeds the current note to an LLM (`deepseek/deepseek-v4-flash`
   via [OpenRouter](https://openrouter.ai)) which fact-checks, asks clarifying
   questions, and raises objections / inconsistencies.
 - **Cross-note consistency check** — agentic "code review for your notes": ColBERT
@@ -35,6 +35,11 @@ you're reading.
   offers a one-click **Accept** to apply the suggested fix.
 - **Smart links** — URLs are auto-detected, highlighted **blue**, and open in the
   browser on click; links found broken are highlighted **red**.
+- **Paste & resize images** — paste an image straight into the editor; it's uploaded
+  and inserted instantly, and is drag-resizable. OCR runs once per image in the
+  background so **image text is searchable** by both full-text and embedding search.
+  (An optional tiny VLM can also caption images — off by default; CPU captioning is
+  slow, so enable it only on a GPU.)
 
 See [`spec.md`](./spec.md) for the full design, data model, API, and roadmap.
 
@@ -47,10 +52,12 @@ frontend (Vite + React + TanStack Query + Tailwind + Tiptap)
 backend  (FastAPI, Python)
         ├── notes_store   reads/writes Markdown files in ./notes
         ├── search        full-text + ColBERT late-interaction (PyLate)
-        └── llm           OpenRouter (xiaomi/mimo-v2.5-pro) review
+        ├── vision        SmolVLM-256M caption + RapidOCR for pasted images
+        └── llm           OpenRouter review / consistency / heal
         │
         ▼
-   ./notes/*.md   ← the source of truth
+   ./notes/*.md            ← the source of truth
+   ./notes/assets/*.{png,…}  ← pasted images (+ <id>.txt caption/OCR cache)
 ```
 
 The embedding model needs Python, so the backend is Python-only (FastAPI). If the
@@ -105,10 +112,13 @@ Backend `.env` (see `backend/.env.example`):
 | --- | --- | --- |
 | `NOTES_DIR` | `../notes` | Folder of Markdown notes (the source of truth) |
 | `OPENROUTER_API_KEY` | — | Required for AI review |
-| `OPENROUTER_MODEL` | `xiaomi/mimo-v2.5-pro` | OpenRouter model id |
+| `OPENROUTER_MODEL` | `deepseek/deepseek-v4-flash` | OpenRouter model id |
 | `EMBEDDINGS_ENABLED` | `true` | Turn off to skip the ColBERT model |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
 | `REINDEX_INTERVAL_S` | `5` | Background re-encode interval for changed notes |
+| `VISION_ENABLED` | `true` | Image OCR (fast, ~1s/image) — makes image text searchable |
+| `VLM_CAPTION_ENABLED` | `false` | VLM captioning (~3 min/image on CPU) — enable only on GPU |
+| `VLM_MODEL` | `HuggingFaceTB/SmolVLM-256M-Instruct` | Tiny VLM used when captioning is on |
 
 ## Frontend toolchain
 
@@ -126,5 +136,5 @@ Tailwind) inside the same config.
 - **Search: PyLate + ColBERT** — late-interaction (token-level MaxSim) beats
   single-vector embeddings for retrieval quality on small/medium collections,
   and brute-force MaxSim is plenty fast for a personal note set.
-- **LLM: OpenRouter** — one API for many models; `xiaomi/mimo-v2.5-pro` per request.
+- **LLM: OpenRouter** — one API for many models; `deepseek/deepseek-v4-flash` per request.
 ```

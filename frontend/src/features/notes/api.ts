@@ -50,4 +50,12 @@ export const notesApi = {
     request<ConsistencyReport>(`/notes/${id}/consistency`, { method: "POST" }),
 
   heal: (id: string) => request<HealReport>(`/notes/${id}/heal`, { method: "POST" }),
+
+  uploadImage: async (file: File): Promise<{ url: string; text: string }> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API}/images`, { method: "POST", body: form });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.json();
+  },
 };

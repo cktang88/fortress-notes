@@ -19,6 +19,8 @@ class NoteSummary(BaseModel):
 class Note(NoteSummary):
     body: str
     created_at: datetime
+    # Cached VLM caption + OCR text per referenced image id (mirrors the sidecar cache).
+    images: dict[str, str] = {}
 
 
 class NoteCreate(BaseModel):

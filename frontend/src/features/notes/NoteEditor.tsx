@@ -8,6 +8,9 @@ import { AnnotationExtension, annotationKey, findAnnotationRange } from "./annot
 import type { Annotation } from "./annotations";
 import { AnnotationPopup } from "./AnnotationPopup";
 import { LinkSync } from "./linkSync";
+import { ImageResize } from "./ImageResize";
+import { notesApi } from "./api";
+import { extractImageFiles, uploadAndInsert } from "./paste";
 
 interface Props {
   /** Stable per note — parent passes key={note.id} so this remounts on note change. */
@@ -49,11 +52,26 @@ export function NoteEditor({
         HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" },
       }),
       LinkSync,
+      ImageResize.configure({ allowBase64: false }),
       AnnotationExtension,
     ],
     content: markdownToHtml(initialMarkdown),
     editorProps: {
       attributes: { class: "tiptap prose max-w-none", spellcheck: "false" },
+      handlePaste(_view, event) {
+        const files = extractImageFiles(event.clipboardData);
+        if (files.length === 0) return false;
+        event.preventDefault();
+        void uploadAndInsert(editorRef.current, files, notesApi.uploadImage);
+        return true;
+      },
+      handleDrop(_view, event) {
+        const files = extractImageFiles((event as DragEvent).dataTransfer);
+        if (files.length === 0) return false;
+        event.preventDefault();
+        void uploadAndInsert(editorRef.current, files, notesApi.uploadImage);
+        return true;
+      },
       handleClick(view, pos) {
         // Find an annotation whose located range contains the clicked position.
         for (const annotation of annotationsRef.current) {
@@ -77,6 +95,11 @@ export function NoteEditor({
       onSave(htmlToMarkdown(editor.getHTML()));
     },
   });
+
+  // The paste handler is captured on the first render (when `editor` is still null),
+  // so read the live editor through a ref instead of the stale closure value.
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
 
   // Push annotations + broken links into the ProseMirror plugin when they change.
   useEffect(() => {

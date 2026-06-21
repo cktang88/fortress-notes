@@ -1,16 +1,18 @@
 """Full-text search + embedding search + related notes."""
 
-from . import embeddings, notes_store
-from .models import NoteSummary, SearchResult
+from . import embeddings, images, notes_store
+from .models import SearchResult
 
 
 def _all_docs() -> list[tuple[str, str, str]]:
-    """Returns [(id, updated_at_iso, body)] for every note."""
+    """Returns [(id, updated_at_iso, searchable_text)] for every note."""
     docs = []
     for summary in notes_store.list_notes():
         note = notes_store.get_note(summary.id)
         if note:
-            docs.append((note.id, note.updated_at.isoformat(), f"{note.title}\n\n{note.body}"))
+            docs.append(
+                (note.id, note.updated_at.isoformat(), images.note_search_text(note.title, note.body))
+            )
     return docs
 
 
@@ -23,7 +25,7 @@ def full_text_search(q: str) -> list[SearchResult]:
         note = notes_store.get_note(summary.id)
         if not note:
             continue
-        haystack = f"{note.title}\n{note.body}".lower()
+        haystack = images.note_search_text(note.title, note.body).lower()
         count = haystack.count(q_lower)
         if count:
             results.append(SearchResult(note=summary, score=float(count)))

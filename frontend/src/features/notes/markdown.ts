@@ -7,6 +7,10 @@ const turndown = new TurndownService({
   bulletListMarker: "-",
 });
 
+// Keep images as raw HTML so their resized width attribute survives the round-trip
+// (Markdown image syntax can't carry a width).
+turndown.keep(["img"]);
+
 export function markdownToHtml(md: string): string {
   return marked.parse(md, { async: false }) as string;
 }
