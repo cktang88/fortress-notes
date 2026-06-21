@@ -56,6 +56,28 @@
   background: none;
   padding: 0;
 }
+/* Inline annotations (consistency + stale-fact findings) */
+.tiptap .squiggle {
+  text-decoration: underline wavy #ef4444;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* Links: blue highlight by default, red if detected broken */
+.tiptap a {
+  color: #2563eb;
+  background: #eff6ff;
+  border-radius: 3px;
+  padding: 0 1px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.tiptap .link-broken {
+  color: #dc2626 !important;
+  background: #fef2f2 !important;
+}
+
 .tiptap p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: #a1a1aa;

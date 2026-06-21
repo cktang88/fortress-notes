@@ -74,6 +74,10 @@ in-memory cache + search index that it rebuilds on change.
 - Query: encode `q` as query embeddings (`is_query=True`), score every doc with
   **MaxSim** (sum over query tokens of max cosine to doc tokens), return top-k.
 - Brute-force is fine at personal scale; PLAID/Voyager index is a future optimization.
+- **Indexing**: embeddings are computed lazily and cached per `(id, updated_at)`. A
+  background task (`_reindex_loop`, every `REINDEX_INTERVAL_S`, default 5s) pre-encodes
+  any changed notes via `embeddings.warm_index()` so searches stay instant; it also
+  evicts embeddings for deleted notes. Steady-state (nothing changed) it's a no-op.
 - **Related notes**: treat the current note's body as the query, exclude itself,
   return top-k.
 - **Fallback**: if embeddings disabled or model missing, score by keyword overlap so
@@ -123,6 +127,17 @@ mode, query). No `useEffect` for data; rely on React Compiler (no manual memoiza
 ## 5. Agentic passes (implemented)
 
 Both are `analysis.py`, exposed as POST endpoints and driven from the note header.
+Findings are **not** shown in side panels — they render as **inline annotations**
+directly on the offending text via a ProseMirror decoration plugin
+(`annotations.ts` + `AnnotationExtension`):
+
+- Each finding's `claim` text is located in the document and gets a **red wavy
+  squiggle**. Clicking it opens a small floating popup (`AnnotationPopup`) with the
+  explanation and **Accept / Reject**. For stale facts, Accept replaces the text with
+  the suggestion; Reject (or Dismiss for consistency) just clears the annotation.
+- **Links** are auto-detected (Tiptap `Link`, `autolink`), highlighted **blue**, and
+  open in a new browser tab on click. Links the heal pass found broken are
+  highlighted **red** (`link-broken` decoration keyed on the dead-link URL set).
 
 ### Cross-note inconsistency detection (`POST /consistency`)
 "Code review for your notes." Retrieves the top-k related notes via ColBERT

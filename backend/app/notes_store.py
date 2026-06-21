@@ -102,8 +102,9 @@ def update_note(note_id: str, data: NoteUpdate) -> Note | None:
         note.body = data.body
     if data.title is not None:
         note.title = data.title
-    elif data.body is not None:
-        note.title = _derive_title(data.body)
+    elif not note.title:
+        # Only auto-derive a title when the note has none — never clobber a user title.
+        note.title = _derive_title(note.body)
     if data.status is not None:
         note.status = data.status
     if data.tags is not None:

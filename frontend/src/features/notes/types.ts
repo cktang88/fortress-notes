@@ -24,6 +24,7 @@ export interface SearchResult {
 export interface ReviewItem {
   label: string;
   detail: string;
+  quote: string;
 }
 
 export interface ReviewResponse {

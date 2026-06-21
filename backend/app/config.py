@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     openrouter_model: str = "xiaomi/mimo-v2.5-pro"
     embeddings_enabled: bool = True
     colbert_model: str = "lightonai/Agent-ModernColBERT"
+    reindex_interval_s: float = 5.0
     frontend_origin: str = "http://localhost:5173"
 
     @property

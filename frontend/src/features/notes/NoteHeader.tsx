@@ -10,6 +10,9 @@ interface Props {
   onReview: (kind: ReviewKind) => void;
   onConsistency: () => void;
   onHeal: () => void;
+  checking: boolean;
+  rawView: boolean;
+  onToggleRaw: () => void;
 }
 
 const REVIEW_OPTIONS: { kind: ReviewKind; label: string }[] = [
@@ -26,17 +29,28 @@ export function NoteHeader({
   onReview,
   onConsistency,
   onHeal,
+  checking,
+  rawView,
+  onToggleRaw,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <div className="flex flex-col gap-3 border-b border-zinc-200 px-8 pt-6 pb-3">
-      <input
-        value={note.title}
-        onChange={(e) => onTitle(e.target.value)}
-        className="text-2xl font-bold text-zinc-900 focus:outline-none"
-        placeholder="Untitled"
-      />
+      <div className="flex items-start gap-3">
+        <input
+          value={note.title}
+          onChange={(e) => onTitle(e.target.value)}
+          className="flex-1 text-2xl font-bold text-zinc-900 focus:outline-none"
+          placeholder="Untitled"
+        />
+        <button
+          onClick={onToggleRaw}
+          className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50"
+        >
+          {rawView ? "Rich" : "Raw"}
+        </button>
+      </div>
       <div className="flex items-center gap-2">
         <StatusBadge status={note.status} />
         {note.status === "rough" && (
@@ -75,16 +89,19 @@ export function NoteHeader({
 
         <button
           onClick={onConsistency}
-          className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          disabled={checking}
+          className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
         >
           Check consistency
         </button>
         <button
           onClick={onHeal}
-          className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          disabled={checking}
+          className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
         >
           Heal
         </button>
+        {checking && <span className="text-xs text-zinc-400">scanning…</span>}
 
         <button
           onClick={onDelete}

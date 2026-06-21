@@ -27,10 +27,14 @@ you're reading.
   via [OpenRouter](https://openrouter.ai)) which fact-checks, asks clarifying
   questions, and raises objections / inconsistencies.
 - **Cross-note consistency check** — agentic "code review for your notes": ColBERT
-  retrieves related notes, the LLM flags contradictions between them (with severity
-  and a clickable link to the conflicting note).
+  retrieves related notes, the LLM flags contradictions, shown as **red squiggles**
+  directly on the offending text. Click a squiggle → popup with the explanation and
+  Accept/Reject.
 - **Self-healing** — detects broken links (concurrent HTTP checks) and uses LLM +
-  web search to flag stale/out-of-date facts and suggest refreshes.
+  web search to flag stale/out-of-date facts. Stale claims get a squiggle whose popup
+  offers a one-click **Accept** to apply the suggested fix.
+- **Smart links** — URLs are auto-detected, highlighted **blue**, and open in the
+  browser on click; links found broken are highlighted **red**.
 
 See [`spec.md`](./spec.md) for the full design, data model, API, and roadmap.
 
@@ -104,6 +108,7 @@ Backend `.env` (see `backend/.env.example`):
 | `OPENROUTER_MODEL` | `xiaomi/mimo-v2.5-pro` | OpenRouter model id |
 | `EMBEDDINGS_ENABLED` | `true` | Turn off to skip the ColBERT model |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
+| `REINDEX_INTERVAL_S` | `5` | Background re-encode interval for changed notes |
 
 ## Frontend toolchain
 

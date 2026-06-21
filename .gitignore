@@ -7,6 +7,7 @@ backend/.env
 # Node
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
 
 # OS
 .DS_Store

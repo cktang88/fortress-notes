@@ -89,6 +89,37 @@ def _keyword_score(query: str, text: str) -> float:
 # ---- public scoring API -------------------------------------------------------
 
 
+def warm_index() -> int:
+    """Encode any notes whose cached embedding is missing or stale.
+
+    Returns the number of notes (re)encoded. No-op when the model is unavailable or
+    nothing changed, so it's cheap to call on a short interval.
+    """
+    model = _get_model()
+    if model is None:
+        return 0
+    from . import notes_store  # local import to avoid an import cycle
+
+    encoded = 0
+    live_ids: set[str] = set()
+    for summary in notes_store.list_notes():
+        note = notes_store.get_note(summary.id)
+        if note is None:
+            continue
+        live_ids.add(note.id)
+        iso = note.updated_at.isoformat()
+        cached = _cache.docs.get(note.id)
+        if cached and cached[0] == iso:
+            continue
+        _encode_doc(model, note.id, iso, f"{note.title}\n\n{note.body}")
+        encoded += 1
+
+    # Drop embeddings for notes that no longer exist.
+    for stale_id in set(_cache.docs) - live_ids:
+        del _cache.docs[stale_id]
+    return encoded
+
+
 def score_documents(query: str, docs: list[tuple[str, str, str]]) -> dict[str, float]:
     """Score `query` against docs = [(id, updated_at_iso, text)]. Returns {id: score}.
 

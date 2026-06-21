@@ -1,3 +1,7 @@
+import asyncio
+import contextlib
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,7 +21,31 @@ from .models import (
 )
 
 settings = get_settings()
-app = FastAPI(title="Fortress Notes")
+
+
+async def _reindex_loop() -> None:
+    """Periodically pre-warm embeddings for changed notes so searches stay instant."""
+    while True:
+        await asyncio.sleep(settings.reindex_interval_s)
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(embeddings.warm_index)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    task = (
+        asyncio.create_task(_reindex_loop()) if settings.embeddings_enabled else None
+    )
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+app = FastAPI(title="Fortress Notes", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

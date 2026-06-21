@@ -4,8 +4,8 @@ import { NoteList } from "./features/notes/NoteList";
 import { RelatedNotes } from "./features/notes/RelatedNotes";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteEditor } from "./features/notes/NoteEditor";
-import { ReviewPanel } from "./features/notes/ReviewPanel";
-import { ConsistencyPanel, HealPanel } from "./features/notes/AnalysisPanel";
+import { RawEditor } from "./features/notes/RawEditor";
+import type { Annotation } from "./features/notes/annotations";
 import {
   useConsistency,
   useCreateNote,
@@ -24,6 +24,8 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("text");
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [rawView, setRawView] = useState(false);
 
   const searching = query.trim().length > 0;
   const allNotes = useNotes();
@@ -45,9 +47,44 @@ export function App() {
     ? Object.fromEntries((searchResults.data ?? []).map((r) => [r.note.id, r.score]))
     : undefined;
 
+  // All AI findings (review, consistency, stale facts) become inline annotations.
+  const annotations: Annotation[] = [
+    ...(review.data?.items ?? [])
+      .filter((it) => it.quote)
+      .map((it, i) => ({
+        id: `r${i}`,
+        claim: it.quote,
+        type: "review" as const,
+        message: it.detail,
+      })),
+    ...(consistency.data?.issues ?? []).map((iss, i) => ({
+      id: `c${i}`,
+      claim: iss.claim,
+      type: "consistency" as const,
+      message: `Conflicts with "${iss.related_note_title}": ${iss.conflict}`,
+    })),
+    ...(heal.data?.stale_facts ?? []).map((f, i) => ({
+      id: `s${i}`,
+      claim: f.claim,
+      type: "stale" as const,
+      message: f.finding,
+      suggestion: f.suggestion,
+    })),
+  ].filter((a) => !dismissed.has(a.id));
+
+  const brokenLinks = (heal.data?.dead_links ?? []).map((d) => d.url);
+
+  const selectNote = (id: string) => {
+    setSelectedId(id);
+    setDismissed(new Set());
+    consistency.reset();
+    heal.reset();
+    review.reset();
+  };
+
   const handleNew = async () => {
     const created = await createNote.mutateAsync();
-    setSelectedId(created.id);
+    selectNote(created.id);
   };
 
   const handleDelete = () => {
@@ -57,8 +94,19 @@ export function App() {
   };
 
   const handleReview = (kind: ReviewKind) => {
-    if (selectedId) review.mutate({ id: selectedId, kind });
+    if (!selectedId) return;
+    setDismissed(new Set());
+    review.mutate({ id: selectedId, kind });
   };
+
+  const runCheck = (which: "consistency" | "heal") => {
+    if (!selectedId) return;
+    setDismissed(new Set());
+    if (which === "consistency") consistency.mutate(selectedId);
+    else heal.mutate(selectedId);
+  };
+
+  const dismiss = (id: string) => setDismissed((prev) => new Set(prev).add(id));
 
   return (
     <div className="flex h-screen text-zinc-900">
@@ -74,11 +122,11 @@ export function App() {
         <NoteList
           notes={listNotes}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={selectNote}
           scores={scores}
           loading={searching ? searchResults.isLoading : allNotes.isLoading}
         />
-        <RelatedNotes noteId={selectedId} onSelect={setSelectedId} />
+        <RelatedNotes noteId={selectedId} onSelect={selectNote} />
       </aside>
 
       {/* Right pane */}
@@ -96,30 +144,28 @@ export function App() {
               onPromote={() => promoteNote.mutate(note.data!.id)}
               onDelete={handleDelete}
               onReview={handleReview}
-              onConsistency={() => consistency.mutate(note.data!.id)}
-              onHeal={() => heal.mutate(note.data!.id)}
+              onConsistency={() => runCheck("consistency")}
+              onHeal={() => runCheck("heal")}
+              checking={consistency.isPending || heal.isPending || review.isPending}
+              rawView={rawView}
+              onToggleRaw={() => setRawView((v) => !v)}
             />
-            <NoteEditor
-              key={note.data.id}
-              initialMarkdown={note.data.body}
-              onSave={(body) => updateNote.mutate({ id: note.data!.id, body })}
-            />
-            <ReviewPanel
-              review={review.data ?? null}
-              loading={review.isPending}
-              onClose={() => review.reset()}
-            />
-            <ConsistencyPanel
-              report={consistency.data ?? null}
-              loading={consistency.isPending}
-              onClose={() => consistency.reset()}
-              onOpenNote={setSelectedId}
-            />
-            <HealPanel
-              report={heal.data ?? null}
-              loading={heal.isPending}
-              onClose={() => heal.reset()}
-            />
+            {rawView ? (
+              <RawEditor
+                key={`raw-${note.data.id}`}
+                initialMarkdown={note.data.body}
+                onSave={(body) => updateNote.mutate({ id: note.data!.id, body })}
+              />
+            ) : (
+              <NoteEditor
+                key={note.data.id}
+                initialMarkdown={note.data.body}
+                onSave={(body) => updateNote.mutate({ id: note.data!.id, body })}
+                annotations={annotations}
+                brokenLinks={brokenLinks}
+                onResolve={dismiss}
+              />
+            )}
           </>
         )}
       </main>

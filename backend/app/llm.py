@@ -30,7 +30,9 @@ _SYSTEM_PROMPTS: dict[ReviewKind, str] = {
 _RESPONSE_INSTRUCTION = (
     "Respond ONLY with JSON of the form "
     '{"summary": "<1-2 sentence overview>", '
-    '"items": [{"label": "<short tag>", "detail": "<the point>"}]}. '
+    '"items": [{"label": "<short tag>", "detail": "<the point>", '
+    '"quote": "<the exact verbatim span of text from the note this point refers to>"}]}. '
+    "The quote MUST be copied character-for-character from the note so it can be located. "
     "Return 1-7 items."
 )
 
@@ -92,7 +94,11 @@ async def review_note(kind: ReviewKind, title: str, body: str) -> ReviewResponse
     if "_raw" in data:
         return ReviewResponse(kind=kind, summary=data["_raw"], items=[])
     items = [
-        ReviewItem(label=i.get("label", ""), detail=i.get("detail", ""))
+        ReviewItem(
+            label=i.get("label", ""),
+            detail=i.get("detail", ""),
+            quote=i.get("quote", ""),
+        )
         for i in data.get("items", [])
     ]
     return ReviewResponse(kind=kind, summary=data.get("summary", ""), items=items)

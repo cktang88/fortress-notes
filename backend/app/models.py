@@ -43,6 +43,7 @@ class SearchResult(BaseModel):
 class ReviewItem(BaseModel):
     label: str = ""
     detail: str
+    quote: str = Field(default="", description="Verbatim text from the note this refers to")
 
 
 class ReviewResponse(BaseModel):
