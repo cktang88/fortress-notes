@@ -53,7 +53,7 @@ export function NoteEditor({
     ],
     content: markdownToHtml(initialMarkdown),
     editorProps: {
-      attributes: { class: "tiptap prose max-w-none" },
+      attributes: { class: "tiptap prose max-w-none", spellcheck: "false" },
       handleClick(view, pos) {
         // Find an annotation whose located range contains the clicked position.
         for (const annotation of annotationsRef.current) {

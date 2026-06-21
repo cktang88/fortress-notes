@@ -9,7 +9,7 @@ class Settings(BaseSettings):
 
     notes_dir: Path = Path("../notes")
     openrouter_api_key: str = ""
-    openrouter_model: str = "xiaomi/mimo-v2.5-pro"
+    openrouter_model: str = "deepseek/deepseek-v4-flash"
     embeddings_enabled: bool = True
     colbert_model: str = "lightonai/Agent-ModernColBERT"
     reindex_interval_s: float = 5.0

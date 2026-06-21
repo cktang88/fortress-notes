@@ -15,6 +15,13 @@ interface Props {
   onToggleRaw: () => void;
 }
 
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 const REVIEW_OPTIONS: { kind: ReviewKind; label: string }[] = [
   { kind: "factcheck", label: "Fact-check" },
   { kind: "clarify", label: "Ask clarifying questions" },
@@ -50,6 +57,9 @@ export function NoteHeader({
         >
           {rawView ? "Rich" : "Raw"}
         </button>
+      </div>
+      <div className="text-xs text-zinc-400">
+        Created {formatDate(note.created_at)} · Edited {formatDate(note.updated_at)}
       </div>
       <div className="flex items-center gap-2">
         <StatusBadge status={note.status} />
