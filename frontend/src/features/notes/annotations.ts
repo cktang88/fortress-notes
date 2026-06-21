@@ -4,12 +4,15 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 
 export type AnnotationType = "consistency" | "stale" | "review";
+export type Severity = "high" | "medium" | "low";
 
 export interface Annotation {
   id: string;
   /** The text in the note this annotation refers to (used to locate the range). */
   claim: string;
   type: AnnotationType;
+  /** Drives squiggle color: high=red, medium=yellow, low=light gray. */
+  severity: Severity;
   message: string;
   /** Replacement text offered on Accept (stale facts only). */
   suggestion?: string;
@@ -62,7 +65,7 @@ function computeDecorations(doc: PMNode, state: AnnotationState): DecorationSet 
     if (!range) continue;
     decos.push(
       Decoration.inline(range[0], range[1], {
-        class: `squiggle squiggle-${a.type}`,
+        class: `squiggle squiggle-${a.severity}`,
         "data-annotation-id": a.id,
       }),
     );

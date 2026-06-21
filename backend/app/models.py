@@ -44,6 +44,7 @@ class ReviewItem(BaseModel):
     label: str = ""
     detail: str
     quote: str = Field(default="", description="Verbatim text from the note this refers to")
+    severity: Literal["high", "medium", "low"] = "medium"
 
 
 class ReviewResponse(BaseModel):

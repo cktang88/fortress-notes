@@ -1,15 +1,14 @@
-import { useState } from "react";
-import { StatusBadge } from "./StatusBadge";
-import type { Note, ReviewKind } from "./types";
+import type { Note, NoteStatus } from "./types";
 
 interface Props {
   note: Note;
   onTitle: (title: string) => void;
-  onPromote: () => void;
   onDelete: () => void;
-  onReview: (kind: ReviewKind) => void;
+  onSetStatus: (status: NoteStatus) => void;
+  onFactcheck: () => void;
+  onClarify: () => void;
   onConsistency: () => void;
-  onHeal: () => void;
+  onLint: () => void;
   checking: boolean;
   rawView: boolean;
   onToggleRaw: () => void;
@@ -22,29 +21,22 @@ function formatDate(iso: string): string {
   });
 }
 
-const REVIEW_OPTIONS: { kind: ReviewKind; label: string }[] = [
-  { kind: "factcheck", label: "Fact-check" },
-  { kind: "clarify", label: "Ask clarifying questions" },
-  { kind: "object", label: "Object / find inconsistencies" },
-];
-
 export function NoteHeader({
   note,
   onTitle,
-  onPromote,
   onDelete,
-  onReview,
+  onSetStatus,
+  onFactcheck,
+  onClarify,
   onConsistency,
-  onHeal,
+  onLint,
   checking,
   rawView,
   onToggleRaw,
 }: Props) {
-  const [menuOpen, setMenuOpen] = useState(false);
-
   return (
     <div className="flex flex-col gap-3 border-b border-zinc-200 px-8 pt-6 pb-3">
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2">
         <input
           value={note.title}
           onChange={(e) => onTitle(e.target.value)}
@@ -52,51 +44,34 @@ export function NoteHeader({
           placeholder="Untitled"
         />
         <button
+          onClick={onClarify}
+          disabled={checking}
+          className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
+        >
+          Clarify
+        </button>
+        <button
           onClick={onToggleRaw}
           className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50"
         >
           {rawView ? "Rich" : "Raw"}
         </button>
       </div>
+
       <div className="text-xs text-zinc-400">
         Created {formatDate(note.created_at)} · Edited {formatDate(note.updated_at)}
       </div>
+
       <div className="flex items-center gap-2">
-        <StatusBadge status={note.status} />
-        {note.status === "rough" && (
-          <button
-            onClick={onPromote}
-            className="rounded-md border border-emerald-300 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
-          >
-            Promote to polished
-          </button>
-        )}
+        <StatusToggle status={note.status} onSetStatus={onSetStatus} />
 
-        <div className="relative">
-          <button
-            onClick={() => setMenuOpen((o) => !o)}
-            className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500"
-          >
-            AI review ▾
-          </button>
-          {menuOpen && (
-            <div className="absolute z-10 mt-1 w-60 rounded-md border border-zinc-200 bg-white py-1 shadow-lg">
-              {REVIEW_OPTIONS.map((o) => (
-                <button
-                  key={o.kind}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onReview(o.kind);
-                  }}
-                  className="block w-full px-3 py-1.5 text-left text-xs text-zinc-700 hover:bg-zinc-50"
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
+        <button
+          onClick={onFactcheck}
+          disabled={checking}
+          className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+        >
+          Fact-check
+        </button>
         <button
           onClick={onConsistency}
           disabled={checking}
@@ -105,11 +80,11 @@ export function NoteHeader({
           Check consistency
         </button>
         <button
-          onClick={onHeal}
+          onClick={onLint}
           disabled={checking}
           className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
         >
-          Heal
+          Lint
         </button>
         {checking && <span className="text-xs text-zinc-400">scanning…</span>}
 
@@ -120,6 +95,39 @@ export function NoteHeader({
           Delete
         </button>
       </div>
+    </div>
+  );
+}
+
+function StatusToggle({
+  status,
+  onSetStatus,
+}: {
+  status: NoteStatus;
+  onSetStatus: (status: NoteStatus) => void;
+}) {
+  return (
+    <div className="flex overflow-hidden rounded-md border border-zinc-300 text-xs font-medium">
+      <button
+        onClick={() => onSetStatus("rough")}
+        className={
+          status === "rough"
+            ? "bg-amber-500 px-2.5 py-1 text-white"
+            : "px-2.5 py-1 text-zinc-500 hover:bg-zinc-50"
+        }
+      >
+        Rough
+      </button>
+      <button
+        onClick={() => onSetStatus("polished")}
+        className={
+          status === "polished"
+            ? "bg-emerald-600 px-2.5 py-1 text-white"
+            : "px-2.5 py-1 text-zinc-500 hover:bg-zinc-50"
+        }
+      >
+        Polished
+      </button>
     </div>
   );
 }

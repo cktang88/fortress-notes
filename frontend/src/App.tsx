@@ -13,7 +13,6 @@ import {
   useHeal,
   useNote,
   useNotes,
-  usePromoteNote,
   useReview,
   useSearch,
   useUpdateNote,
@@ -35,7 +34,6 @@ export function App() {
   const createNote = useCreateNote();
   const updateNote = useUpdateNote();
   const deleteNote = useDeleteNote();
-  const promoteNote = usePromoteNote();
   const review = useReview();
   const consistency = useConsistency();
   const heal = useHeal();
@@ -55,18 +53,21 @@ export function App() {
         id: `r${i}`,
         claim: it.quote,
         type: "review" as const,
+        severity: it.severity,
         message: it.detail,
       })),
     ...(consistency.data?.issues ?? []).map((iss, i) => ({
       id: `c${i}`,
       claim: iss.claim,
       type: "consistency" as const,
+      severity: iss.severity,
       message: `Conflicts with "${iss.related_note_title}": ${iss.conflict}`,
     })),
     ...(heal.data?.stale_facts ?? []).map((f, i) => ({
       id: `s${i}`,
       claim: f.claim,
       type: "stale" as const,
+      severity: "high" as const,
       message: f.finding,
       suggestion: f.suggestion,
     })),
@@ -141,11 +142,12 @@ export function App() {
             <NoteHeader
               note={note.data}
               onTitle={(title) => updateNote.mutate({ id: note.data!.id, title })}
-              onPromote={() => promoteNote.mutate(note.data!.id)}
               onDelete={handleDelete}
-              onReview={handleReview}
+              onSetStatus={(status) => updateNote.mutate({ id: note.data!.id, status })}
+              onFactcheck={() => handleReview("factcheck")}
+              onClarify={() => handleReview("clarify")}
               onConsistency={() => runCheck("consistency")}
-              onHeal={() => runCheck("heal")}
+              onLint={() => runCheck("heal")}
               checking={consistency.isPending || heal.isPending || review.isPending}
               rawView={rawView}
               onToggleRaw={() => setRawView((v) => !v)}

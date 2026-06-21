@@ -11,9 +11,16 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 _SYSTEM_PROMPTS: dict[ReviewKind, str] = {
     "factcheck": (
-        "You are a rigorous fact-checker reviewing a personal note. Identify specific "
-        "claims that are factually wrong, unsupported, or out of date. Be concrete and "
-        "flag your own uncertainty. Do not praise; only surface problems."
+        "You are a rigorous fact-checker reviewing a personal note. FIRST steelman the "
+        "note: read every claim in the most reasonable, charitable way a knowledgeable "
+        "person would mean it. Only after steelmanning, flag genuine problems. "
+        "Classify each flagged item by severity: "
+        "'high' = obviously, provably incorrect; "
+        "'medium' = misleading, or very incomplete / out of context; "
+        "'low' = a minor revision. "
+        "Be sparing with 'low' items — do NOT nitpick wording, style, or things that are "
+        "fine under a charitable reading. If a claim is reasonable, do not flag it. "
+        "Do not praise; only surface real problems."
     ),
     "clarify": (
         "You are a sharp editor reviewing a personal note. Ask the clarifying questions "
@@ -31,9 +38,11 @@ _RESPONSE_INSTRUCTION = (
     "Respond ONLY with JSON of the form "
     '{"summary": "<1-2 sentence overview>", '
     '"items": [{"label": "<short tag>", "detail": "<the point>", '
-    '"quote": "<the exact verbatim span of text from the note this point refers to>"}]}. '
+    '"quote": "<the exact verbatim span of text from the note this point refers to>", '
+    '"severity": "high|medium|low"}]}. '
     "The quote MUST be copied character-for-character from the note so it can be located. "
-    "Return 1-7 items."
+    "Use severity high for provably incorrect, medium for misleading/incomplete, low for "
+    "minor revisions. Return 0-7 items (return none if the note holds up)."
 )
 
 
@@ -98,6 +107,7 @@ async def review_note(kind: ReviewKind, title: str, body: str) -> ReviewResponse
             label=i.get("label", ""),
             detail=i.get("detail", ""),
             quote=i.get("quote", ""),
+            severity=i.get("severity", "medium"),
         )
         for i in data.get("items", [])
     ]

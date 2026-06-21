@@ -21,10 +21,13 @@ export interface SearchResult {
   score: number;
 }
 
+export type Severity = "high" | "medium" | "low";
+
 export interface ReviewItem {
   label: string;
   detail: string;
   quote: string;
+  severity: Severity;
 }
 
 export interface ReviewResponse {

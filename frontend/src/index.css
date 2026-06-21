@@ -56,12 +56,22 @@
   background: none;
   padding: 0;
 }
-/* Inline annotations (consistency + stale-fact findings) */
+/* Inline annotations — color by severity: red / yellow / light gray */
 .tiptap .squiggle {
-  text-decoration: underline wavy #ef4444;
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
   text-decoration-skip-ink: none;
   text-underline-offset: 3px;
   cursor: pointer;
+}
+.tiptap .squiggle-high {
+  text-decoration-color: #ef4444;
+}
+.tiptap .squiggle-medium {
+  text-decoration-color: #eab308;
+}
+.tiptap .squiggle-low {
+  text-decoration-color: #9ca3af;
 }
 
 /* Links: blue highlight by default, red if detected broken */
