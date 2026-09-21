@@ -46,10 +46,10 @@ export const ImageResize = Image.extend({
           document.removeEventListener("mouseup", onUp);
           const width = Number(img.getAttribute("width")) || null;
           if (typeof getPos === "function") {
+            const pos = getPos();
+            if (typeof pos !== "number") return;
             const { view } = editor;
-            view.dispatch(
-              view.state.tr.setNodeMarkup(getPos(), undefined, { ...node.attrs, width }),
-            );
+            view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, width }));
           }
         };
         document.addEventListener("mousemove", onMove);

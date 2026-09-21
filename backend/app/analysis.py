@@ -5,7 +5,7 @@ import re
 
 import httpx
 
-from . import llm, notes_store, search
+from . import images, llm, notes_store, search
 from .models import (
     ConsistencyIssue,
     ConsistencyReport,
@@ -50,10 +50,12 @@ async def check_consistency(note_id: str, k: int = 5) -> ConsistencyReport:
         )
 
     related_block = "\n\n".join(
-        f"### RELATED NOTE (id={n.id}, title={n.title})\n{n.body}" for n in related_notes
+        f"### RELATED NOTE (id={n.id}, title={n.title})\n{images.inline_for_llm(n.body)}"
+        for n in related_notes
     )
     user = (
-        f"## TARGET NOTE (id={target.id}, title={target.title})\n{target.body}\n\n"
+        f"## TARGET NOTE (id={target.id}, title={target.title})\n"
+        f"{images.inline_for_llm(target.body)}\n\n"
         f"## RELATED NOTES\n{related_block}"
     )
 
@@ -145,7 +147,8 @@ async def _check_stale_facts(
     title: str, body: str, created: str, edited: str
 ) -> tuple[str, list[StaleFact]]:
     user = (
-        f"Created: {created}\nLast edited: {edited}\n\n# {title}\n\n{body}\n\n"
+        f"Created: {created}\nLast edited: {edited}\n\n# {title}\n\n"
+        f"{images.inline_for_llm(body)}\n\n"
         "Find facts that were correct as of the last-edited date but are no longer "
         "correct today."
     )

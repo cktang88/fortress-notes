@@ -63,6 +63,25 @@ def collect_image_texts(body: str) -> dict[str, str]:
     return texts
 
 
+_IMG_HTML_RE = re.compile(
+    r"<img\b[^>]*?/media/([A-Za-z0-9]+)\.(?:png|jpe?g|gif|webp)[^>]*>", re.IGNORECASE
+)
+_IMG_MD_RE = re.compile(
+    r"!\[[^\]]*\]\(/media/([A-Za-z0-9]+)\.(?:png|jpe?g|gif|webp)[^)]*\)", re.IGNORECASE
+)
+
+
+def inline_for_llm(body: str) -> str:
+    """Replace each image reference with its caption/OCR text, so an LLM 'sees' the
+    image content (used for fact-check, consistency, heal)."""
+
+    def repl(match: re.Match) -> str:
+        text = _sidecar_text(match.group(1)).strip()
+        return f"[image: {text}]" if text else "[image]"
+
+    return _IMG_MD_RE.sub(repl, _IMG_HTML_RE.sub(repl, body))
+
+
 def note_search_text(title: str, body: str) -> str:
     """Title + body + image caption/OCR text (read from the sidecar cache, so it's
     always fresh even before the frontmatter mirror is updated). Used everywhere a note

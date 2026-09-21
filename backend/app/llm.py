@@ -4,6 +4,7 @@ import json
 
 import httpx
 
+from . import images
 from .config import get_settings
 from .models import ReviewItem, ReviewKind, ReviewResponse
 
@@ -92,7 +93,7 @@ async def review_note(kind: ReviewKind, title: str, body: str) -> ReviewResponse
     try:
         data = await chat_json(
             f"{_SYSTEM_PROMPTS[kind]} {_RESPONSE_INSTRUCTION}",
-            f"# {title}\n\n{body}",
+            f"# {title}\n\n{images.inline_for_llm(body)}",
         )
     except LLMNotConfigured:
         return ReviewResponse(
