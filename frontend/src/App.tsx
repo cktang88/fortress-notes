@@ -3,6 +3,7 @@ import { SearchBar } from "./features/notes/SearchBar";
 import { NoteList } from "./features/notes/NoteList";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
 import { RelatedNotes } from "./features/notes/RelatedNotes";
+import { BacklinksPanel } from "./features/notes/BacklinksPanel";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteEditor } from "./features/notes/NoteEditor";
 import { RawEditor } from "./features/notes/RawEditor";
@@ -144,6 +145,7 @@ export function App() {
           />
         )}
         <RelatedNotes noteId={selectedId} onSelect={selectNote} />
+        <BacklinksPanel documentId={selectedId} onSelect={selectNote} />
       </aside>
 
       {/* Right pane */}

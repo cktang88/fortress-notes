@@ -31,6 +31,14 @@ export function useBlockSearch(q: string, enabled = true) {
   });
 }
 
+export function useBacklinks(id: string | null) {
+  return useQuery({
+    queryKey: ["backlinks", id],
+    queryFn: () => blockApi.backlinks(id!),
+    enabled: !!id,
+  });
+}
+
 export function useSearch(q: string, mode: SearchMode, enabled = true) {
   return useQuery({
     queryKey: ["search", mode, q],

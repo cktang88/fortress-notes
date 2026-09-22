@@ -19,6 +19,7 @@ from .models import (
     NoteUpdate,
     BlockTransaction,
     BlockSearchResult,
+    Backlink,
     ReviewKind,
     ReviewResponse,
     SearchResult,
@@ -119,6 +120,15 @@ def search_blocks(q: str, limit: int = Query(50, ge=1, le=200)):
     if not settings.block_db_enabled:
         raise HTTPException(404, "Block store is disabled")
     return block_store.search_blocks(settings.block_db_path, q, limit)
+
+
+@app.get("/api/block-documents/{document_id}/backlinks", response_model=list[Backlink])
+def get_backlinks(document_id: str, limit: int = Query(100, ge=1, le=500)):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    if block_store.document_tree(settings.block_db_path, document_id) is None:
+        raise HTTPException(404, "Block document not found")
+    return block_store.document_backlinks(settings.block_db_path, document_id, limit)
 
 
 @app.post("/api/block-documents/{document_id}/transactions")

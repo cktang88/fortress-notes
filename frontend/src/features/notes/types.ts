@@ -67,6 +67,15 @@ export interface BlockSearchResult {
   score: number;
 }
 
+export interface Backlink {
+  source_block_id: string;
+  source_document_id: string;
+  source_document_title: string;
+  source_text: string;
+  label: string;
+  target_block_id: string | null;
+}
+
 export type Severity = "high" | "medium" | "low";
 
 export interface ReviewItem {

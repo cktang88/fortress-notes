@@ -9,7 +9,9 @@ from app.block_store import (
     check_integrity,
     connection_scope,
     create_document,
+    document_backlinks,
     document_tree,
+    initialize,
     replace_document_from_markdown,
     search_blocks,
     sync_markdown,
@@ -140,6 +142,79 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(parent_hits[0]["document_id"], "one")
             self.assertEqual(child_hits[0]["text"], "- Child phrase")
             self.assertEqual(search_blocks(database, "not-present"), [])
+
+    def test_rebuilds_block_and_document_backlinks_in_the_same_store(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / ".fortress.sqlite3"
+            create_document(
+                database,
+                "target",
+                "Target",
+                "rough",
+                [],
+                "Target block",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            target = document_tree(database, "target")
+            assert target is not None
+            target_block_id = target["children"][0]["id"]
+            create_document(
+                database,
+                "source",
+                "Source",
+                "rough",
+                [],
+                f"(( {target_block_id} \"block label\" )) and [[target|document label]]",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+
+            backlinks = document_backlinks(database, "target")
+            self.assertEqual(len(backlinks), 2)
+            self.assertEqual(
+                {backlink["label"] for backlink in backlinks},
+                {"block label", "document label"},
+            )
+            self.assertEqual(
+                {backlink["source_document_id"] for backlink in backlinks}, {"source"}
+            )
+
+            replace_document_from_markdown(
+                database,
+                "source",
+                "Source",
+                "rough",
+                [],
+                "No links now",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-02T00:00:00+00:00",
+            )
+            self.assertEqual(document_backlinks(database, "target"), [])
+
+    def test_upgrades_schema_version_one_to_two(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            with connection_scope(database) as connection:
+                connection.execute(
+                    "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (1, ?)",
+                    ("2026-01-01T00:00:00+00:00",),
+                )
+            initialize(database)
+            with connection_scope(database) as connection:
+                versions = connection.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                ).fetchall()
+                self.assertEqual([row["version"] for row in versions], [1, 2])
+                self.assertIsNotNone(
+                    connection.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'document_refs'"
+                    ).fetchone()
+                )
 
     def test_compatibility_mirror_tracks_block_store_writes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

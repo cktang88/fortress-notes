@@ -68,6 +68,15 @@ class BlockSearchResult(BaseModel):
     score: float = Field(description="Higher is more relevant")
 
 
+class Backlink(BaseModel):
+    source_block_id: str
+    source_document_id: str
+    source_document_title: str
+    source_text: str
+    label: str = ""
+    target_block_id: str | None = None
+
+
 class ReviewItem(BaseModel):
     label: str = ""
     detail: str

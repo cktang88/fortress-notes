@@ -147,7 +147,8 @@ plugin-driven publishing editor.
 - [ ] Add outline from heading blocks with click-to-focus navigation.
 - [ ] Add `[[` block/document link autocomplete.
 - [ ] Add block references and embeds with live target previews.
-- [ ] Add backlinks panel grouped by document and block.
+- [x] Persist block/document references and add a backlinks panel grouped by
+  source document and block, with click-to-focus navigation.
 - [ ] Add block permalink/copy-link actions.
 - [ ] Add tag and attribute editing at block and document level.
 - [ ] Add graph view only after backlinks and reference queries are stable.

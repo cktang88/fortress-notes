@@ -22,10 +22,12 @@ from ulid import ULID
 
 from .models import BlockOperation
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DB_FILENAME = ".fortress.sqlite3"
 
 _TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
+_BLOCK_REF_RE = re.compile(r"\(\(\s*([A-Za-z0-9_-]+)(?:\s+[\"']([^\"']*)[\"'])?\s*\)\)")
+_DOCUMENT_REF_RE = re.compile(r"\[\[([A-Za-z0-9_-]+)(?:\|([^\]]+))?\]\]")
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,13 @@ CREATE TABLE IF NOT EXISTS block_refs (
     PRIMARY KEY (source_block_id, target_block_id, label)
 );
 
+CREATE TABLE IF NOT EXISTS document_refs (
+    source_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+    target_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    label TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (source_block_id, target_document_id, label)
+);
+
 CREATE TABLE IF NOT EXISTS revisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -97,6 +106,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
     text
 );
 """
+
+_MIGRATIONS = {
+    2: """
+    CREATE TABLE IF NOT EXISTS document_refs (
+        source_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        target_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        label TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (source_block_id, target_document_id, label)
+    );
+    """
+}
 
 _ready_paths: set[Path] = set()
 
@@ -137,10 +157,19 @@ def initialize(path: Path) -> None:
                 "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, _now()),
             )
-        elif row["version"] != SCHEMA_VERSION:
+        elif row["version"] > SCHEMA_VERSION:
             raise RuntimeError(
                 f"Unsupported block database version {row['version']} (expected {SCHEMA_VERSION})"
             )
+        else:
+            current = int(row["version"])
+            while current < SCHEMA_VERSION:
+                current += 1
+                connection.executescript(_MIGRATIONS[current])
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (current, _now()),
+                )
     _ready_paths.add(path.resolve())
 
 
@@ -333,6 +362,49 @@ def search_blocks(path: Path, query: str, limit: int = 50) -> list[dict[str, obj
     ]
 
 
+def document_backlinks(path: Path, document_id: str, limit: int = 100) -> list[dict[str, object]]:
+    """Return block and document references pointing into one document."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        rows = connection.execute(
+            """SELECT source_block_id, source_document_id, source_document_title,
+                      source_text, label, target_block_id
+                 FROM (
+                    SELECT refs.source_block_id, source.document_id AS source_document_id,
+                           source_doc.title AS source_document_title, source.text AS source_text,
+                           refs.label, refs.target_block_id, source.updated_at AS updated_at
+                      FROM block_refs AS refs
+                      JOIN blocks AS source ON source.id = refs.source_block_id
+                      JOIN documents AS source_doc ON source_doc.id = source.document_id
+                      JOIN blocks AS target ON target.id = refs.target_block_id
+                     WHERE target.document_id = ?
+                     UNION ALL
+                    SELECT refs.source_block_id, source.document_id AS source_document_id,
+                           source_doc.title AS source_document_title, source.text AS source_text,
+                           refs.label, NULL AS target_block_id, source.updated_at AS updated_at
+                      FROM document_refs AS refs
+                      JOIN blocks AS source ON source.id = refs.source_block_id
+                      JOIN documents AS source_doc ON source_doc.id = source.document_id
+                     WHERE refs.target_document_id = ?
+                 )
+                ORDER BY updated_at DESC
+                LIMIT ?""",
+            (document_id, document_id, max(1, min(limit, 500))),
+        ).fetchall()
+    return [
+        {
+            "source_block_id": row["source_block_id"],
+            "source_document_id": row["source_document_id"],
+            "source_document_title": row["source_document_title"],
+            "source_text": row["source_text"],
+            "label": row["label"],
+            "target_block_id": row["target_block_id"],
+        }
+        for row in rows
+    ]
+
+
 def sync_markdown(notes_path: Path, path: Path, document_id: str) -> None:
     """Refresh the old Markdown file as a compatibility mirror of SQLite."""
 
@@ -409,6 +481,49 @@ def _insert_blocks(
 
     for position, block in enumerate(_parse_blocks(body)):
         insert(block, None, position)
+    _rebuild_document_references(connection, document_id)
+
+
+def _rebuild_document_references(connection: sqlite3.Connection, document_id: str) -> None:
+    source_ids = connection.execute(
+        "SELECT id FROM blocks WHERE document_id = ?", (document_id,)
+    ).fetchall()
+    for row in source_ids:
+        _replace_references(connection, row["id"], document_id)
+
+
+def _replace_references(
+    connection: sqlite3.Connection, source_block_id: str, document_id: str
+) -> None:
+    row = connection.execute(
+        "SELECT content_json, text FROM blocks WHERE id = ? AND document_id = ?",
+        (source_block_id, document_id),
+    ).fetchone()
+    if row is None:
+        return
+    connection.execute("DELETE FROM block_refs WHERE source_block_id = ?", (source_block_id,))
+    connection.execute("DELETE FROM document_refs WHERE source_block_id = ?", (source_block_id,))
+    haystack = f"{row['text']}\n{row['content_json']}"
+    block_targets = {
+        match.group(1): match.group(2) or "" for match in _BLOCK_REF_RE.finditer(haystack)
+    }
+    document_targets = {
+        match.group(1): match.group(2) or "" for match in _DOCUMENT_REF_RE.finditer(haystack)
+    }
+    for target_id, label in block_targets.items():
+        if target_id == source_block_id:
+            continue
+        if connection.execute("SELECT 1 FROM blocks WHERE id = ?", (target_id,)).fetchone():
+            connection.execute(
+                "INSERT OR IGNORE INTO block_refs(source_block_id, target_block_id, label) VALUES (?, ?, ?)",
+                (source_block_id, target_id, label),
+            )
+    for target_id, label in document_targets.items():
+        if connection.execute("SELECT 1 FROM documents WHERE id = ?", (target_id,)).fetchone():
+            connection.execute(
+                "INSERT OR IGNORE INTO document_refs(source_block_id, target_document_id, label) VALUES (?, ?, ?)",
+                (source_block_id, target_id, label),
+            )
 
 
 def _render_markdown(nodes: list[dict], depth: int = 0) -> str:
@@ -521,6 +636,7 @@ def apply_transaction(path: Path, document_id: str, operations: list[BlockOperat
             raise KeyError("document not found")
         for operation in operations:
             _apply_operation(connection, document_id, operation, now)
+        _rebuild_document_references(connection, document_id)
         connection.execute(
             "UPDATE documents SET updated_at = ? WHERE id = ?", (now, document_id)
         )
