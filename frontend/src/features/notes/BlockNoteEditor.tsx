@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type {
   Block,
   BlocksChanged,
@@ -34,6 +35,7 @@ type Location = {
 };
 
 export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkTargets }: Props) {
+  const queryClient = useQueryClient();
   const initialContent = useMemo(
     () => initialDocument.children.map(toPartialBlock),
     [initialDocument.children],
@@ -43,6 +45,8 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
     [initialDocument.id],
   );
   const saveQueue = useRef(Promise.resolve());
+  const blockUpdatedAt = useRef(blockUpdatedAtById(initialDocument.children));
+  const saveFailed = useRef(false);
   const hydrating = useRef(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -55,20 +59,36 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
     const operations = changesToOperations(changedEditor, context.getChanges());
     if (operations.length === 0) return;
 
-    saveQueue.current = saveQueue.current
-      .catch(() => undefined)
-      .then(async () => {
-        setSaving(true);
-        try {
-          await blockApi.transaction(initialDocument.id, operations);
-          setSaveError(null);
-        } catch (error) {
-          setSaveError(error instanceof Error ? error.message : "Could not save changes");
-        } finally {
-          setSaving(false);
-        }
-      });
+    saveQueue.current = saveQueue.current.then(async () => {
+      if (saveFailed.current) return;
+
+      setSaving(true);
+      try {
+        const document = await blockApi.transaction(
+          initialDocument.id,
+          withExpectedUpdatedAt(operations, blockUpdatedAt.current),
+        );
+        blockUpdatedAt.current = blockUpdatedAtById(document.children);
+        queryClient.setQueryData(["block-document", initialDocument.id], document);
+        void queryClient.invalidateQueries({ queryKey: ["navigation"] });
+        void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
+        void queryClient.invalidateQueries({ queryKey: ["notes"] });
+        void queryClient.invalidateQueries({ queryKey: ["backlinks", initialDocument.id] });
+        setSaveError(null);
+      } catch (error) {
+        saveFailed.current = true;
+        setSaveError(error instanceof Error ? error.message : "Could not save changes");
+      } finally {
+        setSaving(false);
+      }
+    });
   };
+
+  useEffect(() => {
+    blockUpdatedAt.current = blockUpdatedAtById(initialDocument.children);
+    saveFailed.current = false;
+    setSaveError(null);
+  }, [initialDocument.id]);
 
   useEffect(() => {
     editor.transact(() => {
@@ -135,6 +155,7 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
       </div>
       <BlockNoteView
         editor={editor}
+        editable={!saveError}
         onChange={onChange}
         className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 pt-2"
       >
@@ -315,4 +336,31 @@ function hasDeletedAncestor(id: string, changes: BlocksChanged): boolean {
 
 function containsDescendant(block: Block, id: string): boolean {
   return block.children.some((child) => child.id === id || containsDescendant(child, id));
+}
+
+export function withExpectedUpdatedAt(
+  operations: readonly BlockOperation[],
+  updatedAtByBlock: ReadonlyMap<string, string>,
+): BlockOperation[] {
+  const checkedBlockIds = new Set<string>();
+
+  return operations.map((operation) => {
+    if (
+      operation.operation === "insert" ||
+      !operation.block_id ||
+      checkedBlockIds.has(operation.block_id)
+    ) {
+      return operation;
+    }
+
+    checkedBlockIds.add(operation.block_id);
+    const expectedUpdatedAt = updatedAtByBlock.get(operation.block_id);
+    return expectedUpdatedAt === undefined
+      ? operation
+      : { ...operation, expected_updated_at: expectedUpdatedAt };
+  });
+}
+
+function blockUpdatedAtById(nodes: readonly BlockNode[]): Map<string, string> {
+  return new Map(flattenNodes(nodes).map((node) => [node.id, node.updated_at]));
 }
