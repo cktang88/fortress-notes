@@ -81,6 +81,18 @@ export function useBacklinks(id: string | null) {
   });
 }
 
+export function useBlockReference(blockId: string | null) {
+  return useQuery({
+    queryKey: ["block-reference", blockId],
+    queryFn: async () =>
+      (await blockApi.linkTargets(blockId!, 1)).find((target) => target.block_id === blockId) ??
+      null,
+    enabled: !!blockId,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
 export function useSearch(q: string, mode: SearchMode, enabled = true) {
   return useQuery({
     queryKey: ["search", mode, q],

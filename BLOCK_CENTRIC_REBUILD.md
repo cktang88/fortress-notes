@@ -146,7 +146,7 @@ plugin-driven publishing editor.
 - [ ] Add document tree/sidebar with collapsed folders and recent documents.
 - [x] Add outline from heading blocks with click-to-focus navigation.
 - [x] Add `[[` document and `((` block-reference autocomplete backed by stable IDs.
-- [ ] Add block references and embeds with live target previews.
+- [x] Add block references and embeds with live target previews.
 - [x] Persist block/document references and add a backlinks panel grouped by
   source document and block, with click-to-focus navigation.
 - [ ] Add block permalink/copy-link actions.
@@ -162,7 +162,7 @@ plugin-driven publishing editor.
   compatible while the UI gains jump-to-block navigation.
 - [x] Add search results at block granularity with context and jump-to-block.
 - [x] Add filters for document, block type, tag, status, and date.
-- [ ] Adapt embedding search to index blocks, not whole notes; keep keyword fallback.
+- [x] Adapt embedding search to index blocks, not whole notes; keep keyword fallback.
 - [ ] Add related blocks/documents and explain why each result matched.
 - [x] Add rebuild-index endpoint and startup integrity check.
 

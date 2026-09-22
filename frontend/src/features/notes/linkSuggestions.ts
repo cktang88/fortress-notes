@@ -41,3 +41,11 @@ export function blockLink(target: Pick<BlockLinkTarget, "block_id" | "text">): s
     .trim();
   return `(( ${target.block_id}${label ? ` "${label}"` : ""} ))`;
 }
+
+export function parseBlockReference(
+  value: string,
+): { blockId: string; label: string | null } | null {
+  const match = value.trim().match(/^\(\(\s*([^\s)]+)(?:\s+"([\s\S]*?)")?\s*\)\)$/);
+  if (!match) return null;
+  return { blockId: match[1], label: match[2] ?? null };
+}

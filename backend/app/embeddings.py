@@ -1,6 +1,7 @@
 """ColBERT late-interaction search via PyLate, with a keyword fallback.
 
-Doc embeddings are cached per (id, updated_at) so we only re-encode changed notes.
+Doc embeddings are cached per (id, updated_at) so we only re-encode changed notes
+or blocks.
 Scoring is brute-force MaxSim, which is fast enough for a personal note collection.
 """
 
@@ -98,20 +99,25 @@ def warm_index() -> int:
     model = _get_model()
     if model is None:
         return 0
-    from . import images, notes_store  # local import to avoid an import cycle
+    from . import block_store, images, notes_store  # local import to avoid an import cycle
 
     encoded = 0
     live_ids: set[str] = set()
-    for summary in notes_store.list_notes():
-        note = notes_store.get_note(summary.id)
-        if note is None:
-            continue
-        live_ids.add(note.id)
-        iso = note.updated_at.isoformat()
-        cached = _cache.docs.get(note.id)
+    settings = get_settings()
+    if settings.block_db_enabled:
+        documents = block_store.embedding_documents(settings.block_db_path)
+    else:
+        documents = [
+            (note.id, note.id, note.updated_at.isoformat(), images.note_search_text(note.title, note.body))
+            for summary in notes_store.list_notes()
+            if (note := notes_store.get_note(summary.id)) is not None
+        ]
+    for block_id, _document_id, iso, text in documents:
+        live_ids.add(block_id)
+        cached = _cache.docs.get(block_id)
         if cached and cached[0] == iso:
             continue
-        _encode_doc(model, note.id, iso, images.note_search_text(note.title, note.body))
+        _encode_doc(model, block_id, iso, text)
         encoded += 1
 
     # Drop embeddings for notes that no longer exist.

@@ -758,6 +758,28 @@ def rebuild_fts(path: Path) -> None:
         )
 
 
+def embedding_documents(path: Path) -> list[tuple[str, str, str, str]]:
+    """Return active canonical blocks as embedding inputs.
+
+    The final document ID keeps the compatibility search layer able to fold
+    block scores back into note-shaped responses.
+    """
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        rows = connection.execute(
+            """SELECT blocks.id, blocks.document_id, blocks.updated_at, blocks.text
+                 FROM blocks
+                 JOIN documents ON documents.id = blocks.document_id
+                WHERE documents.deleted_at IS NULL AND trim(blocks.text) <> ''
+                ORDER BY blocks.document_id, blocks.position, blocks.id"""
+        ).fetchall()
+    return [
+        (str(row["id"]), str(row["document_id"]), str(row["updated_at"]), str(row["text"]))
+        for row in rows
+    ]
+
+
 def ensure_fts_integrity(path: Path) -> bool:
     """Repair FTS if needed and report whether the index is consistent afterward."""
 

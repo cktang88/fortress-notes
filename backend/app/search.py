@@ -50,12 +50,23 @@ def full_text_search(q: str) -> list[SearchResult]:
 def embedding_search(q: str, k: int = 20) -> list[SearchResult]:
     if not q.strip():
         return []
-    docs = _all_docs()
-    scores = embeddings.score_documents(q, docs)
+    settings = get_settings()
+    if settings.block_db_enabled:
+        block_docs = block_store.embedding_documents(settings.block_db_path)
+        scores = embeddings.score_documents(
+            q, [(block_id, updated_at, text) for block_id, _, updated_at, text in block_docs]
+        )
+        document_ids = {block_id: document_id for block_id, document_id, _, _ in block_docs}
+        note_scores: dict[str, float] = {}
+        for block_id, score in scores.items():
+            document_id = document_ids[block_id]
+            note_scores[document_id] = max(note_scores.get(document_id, 0.0), score)
+    else:
+        note_scores = embeddings.score_documents(q, _all_docs())
     summaries = {s.id: s for s in notes_store.list_notes()}
     results = [
         SearchResult(note=summaries[note_id], score=score)
-        for note_id, score in scores.items()
+        for note_id, score in note_scores.items()
         if note_id in summaries and score > 0
     ]
     results.sort(key=lambda r: r.score, reverse=True)
@@ -67,12 +78,26 @@ def related_notes(note_id: str, k: int = 5) -> list[SearchResult]:
     if not note:
         return []
     query = f"{note.title}\n\n{note.body}"
-    docs = [d for d in _all_docs() if d[0] != note_id]
-    scores = embeddings.score_documents(query, docs)
+    settings = get_settings()
+    if settings.block_db_enabled:
+        block_docs = [
+            d for d in block_store.embedding_documents(settings.block_db_path) if d[1] != note_id
+        ]
+        scores = embeddings.score_documents(
+            query, [(block_id, updated_at, text) for block_id, _, updated_at, text in block_docs]
+        )
+        document_ids = {block_id: document_id for block_id, document_id, _, _ in block_docs}
+        note_scores: dict[str, float] = {}
+        for block_id, score in scores.items():
+            document_id = document_ids[block_id]
+            note_scores[document_id] = max(note_scores.get(document_id, 0.0), score)
+    else:
+        docs = [d for d in _all_docs() if d[0] != note_id]
+        note_scores = embeddings.score_documents(query, docs)
     summaries = {s.id: s for s in notes_store.list_notes()}
     results = [
         SearchResult(note=summaries[nid], score=score)
-        for nid, score in scores.items()
+        for nid, score in note_scores.items()
         if nid in summaries and score > 0
     ]
     results.sort(key=lambda r: r.score, reverse=True)

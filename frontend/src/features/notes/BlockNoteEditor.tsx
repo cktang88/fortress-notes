@@ -13,7 +13,13 @@ import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 import { blockApi } from "./api";
-import { blockLink, documentLink, matchingLinkTargets } from "./linkSuggestions";
+import {
+  blockLink,
+  documentLink,
+  matchingLinkTargets,
+  parseBlockReference,
+} from "./linkSuggestions";
+import { useBlockReference } from "./hooks";
 import type {
   BlockDocument,
   BlockLinkTarget,
@@ -52,6 +58,23 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [hasBlockSelection, setHasBlockSelection] = useState(false);
+  const [preview, setPreview] = useState<{ blockId: string; left: number; top: number } | null>(
+    null,
+  );
+  const previewQuery = useBlockReference(preview?.blockId ?? null);
+
+  const showPreview = (event: React.MouseEvent<HTMLElement>) => {
+    const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a");
+    const reference = anchor && parseBlockReference(anchor.getAttribute("href") ?? "");
+    if (!anchor || !reference) return;
+    const surface = event.currentTarget.getBoundingClientRect();
+    const bounds = anchor.getBoundingClientRect();
+    setPreview({
+      blockId: reference.blockId,
+      left: bounds.left - surface.left,
+      top: bounds.bottom - surface.top + 6,
+    });
+  };
 
   const onChange = (
     changedEditor: BlockNoteEditorInstance,
@@ -155,7 +178,18 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
   const selectionActions = hasBlockSelection ? blockSelectionActions(editor) : null;
 
   return (
-    <section className="blocknote-shell flex min-h-0 flex-1 flex-col">
+    <section
+      className="blocknote-shell relative flex min-h-0 flex-1 flex-col"
+      onMouseOver={showPreview}
+      onClick={(event) => {
+        const anchor = (event.target as HTMLElement).closest("a");
+        if (anchor && parseBlockReference(anchor.getAttribute("href") ?? "")) {
+          event.preventDefault();
+          showPreview(event);
+        }
+      }}
+      onMouseLeave={() => setPreview(null)}
+    >
       <div className="flex items-center gap-2 px-8 pt-4 text-xs text-zinc-400">
         <span className="font-medium uppercase tracking-wide text-zinc-500">
           {editor.document.length} blocks
@@ -214,6 +248,26 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
           minQueryLength={1}
         />
       </BlockNoteView>
+      {preview && (
+        <div
+          role="status"
+          className="pointer-events-none absolute z-20 w-72 rounded-md border border-zinc-200 bg-white p-3 text-sm shadow-lg"
+          style={{ left: preview.left, top: preview.top }}
+        >
+          {previewQuery.isLoading && <span className="text-zinc-400">Loading block…</span>}
+          {!previewQuery.isLoading && previewQuery.data && (
+            <>
+              <div className="mb-1 text-xs text-zinc-500">{previewQuery.data.document_title}</div>
+              <div className="whitespace-pre-wrap text-zinc-800">
+                {previewQuery.data.text || "Empty block"}
+              </div>
+            </>
+          )}
+          {!previewQuery.isLoading && !previewQuery.data && (
+            <span className="text-zinc-500">Block not found</span>
+          )}
+        </div>
+      )}
     </section>
   );
 }

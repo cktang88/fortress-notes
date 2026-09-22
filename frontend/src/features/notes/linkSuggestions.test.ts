@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { blockLink, documentLink, matchingLinkTargets } from "./linkSuggestions";
+import {
+  blockLink,
+  documentLink,
+  matchingLinkTargets,
+  parseBlockReference,
+} from "./linkSuggestions";
 import type { NoteSummary } from "./types";
 
 const notes: NoteSummary[] = [
@@ -35,5 +40,19 @@ describe("document link suggestions", () => {
     expect(blockLink({ block_id: "block-1", text: 'A "quoted" block' })).toBe(
       '(( block-1 "A quoted block" ))',
     );
+  });
+});
+
+describe("block reference parsing", () => {
+  it("extracts the stable ID and optional display label", () => {
+    expect(parseBlockReference('(( block-1 "A quoted block" ))')).toEqual({
+      blockId: "block-1",
+      label: "A quoted block",
+    });
+    expect(parseBlockReference("(( block-2 ))")).toEqual({ blockId: "block-2", label: null });
+  });
+
+  it("rejects ordinary links", () => {
+    expect(parseBlockReference("https://example.com")).toBeNull();
   });
 });
