@@ -40,12 +40,47 @@ Every mutation goes through one transaction boundary. Block IDs are generated on
 and survive edits, moves, exports, and imports. Positions are ordered values with a
 rebalance operation, so moving a block does not rewrite unrelated siblings.
 
+### Reuse map
+
+Use a library when it owns a real product capability; keep the small amount of
+Fortress-specific policy in the backend and adapters.
+
+- **Block editor:** `@blocknote/core`, `@blocknote/react`, and the BlockNote UI
+  package. This replaces the temporary custom contenteditable tree and supplies
+  block handles, menus, nesting, drag/drop, inline formatting, and undo/redo.
+- **Client data flow:** the existing TanStack Query layer remains responsible for
+  loading, caching, and invalidating document queries.
+- **HTTP/API boundary:** the existing FastAPI and Pydantic layer remains the
+  narrow typed boundary; no second client state framework is needed.
+- **Storage/search:** SQLite, foreign keys, WAL, and FTS5 remain the right local
+  primitives for a single-user workspace. Use SQLAlchemy Core as a query builder
+  when document, block, and filter queries become composable; do not add its ORM
+  or let it hide SQLite-specific FTS5, recursive-tree, PRAGMA, backup, and
+  transaction code. The current first slice stays on parameterized `sqlite3`
+  statements because its queries are small and its SQLite behavior is explicit.
+- **Markdown:** use BlockNote's native Markdown conversion for editor import/export
+  where possible, and add a small server parser only for startup migration and
+  headless export. Markdown is compatibility data, never the canonical model.
+- **References/backlinks, block permissions, revision conflict rules, AI context
+  selection, and asset ownership:** keep these as domain code because no selected
+  editor library can safely own them for this app.
+- **Collaboration, sync, graph visualization, and database views:** defer them;
+  they are outside the local-first single-user product boundary.
+
 ### Editor boundary
 
-The frontend editor owns a document tree whose top-level children are blocks. Each
-block renders its own handle, type, selection state, and inline editor. Autosave
-sends block transactions (`insert`, `update`, `move`, `delete`, `set-attrs`) rather
-than replacing a whole Markdown document.
+The frontend editor owns a document tree whose top-level children are blocks. Use
+BlockNote for the React editing surface instead of maintaining a second custom
+contenteditable implementation. Its native block JSON maps to the SQLite rows;
+the backend remains authoritative for IDs, ordering, attributes, references, and
+transactions. Autosave sends block transactions (`insert`, `update`, `move`,
+`delete`, `set-attrs`) rather than replacing a whole Markdown document.
+
+BlockNote is preferred over Editor.js for this product because it already provides
+the Notion-like interactions this app needs: nested blocks, indentation, block
+movement, menus, and block-level change events. Editor.js remains a possible
+export/import format or future alternative only if the product shifts toward a
+plugin-driven publishing editor.
 
 ## Feature backlog
 
@@ -55,13 +90,21 @@ than replacing a whole Markdown document.
 - [x] Choose SQLite as the canonical local store and Markdown as import/export.
 - [x] Add SQLite settings, migration runner, schema version table, and test database.
 - [ ] Add deterministic block/document ID generation and validation.
-- [ ] Add database backup/export and recovery-on-startup behavior.
+- [x] Add a SQLite backup API and integrity-check primitive; wire recovery and
+  user-visible export flows later.
 - [x] Add a feature flag so the old Markdown reader remains available during migration.
+- [x] Select BlockNote as the frontend block editor and keep the editor dependency
+  separate from the canonical SQLite data model.
+- [x] Map the rebuild backlog to existing libraries and explicitly avoid adding
+  frameworks where SQLite, FastAPI, or TanStack Query already cover the need.
+- [x] Choose a query-builder boundary: SQLAlchemy Core later for composable reads,
+  raw parameterized SQLite for FTS5, recursive tree writes, PRAGMAs, and backups;
+  no full ORM.
 
 ### Phase 1 — data model and migration
 
-- [ ] Implement document/block CRUD in one backend store module.
-- [ ] Implement nested tree queries and sibling ordering.
+- [x] Implement the first document/block CRUD and transaction slice in one backend store module.
+- [x] Implement nested tree queries and sibling ordering.
 - [ ] Implement Markdown → block-tree import for headings, paragraphs, lists, tasks,
   quotes, code, thematic breaks, links, images, and unsupported raw blocks.
 - [ ] Preserve each imported Markdown file under a timestamped migration backup.
@@ -75,7 +118,7 @@ than replacing a whole Markdown document.
 - [x] Add a read-only block-document endpoint for migration inspection.
 - [ ] Add document list/get/create/rename/delete endpoints.
 - [ ] Add block subtree endpoint with parent, children, depth, and breadcrumbs.
-- [ ] Add transaction endpoint with optimistic revision checks.
+- [x] Add transaction endpoint with optimistic revision checks.
 - [ ] Support insert, update text/type, move, duplicate, delete, and merge/split.
 - [ ] Support batch transactions so paste, drag, and multi-block transforms are atomic.
 - [ ] Return conflict details instead of silently overwriting a newer revision.
@@ -83,7 +126,9 @@ than replacing a whole Markdown document.
 
 ### Phase 3 — block editor shell
 
-- [ ] Replace the single-note editor with a block tree editor.
+- [x] Replace the single-note editor with a BlockNote-backed block tree editor.
+- [x] Translate BlockNote block changes into atomic server transactions and hydrate
+  legacy Markdown into rich inline content on first load.
 - [ ] Add stable block DOM attributes and keyboard focus by block ID.
 - [ ] Add block selection, multi-select, copy/cut/paste, duplicate, and delete.
 - [ ] Add block handle menu: convert, insert above/below, move, duplicate, delete,
@@ -152,7 +197,7 @@ than replacing a whole Markdown document.
 
 ## Current status
 
-The repository still serves the existing Markdown-backed UI/API. The SQLite schema,
-insert-only Markdown bootstrap, health signal, and read-only block-tree endpoint are
-now in place behind a feature flag. The next slice is transactional block mutations
-and the first block-tree editor surface.
+The repository still serves compatibility Markdown endpoints, but the normal note
+surface now reads the SQLite block tree and uses BlockNote for editing. The next
+slice is expanding Markdown migration to nested, lossless-enough structures and
+adding block-level navigation/search on top of the same store.

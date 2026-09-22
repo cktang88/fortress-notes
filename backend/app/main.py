@@ -118,9 +118,11 @@ def apply_block_transaction(document_id: str, transaction: BlockTransaction):
     if not settings.block_db_enabled:
         raise HTTPException(404, "Block store is disabled")
     try:
-        return block_store.apply_transaction(
+        tree = block_store.apply_transaction(
             settings.block_db_path, document_id, transaction.operations
         )
+        block_store.sync_markdown(settings.notes_path, settings.block_db_path, document_id)
+        return tree
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except (ValueError, RuntimeError) as exc:
@@ -146,7 +148,19 @@ def list_notes(status: NoteStatus | None = None):
 
 @app.post("/api/notes", response_model=Note, status_code=201)
 def create_note(data: NoteCreate):
-    return notes_store.create_note(data)
+    note = notes_store.create_note(data)
+    if settings.block_db_enabled:
+        block_store.create_document(
+            settings.block_db_path,
+            note.id,
+            note.title,
+            note.status,
+            note.tags,
+            note.body,
+            note.created_at,
+            note.updated_at,
+        )
+    return note
 
 
 @app.get("/api/notes/{note_id}", response_model=Note)
@@ -162,6 +176,27 @@ def update_note(note_id: str, data: NoteUpdate):
     note = notes_store.update_note(note_id, data)
     if note is None:
         raise HTTPException(404, "Note not found")
+    if settings.block_db_enabled:
+        if data.body is not None:
+            block_store.replace_document_from_markdown(
+                settings.block_db_path,
+                note.id,
+                note.title,
+                note.status,
+                note.tags,
+                note.body,
+                note.created_at,
+                note.updated_at,
+            )
+        else:
+            block_store.update_document_metadata(
+                settings.block_db_path,
+                note.id,
+                note.title,
+                note.status,
+                note.tags,
+                note.updated_at,
+            )
     return note
 
 
@@ -169,6 +204,8 @@ def update_note(note_id: str, data: NoteUpdate):
 def delete_note(note_id: str):
     if not notes_store.delete_note(note_id):
         raise HTTPException(404, "Note not found")
+    if settings.block_db_enabled:
+        block_store.delete_document(settings.block_db_path, note_id)
     return Response(status_code=204)
 
 
@@ -177,6 +214,15 @@ def promote_note(note_id: str):
     note = notes_store.promote_note(note_id)
     if note is None:
         raise HTTPException(404, "Note not found")
+    if settings.block_db_enabled:
+        block_store.update_document_metadata(
+            settings.block_db_path,
+            note.id,
+            note.title,
+            note.status,
+            note.tags,
+            note.updated_at,
+        )
     return note
 
 

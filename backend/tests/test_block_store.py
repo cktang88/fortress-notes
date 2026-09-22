@@ -2,7 +2,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.block_store import apply_transaction, bootstrap_markdown, connect, document_tree
+from app.block_store import (
+    apply_transaction,
+    backup_database,
+    bootstrap_markdown,
+    check_integrity,
+    connect,
+    create_document,
+    document_tree,
+    replace_document_from_markdown,
+    sync_markdown,
+)
 from app.models import BlockOperation
 
 
@@ -84,6 +94,80 @@ class BlockStoreTests(unittest.TestCase):
                         "SELECT 1 FROM blocks_fts WHERE block_id = ?", (ids[2],)
                     ).fetchone()
                 )
+
+    def test_compatibility_mirror_tracks_block_store_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            note_path = root / "one.md"
+            note_path.write_text(
+                "---\n"
+                "title: One\n"
+                "status: rough\n"
+                "tags: [demo]\n"
+                "custom: keep\n"
+                "---\n"
+                "Original\n",
+                encoding="utf-8",
+            )
+            database = root / ".fortress.sqlite3"
+            bootstrap_markdown(root, database)
+            tree = document_tree(database, "one")
+            assert tree is not None
+            block_id = tree["children"][0]["id"]
+
+            apply_transaction(
+                database,
+                "one",
+                [
+                    BlockOperation(
+                        operation="update",
+                        block_id=block_id,
+                        content={"markdown": "Updated"},
+                        text="Updated",
+                    )
+                ],
+            )
+            sync_markdown(root, database, "one")
+
+            mirrored = note_path.read_text(encoding="utf-8")
+            self.assertIn("custom: keep", mirrored)
+            self.assertIn("Updated", mirrored)
+            self.assertNotIn("Original", mirrored)
+
+    def test_markdown_replacement_and_backup_are_consistent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / ".fortress.sqlite3"
+            create_document(
+                database,
+                "one",
+                "One",
+                "rough",
+                ["demo"],
+                "First\n\nSecond",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            replace_document_from_markdown(
+                database,
+                "one",
+                "Updated",
+                "polished",
+                ["new"],
+                "# Heading\n\nBody",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-02T00:00:00+00:00",
+            )
+            backup = root / "backup.sqlite3"
+            backup_database(database, backup)
+
+            tree = document_tree(backup, "one")
+            self.assertIsNotNone(tree)
+            assert tree is not None
+            self.assertEqual(tree["title"], "Updated")
+            self.assertEqual(tree["status"], "polished")
+            self.assertEqual([block["text"] for block in tree["children"]], ["# Heading", "Body"])
+            self.assertTrue(check_integrity(backup))
 
 
 if __name__ == "__main__":

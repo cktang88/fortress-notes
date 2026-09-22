@@ -107,10 +107,12 @@ def database_path(notes_path: Path) -> Path:
 
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(path, timeout=5.0)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = FULL")
     return connection
 
 
@@ -161,35 +163,252 @@ def bootstrap_markdown(notes_path: Path, path: Path) -> int:
             if status not in {"rough", "polished"}:
                 status = "rough"
             tags = post.metadata.get("tags", []) or []
-            connection.execute(
-                """INSERT INTO documents(id, title, status, tags_json, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (note_id, title, status, json.dumps(tags), created_at, updated_at),
+            _insert_document(
+                connection,
+                note_id,
+                title,
+                status,
+                tags,
+                post.content,
+                created_at,
+                updated_at,
             )
-            blocks = _parse_blocks(post.content)
-            for block in blocks:
-                connection.execute(
-                    """INSERT INTO blocks(
-                           id, document_id, parent_id, position, type, attrs_json,
-                           content_json, text, created_at, updated_at
-                       ) VALUES (?, ?, NULL, ?, ?, '{}', ?, ?, ?, ?)""",
-                    (
-                        block.id,
-                        note_id,
-                        block.position,
-                        block.type,
-                        json.dumps({"markdown": block.source}),
-                        block.source,
-                        created_at,
-                        updated_at,
-                    ),
-                )
-                connection.execute(
-                    "INSERT INTO blocks_fts(block_id, document_id, text) VALUES (?, ?, ?)",
-                    (block.id, note_id, block.source),
-                )
             imported += 1
     return imported
+
+
+def create_document(
+    path: Path,
+    document_id: str,
+    title: str,
+    status: str,
+    tags: list[str],
+    body: str,
+    created_at: object,
+    updated_at: object,
+) -> None:
+    """Create the block representation for a newly created compatibility note."""
+
+    initialize(path)
+    with connect(path) as connection:
+        if connection.execute(
+            "SELECT 1 FROM documents WHERE id = ?", (document_id,)
+        ).fetchone():
+            return
+        _insert_document(
+            connection,
+            document_id,
+            title,
+            status,
+            tags,
+            body,
+            _iso(created_at),
+            _iso(updated_at),
+        )
+
+
+def update_document_metadata(
+    path: Path,
+    document_id: str,
+    title: str,
+    status: str,
+    tags: list[str],
+    updated_at: object,
+) -> None:
+    initialize(path)
+    with connect(path) as connection:
+        cursor = connection.execute(
+            """UPDATE documents
+               SET title = ?, status = ?, tags_json = ?, updated_at = ?
+               WHERE id = ?""",
+            (title, status, json.dumps(tags), _iso(updated_at), document_id),
+        )
+        if cursor.rowcount == 0:
+            raise KeyError("document not found")
+
+
+def replace_document_from_markdown(
+    path: Path,
+    document_id: str,
+    title: str,
+    status: str,
+    tags: list[str],
+    body: str,
+    created_at: object,
+    updated_at: object,
+) -> None:
+    """Re-import the explicit raw/compatibility edit into the block store."""
+
+    initialize(path)
+    with connect(path) as connection:
+        existing = connection.execute(
+            "SELECT created_at FROM documents WHERE id = ?", (document_id,)
+        ).fetchone()
+        if existing is None:
+            _insert_document(
+                connection,
+                document_id,
+                title,
+                status,
+                tags,
+                body,
+                _iso(created_at),
+                _iso(updated_at),
+            )
+            return
+        connection.execute(
+            """UPDATE documents
+               SET title = ?, status = ?, tags_json = ?, updated_at = ?
+               WHERE id = ?""",
+            (title, status, json.dumps(tags), _iso(updated_at), document_id),
+        )
+        connection.execute("DELETE FROM blocks_fts WHERE document_id = ?", (document_id,))
+        connection.execute("DELETE FROM blocks WHERE document_id = ?", (document_id,))
+        _insert_blocks(connection, document_id, body, existing["created_at"], _iso(updated_at))
+
+
+def delete_document(path: Path, document_id: str) -> None:
+    initialize(path)
+    with connect(path) as connection:
+        connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+
+
+def backup_database(path: Path, destination: Path) -> None:
+    """Create a consistent live snapshot using Python's SQLite backup API."""
+
+    initialize(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with connect(path) as source, sqlite3.connect(destination) as target:
+        source.backup(target)
+
+
+def check_integrity(path: Path) -> bool:
+    initialize(path)
+    with connect(path) as connection:
+        result = connection.execute("PRAGMA quick_check").fetchone()
+    return result is not None and result[0] == "ok"
+
+
+def sync_markdown(notes_path: Path, path: Path, document_id: str) -> None:
+    """Refresh the old Markdown file as a compatibility mirror of SQLite."""
+
+    tree = document_tree(path, document_id)
+    if tree is None:
+        raise KeyError("document not found")
+    note_path = notes_path / f"{document_id}.md"
+    if not note_path.exists():
+        return
+    post = frontmatter.load(note_path)
+    post.content = _render_markdown(tree["children"])
+    post.metadata.update(
+        {
+            "title": tree["title"],
+            "status": tree["status"],
+            "tags": tree["tags"],
+            "created_at": tree["created_at"],
+            "updated_at": tree["updated_at"],
+        }
+    )
+    note_path.write_text(frontmatter.dumps(post), encoding="utf-8")
+
+
+def _insert_document(
+    connection: sqlite3.Connection,
+    document_id: str,
+    title: str,
+    status: str,
+    tags: list[str],
+    body: str,
+    created_at: str,
+    updated_at: str,
+) -> None:
+    connection.execute(
+        """INSERT INTO documents(id, title, status, tags_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (document_id, title, status, json.dumps(tags), created_at, updated_at),
+    )
+    _insert_blocks(connection, document_id, body, created_at, updated_at)
+
+
+def _insert_blocks(
+    connection: sqlite3.Connection,
+    document_id: str,
+    body: str,
+    created_at: str,
+    updated_at: str,
+) -> None:
+    for block in _parse_blocks(body):
+        connection.execute(
+            """INSERT INTO blocks(
+                   id, document_id, parent_id, position, type, attrs_json,
+                   content_json, text, created_at, updated_at
+               ) VALUES (?, ?, NULL, ?, ?, '{}', ?, ?, ?, ?)""",
+            (
+                block.id,
+                document_id,
+                block.position,
+                block.type,
+                json.dumps({"markdown": block.source}),
+                block.source,
+                created_at,
+                updated_at,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO blocks_fts(block_id, document_id, text) VALUES (?, ?, ?)",
+            (block.id, document_id, block.source),
+        )
+
+
+def _render_markdown(nodes: list[dict], depth: int = 0) -> str:
+    fragments: list[str] = []
+    for node in nodes:
+        source = _node_markdown(node)
+        if node["type"] == "divider" and not source:
+            source = "---"
+        if depth and source:
+            prefix = "  " * depth
+            source = "\n".join(
+                f"{prefix}{line}" if line else line for line in source.splitlines()
+            )
+        if source:
+            fragments.append(source)
+        children = node.get("children", [])
+        if children:
+            rendered_children = _render_markdown(children, depth + 1)
+            if rendered_children:
+                fragments.append(rendered_children)
+    return "\n\n".join(fragments)
+
+
+def _node_markdown(node: dict) -> str:
+    content = node.get("content", {})
+    if isinstance(content, dict):
+        markdown = content.get("markdown")
+        if isinstance(markdown, str):
+            return markdown
+        native = content.get("blocknote")
+        if isinstance(native, str):
+            return native
+        return _inline_text(native)
+    return str(node.get("text", ""))
+
+
+def _inline_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            if isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            else:
+                parts.append(_inline_text(item.get("content")))
+    return "".join(parts)
 
 
 def document_tree(path: Path, document_id: str) -> dict | None:
