@@ -104,6 +104,13 @@ def health() -> dict:
     }
 
 
+@app.get("/api/navigation")
+def get_navigation(recent_limit: int = Query(10, ge=1, le=50)):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    return block_store.navigation(settings.block_db_path, recent_limit)
+
+
 @app.get("/api/block-documents/{document_id}")
 def get_block_document(document_id: str):
     """Read the bootstrapped block tree while the legacy note API remains active."""

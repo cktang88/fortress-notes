@@ -22,7 +22,7 @@ from ulid import ULID
 
 from .models import BlockOperation
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DB_FILENAME = ".fortress.sqlite3"
 
 _TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
@@ -45,14 +45,28 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS folders (
+    id TEXT PRIMARY KEY,
+    parent_id TEXT REFERENCES folders(id) ON DELETE RESTRICT,
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('rough', 'polished')),
     tags_json TEXT NOT NULL DEFAULT '[]',
+    folder_id TEXT REFERENCES folders(id) ON DELETE RESTRICT,
+    position INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS folders_parent_position ON folders(parent_id, position);
 
 CREATE TABLE IF NOT EXISTS blocks (
     id TEXT PRIMARY KEY,
@@ -115,6 +129,18 @@ _MIGRATIONS = {
         label TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (source_block_id, target_document_id, label)
     );
+    """,
+    3: """
+    CREATE TABLE IF NOT EXISTS folders (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT REFERENCES folders(id) ON DELETE RESTRICT,
+        name TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS folders_parent_position ON folders(parent_id, position);
+    CREATE INDEX IF NOT EXISTS documents_folder_position ON documents(folder_id, position);
     """
 }
 
@@ -165,12 +191,46 @@ def initialize(path: Path) -> None:
             current = int(row["version"])
             while current < SCHEMA_VERSION:
                 current += 1
-                connection.executescript(_MIGRATIONS[current])
+                _apply_migration(connection, current)
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (current, _now()),
                 )
     _ready_paths.add(path.resolve())
+
+
+def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
+    if version == 3:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(documents)").fetchall()
+        }
+        if "folder_id" not in columns:
+            connection.execute(
+                "ALTER TABLE documents ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE RESTRICT"
+            )
+        if "position" not in columns:
+            connection.execute(
+                "ALTER TABLE documents ADD COLUMN position INTEGER NOT NULL DEFAULT 0"
+            )
+        if "deleted_at" not in columns:
+            connection.execute("ALTER TABLE documents ADD COLUMN deleted_at TEXT")
+        connection.execute(
+            """WITH ordered AS (
+                   SELECT id,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY folder_id ORDER BY updated_at ASC, id ASC
+                          ) - 1 AS sibling_position
+                     FROM documents
+                    WHERE deleted_at IS NULL
+               )
+               UPDATE documents
+                  SET position = (
+                      SELECT sibling_position FROM ordered WHERE ordered.id = documents.id
+                  )
+                WHERE deleted_at IS NULL"""
+        )
+    connection.executescript(_MIGRATIONS[version])
 
 
 def is_ready(path: Path) -> bool:
@@ -259,7 +319,7 @@ def update_document_metadata(
         cursor = connection.execute(
             """UPDATE documents
                SET title = ?, status = ?, tags_json = ?, updated_at = ?
-               WHERE id = ?""",
+               WHERE id = ? AND deleted_at IS NULL""",
             (title, status, json.dumps(tags), _iso(updated_at), document_id),
         )
         if cursor.rowcount == 0:
@@ -308,8 +368,78 @@ def replace_document_from_markdown(
 
 def delete_document(path: Path, document_id: str) -> None:
     initialize(path)
+    now = _now()
     with connection_scope(path) as connection:
-        connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+        connection.execute(
+            "UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, document_id),
+        )
+
+
+def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
+    """Return the canonical folder tree and recently edited documents."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        folders = connection.execute(
+            """SELECT id, parent_id, name, position, created_at, updated_at
+                 FROM folders
+                ORDER BY parent_id, position, id"""
+        ).fetchall()
+        documents = connection.execute(
+            """SELECT id, title, status, tags_json, folder_id, position,
+                      created_at, updated_at,
+                      COALESCE((
+                          SELECT text FROM blocks
+                           WHERE blocks.document_id = documents.id
+                           ORDER BY parent_id, position, id LIMIT 1
+                      ), '') AS snippet
+                 FROM documents
+                WHERE deleted_at IS NULL
+                ORDER BY folder_id, position, id"""
+        ).fetchall()
+        recent = connection.execute(
+            """SELECT id, title, status, tags_json, folder_id, position,
+                      created_at, updated_at,
+                      COALESCE((
+                          SELECT text FROM blocks
+                           WHERE blocks.document_id = documents.id
+                           ORDER BY parent_id, position, id LIMIT 1
+                      ), '') AS snippet
+                 FROM documents
+                WHERE deleted_at IS NULL
+                ORDER BY updated_at DESC, id ASC
+                LIMIT ?""",
+            (max(1, min(recent_limit, 50)),),
+        ).fetchall()
+
+    documents_by_folder: dict[str | None, list[dict[str, object]]] = {}
+    for row in documents:
+        item = _navigation_document(row)
+        documents_by_folder.setdefault(row["folder_id"], []).append(item)
+
+    folders_by_parent: dict[str | None, list[sqlite3.Row]] = {}
+    for row in folders:
+        folders_by_parent.setdefault(row["parent_id"], []).append(row)
+
+    def children(parent_id: str | None) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for folder in folders_by_parent.get(parent_id, []):
+            items.append(
+                {
+                    "kind": "folder",
+                    "id": folder["id"],
+                    "name": folder["name"],
+                    "children": children(folder["id"]),
+                }
+            )
+        items.extend(documents_by_folder.get(parent_id, []))
+        return items
+
+    return {
+        "items": children(None),
+        "recent": [_navigation_document(row) for row in recent],
+    }
 
 
 def backup_database(path: Path, destination: Path) -> None:
@@ -341,10 +471,10 @@ def search_blocks(path: Path, query: str, limit: int = 50) -> list[dict[str, obj
         rows = connection.execute(
             """SELECT blocks_fts.block_id, blocks_fts.document_id, documents.title,
                       blocks.type, blocks.text, bm25(blocks_fts) AS rank
-                 FROM blocks_fts
+                FROM blocks_fts
                  JOIN blocks ON blocks.id = blocks_fts.block_id
                  JOIN documents ON documents.id = blocks_fts.document_id
-                WHERE blocks_fts MATCH ?
+                WHERE blocks_fts MATCH ? AND documents.deleted_at IS NULL
                 ORDER BY rank, blocks.updated_at DESC
                 LIMIT ?""",
             (match, max(1, min(limit, 200))),
@@ -379,7 +509,9 @@ def block_link_targets(path: Path, query: str = "", limit: int = 50) -> list[dic
                       blocks.type, blocks.text
                  FROM blocks
                  JOIN documents ON documents.id = blocks.document_id
-                WHERE blocks.text LIKE ? COLLATE NOCASE ESCAPE '\\'
+                WHERE documents.deleted_at IS NULL
+                  AND (
+                    blocks.text LIKE ? COLLATE NOCASE ESCAPE '\\'
                    OR (
                         (documents.title LIKE ? COLLATE NOCASE ESCAPE '\\'
                          OR documents.id LIKE ? COLLATE NOCASE ESCAPE '\\')
@@ -391,6 +523,7 @@ def block_link_targets(path: Path, query: str = "", limit: int = 50) -> list[dic
                              LIMIT 1
                         )
                    )
+                  )
                 ORDER BY documents.updated_at DESC, blocks.updated_at DESC,
                          blocks.position ASC, documents.id ASC, blocks.id ASC
                 LIMIT ?""",
@@ -424,7 +557,10 @@ def document_backlinks(path: Path, document_id: str, limit: int = 100) -> list[d
                       JOIN blocks AS source ON source.id = refs.source_block_id
                       JOIN documents AS source_doc ON source_doc.id = source.document_id
                       JOIN blocks AS target ON target.id = refs.target_block_id
+                      JOIN documents AS target_doc ON target_doc.id = target.document_id
                      WHERE target.document_id = ?
+                       AND source_doc.deleted_at IS NULL
+                       AND target_doc.deleted_at IS NULL
                      UNION ALL
                     SELECT refs.source_block_id, source.document_id AS source_document_id,
                            source_doc.title AS source_document_title, source.text AS source_text,
@@ -432,7 +568,10 @@ def document_backlinks(path: Path, document_id: str, limit: int = 100) -> list[d
                       FROM document_refs AS refs
                       JOIN blocks AS source ON source.id = refs.source_block_id
                       JOIN documents AS source_doc ON source_doc.id = source.document_id
+                      JOIN documents AS target_doc ON target_doc.id = refs.target_document_id
                      WHERE refs.target_document_id = ?
+                       AND source_doc.deleted_at IS NULL
+                       AND target_doc.deleted_at IS NULL
                  )
                 ORDER BY updated_at DESC
                 LIMIT ?""",
@@ -484,12 +623,34 @@ def _insert_document(
     created_at: str,
     updated_at: str,
 ) -> None:
+    position = connection.execute(
+        """SELECT COALESCE(MAX(position) + 1, 0)
+             FROM documents
+            WHERE folder_id IS NULL AND deleted_at IS NULL"""
+    ).fetchone()[0]
     connection.execute(
-        """INSERT INTO documents(id, title, status, tags_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (document_id, title, status, json.dumps(tags), created_at, updated_at),
+        """INSERT INTO documents(
+                   id, title, status, tags_json, folder_id, position, deleted_at,
+                   created_at, updated_at
+               ) VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?)""",
+        (document_id, title, status, json.dumps(tags), position, created_at, updated_at),
     )
     _insert_blocks(connection, document_id, body, created_at, updated_at)
+
+
+def _navigation_document(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "kind": "document",
+        "id": row["id"],
+        "title": row["title"],
+        "status": row["status"],
+        "tags": json.loads(row["tags_json"]),
+        "folder_id": row["folder_id"],
+        "position": row["position"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "snippet": row["snippet"][:160],
+    }
 
 
 def _insert_blocks(
@@ -559,13 +720,20 @@ def _replace_references(
     for target_id, label in block_targets.items():
         if target_id == source_block_id:
             continue
-        if connection.execute("SELECT 1 FROM blocks WHERE id = ?", (target_id,)).fetchone():
+        if connection.execute(
+            """SELECT 1 FROM blocks
+                JOIN documents ON documents.id = blocks.document_id
+               WHERE blocks.id = ? AND documents.deleted_at IS NULL""",
+            (target_id,),
+        ).fetchone():
             connection.execute(
                 "INSERT OR IGNORE INTO block_refs(source_block_id, target_block_id, label) VALUES (?, ?, ?)",
                 (source_block_id, target_id, label),
             )
     for target_id, label in document_targets.items():
-        if connection.execute("SELECT 1 FROM documents WHERE id = ?", (target_id,)).fetchone():
+        if connection.execute(
+            "SELECT 1 FROM documents WHERE id = ? AND deleted_at IS NULL", (target_id,)
+        ).fetchone():
             connection.execute(
                 "INSERT OR IGNORE INTO document_refs(source_block_id, target_document_id, label) VALUES (?, ?, ?)",
                 (source_block_id, target_id, label),
@@ -627,7 +795,7 @@ def document_tree(path: Path, document_id: str) -> dict | None:
     initialize(path)
     with connection_scope(path) as connection:
         document = connection.execute(
-            "SELECT * FROM documents WHERE id = ?", (document_id,)
+            "SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
         ).fetchone()
         if document is None:
             return None
@@ -676,7 +844,7 @@ def apply_transaction(path: Path, document_id: str, operations: list[BlockOperat
     now = _now()
     with connection_scope(path) as connection:
         document = connection.execute(
-            "SELECT 1 FROM documents WHERE id = ?", (document_id,)
+            "SELECT 1 FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
         ).fetchone()
         if document is None:
             raise KeyError("document not found")

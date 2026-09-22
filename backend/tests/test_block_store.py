@@ -10,9 +10,11 @@ from app.block_store import (
     check_integrity,
     connection_scope,
     create_document,
+    delete_document,
     document_backlinks,
     document_tree,
     initialize,
+    navigation,
     replace_document_from_markdown,
     search_blocks,
     sync_markdown,
@@ -231,12 +233,50 @@ class BlockStoreTests(unittest.TestCase):
                 versions = connection.execute(
                     "SELECT version FROM schema_migrations ORDER BY version"
                 ).fetchall()
-                self.assertEqual([row["version"] for row in versions], [1, 2])
+                self.assertEqual([row["version"] for row in versions], [1, 2, 3])
                 self.assertIsNotNone(
                     connection.execute(
                         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'document_refs'"
                     ).fetchone()
                 )
+                self.assertIsNotNone(
+                    connection.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'folders'"
+                    ).fetchone()
+                )
+
+    def test_navigation_excludes_soft_deleted_documents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            create_document(
+                database,
+                "one",
+                "One",
+                "rough",
+                [],
+                "First",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            create_document(
+                database,
+                "two",
+                "Two",
+                "polished",
+                ["demo"],
+                "Second",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-02T00:00:00+00:00",
+            )
+
+            result = navigation(database, recent_limit=1)
+            self.assertEqual([item["id"] for item in result["items"]], ["one", "two"])
+            self.assertEqual([item["id"] for item in result["recent"]], ["two"])
+
+            delete_document(database, "one")
+            result = navigation(database)
+            self.assertEqual([item["id"] for item in result["items"]], ["two"])
+            self.assertIsNone(document_tree(database, "one"))
 
     def test_compatibility_mirror_tracks_block_store_writes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

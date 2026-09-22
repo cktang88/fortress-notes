@@ -4,6 +4,7 @@ import type {
   Note,
   NoteStatus,
   NoteSummary,
+  NavigationResponse,
   BlockDocument,
   BlockSearchResult,
   BlockLinkTarget,
@@ -66,6 +67,8 @@ export const notesApi = {
 };
 
 export const blockApi = {
+  navigation: (recentLimit = 10) =>
+    request<NavigationResponse>(`/navigation?recent_limit=${recentLimit}`),
   get: (id: string) => request<BlockDocument>(`/block-documents/${id}`),
   backlinks: (id: string, limit = 100) =>
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),

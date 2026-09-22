@@ -6,6 +6,14 @@ export function useNotes(status?: NoteStatus) {
   return useQuery({ queryKey: ["notes", status], queryFn: () => notesApi.list(status) });
 }
 
+export function useNavigation() {
+  return useQuery({
+    queryKey: ["navigation"],
+    queryFn: () => blockApi.navigation(),
+    retry: false,
+  });
+}
+
 export function useNote(id: string | null) {
   return useQuery({
     queryKey: ["note", id],
@@ -59,7 +67,10 @@ export function useCreateNote() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => notesApi.create(""),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["notes"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["navigation"] });
+    },
   });
 }
 
@@ -70,6 +81,7 @@ export function useUpdateNote() {
       notesApi.update(id, patch),
     onSuccess: (note) => {
       qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["navigation"] });
       qc.setQueryData(["note", note.id], note);
     },
   });
@@ -79,7 +91,10 @@ export function useDeleteNote() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => notesApi.remove(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["notes"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["navigation"] });
+    },
   });
 }
 

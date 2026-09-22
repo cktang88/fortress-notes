@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { SearchBar } from "./features/notes/SearchBar";
 import { NoteList } from "./features/notes/NoteList";
+import { DocumentSidebar } from "./features/notes/DocumentSidebar";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
 import { RelatedNotes } from "./features/notes/RelatedNotes";
 import { BacklinksPanel } from "./features/notes/BacklinksPanel";
@@ -18,6 +19,7 @@ import {
   useNote,
   useBlockDocument,
   useBlockSearch,
+  useNavigation,
   useNotes,
   useReview,
   useSearch,
@@ -35,6 +37,7 @@ export function App() {
 
   const searching = query.trim().length > 0;
   const allNotes = useNotes();
+  const navigation = useNavigation();
   const blockSearch = useBlockSearch(query, mode === "text");
   const searchResults = useSearch(query, mode, mode !== "text" || blockSearch.isError);
   const note = useNote(selectedId);
@@ -136,13 +139,20 @@ export function App() {
             loading={blockSearch.isLoading}
             onSelect={(documentId, blockId) => selectNote(documentId, blockId)}
           />
-        ) : (
+        ) : navigation.isError ? (
           <NoteList
             notes={listNotes}
             selectedId={selectedId}
             onSelect={selectNote}
             scores={scores}
             loading={searching ? searchResults.isLoading : allNotes.isLoading}
+          />
+        ) : (
+          <DocumentSidebar
+            nodes={navigation.data?.items ?? []}
+            selectedId={selectedId}
+            loading={navigation.isLoading}
+            onSelect={selectNote}
           />
         )}
         <OutlinePanel

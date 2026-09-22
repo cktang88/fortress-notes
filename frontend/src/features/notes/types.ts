@@ -12,6 +12,27 @@ export interface NoteSummary {
   snippet: string;
 }
 
+export interface NavigationDocument extends NoteSummary {
+  kind: "document";
+  folder_id: string | null;
+  position: number;
+  created_at: string;
+}
+
+export interface NavigationFolder {
+  kind: "folder";
+  id: string;
+  name: string;
+  children: NavigationNode[];
+}
+
+export type NavigationNode = NavigationDocument | NavigationFolder;
+
+export interface NavigationResponse {
+  items: NavigationNode[];
+  recent: NavigationDocument[];
+}
+
 export interface Note extends NoteSummary {
   body: string;
   created_at: string;
