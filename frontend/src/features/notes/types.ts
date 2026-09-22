@@ -22,7 +22,11 @@ export interface NavigationDocument extends NoteSummary {
 export interface NavigationFolder {
   kind: "folder";
   id: string;
+  parent_id: string | null;
   name: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
   children: NavigationNode[];
 }
 
@@ -31,6 +35,21 @@ export type NavigationNode = NavigationDocument | NavigationFolder;
 export interface NavigationResponse {
   items: NavigationNode[];
   recent: NavigationDocument[];
+}
+
+export interface Folder {
+  id: string;
+  parent_id: string | null;
+  name: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocumentOrganization {
+  id: string;
+  folder_id: string | null;
+  position: number;
 }
 
 export interface Note extends NoteSummary {

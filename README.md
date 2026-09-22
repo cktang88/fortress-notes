@@ -1,20 +1,23 @@
 # Fortress Notes
 
-A local-first notes app. Notes are plain **Markdown files** in a folder you own — the
-app is just a fast, smart UI on top of them. Two-pane layout: a list of notes on the
-left, a rich-text editor on the right. Search by **full text** or by **late-interaction
+A local-first, block-centric notes app. SQLite is the live source of truth for
+documents, nested blocks, links, and search indexes. Markdown files remain a safe,
+portable import/export format. Two-pane layout: a document tree on the left and a
+BlockNote editor on the right. Search by **full text** or by **late-interaction
 embedding search** (ColBERT). An LLM can fact-check, question, or push back on the note
 you're reading.
 
-> The point: your notes stay as portable `.md` files on disk forever. Everything else
-> (search index, embeddings, AI) is a disposable layer on top.
+> The point: the local SQLite store keeps stable block IDs and atomic edits, while
+> Markdown export keeps your notes portable and inspectable.
 
 ## Features
 
-- **Folder of Markdown notes** — every note is a `.md` file with YAML frontmatter
-  (`id`, `title`, `status`, `tags`, timestamps). Edit them here or in any other editor.
-- **Two-pane UI** — left: search + note list + a live "related notes" sub-pane;
-  right: a Tiptap rich-text editor for the selected note.
+- **SQLite block store** — documents contain stable, nested blocks with atomic
+  transactions, references, backlinks, and an FTS5 search index.
+- **Markdown portability** — existing Markdown notes are imported without deleting the
+  originals; compatibility mirrors and export keep the data easy to inspect.
+- **Two-pane UI** — left: search + document tree + related/backlink panes; right: a
+  BlockNote rich-text editor for the selected document.
 - **Two search modes** (toggle in the search bar):
   - **Full-text** — fast substring/keyword search across all notes.
   - **Embedding search** — late-interaction (ColBERT / `lightonai/Agent-ModernColBERT`)
@@ -46,17 +49,19 @@ See [`spec.md`](./spec.md) for the full design, data model, API, and roadmap.
 ## Architecture
 
 ```
-frontend (Vite + React + TanStack Query + Tailwind + Tiptap)
+frontend (Vite + React + TanStack Query + Tailwind + BlockNote)
         │  HTTP / JSON
         ▼
 backend  (FastAPI, Python)
-        ├── notes_store   reads/writes Markdown files in ./notes
+        ├── block_store   SQLite documents, blocks, references, FTS5, migrations
+        ├── notes_store   compatibility Markdown API and export mirror
         ├── search        full-text + ColBERT late-interaction (PyLate)
         ├── vision        SmolVLM-256M caption + RapidOCR for pasted images
         └── llm           OpenRouter review / consistency / heal
         │
         ▼
-   ./notes/*.md            ← the source of truth
+   ./notes/.fortress.sqlite3 ← the canonical local store
+   ./notes/*.md            ← imported/compatibility Markdown files
    ./notes/assets/*.{png,…}  ← pasted images (+ <id>.txt caption/OCR cache)
 ```
 
@@ -110,7 +115,7 @@ Backend `.env` (see `backend/.env.example`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `NOTES_DIR` | `../notes` | Folder of Markdown notes (the source of truth) |
+| `NOTES_DIR` | `../notes` | Workspace containing the SQLite store and Markdown compatibility files |
 | `OPENROUTER_API_KEY` | — | Required for AI review |
 | `OPENROUTER_MODEL` | `deepseek/deepseek-v4-flash` | OpenRouter model id |
 | `EMBEDDINGS_ENABLED` | `true` | Turn off to skip the ColBERT model |
@@ -129,10 +134,13 @@ Tailwind) inside the same config.
 
 ## Tech choices (short version)
 
-- **Editor: Tiptap** over Lexical/MarkText — MarkText is a desktop app (not
-  embeddable); Lexical is great but lower-level. Tiptap is headless + ships
-  Markdown I/O and a StarterKit, so less glue code. Isolated in one component
-  so it's swappable.
+- **Editor: BlockNote** over Editor.js/Tiptap — BlockNote already owns the
+  Notion-like block interactions this product needs: nested blocks, handles, menus,
+  indentation, drag/drop, and block change events. SQLite remains authoritative behind
+  a narrow adapter, so editor JSON is not the storage format.
+- **Storage: SQLite + small query helpers** — SQLite gives local transactions,
+  foreign keys, WAL, FTS5, backups, and integrity checks without the cost of a full
+  ORM. Raw parameterized SQL remains explicit for FTS and tree mutations.
 - **Search: PyLate + ColBERT** — late-interaction (token-level MaxSim) beats
   single-vector embeddings for retrieval quality on small/medium collections,
   and brute-force MaxSim is plenty fast for a personal note set.

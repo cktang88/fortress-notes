@@ -145,6 +145,7 @@ _MIGRATIONS = {
 }
 
 _ready_paths: set[Path] = set()
+UNSET = object()
 
 
 def database_path(notes_path: Path) -> Path:
@@ -376,6 +377,122 @@ def delete_document(path: Path, document_id: str) -> None:
         )
 
 
+def create_folder(
+    path: Path, name: str, parent_id: str | None = None, position: int | None = None
+) -> dict[str, object]:
+    initialize(path)
+    now = _now()
+    with connection_scope(path) as connection:
+        _validate_folder_parent(connection, parent_id)
+        target_position = _folder_insert_position(connection, parent_id, position)
+        folder_id = str(ULID())
+        connection.execute(
+            """INSERT INTO folders(id, parent_id, name, position, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (folder_id, parent_id, name, target_position, now, now),
+        )
+        row = _folder_row(connection, folder_id)
+    return _folder_data(row)
+
+
+def rename_folder(path: Path, folder_id: str, name: str) -> dict[str, object]:
+    initialize(path)
+    now = _now()
+    with connection_scope(path) as connection:
+        cursor = connection.execute(
+            "UPDATE folders SET name = ?, updated_at = ? WHERE id = ?",
+            (name, now, folder_id),
+        )
+        if cursor.rowcount == 0:
+            raise KeyError("folder not found")
+        row = _folder_row(connection, folder_id)
+    return _folder_data(row)
+
+
+def move_folder(
+    path: Path,
+    folder_id: str,
+    parent_id: str | None | object = UNSET,
+    position: int | None = None,
+) -> dict[str, object]:
+    initialize(path)
+    now = _now()
+    with connection_scope(path) as connection:
+        folder = _folder_row(connection, folder_id)
+        target_parent = folder["parent_id"] if parent_id is UNSET else parent_id
+        _validate_folder_parent(connection, target_parent)
+        if target_parent == folder_id or _folder_is_descendant(connection, folder_id, target_parent):
+            raise ValueError("cannot move a folder into itself or its descendant")
+        _shift_folder_positions(connection, folder["parent_id"], folder["position"] + 1, -1)
+        target_position = _folder_insert_position(
+            connection, target_parent, position, exclude_id=folder_id
+        )
+        connection.execute(
+            """UPDATE folders
+                  SET parent_id = ?, position = ?, updated_at = ?
+                WHERE id = ?""",
+            (target_parent, target_position, now, folder_id),
+        )
+        row = _folder_row(connection, folder_id)
+    return _folder_data(row)
+
+
+def delete_folder(path: Path, folder_id: str) -> None:
+    initialize(path)
+    with connection_scope(path) as connection:
+        _folder_row(connection, folder_id)
+        if connection.execute(
+            "SELECT 1 FROM folders WHERE parent_id = ? LIMIT 1", (folder_id,)
+        ).fetchone() or connection.execute(
+            "SELECT 1 FROM documents WHERE folder_id = ? AND deleted_at IS NULL LIMIT 1",
+            (folder_id,),
+        ).fetchone():
+            raise ValueError("folder is not empty")
+        folder = _folder_row(connection, folder_id)
+        connection.execute(
+            "UPDATE documents SET folder_id = NULL WHERE folder_id = ? AND deleted_at IS NOT NULL",
+            (folder_id,),
+        )
+        connection.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+        _shift_folder_positions(connection, folder["parent_id"], folder["position"] + 1, -1)
+
+
+def move_document(
+    path: Path,
+    document_id: str,
+    folder_id: str | None | object = UNSET,
+    position: int | None = None,
+) -> dict[str, object]:
+    initialize(path)
+    now = _now()
+    with connection_scope(path) as connection:
+        document = connection.execute(
+            """SELECT id, folder_id, position FROM documents
+                 WHERE id = ? AND deleted_at IS NULL""",
+            (document_id,),
+        ).fetchone()
+        if document is None:
+            raise KeyError("document not found")
+        target_folder = document["folder_id"] if folder_id is UNSET else folder_id
+        _validate_folder_parent(connection, target_folder)
+        _shift_document_positions(
+            connection, document["folder_id"], document["position"] + 1, -1
+        )
+        target_position = _document_insert_position(
+            connection, target_folder, position, exclude_id=document_id
+        )
+        connection.execute(
+            """UPDATE documents
+                  SET folder_id = ?, position = ?, updated_at = ?
+                WHERE id = ?""",
+            (target_folder, target_position, now, document_id),
+        )
+        row = connection.execute(
+            "SELECT id, folder_id, position FROM documents WHERE id = ?", (document_id,)
+        ).fetchone()
+    return {"id": row["id"], "folder_id": row["folder_id"], "position": row["position"]}
+
+
 def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
     """Return the canonical folder tree and recently edited documents."""
 
@@ -429,7 +546,11 @@ def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
                 {
                     "kind": "folder",
                     "id": folder["id"],
+                    "parent_id": folder["parent_id"],
                     "name": folder["name"],
+                    "position": folder["position"],
+                    "created_at": folder["created_at"],
+                    "updated_at": folder["updated_at"],
                     "children": children(folder["id"]),
                 }
             )
@@ -440,6 +561,91 @@ def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
         "items": children(None),
         "recent": [_navigation_document(row) for row in recent],
     }
+
+
+def _folder_row(connection: sqlite3.Connection, folder_id: str) -> sqlite3.Row:
+    row = connection.execute("SELECT * FROM folders WHERE id = ?", (folder_id,)).fetchone()
+    if row is None:
+        raise KeyError("folder not found")
+    return row
+
+
+def _folder_data(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "id": row["id"],
+        "parent_id": row["parent_id"],
+        "name": row["name"],
+        "position": row["position"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _validate_folder_parent(connection: sqlite3.Connection, parent_id: str | None) -> None:
+    if parent_id is not None:
+        _folder_row(connection, parent_id)
+
+
+def _folder_is_descendant(
+    connection: sqlite3.Connection, folder_id: str, candidate_parent_id: str | None
+) -> bool:
+    parent_id = candidate_parent_id
+    while parent_id is not None:
+        if parent_id == folder_id:
+            return True
+        parent_id = _folder_row(connection, parent_id)["parent_id"]
+    return False
+
+
+def _folder_insert_position(
+    connection: sqlite3.Connection,
+    parent_id: str | None,
+    position: int | None,
+    exclude_id: str | None = None,
+) -> int:
+    count = connection.execute(
+        "SELECT COUNT(*) FROM folders WHERE parent_id IS ? AND id IS NOT ?",
+        (parent_id, exclude_id),
+    ).fetchone()[0]
+    target_position = count if position is None else min(position, count)
+    _shift_folder_positions(connection, parent_id, target_position, 1)
+    return target_position
+
+
+def _shift_folder_positions(
+    connection: sqlite3.Connection, parent_id: str | None, from_position: int, delta: int
+) -> None:
+    connection.execute(
+        """UPDATE folders SET position = position + ?
+           WHERE parent_id IS ? AND position >= ?""",
+        (delta, parent_id, from_position),
+    )
+
+
+def _document_insert_position(
+    connection: sqlite3.Connection,
+    folder_id: str | None,
+    position: int | None,
+    exclude_id: str | None = None,
+) -> int:
+    count = connection.execute(
+        """SELECT COUNT(*) FROM documents
+           WHERE folder_id IS ? AND deleted_at IS NULL AND id IS NOT ?""",
+        (folder_id, exclude_id),
+    ).fetchone()[0]
+    target_position = count if position is None else min(position, count)
+    _shift_document_positions(connection, folder_id, target_position, 1)
+    return target_position
+
+
+def _shift_document_positions(
+    connection: sqlite3.Connection, folder_id: str | None, from_position: int, delta: int
+) -> None:
+    connection.execute(
+        """UPDATE documents SET position = position + ?
+           WHERE folder_id IS ? AND deleted_at IS NULL AND position >= ?""",
+        (delta, folder_id, from_position),
+    )
 
 
 def backup_database(path: Path, destination: Path) -> None:

@@ -9,12 +9,17 @@ from app.block_store import (
     bootstrap_markdown,
     check_integrity,
     connection_scope,
+    create_folder,
     create_document,
+    delete_folder,
     delete_document,
     document_backlinks,
     document_tree,
     initialize,
+    move_document,
+    move_folder,
     navigation,
+    rename_folder,
     replace_document_from_markdown,
     search_blocks,
     sync_markdown,
@@ -217,7 +222,7 @@ class BlockStoreTests(unittest.TestCase):
             )
             self.assertEqual(document_backlinks(database, "target"), [])
 
-    def test_upgrades_schema_version_one_to_two(self) -> None:
+    def test_upgrades_legacy_documents_table_to_current_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             with connection_scope(database) as connection:
@@ -225,7 +230,26 @@ class BlockStoreTests(unittest.TestCase):
                     "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
                 )
                 connection.execute(
-                    "INSERT INTO schema_migrations(version, applied_at) VALUES (1, ?)",
+                    """CREATE TABLE documents(
+                           id TEXT PRIMARY KEY,
+                           title TEXT NOT NULL,
+                           status TEXT NOT NULL,
+                           tags_json TEXT NOT NULL,
+                           created_at TEXT NOT NULL,
+                           updated_at TEXT NOT NULL
+                       )"""
+                )
+                connection.executemany(
+                    """INSERT INTO documents(
+                           id, title, status, tags_json, created_at, updated_at
+                       ) VALUES (?, ?, 'rough', '[]', ?, ?)""",
+                    [
+                        ("older", "Older", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+                        ("newer", "Newer", "2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"),
+                    ],
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?)",
                     ("2026-01-01T00:00:00+00:00",),
                 )
             initialize(database)
@@ -233,7 +257,7 @@ class BlockStoreTests(unittest.TestCase):
                 versions = connection.execute(
                     "SELECT version FROM schema_migrations ORDER BY version"
                 ).fetchall()
-                self.assertEqual([row["version"] for row in versions], [1, 2, 3])
+                self.assertEqual([row["version"] for row in versions], [2, 3])
                 self.assertIsNotNone(
                     connection.execute(
                         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'document_refs'"
@@ -243,6 +267,16 @@ class BlockStoreTests(unittest.TestCase):
                     connection.execute(
                         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'folders'"
                     ).fetchone()
+                )
+                columns = {
+                    row["name"] for row in connection.execute("PRAGMA table_info(documents)")
+                }
+                self.assertTrue({"folder_id", "position", "deleted_at"} <= columns)
+                self.assertEqual(
+                    [row["position"] for row in connection.execute(
+                        "SELECT position FROM documents ORDER BY position"
+                    )],
+                    [0, 1],
                 )
 
     def test_navigation_excludes_soft_deleted_documents(self) -> None:
@@ -277,6 +311,98 @@ class BlockStoreTests(unittest.TestCase):
             result = navigation(database)
             self.assertEqual([item["id"] for item in result["items"]], ["two"])
             self.assertIsNone(document_tree(database, "one"))
+
+    def test_organizes_folders_with_stable_ordering_and_cycle_protection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            first = create_folder(database, "First")
+            second = create_folder(database, "Second", position=0)
+            child = create_folder(database, "Child", parent_id=first["id"])
+
+            self.assertEqual(
+                [item["name"] for item in navigation(database)["items"]],
+                ["Second", "First"],
+            )
+            renamed = rename_folder(database, first["id"], "Renamed")
+            self.assertEqual(renamed["name"], "Renamed")
+
+            with self.assertRaisesRegex(ValueError, "descendant"):
+                move_folder(database, first["id"], child["id"])
+
+            moved = move_folder(database, second["id"], first["id"], position=0)
+            self.assertEqual(moved["parent_id"], first["id"])
+            tree = navigation(database)["items"]
+            self.assertEqual(tree[0]["name"], "Renamed")
+            self.assertEqual(
+                [item["name"] for item in tree[0]["children"]], ["Second", "Child"]
+            )
+
+    def test_deletes_only_empty_folders_and_moves_documents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            source = create_folder(database, "Source")
+            destination = create_folder(database, "Destination")
+            create_document(
+                database,
+                "one",
+                "One",
+                "rough",
+                [],
+                "First",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            create_document(
+                database,
+                "two",
+                "Two",
+                "rough",
+                [],
+                "Second",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+
+            self.assertEqual(move_document(database, "one", source["id"])["position"], 0)
+            self.assertEqual(
+                move_document(database, "two", source["id"], position=0)["position"], 0
+            )
+            result = navigation(database)
+            source_node = next(item for item in result["items"] if item["id"] == source["id"])
+            self.assertEqual(
+                [item["id"] for item in source_node["children"]], ["two", "one"]
+            )
+            move_document(database, "two")
+            source_node = next(item for item in navigation(database)["items"] if item["id"] == source["id"])
+            self.assertEqual([item["id"] for item in source_node["children"]], ["one", "two"])
+
+            with self.assertRaisesRegex(ValueError, "not empty"):
+                delete_folder(database, source["id"])
+
+            move_document(database, "one", destination["id"])
+            move_document(database, "two", destination["id"])
+            create_document(
+                database,
+                "three",
+                "Three",
+                "rough",
+                [],
+                "Third",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            move_document(database, "three", source["id"])
+            delete_document(database, "three")
+            delete_folder(database, source["id"])
+            self.assertEqual(
+                [item["id"] for item in navigation(database)["items"]], [destination["id"]]
+            )
+            with connection_scope(database) as connection:
+                self.assertIsNone(
+                    connection.execute(
+                        "SELECT folder_id FROM documents WHERE id = 'three'"
+                    ).fetchone()["folder_id"]
+                )
 
     def test_compatibility_mirror_tracks_block_store_writes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

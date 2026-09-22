@@ -5,6 +5,8 @@ import type {
   NoteStatus,
   NoteSummary,
   NavigationResponse,
+  Folder,
+  DocumentOrganization,
   BlockDocument,
   BlockSearchResult,
   BlockLinkTarget,
@@ -23,7 +25,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const detail =
+      body && typeof body === "object" && "detail" in body && typeof body.detail === "string"
+        ? body.detail
+        : null;
+    throw new Error(`${res.status} ${detail ?? res.statusText}`);
+  }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -69,6 +78,19 @@ export const notesApi = {
 export const blockApi = {
   navigation: (recentLimit = 10) =>
     request<NavigationResponse>(`/navigation?recent_limit=${recentLimit}`),
+  createFolder: (name: string, parent_id: string | null = null, position?: number) =>
+    request<Folder>("/folders", {
+      method: "POST",
+      body: JSON.stringify({ name, parent_id, position }),
+    }),
+  renameFolder: (id: string, name: string) =>
+    request<Folder>(`/folders/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  removeFolder: (id: string) => request<void>(`/folders/${id}`, { method: "DELETE" }),
+  moveDocument: (id: string, folder_id: string | null, position?: number) =>
+    request<DocumentOrganization>(`/block-documents/${id}/move`, {
+      method: "POST",
+      body: JSON.stringify({ folder_id, position }),
+    }),
   get: (id: string) => request<BlockDocument>(`/block-documents/${id}`),
   backlinks: (id: string, limit = 100) =>
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),

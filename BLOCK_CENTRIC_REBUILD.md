@@ -201,6 +201,8 @@ plugin-driven publishing editor.
 ## Current status
 
 The repository still serves compatibility Markdown endpoints, but the normal note
-surface now reads the SQLite block tree and uses BlockNote for editing. The next
-slice is adding document hierarchy/navigation and live block link previews on top
-of the same store.
+surface reads the SQLite block tree and uses BlockNote for editing. SQLite is opened
+with foreign keys, WAL, a busy timeout, full synchronous durability, numbered
+migrations, FTS5, backups, and integrity checks. The next slices are completing
+hierarchy mutations and making editor autosave conflict-aware before adding portable
+export/import and block-scoped search filters.

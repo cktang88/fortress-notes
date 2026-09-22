@@ -14,6 +14,40 @@ export function useNavigation() {
   });
 }
 
+function useNavigationMutation<TVariables, TResult>(
+  mutationFn: (variables: TVariables) => Promise<TResult>,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["navigation"] });
+    },
+  });
+}
+
+export function useCreateFolder() {
+  return useNavigationMutation(({ name, parentId }: { name: string; parentId?: string | null }) =>
+    blockApi.createFolder(name, parentId),
+  );
+}
+
+export function useRenameFolder() {
+  return useNavigationMutation(({ id, name }: { id: string; name: string }) =>
+    blockApi.renameFolder(id, name),
+  );
+}
+
+export function useDeleteFolder() {
+  return useNavigationMutation((id: string) => blockApi.removeFolder(id));
+}
+
+export function useMoveDocument() {
+  return useNavigationMutation(({ id, folderId }: { id: string; folderId: string | null }) =>
+    blockApi.moveDocument(id, folderId),
+  );
+}
+
 export function useNote(id: string | null) {
   return useQuery({
     queryKey: ["note", id],

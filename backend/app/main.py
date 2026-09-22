@@ -24,6 +24,12 @@ from .models import (
     ReviewKind,
     ReviewResponse,
     SearchResult,
+    DocumentMove,
+    DocumentOrganization,
+    Folder,
+    FolderCreate,
+    FolderMove,
+    FolderRename,
 )
 
 settings = get_settings()
@@ -109,6 +115,79 @@ def get_navigation(recent_limit: int = Query(10, ge=1, le=50)):
     if not settings.block_db_enabled:
         raise HTTPException(404, "Block store is disabled")
     return block_store.navigation(settings.block_db_path, recent_limit)
+
+
+@app.post("/api/folders", response_model=Folder, status_code=201)
+def create_folder(data: FolderCreate):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    try:
+        return block_store.create_folder(
+            settings.block_db_path, data.name, data.parent_id, data.position
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.patch("/api/folders/{folder_id}", response_model=Folder)
+def rename_folder(folder_id: str, data: FolderRename):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    try:
+        return block_store.rename_folder(settings.block_db_path, folder_id, data.name)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/folders/{folder_id}/move", response_model=Folder)
+def move_folder(folder_id: str, data: FolderMove):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    try:
+        parent_id = (
+            data.parent_id
+            if "parent_id" in data.model_fields_set
+            else block_store.UNSET
+        )
+        return block_store.move_folder(
+            settings.block_db_path, folder_id, parent_id, data.position
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.delete("/api/folders/{folder_id}", status_code=204)
+def delete_folder(folder_id: str):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    try:
+        block_store.delete_folder(settings.block_db_path, folder_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return Response(status_code=204)
+
+
+@app.post(
+    "/api/block-documents/{document_id}/move", response_model=DocumentOrganization
+)
+def move_block_document(document_id: str, data: DocumentMove):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    try:
+        folder_id = (
+            data.folder_id
+            if "folder_id" in data.model_fields_set
+            else block_store.UNSET
+        )
+        return block_store.move_document(
+            settings.block_db_path, document_id, folder_id, data.position
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @app.get("/api/block-documents/{document_id}")

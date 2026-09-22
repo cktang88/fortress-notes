@@ -2,10 +2,11 @@
 
 ## 1. Goal
 
-A local-first notes app where the source of truth is a **folder of Markdown files**.
-The app provides a fast two-pane UI, two search modes (full-text + ColBERT
-late-interaction embedding search), live related-notes, rough→polished workflow, and
-an LLM "review" of the current note.
+A local-first block-centric notes app where **SQLite is the live source of truth** for
+documents, nested blocks, references, and indexes. Markdown remains the portable
+import/export format. The app provides a fast two-pane UI, two search modes
+(full-text + ColBERT late-interaction embedding search), live related results,
+rough→polished workflow, and an LLM "review" of the current document.
 
 Non-goals (for v1): multi-user, auth, real-time collaboration, mobile, cloud sync,
 nested folders.
@@ -40,8 +41,9 @@ resized width survives the round-trip).
 - **title**: if empty, derived from the first heading/line of the body.
 - Timestamps are UTC ISO-8601. `updated_at` is set on every save.
 
-The filesystem is authoritative. The backend reads files on demand and keeps an
-in-memory cache + search index that it rebuilds on change.
+SQLite is authoritative for the active block workspace. Markdown files are preserved
+as migration inputs and compatibility mirrors; import/export must never silently delete
+them.
 
 ## 3. Backend (FastAPI, Python / uv)
 
@@ -100,7 +102,7 @@ in-memory cache + search index that it rebuilds on change.
     ("code review for your notes").
 - Returns structured `ReviewResponse { kind, summary, items[] }`.
 
-## 4. Frontend (Vite + React + TanStack Query + Tailwind + Tiptap)
+## 4. Frontend (Vite + React + TanStack Query + Tailwind + BlockNote)
 
 ### Layout
 ```
@@ -108,9 +110,9 @@ in-memory cache + search index that it rebuilds on change.
 │ Search bar  [text|embed] │                                     │
 │ [+ New]   [All|Rough|Pol]│         Note title                  │
 ├──────────────────────────┤   [status badge] [Promote] [AI ▾]   │
-│ ▸ Note list (scroll)     │                                     │
+│ ▸ Document tree (scroll) │                                     │
 │   • note A    rough      │   ┌───────────────────────────────┐ │
-│   • note B    polished   │   │  Tiptap rich-text editor      │ │
+│   • note B    polished   │   │  BlockNote rich-text editor  │ │
 │   • ...                  │   │  (Markdown-backed)            │ │
 │                          │   │                               │ │
 ├──────────────────────────┤   └───────────────────────────────┘ │
@@ -124,7 +126,7 @@ in-memory cache + search index that it rebuilds on change.
 - `NoteList` — list + status filter; clicking selects a note.
 - `SearchBar` — query input + mode toggle (text/embedding); drives the list.
 - `RelatedNotes` — bottom-left; refetches on selected-note change.
-- `NoteEditor` — Tiptap editor; debounced autosave (PUT); Markdown ⇄ HTML.
+- `BlockNoteEditor` — nested block editor; debounced transactional autosave.
 - `NoteHeader` — title, status badge, Promote button, AI review dropdown.
 - `ReviewPanel` — shows LLM `factcheck`/`clarify`/`object` output.
 - `api.ts` — typed fetch wrappers; `hooks.ts` — TanStack Query hooks.

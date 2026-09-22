@@ -14,6 +14,8 @@ import type { Annotation } from "./features/notes/annotations";
 import {
   useConsistency,
   useCreateNote,
+  useCreateFolder,
+  useDeleteFolder,
   useDeleteNote,
   useHeal,
   useNote,
@@ -21,6 +23,8 @@ import {
   useBlockSearch,
   useNavigation,
   useNotes,
+  useMoveDocument,
+  useRenameFolder,
   useReview,
   useSearch,
   useUpdateNote,
@@ -44,6 +48,10 @@ export function App() {
   const blockDocument = useBlockDocument(selectedId);
 
   const createNote = useCreateNote();
+  const createFolder = useCreateFolder();
+  const renameFolder = useRenameFolder();
+  const deleteFolder = useDeleteFolder();
+  const moveDocument = useMoveDocument();
   const updateNote = useUpdateNote();
   const deleteNote = useDeleteNote();
   const review = useReview();
@@ -153,6 +161,10 @@ export function App() {
             selectedId={selectedId}
             loading={navigation.isLoading}
             onSelect={selectNote}
+            onCreateFolder={(name) => createFolder.mutateAsync({ name })}
+            onRenameFolder={(id, name) => renameFolder.mutateAsync({ id, name })}
+            onDeleteFolder={(id) => deleteFolder.mutateAsync(id)}
+            onMoveDocument={(id, folderId) => moveDocument.mutateAsync({ id, folderId })}
           />
         )}
         <OutlinePanel

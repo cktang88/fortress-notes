@@ -54,6 +54,41 @@ class BlockTransaction(BaseModel):
     operations: list[BlockOperation] = Field(min_length=1)
 
 
+class Folder(BaseModel):
+    id: str
+    parent_id: str | None = None
+    name: str
+    position: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class FolderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    parent_id: str | None = None
+    position: int | None = Field(default=None, ge=0)
+
+
+class FolderRename(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+class FolderMove(BaseModel):
+    parent_id: str | None = None
+    position: int | None = Field(default=None, ge=0)
+
+
+class DocumentMove(BaseModel):
+    folder_id: str | None = None
+    position: int | None = Field(default=None, ge=0)
+
+
+class DocumentOrganization(BaseModel):
+    id: str
+    folder_id: str | None = None
+    position: int
+
+
 class SearchResult(BaseModel):
     note: NoteSummary
     score: float = Field(description="Higher is more relevant")
