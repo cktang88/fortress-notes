@@ -46,6 +46,7 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
   );
   const saveQueue = useRef(Promise.resolve());
   const blockUpdatedAt = useRef(blockUpdatedAtById(initialDocument.children));
+  const documentRevision = useRef(initialDocument.revision);
   const saveFailed = useRef(false);
   const hydrating = useRef(true);
   const [saving, setSaving] = useState(false);
@@ -66,9 +67,13 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
       try {
         const document = await blockApi.transaction(
           initialDocument.id,
-          withExpectedUpdatedAt(operations, blockUpdatedAt.current),
+          transactionPayload(
+            documentRevision.current,
+            withExpectedUpdatedAt(operations, blockUpdatedAt.current),
+          ),
         );
         blockUpdatedAt.current = blockUpdatedAtById(document.children);
+        documentRevision.current = document.revision;
         queryClient.setQueryData(["block-document", initialDocument.id], document);
         void queryClient.invalidateQueries({ queryKey: ["navigation"] });
         void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
@@ -87,9 +92,10 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
 
   useEffect(() => {
     blockUpdatedAt.current = blockUpdatedAtById(initialDocument.children);
+    documentRevision.current = initialDocument.revision;
     saveFailed.current = false;
     setSaveError(null);
-  }, [initialDocument.id]);
+  }, [initialDocument.id, initialDocument.revision]);
 
   useEffect(() => {
     editor.transact(() => {
@@ -360,6 +366,10 @@ export function withExpectedUpdatedAt(
       ? operation
       : { ...operation, expected_updated_at: expectedUpdatedAt };
   });
+}
+
+export function transactionPayload(baseRevision: number, operations: BlockOperation[]) {
+  return { base_revision: baseRevision, operations };
 }
 
 function blockUpdatedAtById(nodes: readonly BlockNode[]): Map<string, string> {

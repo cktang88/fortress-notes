@@ -22,7 +22,7 @@ from ulid import ULID
 
 from .models import BlockOperation
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DB_FILENAME = ".fortress.sqlite3"
 
 _TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS documents (
     position INTEGER NOT NULL DEFAULT 0,
     deleted_at TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS folders_parent_position ON folders(parent_id, position);
@@ -141,7 +142,8 @@ _MIGRATIONS = {
     );
     CREATE INDEX IF NOT EXISTS folders_parent_position ON folders(parent_id, position);
     CREATE INDEX IF NOT EXISTS documents_folder_position ON documents(folder_id, position);
-    """
+    """,
+    4: "",
 }
 
 _ready_paths: set[Path] = set()
@@ -231,6 +233,15 @@ def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
                   )
                 WHERE deleted_at IS NULL"""
         )
+    if version == 4:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(documents)").fetchall()
+        }
+        if "revision" not in columns:
+            connection.execute(
+                "ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+            )
     connection.executescript(_MIGRATIONS[version])
 
 
@@ -665,6 +676,53 @@ def check_integrity(path: Path) -> bool:
     return result is not None and result[0] == "ok"
 
 
+def fts_is_consistent(path: Path) -> bool:
+    """Check that FTS contains exactly the active canonical blocks."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        missing = connection.execute(
+            """SELECT 1
+                 FROM blocks
+                 JOIN documents ON documents.id = blocks.document_id
+                 LEFT JOIN blocks_fts ON blocks_fts.block_id = blocks.id
+                WHERE documents.deleted_at IS NULL AND blocks_fts.block_id IS NULL
+                LIMIT 1"""
+        ).fetchone()
+        stale = connection.execute(
+            """SELECT 1
+                 FROM blocks_fts
+                 LEFT JOIN blocks ON blocks.id = blocks_fts.block_id
+                 LEFT JOIN documents ON documents.id = blocks_fts.document_id
+                WHERE blocks.id IS NULL OR documents.deleted_at IS NOT NULL
+                LIMIT 1"""
+        ).fetchone()
+    return missing is None and stale is None
+
+
+def rebuild_fts(path: Path) -> None:
+    """Rebuild the disposable FTS rows from active canonical blocks."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        connection.execute("DELETE FROM blocks_fts")
+        connection.execute(
+            """INSERT INTO blocks_fts(block_id, document_id, text)
+                 SELECT blocks.id, blocks.document_id, blocks.text
+                   FROM blocks
+                   JOIN documents ON documents.id = blocks.document_id
+                  WHERE documents.deleted_at IS NULL"""
+        )
+
+
+def ensure_fts_integrity(path: Path) -> bool:
+    """Repair FTS if needed and report whether the index is consistent afterward."""
+
+    if not fts_is_consistent(path):
+        rebuild_fts(path)
+    return fts_is_consistent(path)
+
+
 def search_blocks(path: Path, query: str, limit: int = 50) -> list[dict[str, object]]:
     """Search canonical block text with SQLite FTS5 and return block context."""
 
@@ -1039,26 +1097,61 @@ def document_tree(path: Path, document_id: str) -> dict | None:
         "tags": json.loads(document["tags_json"]),
         "created_at": document["created_at"],
         "updated_at": document["updated_at"],
+        "revision": document["revision"],
         "children": roots,
     }
 
 
-def apply_transaction(path: Path, document_id: str, operations: list[BlockOperation]) -> dict:
-    """Apply block operations atomically and return the resulting document tree."""
+class DocumentRevisionConflict(RuntimeError):
+    """Raised when a transaction was composed from an older document version."""
+
+    def __init__(self, document_id: str, base_revision: int, current_revision: int):
+        self.document_id = document_id
+        self.base_revision = base_revision
+        self.current_revision = current_revision
+        super().__init__(
+            f"document revision conflict: expected {base_revision}, "
+            f"current revision is {current_revision}"
+        )
+
+    def detail(self) -> dict[str, int | str]:
+        return {
+            "code": "document_revision_conflict",
+            "document_id": self.document_id,
+            "base_revision": self.base_revision,
+            "current_revision": self.current_revision,
+        }
+
+
+def apply_transaction(
+    path: Path,
+    document_id: str,
+    operations: list[BlockOperation],
+    base_revision: int,
+) -> dict:
+    """Apply operations for ``base_revision`` atomically and return the new tree."""
 
     initialize(path)
     now = _now()
     with connection_scope(path) as connection:
+        # Acquire the SQLite writer lock before reading the version. Without this,
+        # two writers could both read the same revision before either starts a write.
+        connection.execute("BEGIN IMMEDIATE")
         document = connection.execute(
-            "SELECT 1 FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
+            "SELECT revision FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
         ).fetchone()
         if document is None:
             raise KeyError("document not found")
+        if base_revision != document["revision"]:
+            raise DocumentRevisionConflict(
+                document_id, base_revision, document["revision"]
+            )
         for operation in operations:
             _apply_operation(connection, document_id, operation, now)
         _rebuild_document_references(connection, document_id)
         connection.execute(
-            "UPDATE documents SET updated_at = ? WHERE id = ?", (now, document_id)
+            "UPDATE documents SET updated_at = ?, revision = revision + 1 WHERE id = ?",
+            (now, document_id),
         )
     tree = document_tree(path, document_id)
     if tree is None:  # pragma: no cover - protected by the transaction above

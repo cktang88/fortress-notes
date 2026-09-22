@@ -82,12 +82,18 @@ export interface BlockNode {
 
 export interface BlockDocument {
   id: string;
+  revision: number;
   title: string;
   status: NoteStatus;
   tags: string[];
   created_at: string;
   updated_at: string;
   children: BlockNode[];
+}
+
+export interface BlockTransaction {
+  base_revision: number;
+  operations: BlockOperation[];
 }
 
 export interface BlockOperation {

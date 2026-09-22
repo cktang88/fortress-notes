@@ -12,7 +12,7 @@ import type {
   BlockSearchResult,
   BlockLinkTarget,
   Backlink,
-  BlockOperation,
+  BlockTransaction,
   ReviewKind,
   ReviewResponse,
   SearchMode,
@@ -99,10 +99,10 @@ export const blockApi = {
     request<BlockSearchResult[]>(`/block-search?${blockSearchParams(q, filters, limit)}`),
   linkTargets: (q: string, limit = 50) =>
     request<BlockLinkTarget[]>(`/block-link-targets?q=${encodeURIComponent(q)}&limit=${limit}`),
-  transaction: (id: string, operations: BlockOperation[]) =>
+  transaction: (id: string, transaction: BlockTransaction) =>
     request<BlockDocument>(`/block-documents/${id}/transactions`, {
       method: "POST",
-      body: JSON.stringify({ operations }),
+      body: JSON.stringify(transaction),
     }),
 };
 

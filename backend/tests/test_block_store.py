@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.block_store import (
+    DocumentRevisionConflict,
     apply_transaction,
     backup_database,
     block_link_targets,
@@ -15,16 +16,20 @@ from app.block_store import (
     delete_document,
     document_backlinks,
     document_tree,
+    ensure_fts_integrity,
+    fts_is_consistent,
     initialize,
     move_document,
     move_folder,
     navigation,
     rename_folder,
     replace_document_from_markdown,
+    rebuild_fts,
     search_blocks,
     sync_markdown,
 )
-from app.models import BlockOperation
+from app.models import BlockOperation, BlockTransaction
+from pydantic import ValidationError
 
 
 class BlockStoreTests(unittest.TestCase):
@@ -70,11 +75,14 @@ class BlockStoreTests(unittest.TestCase):
             (root / "one.md").write_text("---\ntitle: One\n---\nA\n\nB\n", encoding="utf-8")
             database = root / ".fortress.sqlite3"
             bootstrap_markdown(root, database)
+            tree = document_tree(database, "one")
+            assert tree is not None
 
             tree = apply_transaction(
                 database,
                 "one",
                 [BlockOperation(operation="insert", position=1, text="X")],
+                tree["revision"],
             )
             self.assertEqual([block["text"] for block in tree["children"]], ["A", "X", "B"])
             ids = [block["id"] for block in tree["children"]]
@@ -83,6 +91,7 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "one",
                 [BlockOperation(operation="move", block_id=ids[0], position=2)],
+                tree["revision"],
             )
             self.assertEqual([block["text"] for block in tree["children"]], ["X", "B", "A"])
 
@@ -90,6 +99,7 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "one",
                 [BlockOperation(operation="update", block_id=ids[2], text="BB")],
+                tree["revision"],
             )
             self.assertEqual([block["text"] for block in tree["children"]], ["X", "BB", "A"])
 
@@ -97,14 +107,114 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "one",
                 [BlockOperation(operation="delete", block_id=ids[2])],
+                tree["revision"],
             )
             self.assertEqual([block["text"] for block in tree["children"]], ["X", "A"])
+            self.assertEqual(tree["revision"], 4)
             with connection_scope(database) as connection:
                 self.assertIsNone(
                     connection.execute(
                         "SELECT 1 FROM blocks_fts WHERE block_id = ?", (ids[2],)
                     ).fetchone()
                 )
+
+    def test_transactions_require_and_increment_document_revisions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            create_document(
+                database,
+                "one",
+                "One",
+                "rough",
+                [],
+                "A\n\nB",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            before = document_tree(database, "one")
+            assert before is not None
+            self.assertEqual(before["revision"], 0)
+
+            updated = apply_transaction(
+                database,
+                "one",
+                [
+                    BlockOperation(operation="insert", text="C"),
+                    BlockOperation(operation="insert", text="D"),
+                ],
+                before["revision"],
+            )
+            self.assertEqual(updated["revision"], 1)
+            self.assertEqual(
+                [block["text"] for block in updated["children"]], ["A", "B", "C", "D"]
+            )
+
+            with self.assertRaises(DocumentRevisionConflict) as raised:
+                apply_transaction(
+                    database,
+                    "one",
+                    [BlockOperation(operation="insert", text="must not be inserted")],
+                    before["revision"],
+                )
+            self.assertEqual(
+                raised.exception.detail(),
+                {
+                    "code": "document_revision_conflict",
+                    "document_id": "one",
+                    "base_revision": 0,
+                    "current_revision": 1,
+                },
+            )
+            after = document_tree(database, "one")
+            assert after is not None
+            self.assertEqual(after["revision"], 1)
+            self.assertEqual(
+                [block["text"] for block in after["children"]], ["A", "B", "C", "D"]
+            )
+
+    def test_stale_revision_protects_concurrent_block_moves(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            create_document(
+                database,
+                "one",
+                "One",
+                "rough",
+                [],
+                "A\n\nB\n\nC",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            initial = document_tree(database, "one")
+            assert initial is not None
+            block_ids = [block["id"] for block in initial["children"]]
+
+            first_move = apply_transaction(
+                database,
+                "one",
+                [BlockOperation(operation="move", block_id=block_ids[0], position=2)],
+                initial["revision"],
+            )
+            self.assertEqual(
+                [block["text"] for block in first_move["children"]], ["B", "C", "A"]
+            )
+            with self.assertRaises(DocumentRevisionConflict):
+                apply_transaction(
+                    database,
+                    "one",
+                    [BlockOperation(operation="move", block_id=block_ids[1], position=2)],
+                    initial["revision"],
+                )
+            final = document_tree(database, "one")
+            assert final is not None
+            self.assertEqual(final["revision"], 1)
+            self.assertEqual([block["text"] for block in final["children"]], ["B", "C", "A"])
+
+    def test_block_transactions_require_a_non_negative_base_revision(self) -> None:
+        with self.assertRaises(ValidationError):
+            BlockTransaction(operations=[BlockOperation(operation="insert")])
+        with self.assertRaises(ValidationError):
+            BlockTransaction(base_revision=-1, operations=[BlockOperation(operation="insert")])
 
     def test_imports_nested_tasks_and_rich_markdown_as_child_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -150,6 +260,31 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(parent_hits[0]["document_id"], "one")
             self.assertEqual(child_hits[0]["text"], "- Child phrase")
             self.assertEqual(search_blocks(database, "not-present"), [])
+
+    def test_rebuilds_stale_fts_rows_from_active_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            create_document(
+                database,
+                "one",
+                "One",
+                "rough",
+                [],
+                "Indexed text",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            with connection_scope(database) as connection:
+                connection.execute("DELETE FROM blocks_fts")
+            self.assertFalse(fts_is_consistent(database))
+            self.assertTrue(ensure_fts_integrity(database))
+            self.assertEqual(len(search_blocks(database, "Indexed")), 1)
+
+            delete_document(database, "one")
+            self.assertFalse(fts_is_consistent(database))
+            rebuild_fts(database)
+            self.assertTrue(fts_is_consistent(database))
+            self.assertEqual(search_blocks(database, "Indexed"), [])
 
     def test_lists_stable_block_targets_for_reference_autocomplete(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -257,7 +392,7 @@ class BlockStoreTests(unittest.TestCase):
                 versions = connection.execute(
                     "SELECT version FROM schema_migrations ORDER BY version"
                 ).fetchall()
-                self.assertEqual([row["version"] for row in versions], [2, 3])
+                self.assertEqual([row["version"] for row in versions], [2, 3, 4])
                 self.assertIsNotNone(
                     connection.execute(
                         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'document_refs'"
@@ -271,7 +406,15 @@ class BlockStoreTests(unittest.TestCase):
                 columns = {
                     row["name"] for row in connection.execute("PRAGMA table_info(documents)")
                 }
-                self.assertTrue({"folder_id", "position", "deleted_at"} <= columns)
+                self.assertTrue(
+                    {"folder_id", "position", "deleted_at", "revision"} <= columns
+                )
+                self.assertEqual(
+                    [row["revision"] for row in connection.execute(
+                        "SELECT revision FROM documents ORDER BY id"
+                    )],
+                    [0, 0],
+                )
                 self.assertEqual(
                     [row["position"] for row in connection.execute(
                         "SELECT position FROM documents ORDER BY position"
@@ -435,6 +578,7 @@ class BlockStoreTests(unittest.TestCase):
                         text="Updated",
                     )
                 ],
+                tree["revision"],
             )
             sync_markdown(root, database, "one")
 

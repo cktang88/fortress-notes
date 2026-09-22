@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { withExpectedUpdatedAt } from "./BlockNoteEditor";
+import { transactionPayload, withExpectedUpdatedAt } from "./BlockNoteEditor";
 import type { BlockOperation } from "./types";
 
 describe("withExpectedUpdatedAt", () => {
@@ -34,5 +34,16 @@ describe("withExpectedUpdatedAt", () => {
         expected_updated_at: "2026-09-22T12:01:00Z",
       },
     ]);
+  });
+});
+
+describe("transactionPayload", () => {
+  it("sends the document revision with the existing operations", () => {
+    const operations: BlockOperation[] = [{ operation: "update", block_id: "block-1" }];
+
+    expect(transactionPayload(7, operations)).toEqual({
+      base_revision: 7,
+      operations,
+    });
   });
 });

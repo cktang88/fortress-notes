@@ -120,8 +120,8 @@ plugin-driven publishing editor.
 - [ ] Add block subtree endpoint with parent, children, depth, and breadcrumbs.
 - [x] Add transaction endpoint with optimistic revision checks.
 - [ ] Support insert, update text/type, move, duplicate, delete, and merge/split.
-- [ ] Support batch transactions so paste, drag, and multi-block transforms are atomic.
-- [ ] Return conflict details instead of silently overwriting a newer revision.
+- [x] Support batch transactions so paste, drag, and multi-block transforms are atomic.
+- [x] Return conflict details instead of silently overwriting a newer revision.
 - [ ] Keep compatibility endpoints for old note clients until the new UI is complete.
 
 ### Phase 3 — block editor shell
@@ -163,7 +163,7 @@ plugin-driven publishing editor.
 - [x] Add filters for document, block type, tag, status, and date.
 - [ ] Adapt embedding search to index blocks, not whole notes; keep keyword fallback.
 - [ ] Add related blocks/documents and explain why each result matched.
-- [ ] Add rebuild-index command and startup integrity check.
+- [x] Add rebuild-index endpoint and startup integrity check.
 
 ### Phase 6 — assets and AI
 

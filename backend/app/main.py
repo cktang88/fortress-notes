@@ -85,6 +85,7 @@ async def lifespan(_app: FastAPI):
             )
         else:
             await asyncio.to_thread(block_store.initialize, settings.block_db_path)
+        await asyncio.to_thread(block_store.ensure_fts_integrity, settings.block_db_path)
     task = (
         asyncio.create_task(_reindex_loop()) if settings.embeddings_enabled else None
     )
@@ -287,6 +288,14 @@ def search_blocks(
     )
 
 
+@app.post("/api/block-search/rebuild")
+def rebuild_block_search_index():
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    block_store.rebuild_fts(settings.block_db_path)
+    return {"ok": block_store.fts_is_consistent(settings.block_db_path)}
+
+
 @app.get("/api/block-link-targets", response_model=list[BlockLinkTarget])
 def block_link_targets(q: str = "", limit: int = Query(50, ge=1, le=200)):
     if not settings.block_db_enabled:
@@ -309,12 +318,17 @@ def apply_block_transaction(document_id: str, transaction: BlockTransaction):
         raise HTTPException(404, "Block store is disabled")
     try:
         tree = block_store.apply_transaction(
-            settings.block_db_path, document_id, transaction.operations
+            settings.block_db_path,
+            document_id,
+            transaction.operations,
+            transaction.base_revision,
         )
         block_store.sync_markdown(settings.notes_path, settings.block_db_path, document_id)
         return tree
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except block_store.DocumentRevisionConflict as exc:
+        raise HTTPException(409, exc.detail()) from exc
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(409, str(exc)) from exc
 

@@ -51,6 +51,7 @@ class BlockOperation(BaseModel):
 
 
 class BlockTransaction(BaseModel):
+    base_revision: int = Field(ge=0)
     operations: list[BlockOperation] = Field(min_length=1)
 
 
