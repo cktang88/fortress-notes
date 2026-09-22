@@ -67,6 +67,14 @@ export interface BlockSearchResult {
   score: number;
 }
 
+export interface BlockLinkTarget {
+  block_id: string;
+  document_id: string;
+  document_title: string;
+  block_type: string;
+  text: string;
+}
+
 export interface Backlink {
   source_block_id: string;
   source_document_id: string;

@@ -19,6 +19,7 @@ from .models import (
     NoteUpdate,
     BlockTransaction,
     BlockSearchResult,
+    BlockLinkTarget,
     Backlink,
     ReviewKind,
     ReviewResponse,
@@ -120,6 +121,13 @@ def search_blocks(q: str, limit: int = Query(50, ge=1, le=200)):
     if not settings.block_db_enabled:
         raise HTTPException(404, "Block store is disabled")
     return block_store.search_blocks(settings.block_db_path, q, limit)
+
+
+@app.get("/api/block-link-targets", response_model=list[BlockLinkTarget])
+def block_link_targets(q: str = "", limit: int = Query(50, ge=1, le=200)):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    return block_store.block_link_targets(settings.block_db_path, q, limit)
 
 
 @app.get("/api/block-documents/{document_id}/backlinks", response_model=list[Backlink])

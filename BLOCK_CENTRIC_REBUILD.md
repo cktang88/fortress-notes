@@ -145,7 +145,7 @@ plugin-driven publishing editor.
 
 - [ ] Add document tree/sidebar with collapsed folders and recent documents.
 - [x] Add outline from heading blocks with click-to-focus navigation.
-- [x] Add `[[` document link autocomplete backed by stable document IDs.
+- [x] Add `[[` document and `((` block-reference autocomplete backed by stable IDs.
 - [ ] Add block references and embeds with live target previews.
 - [x] Persist block/document references and add a backlinks panel grouped by
   source document and block, with click-to-focus navigation.

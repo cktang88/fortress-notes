@@ -5,6 +5,7 @@ from pathlib import Path
 from app.block_store import (
     apply_transaction,
     backup_database,
+    block_link_targets,
     bootstrap_markdown,
     check_integrity,
     connection_scope,
@@ -142,6 +143,27 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(parent_hits[0]["document_id"], "one")
             self.assertEqual(child_hits[0]["text"], "- Child phrase")
             self.assertEqual(search_blocks(database, "not-present"), [])
+
+    def test_lists_stable_block_targets_for_reference_autocomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "one.md").write_text(
+                "---\ntitle: One\n---\nFirst block\n\nSecond block\n", encoding="utf-8"
+            )
+            (root / "two.md").write_text(
+                "---\ntitle: Two\n---\nAnother block\n", encoding="utf-8"
+            )
+            database = root / ".fortress.sqlite3"
+            bootstrap_markdown(root, database)
+
+            all_targets = block_link_targets(database, "block", limit=10)
+            self.assertEqual(len(all_targets), 3)
+            self.assertEqual(all_targets[0]["document_id"], "two")
+            self.assertEqual(block_link_targets(database, "second")[0]["text"], "Second block")
+            self.assertEqual(len(block_link_targets(database, "One")), 1)
+            self.assertEqual(block_link_targets(database, "missing"), [])
+            self.assertEqual(block_link_targets(database, "%"), [])
+            self.assertEqual(block_link_targets(database), [])
 
     def test_rebuilds_block_and_document_backlinks_in_the_same_store(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

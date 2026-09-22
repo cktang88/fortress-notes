@@ -1,4 +1,4 @@
-import type { NoteSummary } from "./types";
+import type { BlockLinkTarget, NoteSummary } from "./types";
 
 const MAX_LINK_SUGGESTIONS = 8;
 
@@ -30,4 +30,14 @@ export function matchingLinkTargets(
 export function documentLink(target: Pick<NoteSummary, "id" | "title">): string {
   const label = target.title.replace(/[|\]]/g, " ").replace(/\s+/g, " ").trim();
   return `[[${target.id}${label ? `|${label}` : ""}]]`;
+}
+
+export function blockLink(target: Pick<BlockLinkTarget, "block_id" | "text">): string {
+  const label = target.text
+    .replaceAll('"', " ")
+    .replaceAll(")", " ")
+    .replaceAll("]", " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return `(( ${target.block_id}${label ? ` "${label}"` : ""} ))`;
 }

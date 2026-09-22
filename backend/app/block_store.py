@@ -362,6 +362,52 @@ def search_blocks(path: Path, query: str, limit: int = 50) -> list[dict[str, obj
     ]
 
 
+def block_link_targets(path: Path, query: str = "", limit: int = 50) -> list[dict[str, object]]:
+    """Return stable block IDs suitable for reference autocomplete."""
+
+    initialize(path)
+    normalized_query = query.strip()
+    if not normalized_query:
+        return []
+    escaped_query = (
+        normalized_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+    needle = f"%{escaped_query}%"
+    with connection_scope(path) as connection:
+        rows = connection.execute(
+            """SELECT blocks.id, blocks.document_id, documents.title,
+                      blocks.type, blocks.text
+                 FROM blocks
+                 JOIN documents ON documents.id = blocks.document_id
+                WHERE blocks.text LIKE ? COLLATE NOCASE ESCAPE '\\'
+                   OR (
+                        (documents.title LIKE ? COLLATE NOCASE ESCAPE '\\'
+                         OR documents.id LIKE ? COLLATE NOCASE ESCAPE '\\')
+                        AND blocks.id = (
+                            SELECT first_block.id
+                              FROM blocks AS first_block
+                             WHERE first_block.document_id = documents.id
+                             ORDER BY first_block.position ASC, first_block.id ASC
+                             LIMIT 1
+                        )
+                   )
+                ORDER BY documents.updated_at DESC, blocks.updated_at DESC,
+                         blocks.position ASC, documents.id ASC, blocks.id ASC
+                LIMIT ?""",
+            (needle, needle, needle, max(1, min(limit, 200))),
+        ).fetchall()
+    return [
+        {
+            "block_id": row["id"],
+            "document_id": row["document_id"],
+            "document_title": row["title"],
+            "block_type": row["type"],
+            "text": row["text"],
+        }
+        for row in rows
+    ]
+
+
 def document_backlinks(path: Path, document_id: str, limit: int = 100) -> list[dict[str, object]]:
     """Return block and document references pointing into one document."""
 

@@ -12,8 +12,14 @@ import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 import { blockApi } from "./api";
-import { documentLink, matchingLinkTargets } from "./linkSuggestions";
-import type { BlockDocument, BlockNode, BlockOperation, NoteSummary } from "./types";
+import { blockLink, documentLink, matchingLinkTargets } from "./linkSuggestions";
+import type {
+  BlockDocument,
+  BlockLinkTarget,
+  BlockNode,
+  BlockOperation,
+  NoteSummary,
+} from "./types";
 
 interface Props {
   document: BlockDocument;
@@ -104,6 +110,20 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
       },
     }));
 
+  const getBlockLinkItems = async (query: string): Promise<DefaultReactSuggestionItem[]> => {
+    const targets: BlockLinkTarget[] = await blockApi.linkTargets(query);
+    return targets.map((target) => ({
+      key: "paragraph",
+      title: target.text || `${target.block_type} block`,
+      subtext: `${target.document_title} · ${target.block_id}`,
+      group: "Link to block",
+      onItemClick: () => {
+        editor.insertInlineContent(blockLink(target));
+        editor.getExtension(SuggestionMenu)?.closeMenu();
+      },
+    }));
+  };
+
   return (
     <section className="blocknote-shell flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 px-8 pt-4 text-xs text-zinc-400">
@@ -122,6 +142,11 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
           triggerCharacter="[["
           getItems={getDocumentLinkItems}
           minQueryLength={0}
+        />
+        <SuggestionMenuController
+          triggerCharacter="(("
+          getItems={getBlockLinkItems}
+          minQueryLength={1}
         />
       </BlockNoteView>
     </section>

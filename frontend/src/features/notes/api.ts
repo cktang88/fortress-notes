@@ -6,6 +6,7 @@ import type {
   NoteSummary,
   BlockDocument,
   BlockSearchResult,
+  BlockLinkTarget,
   Backlink,
   BlockOperation,
   ReviewKind,
@@ -70,6 +71,8 @@ export const blockApi = {
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),
   search: (q: string, limit = 50) =>
     request<BlockSearchResult[]>(`/block-search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  linkTargets: (q: string, limit = 50) =>
+    request<BlockLinkTarget[]>(`/block-link-targets?q=${encodeURIComponent(q)}&limit=${limit}`),
   transaction: (id: string, operations: BlockOperation[]) =>
     request<BlockDocument>(`/block-documents/${id}/transactions`, {
       method: "POST",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { documentLink, matchingLinkTargets } from "./linkSuggestions";
+import { blockLink, documentLink, matchingLinkTargets } from "./linkSuggestions";
 import type { NoteSummary } from "./types";
 
 const notes: NoteSummary[] = [
@@ -29,5 +29,11 @@ describe("document link suggestions", () => {
 
   it("serializes a stable ID with a readable label", () => {
     expect(documentLink({ id: "alpha", title: "Alpha | Draft]" })).toBe("[[alpha|Alpha Draft]]");
+  });
+
+  it("serializes a stable block ID with a safe label", () => {
+    expect(blockLink({ block_id: "block-1", text: 'A "quoted" block' })).toBe(
+      '(( block-1 "A quoted block" ))',
+    );
   });
 });
