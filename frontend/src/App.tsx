@@ -4,6 +4,7 @@ import { NoteList } from "./features/notes/NoteList";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
 import { RelatedNotes } from "./features/notes/RelatedNotes";
 import { BacklinksPanel } from "./features/notes/BacklinksPanel";
+import { OutlinePanel } from "./features/notes/OutlinePanel";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteEditor } from "./features/notes/NoteEditor";
 import { RawEditor } from "./features/notes/RawEditor";
@@ -144,6 +145,10 @@ export function App() {
             loading={searching ? searchResults.isLoading : allNotes.isLoading}
           />
         )}
+        <OutlinePanel
+          document={blockDocument.data ?? null}
+          onFocus={(blockId) => selectedId && selectNote(selectedId, blockId)}
+        />
         <RelatedNotes noteId={selectedId} onSelect={selectNote} />
         <BacklinksPanel documentId={selectedId} onSelect={selectNote} />
       </aside>

@@ -144,7 +144,7 @@ plugin-driven publishing editor.
 ### Phase 4 — navigation and knowledge links
 
 - [ ] Add document tree/sidebar with collapsed folders and recent documents.
-- [ ] Add outline from heading blocks with click-to-focus navigation.
+- [x] Add outline from heading blocks with click-to-focus navigation.
 - [ ] Add `[[` block/document link autocomplete.
 - [ ] Add block references and embeds with live target previews.
 - [x] Persist block/document references and add a backlinks panel grouped by
