@@ -5,7 +5,9 @@ from pydantic import BaseModel, Field
 
 NoteStatus = Literal["rough", "polished"]
 ReviewKind = Literal["factcheck", "clarify", "object"]
-BlockOperationKind = Literal["insert", "update", "move", "delete", "set_attrs"]
+BlockOperationKind = Literal[
+    "insert", "update", "move", "delete", "set_attrs", "duplicate", "split", "merge"
+]
 
 
 class NoteSummary(BaseModel):
@@ -47,6 +49,9 @@ class BlockOperation(BaseModel):
     attrs: dict[str, Any] | None = None
     content: dict[str, Any] | None = None
     text: str | None = None
+    split_at: int | None = Field(default=None, ge=0)
+    # For split, the character offset in the block text. For duplicate/merge,
+    # position keeps its existing sibling-position meaning.
     expected_updated_at: str | None = None
 
 

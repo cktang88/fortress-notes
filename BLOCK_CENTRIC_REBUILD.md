@@ -119,7 +119,7 @@ plugin-driven publishing editor.
 - [ ] Add document list/get/create/rename/delete endpoints.
 - [ ] Add block subtree endpoint with parent, children, depth, and breadcrumbs.
 - [x] Add transaction endpoint with optimistic revision checks.
-- [ ] Support insert, update text/type, move, duplicate, delete, and merge/split.
+- [x] Support insert, update text/type, move, duplicate, delete, and merge/split.
 - [x] Support batch transactions so paste, drag, and multi-block transforms are atomic.
 - [x] Return conflict details instead of silently overwriting a newer revision.
 - [ ] Keep compatibility endpoints for old note clients until the new UI is complete.
@@ -130,7 +130,7 @@ plugin-driven publishing editor.
 - [x] Translate BlockNote block changes into atomic server transactions and hydrate
   legacy Markdown into rich inline content on first load.
 - [x] Add stable block DOM lookup and keyboard focus by block ID.
-- [ ] Add block selection, multi-select, copy/cut/paste, duplicate, and delete.
+- [x] Add block selection, multi-select, copy/cut/paste, duplicate, and delete.
 - [ ] Add block handle menu: convert, insert above/below, move, duplicate, delete,
   copy block link, copy block embed.
 - [ ] Add slash command menu for paragraph, heading, bullet/number/task list,

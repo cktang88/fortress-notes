@@ -1214,6 +1214,12 @@ def _apply_operation(
         _move_block(connection, document_id, row, operation, now)
     elif operation.operation == "delete":
         _delete_block(connection, document_id, row)
+    elif operation.operation == "duplicate":
+        _duplicate_block(connection, document_id, row, operation, now)
+    elif operation.operation == "split":
+        _split_block(connection, document_id, row, operation, now)
+    elif operation.operation == "merge":
+        _merge_block(connection, document_id, row, now)
     else:  # pragma: no cover - Pydantic validates operation values
         raise ValueError(f"unsupported operation: {operation.operation}")
     connection.execute(
@@ -1309,6 +1315,77 @@ def _delete_block(
         "DELETE FROM blocks WHERE id = ? AND document_id = ?", (row["id"], document_id)
     )
     _shift_positions(connection, document_id, row["parent_id"], row["position"] + 1, -1)
+
+
+def _subtree_rows(connection: sqlite3.Connection, block_id: str) -> list[sqlite3.Row]:
+    return connection.execute(
+        """WITH RECURSIVE subtree(id, depth) AS (
+               SELECT id, 0 FROM blocks WHERE id = ?
+               UNION ALL SELECT blocks.id, subtree.depth + 1
+                 FROM blocks JOIN subtree ON blocks.parent_id = subtree.id
+           ) SELECT blocks.* FROM blocks JOIN subtree ON subtree.id = blocks.id
+             ORDER BY subtree.depth, blocks.position, blocks.id""", (block_id,)
+    ).fetchall()
+
+
+def _duplicate_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row,
+                     operation: BlockOperation, now: str) -> None:
+    parent_id = row["parent_id"]
+    position = row["position"] + 1 if operation.position is None else operation.position
+    _shift_positions(connection, document_id, parent_id, position, 1)
+    id_map: dict[str, str] = {}
+    for source in _subtree_rows(connection, row["id"]):
+        new_id = str(ULID())
+        id_map[source["id"]] = new_id
+        new_parent = id_map.get(source["parent_id"], parent_id)
+        new_position = position if source["id"] == row["id"] else source["position"]
+        connection.execute(
+            """INSERT INTO blocks(id, document_id, parent_id, position, type, attrs_json,
+               content_json, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (new_id, document_id, new_parent, new_position, source["type"], source["attrs_json"],
+             source["content_json"], source["text"], now, now),
+        )
+        _replace_attrs(connection, new_id, json.loads(source["attrs_json"]))
+        _refresh_fts(connection, new_id, document_id, source["text"])
+
+
+def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row,
+                 operation: BlockOperation, now: str) -> None:
+    offset = operation.split_at
+    if offset is None or offset > len(row["text"]):
+        raise ValueError("split requires split_at within block text")
+    if len(_subtree_rows(connection, row["id"])) > 1:
+        raise ValueError("cannot split a block with children")
+    first, second = row["text"][:offset], row["text"][offset:]
+    connection.execute("UPDATE blocks SET text = ?, content_json = ?, updated_at = ? WHERE id = ?",
+                       (first, json.dumps({"markdown": first}), now, row["id"]))
+    _refresh_fts(connection, row["id"], document_id, first)
+    _shift_positions(connection, document_id, row["parent_id"], row["position"] + 1, 1)
+    new_id = str(ULID())
+    connection.execute(
+        """INSERT INTO blocks(id, document_id, parent_id, position, type, attrs_json,
+           content_json, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (new_id, document_id, row["parent_id"], row["position"] + 1, row["type"],
+         row["attrs_json"], json.dumps({"markdown": second}), second, now, now),
+    )
+    _replace_attrs(connection, new_id, json.loads(row["attrs_json"]))
+    _refresh_fts(connection, new_id, document_id, second)
+
+
+def _merge_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row, now: str) -> None:
+    next_row = connection.execute(
+        "SELECT * FROM blocks WHERE document_id = ? AND parent_id IS ? AND position = ?",
+        (document_id, row["parent_id"], row["position"] + 1),
+    ).fetchone()
+    if next_row is None:
+        raise ValueError("cannot merge the last sibling")
+    if len(_subtree_rows(connection, row["id"])) > 1 or len(_subtree_rows(connection, next_row["id"])) > 1:
+        raise ValueError("cannot merge blocks with children")
+    merged = row["text"] + next_row["text"]
+    connection.execute("UPDATE blocks SET text = ?, content_json = ?, updated_at = ? WHERE id = ?",
+                       (merged, json.dumps({"markdown": merged}), now, row["id"]))
+    _refresh_fts(connection, row["id"], document_id, merged)
+    _delete_block(connection, document_id, next_row)
 
 
 def _validate_parent(

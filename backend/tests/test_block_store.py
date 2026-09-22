@@ -118,6 +118,44 @@ class BlockStoreTests(unittest.TestCase):
                     ).fetchone()
                 )
 
+    def test_duplicate_preserves_subtree_shape_with_new_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            create_document(database, "one", "One", "rough", [], "Parent\n\nChild", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
+            before = document_tree(database, "one"); assert before is not None
+            original = before["children"][0]
+            nested = apply_transaction(database, "one", [BlockOperation(operation="insert", parent_id=original["id"], text="Child")], before["revision"])
+            apply_transaction(database, "one", [BlockOperation(operation="duplicate", block_id=original["id"])], nested["revision"])
+            tree = document_tree(database, "one"); assert tree is not None
+            self.assertEqual([node["text"] for node in tree["children"]], ["Parent", "Parent", "Child"])
+            self.assertNotEqual(tree["children"][0]["id"], tree["children"][1]["id"])
+            self.assertEqual(tree["children"][1]["children"][0]["text"], "Child")
+
+    def test_split_and_merge_preserve_first_id_and_refresh_search(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            create_document(database, "one", "One", "rough", [], "abcdef\n\nghijkl", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
+            before = document_tree(database, "one"); assert before is not None
+            first_id = before["children"][0]["id"]
+            split = apply_transaction(database, "one", [BlockOperation(operation="split", block_id=first_id, split_at=3)], before["revision"])
+            self.assertEqual([node["text"] for node in split["children"]], ["abc", "def", "ghijkl"])
+            self.assertEqual(split["children"][0]["id"], first_id)
+            merged = apply_transaction(database, "one", [BlockOperation(operation="merge", block_id=first_id)], split["revision"])
+            self.assertEqual([node["text"] for node in merged["children"]], ["abcdef", "ghijkl"])
+            self.assertEqual(merged["children"][0]["id"], first_id)
+            self.assertEqual([hit["text"] for hit in search_blocks(database, "abcdef")], ["abcdef"])
+
+    def test_failed_structural_operation_rolls_back_the_whole_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            create_document(database, "one", "One", "rough", [], "A\n\nB", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
+            before = document_tree(database, "one"); assert before is not None
+            with self.assertRaises(ValueError):
+                apply_transaction(database, "one", [BlockOperation(operation="insert", text="C"), BlockOperation(operation="split", block_id=before["children"][0]["id"], split_at=99)], before["revision"])
+            after = document_tree(database, "one"); assert after is not None
+            self.assertEqual([node["text"] for node in after["children"]], ["A", "B"])
+            self.assertEqual(after["revision"], before["revision"])
+
     def test_transactions_require_and_increment_document_revisions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"

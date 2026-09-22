@@ -51,6 +51,7 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
   const hydrating = useRef(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [hasBlockSelection, setHasBlockSelection] = useState(false);
 
   const onChange = (
     changedEditor: BlockNoteEditorInstance,
@@ -151,6 +152,8 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
     }));
   };
 
+  const selectionActions = hasBlockSelection ? blockSelectionActions(editor) : null;
+
   return (
     <section className="blocknote-shell flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 px-8 pt-4 text-xs text-zinc-400">
@@ -160,10 +163,44 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
         {saving && <span>Saving…</span>}
         {saveError && <span className="text-red-600">{saveError}</span>}
       </div>
+      {selectionActions && (
+        <div className="flex items-center gap-2 px-8 pt-2 text-xs">
+          <button
+            type="button"
+            className="rounded border px-2 py-1"
+            onClick={selectionActions.duplicate}
+          >
+            Duplicate
+          </button>
+          <button
+            type="button"
+            className="rounded border px-2 py-1"
+            onClick={selectionActions.remove}
+          >
+            Delete
+          </button>
+          <span className="text-zinc-400">
+            Copy, cut, and paste use BlockNote’s native clipboard handling.
+          </span>
+        </div>
+      )}
       <BlockNoteView
         editor={editor}
         editable={!saveError}
         onChange={onChange}
+        onSelectionChange={() => {
+          setHasBlockSelection((editor.getSelection()?.blocks.length ?? 0) > 0);
+        }}
+        onKeyDown={(event) => {
+          if (!selectionActions || event.defaultPrevented) return;
+          if (event.key === "Delete" || event.key === "Backspace") {
+            event.preventDefault();
+            selectionActions.remove();
+          } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "d") {
+            event.preventDefault();
+            selectionActions.duplicate();
+          }
+        }}
         className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 pt-2"
       >
         <SuggestionMenuController
@@ -179,6 +216,48 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
       </BlockNoteView>
     </section>
   );
+}
+
+type BlockSelectionEditor = Pick<
+  BlockNoteEditorInstance,
+  "getSelection" | "insertBlocks" | "removeBlocks"
+>;
+
+export function selectedBlockIds(editor: BlockSelectionEditor): string[] {
+  return (editor.getSelection()?.blocks ?? []).map((block) => block.id);
+}
+
+function cloneForInsert(block: Block): PartialBlock {
+  return {
+    type: block.type,
+    props: block.props,
+    content: block.content,
+    children: block.children.map(cloneForInsert),
+  } as PartialBlock;
+}
+
+export function duplicateSelectedBlocks(editor: BlockSelectionEditor): string[] {
+  const blocks = editor.getSelection()?.blocks ?? [];
+  if (blocks.length === 0) return [];
+  const inserted = editor.insertBlocks(
+    blocks.map(cloneForInsert),
+    blocks[blocks.length - 1].id,
+    "after",
+  );
+  return inserted.map((block) => block.id);
+}
+
+export function deleteSelectedBlocks(editor: BlockSelectionEditor): string[] {
+  const ids = selectedBlockIds(editor);
+  if (ids.length > 0) editor.removeBlocks(ids);
+  return ids;
+}
+
+function blockSelectionActions(editor: BlockSelectionEditor) {
+  return {
+    duplicate: () => duplicateSelectedBlocks(editor),
+    remove: () => deleteSelectedBlocks(editor),
+  };
 }
 
 function toPartialBlock(node: BlockNode): PartialBlock {
