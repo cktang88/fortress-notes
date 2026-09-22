@@ -8,6 +8,7 @@ import type {
   Folder,
   DocumentOrganization,
   BlockDocument,
+  BlockSearchFilters,
   BlockSearchResult,
   BlockLinkTarget,
   Backlink,
@@ -94,8 +95,8 @@ export const blockApi = {
   get: (id: string) => request<BlockDocument>(`/block-documents/${id}`),
   backlinks: (id: string, limit = 100) =>
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),
-  search: (q: string, limit = 50) =>
-    request<BlockSearchResult[]>(`/block-search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  search: (q: string, filters: BlockSearchFilters = {}, limit = 50) =>
+    request<BlockSearchResult[]>(`/block-search?${blockSearchParams(q, filters, limit)}`),
   linkTargets: (q: string, limit = 50) =>
     request<BlockLinkTarget[]>(`/block-link-targets?q=${encodeURIComponent(q)}&limit=${limit}`),
   transaction: (id: string, operations: BlockOperation[]) =>
@@ -104,3 +105,19 @@ export const blockApi = {
       body: JSON.stringify({ operations }),
     }),
 };
+
+export function blockSearchParams(q: string, filters: BlockSearchFilters = {}, limit = 50) {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  const filterParams = {
+    document_id: filters.documentId,
+    block_type: filters.blockType,
+    status: filters.status,
+    tag: filters.tag?.trim() || undefined,
+    updated_after: filters.updatedAfter,
+    updated_before: filters.updatedBefore,
+  };
+  for (const [name, value] of Object.entries(filterParams)) {
+    if (value) params.set(name, value);
+  }
+  return params.toString();
+}

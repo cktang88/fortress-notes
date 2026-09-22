@@ -3,6 +3,15 @@ export type ReviewKind = "factcheck" | "clarify" | "object";
 export type SearchMode = "text" | "embedding";
 export type BlockType = "paragraph" | "heading" | "list" | "quote" | "code" | "thematic_break";
 
+export interface BlockSearchFilters {
+  documentId?: string;
+  blockType?: BlockType;
+  status?: NoteStatus;
+  tag?: string;
+  updatedAfter?: string;
+  updatedBefore?: string;
+}
+
 export interface NoteSummary {
   id: string;
   title: string;

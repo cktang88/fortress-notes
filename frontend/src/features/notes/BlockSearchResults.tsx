@@ -3,11 +3,19 @@ import type { BlockSearchResult } from "./types";
 interface Props {
   results: BlockSearchResult[];
   loading: boolean;
+  error?: boolean;
   onSelect: (documentId: string, blockId: string) => void;
 }
 
-export function BlockSearchResults({ results, loading, onSelect }: Props) {
+export function BlockSearchResults({ results, loading, error = false, onSelect }: Props) {
   if (loading) return <div className="p-4 text-sm text-zinc-400">Searching blocks…</div>;
+  if (error) {
+    return (
+      <div className="p-4 text-sm text-red-600">
+        Block search is unavailable; the selected filters were not applied.
+      </div>
+    );
+  }
   if (results.length === 0) {
     return <div className="p-4 text-sm text-zinc-400">No matching blocks.</div>;
   }

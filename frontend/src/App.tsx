@@ -29,21 +29,27 @@ import {
   useSearch,
   useUpdateNote,
 } from "./features/notes/hooks";
-import type { ReviewKind, SearchMode } from "./features/notes/types";
+import type { BlockSearchFilters, ReviewKind, SearchMode } from "./features/notes/types";
 
 export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusBlockId, setFocusBlockId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("text");
+  const [blockSearchFilters, setBlockSearchFilters] = useState<BlockSearchFilters>({});
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [rawView, setRawView] = useState(false);
 
   const searching = query.trim().length > 0;
+  const hasBlockSearchFilters = Object.values(blockSearchFilters).some(Boolean);
   const allNotes = useNotes();
   const navigation = useNavigation();
-  const blockSearch = useBlockSearch(query, mode === "text");
-  const searchResults = useSearch(query, mode, mode !== "text" || blockSearch.isError);
+  const blockSearch = useBlockSearch(query, blockSearchFilters, mode === "text");
+  const searchResults = useSearch(
+    query,
+    mode,
+    mode !== "text" || (blockSearch.isError && !hasBlockSearchFilters),
+  );
   const note = useNote(selectedId);
   const blockDocument = useBlockDocument(selectedId);
 
@@ -139,14 +145,28 @@ export function App() {
           onQuery={setQuery}
           mode={mode}
           onMode={setMode}
+          filters={blockSearchFilters}
+          onFilters={setBlockSearchFilters}
+          documents={allNotes.data ?? []}
           onNew={handleNew}
         />
-        {searching && mode === "text" && !blockSearch.isError ? (
-          <BlockSearchResults
-            results={blockSearch.data ?? []}
-            loading={blockSearch.isLoading}
-            onSelect={(documentId, blockId) => selectNote(documentId, blockId)}
-          />
+        {searching && mode === "text" ? (
+          blockSearch.isError && !hasBlockSearchFilters ? (
+            <NoteList
+              notes={listNotes}
+              selectedId={selectedId}
+              onSelect={selectNote}
+              scores={scores}
+              loading={searchResults.isLoading}
+            />
+          ) : (
+            <BlockSearchResults
+              results={blockSearch.data ?? []}
+              loading={blockSearch.isLoading}
+              error={blockSearch.isError}
+              onSelect={(documentId, blockId) => selectNote(documentId, blockId)}
+            />
+          )
         ) : navigation.isError ? (
           <NoteList
             notes={listNotes}

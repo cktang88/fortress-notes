@@ -2,12 +2,29 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import analysis, block_store, embeddings, images, llm, notes_store, search, vision
+from . import (
+    analysis,
+    block_query,
+    block_store,
+    embeddings,
+    images,
+    llm,
+    notes_store,
+    search,
+    vision,
+)
+from .portability import (
+    export_all_markdown,
+    export_document_markdown,
+    import_markdown_directory,
+    import_markdown_if_empty,
+)
 from .config import get_settings
 from .models import (
     ConsistencyReport,
@@ -64,7 +81,7 @@ async def lifespan(_app: FastAPI):
     if settings.block_db_enabled:
         if settings.block_db_import_on_startup:
             await asyncio.to_thread(
-                block_store.bootstrap_markdown, settings.notes_path, settings.block_db_path
+                import_markdown_if_empty, settings.block_db_path, settings.notes_path
             )
         else:
             await asyncio.to_thread(block_store.initialize, settings.block_db_path)
@@ -202,11 +219,72 @@ def get_block_document(document_id: str):
     return tree
 
 
-@app.get("/api/block-search", response_model=list[BlockSearchResult])
-def search_blocks(q: str, limit: int = Query(50, ge=1, le=200)):
+@app.get("/api/block-documents/{document_id}/markdown")
+def export_block_document_markdown(document_id: str):
     if not settings.block_db_enabled:
         raise HTTPException(404, "Block store is disabled")
-    return block_store.search_blocks(settings.block_db_path, q, limit)
+    try:
+        markdown = export_document_markdown(settings.block_db_path, document_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(content=markdown, media_type="text/markdown")
+
+
+@app.get("/api/markdown-export")
+def export_all_block_markdown():
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    return export_all_markdown(settings.block_db_path)
+
+
+@app.post("/api/markdown-import")
+def import_workspace_markdown():
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    report = import_markdown_directory(settings.block_db_path, settings.notes_path)
+    return {
+        "backup_directory": f".fortress-import-backups/{report.backup_directory.name}",
+        "items": [
+            {
+                "source_path": item.source_path.name,
+                "document_id": item.document_id,
+                "status": item.status,
+                "detail": item.detail,
+            }
+            for item in report.items
+        ],
+        "imported": report.imported_count,
+        "skipped": report.skipped_count,
+        "errors": report.error_count,
+    }
+
+
+@app.get("/api/block-search", response_model=list[BlockSearchResult])
+def search_blocks(
+    q: str,
+    limit: int = Query(50, ge=1, le=200),
+    document_id: str | None = None,
+    block_type: str | None = None,
+    status: NoteStatus | None = None,
+    tag: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    return block_query.search_blocks(
+        settings.block_db_path,
+        q,
+        block_query.BlockSearchFilters(
+            document_id=document_id,
+            block_type=block_type,
+            status=status,
+            tag=tag,
+            updated_after=updated_after,
+            updated_before=updated_before,
+        ),
+        limit=limit,
+    )
 
 
 @app.get("/api/block-link-targets", response_model=list[BlockLinkTarget])

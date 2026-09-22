@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { blockApi, notesApi } from "./api";
-import type { NoteStatus, ReviewKind, SearchMode } from "./types";
+import type { BlockSearchFilters, NoteStatus, ReviewKind, SearchMode } from "./types";
 
 export function useNotes(status?: NoteStatus) {
   return useQuery({ queryKey: ["notes", status], queryFn: () => notesApi.list(status) });
@@ -64,10 +64,10 @@ export function useBlockDocument(id: string | null) {
   });
 }
 
-export function useBlockSearch(q: string, enabled = true) {
+export function useBlockSearch(q: string, filters: BlockSearchFilters = {}, enabled = true) {
   return useQuery({
-    queryKey: ["block-search", q],
-    queryFn: () => blockApi.search(q),
+    queryKey: ["block-search", q, filters],
+    queryFn: () => blockApi.search(q, filters),
     enabled: enabled && q.trim().length > 0,
     retry: false,
   });
@@ -104,6 +104,7 @@ export function useCreateNote() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["navigation"] });
+      qc.invalidateQueries({ queryKey: ["block-search"] });
     },
   });
 }
@@ -116,6 +117,7 @@ export function useUpdateNote() {
     onSuccess: (note) => {
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["navigation"] });
+      qc.invalidateQueries({ queryKey: ["block-search"] });
       qc.setQueryData(["note", note.id], note);
     },
   });
@@ -128,6 +130,7 @@ export function useDeleteNote() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["navigation"] });
+      qc.invalidateQueries({ queryKey: ["block-search"] });
     },
   });
 }
@@ -139,6 +142,7 @@ export function usePromoteNote() {
     onSuccess: (note) => {
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.setQueryData(["note", note.id], note);
+      qc.invalidateQueries({ queryKey: ["block-search"] });
     },
   });
 }

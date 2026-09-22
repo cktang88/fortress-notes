@@ -74,6 +74,7 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
         void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
         void queryClient.invalidateQueries({ queryKey: ["notes"] });
         void queryClient.invalidateQueries({ queryKey: ["backlinks", initialDocument.id] });
+        void queryClient.invalidateQueries({ queryKey: ["block-search"] });
         setSaveError(null);
       } catch (error) {
         saveFailed.current = true;

@@ -107,9 +107,9 @@ plugin-driven publishing editor.
 - [x] Implement nested tree queries and sibling ordering.
 - [x] Implement Markdown → block-tree import for headings, paragraphs, nested lists,
   tasks, quotes, code, thematic breaks, links, images, and unsupported raw blocks.
-- [ ] Preserve each imported Markdown file under a timestamped migration backup.
-- [ ] Implement block-tree → Markdown export with stable IDs omitted from output.
-- [ ] Add migration report: imported, skipped, duplicate, and failed files.
+- [x] Preserve each imported Markdown file under a timestamped migration backup.
+- [x] Implement block-tree → Markdown export with stable IDs omitted from output.
+- [x] Add migration report: imported, skipped, duplicate, and failed files.
 - [ ] Add tests for round trips, nested lists, empty documents, malformed input, and
   rerunning migration without duplicating documents.
 
@@ -160,7 +160,7 @@ plugin-driven publishing editor.
 - [x] Add block-level FTS search results and keep the existing note-search response
   compatible while the UI gains jump-to-block navigation.
 - [x] Add search results at block granularity with context and jump-to-block.
-- [ ] Add filters for document, block type, tag, status, and date.
+- [x] Add filters for document, block type, tag, status, and date.
 - [ ] Adapt embedding search to index blocks, not whole notes; keep keyword fallback.
 - [ ] Add related blocks/documents and explain why each result matched.
 - [ ] Add rebuild-index command and startup integrity check.
@@ -177,7 +177,7 @@ plugin-driven publishing editor.
 ### Phase 7 — safety and portability
 
 - [ ] Add autosave crash recovery and an edit journal.
-- [ ] Add export-all, export-document, and export-selected-blocks to Markdown/HTML.
+- [x] Add export-all and export-document to Markdown; selected-block export remains open.
 - [ ] Add import preview with conflict handling and no destructive default.
 - [ ] Add database backup/restore verification.
 - [ ] Add accessibility pass for block handles, menus, selection, and keyboard use.
