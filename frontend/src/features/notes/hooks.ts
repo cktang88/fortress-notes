@@ -22,11 +22,20 @@ export function useBlockDocument(id: string | null) {
   });
 }
 
-export function useSearch(q: string, mode: SearchMode) {
+export function useBlockSearch(q: string, enabled = true) {
+  return useQuery({
+    queryKey: ["block-search", q],
+    queryFn: () => blockApi.search(q),
+    enabled: enabled && q.trim().length > 0,
+    retry: false,
+  });
+}
+
+export function useSearch(q: string, mode: SearchMode, enabled = true) {
   return useQuery({
     queryKey: ["search", mode, q],
     queryFn: () => notesApi.search(q, mode),
-    enabled: q.trim().length > 0,
+    enabled: enabled && q.trim().length > 0,
   });
 }
 

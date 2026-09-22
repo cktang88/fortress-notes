@@ -14,6 +14,7 @@ import type { BlockDocument, BlockNode, BlockOperation } from "./types";
 
 interface Props {
   document: BlockDocument;
+  focusBlockId?: string | null;
 }
 
 type Location = {
@@ -22,7 +23,7 @@ type Location = {
   depth: number;
 };
 
-export function BlockNoteEditor({ document: initialDocument }: Props) {
+export function BlockNoteEditor({ document: initialDocument, focusBlockId }: Props) {
   const initialContent = useMemo(
     () => initialDocument.children.map(toPartialBlock),
     [initialDocument.children],
@@ -73,6 +74,19 @@ export function BlockNoteEditor({ document: initialDocument }: Props) {
     });
     hydrating.current = false;
   }, [editor, initialDocument]);
+
+  useEffect(() => {
+    if (!focusBlockId || !editor.getBlock(focusBlockId)) return;
+    const frame = requestAnimationFrame(() => {
+      editor.setTextCursorPosition(focusBlockId, "start");
+      editor.focus();
+      const target = Array.from(
+        editor.domElement?.querySelectorAll<HTMLElement>("[data-id]") ?? [],
+      ).find((element) => element.dataset.id === focusBlockId);
+      target?.scrollIntoView({ block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [editor, focusBlockId]);
 
   return (
     <section className="blocknote-shell flex min-h-0 flex-1 flex-col">

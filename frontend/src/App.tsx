@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { SearchBar } from "./features/notes/SearchBar";
 import { NoteList } from "./features/notes/NoteList";
+import { BlockSearchResults } from "./features/notes/BlockSearchResults";
 import { RelatedNotes } from "./features/notes/RelatedNotes";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteEditor } from "./features/notes/NoteEditor";
@@ -14,6 +15,7 @@ import {
   useHeal,
   useNote,
   useBlockDocument,
+  useBlockSearch,
   useNotes,
   useReview,
   useSearch,
@@ -23,6 +25,7 @@ import type { ReviewKind, SearchMode } from "./features/notes/types";
 
 export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focusBlockId, setFocusBlockId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("text");
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
@@ -30,7 +33,8 @@ export function App() {
 
   const searching = query.trim().length > 0;
   const allNotes = useNotes();
-  const searchResults = useSearch(query, mode);
+  const blockSearch = useBlockSearch(query, mode === "text");
+  const searchResults = useSearch(query, mode, mode !== "text" || blockSearch.isError);
   const note = useNote(selectedId);
   const blockDocument = useBlockDocument(selectedId);
 
@@ -78,8 +82,9 @@ export function App() {
 
   const brokenLinks = (heal.data?.dead_links ?? []).map((d) => d.url);
 
-  const selectNote = (id: string) => {
+  const selectNote = (id: string, blockId: string | null = null) => {
     setSelectedId(id);
+    setFocusBlockId(blockId);
     setDismissed(new Set());
     consistency.reset();
     heal.reset();
@@ -123,13 +128,21 @@ export function App() {
           onMode={setMode}
           onNew={handleNew}
         />
-        <NoteList
-          notes={listNotes}
-          selectedId={selectedId}
-          onSelect={selectNote}
-          scores={scores}
-          loading={searching ? searchResults.isLoading : allNotes.isLoading}
-        />
+        {searching && mode === "text" && !blockSearch.isError ? (
+          <BlockSearchResults
+            results={blockSearch.data ?? []}
+            loading={blockSearch.isLoading}
+            onSelect={(documentId, blockId) => selectNote(documentId, blockId)}
+          />
+        ) : (
+          <NoteList
+            notes={listNotes}
+            selectedId={selectedId}
+            onSelect={selectNote}
+            scores={scores}
+            loading={searching ? searchResults.isLoading : allNotes.isLoading}
+          />
+        )}
         <RelatedNotes noteId={selectedId} onSelect={selectNote} />
       </aside>
 
@@ -162,7 +175,11 @@ export function App() {
                 onSave={(body) => updateNote.mutate({ id: note.data!.id, body })}
               />
             ) : blockDocument.data ? (
-              <BlockNoteEditor key={blockDocument.data.id} document={blockDocument.data} />
+              <BlockNoteEditor
+                key={blockDocument.data.id}
+                document={blockDocument.data}
+                focusBlockId={focusBlockId}
+              />
             ) : blockDocument.isLoading ? (
               <div className="p-8 text-sm text-zinc-400">Loading blocks…</div>
             ) : (

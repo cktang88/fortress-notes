@@ -129,7 +129,7 @@ plugin-driven publishing editor.
 - [x] Replace the single-note editor with a BlockNote-backed block tree editor.
 - [x] Translate BlockNote block changes into atomic server transactions and hydrate
   legacy Markdown into rich inline content on first load.
-- [ ] Add stable block DOM attributes and keyboard focus by block ID.
+- [x] Add stable block DOM lookup and keyboard focus by block ID.
 - [ ] Add block selection, multi-select, copy/cut/paste, duplicate, and delete.
 - [ ] Add block handle menu: convert, insert above/below, move, duplicate, delete,
   copy block link, copy block embed.
@@ -158,7 +158,7 @@ plugin-driven publishing editor.
 - [x] Update FTS rows in the same transaction as block writes.
 - [x] Add block-level FTS search results and keep the existing note-search response
   compatible while the UI gains jump-to-block navigation.
-- [ ] Add search results at block granularity with context and jump-to-block.
+- [x] Add search results at block granularity with context and jump-to-block.
 - [ ] Add filters for document, block type, tag, status, and date.
 - [ ] Adapt embedding search to index blocks, not whole notes; keep keyword fallback.
 - [ ] Add related blocks/documents and explain why each result matched.
