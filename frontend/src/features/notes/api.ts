@@ -4,6 +4,8 @@ import type {
   Note,
   NoteStatus,
   NoteSummary,
+  BlockDocument,
+  BlockOperation,
   ReviewKind,
   ReviewResponse,
   SearchMode,
@@ -58,4 +60,13 @@ export const notesApi = {
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     return res.json();
   },
+};
+
+export const blockApi = {
+  get: (id: string) => request<BlockDocument>(`/block-documents/${id}`),
+  transaction: (id: string, operations: BlockOperation[]) =>
+    request<BlockDocument>(`/block-documents/${id}/transactions`, {
+      method: "POST",
+      body: JSON.stringify({ operations }),
+    }),
 };

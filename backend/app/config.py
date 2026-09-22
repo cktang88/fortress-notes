@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     vlm_caption_enabled: bool = False
     vlm_model: str = "HuggingFaceTB/SmolVLM-256M-Instruct"
     frontend_origin: str = "http://localhost:5173"
+    block_db_enabled: bool = True
+    block_db_import_on_startup: bool = True
 
     @property
     def notes_path(self) -> Path:
@@ -30,6 +32,10 @@ class Settings(BaseSettings):
         p = self.notes_path / "assets"
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    @property
+    def block_db_path(self) -> Path:
+        return self.notes_path / ".fortress.sqlite3"
 
 
 @lru_cache

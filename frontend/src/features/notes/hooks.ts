@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { notesApi } from "./api";
+import { blockApi, notesApi } from "./api";
 import type { NoteStatus, ReviewKind, SearchMode } from "./types";
 
 export function useNotes(status?: NoteStatus) {
@@ -10,6 +10,14 @@ export function useNote(id: string | null) {
   return useQuery({
     queryKey: ["note", id],
     queryFn: () => notesApi.get(id!),
+    enabled: !!id,
+  });
+}
+
+export function useBlockDocument(id: string | null) {
+  return useQuery({
+    queryKey: ["block-document", id],
+    queryFn: () => blockApi.get(id!),
     enabled: !!id,
   });
 }

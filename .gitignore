@@ -12,6 +12,7 @@ frontend/*.tsbuildinfo
 # Notes are personal data — keep only the sample welcome note in the repo
 notes/*
 !notes/welcome.md
+notes/.fortress.sqlite3*
 
 # OS
 .DS_Store

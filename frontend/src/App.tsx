@@ -5,6 +5,7 @@ import { RelatedNotes } from "./features/notes/RelatedNotes";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteEditor } from "./features/notes/NoteEditor";
 import { RawEditor } from "./features/notes/RawEditor";
+import { BlockTreeEditor } from "./features/notes/BlockTreeEditor";
 import type { Annotation } from "./features/notes/annotations";
 import {
   useConsistency,
@@ -12,6 +13,7 @@ import {
   useDeleteNote,
   useHeal,
   useNote,
+  useBlockDocument,
   useNotes,
   useReview,
   useSearch,
@@ -30,6 +32,7 @@ export function App() {
   const allNotes = useNotes();
   const searchResults = useSearch(query, mode);
   const note = useNote(selectedId);
+  const blockDocument = useBlockDocument(selectedId);
 
   const createNote = useCreateNote();
   const updateNote = useUpdateNote();
@@ -158,6 +161,10 @@ export function App() {
                 initialMarkdown={note.data.body}
                 onSave={(body) => updateNote.mutate({ id: note.data!.id, body })}
               />
+            ) : blockDocument.data ? (
+              <BlockTreeEditor key={blockDocument.data.id} document={blockDocument.data} />
+            ) : blockDocument.isLoading ? (
+              <div className="p-8 text-sm text-zinc-400">Loading blocks…</div>
             ) : (
               <NoteEditor
                 key={note.data.id}

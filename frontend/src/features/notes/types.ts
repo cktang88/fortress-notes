@@ -1,6 +1,7 @@
 export type NoteStatus = "rough" | "polished";
 export type ReviewKind = "factcheck" | "clarify" | "object";
 export type SearchMode = "text" | "embedding";
+export type BlockType = "paragraph" | "heading" | "list" | "quote" | "code" | "thematic_break";
 
 export interface NoteSummary {
   id: string;
@@ -14,6 +15,42 @@ export interface NoteSummary {
 export interface Note extends NoteSummary {
   body: string;
   created_at: string;
+}
+
+export interface BlockNode {
+  id: string;
+  document_id: string;
+  parent_id: string | null;
+  position: number;
+  type: BlockType | string;
+  attrs: Record<string, unknown>;
+  content: Record<string, unknown>;
+  text: string;
+  created_at: string;
+  updated_at: string;
+  children: BlockNode[];
+}
+
+export interface BlockDocument {
+  id: string;
+  title: string;
+  status: NoteStatus;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  children: BlockNode[];
+}
+
+export interface BlockOperation {
+  operation: "insert" | "update" | "move" | "delete" | "set_attrs";
+  block_id?: string;
+  parent_id?: string | null;
+  position?: number;
+  type?: BlockType | string;
+  attrs?: Record<string, unknown>;
+  content?: Record<string, unknown>;
+  text?: string;
+  expected_updated_at?: string;
 }
 
 export interface SearchResult {

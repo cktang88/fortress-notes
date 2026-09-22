@@ -1,10 +1,11 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 NoteStatus = Literal["rough", "polished"]
 ReviewKind = Literal["factcheck", "clarify", "object"]
+BlockOperationKind = Literal["insert", "update", "move", "delete", "set_attrs"]
 
 
 class NoteSummary(BaseModel):
@@ -35,6 +36,22 @@ class NoteUpdate(BaseModel):
     body: str | None = None
     status: NoteStatus | None = None
     tags: list[str] | None = None
+
+
+class BlockOperation(BaseModel):
+    operation: BlockOperationKind
+    block_id: str | None = None
+    parent_id: str | None = None
+    position: int | None = Field(default=None, ge=0)
+    type: str | None = None
+    attrs: dict[str, Any] | None = None
+    content: dict[str, Any] | None = None
+    text: str | None = None
+    expected_updated_at: str | None = None
+
+
+class BlockTransaction(BaseModel):
+    operations: list[BlockOperation] = Field(min_length=1)
 
 
 class SearchResult(BaseModel):

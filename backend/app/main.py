@@ -7,7 +7,7 @@ from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import analysis, embeddings, images, llm, notes_store, search, vision
+from . import analysis, block_store, embeddings, images, llm, notes_store, search, vision
 from .config import get_settings
 from .models import (
     ConsistencyReport,
@@ -17,6 +17,7 @@ from .models import (
     NoteStatus,
     NoteSummary,
     NoteUpdate,
+    BlockTransaction,
     ReviewKind,
     ReviewResponse,
     SearchResult,
@@ -51,6 +52,13 @@ async def _reindex_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if settings.block_db_enabled:
+        if settings.block_db_import_on_startup:
+            await asyncio.to_thread(
+                block_store.bootstrap_markdown, settings.notes_path, settings.block_db_path
+            )
+        else:
+            await asyncio.to_thread(block_store.initialize, settings.block_db_path)
     task = (
         asyncio.create_task(_reindex_loop()) if settings.embeddings_enabled else None
     )
@@ -88,7 +96,35 @@ def health() -> dict:
         "model_loaded": embeddings.model_loaded(),
         "vision_enabled": settings.vision_enabled,
         "vision_loaded": vision.loaded(),
+        "block_db_enabled": settings.block_db_enabled,
+        "block_db_ready": block_store.is_ready(settings.block_db_path),
     }
+
+
+@app.get("/api/block-documents/{document_id}")
+def get_block_document(document_id: str):
+    """Read the bootstrapped block tree while the legacy note API remains active."""
+
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    tree = block_store.document_tree(settings.block_db_path, document_id)
+    if tree is None:
+        raise HTTPException(404, "Block document not found")
+    return tree
+
+
+@app.post("/api/block-documents/{document_id}/transactions")
+def apply_block_transaction(document_id: str, transaction: BlockTransaction):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    try:
+        return block_store.apply_transaction(
+            settings.block_db_path, document_id, transaction.operations
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/images")
