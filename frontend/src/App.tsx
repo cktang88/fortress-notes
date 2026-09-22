@@ -207,6 +207,7 @@ export function App() {
             <NoteHeader
               note={note.data}
               onTitle={(title) => updateNote.mutate({ id: note.data!.id, title })}
+              onTags={(tags) => updateNote.mutate({ id: note.data!.id, tags })}
               onDelete={handleDelete}
               onSetStatus={(status) => updateNote.mutate({ id: note.data!.id, status })}
               onFactcheck={() => handleReview("factcheck")}

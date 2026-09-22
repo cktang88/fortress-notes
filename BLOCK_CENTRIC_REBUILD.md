@@ -116,8 +116,8 @@ plugin-driven publishing editor.
 ### Phase 2 — block API
 
 - [x] Add a read-only block-document endpoint for migration inspection.
-- [ ] Add document list/get/create/rename/delete endpoints.
-- [ ] Add block subtree endpoint with parent, children, depth, and breadcrumbs.
+- [x] Add document list/get/create/rename/delete endpoints.
+- [x] Add block subtree endpoint with parent, children, depth, and breadcrumbs.
 - [x] Add transaction endpoint with optimistic revision checks.
 - [x] Support insert, update text/type, move, duplicate, delete, and merge/split.
 - [x] Support batch transactions so paste, drag, and multi-block transforms are atomic.
@@ -151,6 +151,7 @@ plugin-driven publishing editor.
   source document and block, with click-to-focus navigation.
 - [ ] Add block permalink/copy-link actions.
 - [ ] Add tag and attribute editing at block and document level.
+- [x] Add document tag editing in the note header.
 - [ ] Add graph view only after backlinks and reference queries are stable.
 
 ### Phase 5 — search and indexing

@@ -318,6 +318,47 @@ def create_document(
         )
 
 
+def list_documents(path: Path) -> list[dict[str, object]]:
+    initialize(path)
+    with connection_scope(path) as connection:
+        rows = connection.execute(
+            """SELECT id, title, status, tags_json, folder_id, position,
+                      created_at, updated_at,
+                      COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
+                                ORDER BY parent_id, position, id LIMIT 1), '') AS snippet
+                 FROM documents
+                WHERE deleted_at IS NULL
+                ORDER BY updated_at DESC, id ASC"""
+        ).fetchall()
+    return [_navigation_document(row) for row in rows]
+
+
+def create_block_document(
+    path: Path, title: str, status: str, tags: list[str], body: str
+) -> dict:
+    document_id = str(ULID())
+    now = _now()
+    create_document(path, document_id, title, status, tags, body, now, now)
+    tree = document_tree(path, document_id)
+    assert tree is not None
+    return tree
+
+
+def rename_document(path: Path, document_id: str, title: str) -> dict:
+    initialize(path)
+    with connection_scope(path) as connection:
+        cursor = connection.execute(
+            """UPDATE documents SET title = ?, updated_at = ?
+                 WHERE id = ? AND deleted_at IS NULL""",
+            (title, _now(), document_id),
+        )
+        if cursor.rowcount == 0:
+            raise KeyError("document not found")
+    tree = document_tree(path, document_id)
+    assert tree is not None
+    return tree
+
+
 def update_document_metadata(
     path: Path,
     document_id: str,
@@ -382,10 +423,12 @@ def delete_document(path: Path, document_id: str) -> None:
     initialize(path)
     now = _now()
     with connection_scope(path) as connection:
-        connection.execute(
+        cursor = connection.execute(
             "UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?",
             (now, now, document_id),
         )
+        if cursor.rowcount == 0:
+            raise KeyError("document not found")
 
 
 def create_folder(
@@ -1099,6 +1142,52 @@ def document_tree(path: Path, document_id: str) -> dict | None:
         "updated_at": document["updated_at"],
         "revision": document["revision"],
         "children": roots,
+    }
+
+
+def document_subtree(path: Path, document_id: str, block_id: str | None = None) -> dict | None:
+    tree = document_tree(path, document_id)
+    if tree is None:
+        return None
+
+    def find(nodes: list[dict], target: str) -> dict | None:
+        for node in nodes:
+            if node["id"] == target:
+                return node
+            found = find(node["children"], target)
+            if found is not None:
+                return found
+        return None
+
+    if block_id is None:
+        root = {"id": None, "parent": None, "children": tree["children"]}
+        return {"document": tree, "parent": None, "depth": 0, "breadcrumbs": [], "subtree": root}
+    node = find(tree["children"], block_id)
+    if node is None:
+        raise KeyError("block not found")
+    by_id: dict[str, dict] = {}
+    stack = [(child, None) for child in tree["children"]]
+    while stack:
+        current, parent = stack.pop()
+        by_id[current["id"]] = {"node": current, "parent": parent}
+        stack.extend((child, current["id"]) for child in current["children"])
+    breadcrumbs = []
+    current_id: str | None = block_id
+    while current_id is not None:
+        current = by_id[current_id]["node"]
+        breadcrumbs.append({"id": current["id"], "type": current["type"], "text": current["text"]})
+        current_id = by_id[current_id]["parent"]
+    breadcrumbs.reverse()
+    depth = len(breadcrumbs) - 1
+    parent_id = by_id[block_id]["parent"]
+    parent = by_id[parent_id]["node"] if parent_id else None
+    return {
+        "document": tree,
+        "parent": parent,
+        "children": node["children"],
+        "depth": depth,
+        "breadcrumbs": breadcrumbs,
+        "subtree": node,
     }
 
 

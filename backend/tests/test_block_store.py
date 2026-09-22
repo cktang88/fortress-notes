@@ -12,16 +12,20 @@ from app.block_store import (
     connection_scope,
     create_folder,
     create_document,
+    create_block_document,
     delete_folder,
     delete_document,
     document_backlinks,
     document_tree,
+    document_subtree,
     ensure_fts_integrity,
     fts_is_consistent,
     initialize,
     move_document,
     move_folder,
     navigation,
+    list_documents,
+    rename_document,
     rename_folder,
     replace_document_from_markdown,
     rebuild_fts,
@@ -33,6 +37,34 @@ from pydantic import ValidationError
 
 
 class BlockStoreTests(unittest.TestCase):
+    def test_document_lifecycle_and_focused_subtree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            created = create_block_document(database, "Draft", "rough", ["work"], "Parent")
+            self.assertEqual(created["title"], "Draft")
+            self.assertEqual([item["id"] for item in list_documents(database)], [created["id"]])
+            parent = created["children"][0]
+            updated = apply_transaction(
+                database,
+                created["id"],
+                [BlockOperation(operation="insert", parent_id=parent["id"], text="Child")],
+                created["revision"],
+            )
+            child = updated["children"][0]["children"][0]
+
+            subtree = document_subtree(database, created["id"], child["id"])
+            assert subtree is not None
+            self.assertEqual(subtree["parent"]["id"], parent["id"])
+            self.assertEqual(subtree["children"], [])
+            self.assertEqual(subtree["depth"], 1)
+            self.assertEqual([item["id"] for item in subtree["breadcrumbs"]], [parent["id"], child["id"]])
+
+            renamed = rename_document(database, created["id"], "Renamed")
+            self.assertEqual(renamed["title"], "Renamed")
+            delete_document(database, created["id"])
+            self.assertEqual(list_documents(database), [])
+            self.assertIsNone(document_tree(database, created["id"]))
+
     def test_bootstraps_markdown_once_and_preserves_block_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

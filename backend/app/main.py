@@ -208,6 +208,53 @@ def move_block_document(document_id: str, data: DocumentMove):
         raise HTTPException(404, str(exc)) from exc
 
 
+@app.get("/api/block-documents")
+def list_block_documents():
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    return block_store.list_documents(settings.block_db_path)
+
+
+@app.post("/api/block-documents", status_code=201)
+def create_block_document(data: NoteCreate):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    tree = block_store.create_block_document(
+        settings.block_db_path,
+        data.title or "Untitled",
+        data.status,
+        data.tags,
+        data.body,
+    )
+    block_store.sync_markdown(settings.notes_path, settings.block_db_path, tree["id"])
+    return tree
+
+
+@app.patch("/api/block-documents/{document_id}")
+def rename_block_document(document_id: str, data: NoteUpdate):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    if data.title is None:
+        raise HTTPException(422, "title is required")
+    try:
+        tree = block_store.rename_document(settings.block_db_path, document_id, data.title)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    block_store.sync_markdown(settings.notes_path, settings.block_db_path, document_id)
+    return tree
+
+
+@app.delete("/api/block-documents/{document_id}", status_code=204)
+def delete_block_document(document_id: str):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    try:
+        block_store.delete_document(settings.block_db_path, document_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(status_code=204)
+
+
 @app.get("/api/block-documents/{document_id}")
 def get_block_document(document_id: str):
     """Read the bootstrapped block tree while the legacy note API remains active."""
@@ -218,6 +265,21 @@ def get_block_document(document_id: str):
     if tree is None:
         raise HTTPException(404, "Block document not found")
     return tree
+
+
+@app.get("/api/block-documents/{document_id}/subtree")
+def get_block_subtree(document_id: str, block_id: str | None = None):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    try:
+        subtree = block_store.document_subtree(
+            settings.block_db_path, document_id, block_id
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if subtree is None:
+        raise HTTPException(404, "Block document not found")
+    return subtree
 
 
 @app.get("/api/block-documents/{document_id}/markdown")
