@@ -186,6 +186,7 @@ export function App() {
                 key={blockDocument.data.id}
                 document={blockDocument.data}
                 focusBlockId={focusBlockId}
+                linkTargets={allNotes.data ?? []}
               />
             ) : blockDocument.isLoading ? (
               <div className="p-8 text-sm text-zinc-400">Loading blocks…</div>

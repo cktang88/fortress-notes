@@ -5,16 +5,19 @@ import type {
   PartialBlock,
   BlockNoteEditor as BlockNoteEditorInstance,
 } from "@blocknote/core";
-import { useCreateBlockNote } from "@blocknote/react";
+import { SuggestionMenuController, useCreateBlockNote } from "@blocknote/react";
+import type { DefaultReactSuggestionItem } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 import { blockApi } from "./api";
-import type { BlockDocument, BlockNode, BlockOperation } from "./types";
+import { documentLink, matchingLinkTargets } from "./linkSuggestions";
+import type { BlockDocument, BlockNode, BlockOperation, NoteSummary } from "./types";
 
 interface Props {
   document: BlockDocument;
   focusBlockId?: string | null;
+  linkTargets: readonly NoteSummary[];
 }
 
 type Location = {
@@ -23,7 +26,7 @@ type Location = {
   depth: number;
 };
 
-export function BlockNoteEditor({ document: initialDocument, focusBlockId }: Props) {
+export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkTargets }: Props) {
   const initialContent = useMemo(
     () => initialDocument.children.map(toPartialBlock),
     [initialDocument.children],
@@ -88,6 +91,15 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId }: Pro
     return () => cancelAnimationFrame(frame);
   }, [editor, focusBlockId]);
 
+  const getDocumentLinkItems = async (query: string): Promise<DefaultReactSuggestionItem[]> =>
+    matchingLinkTargets(linkTargets, query).map((target) => ({
+      key: "paragraph",
+      title: target.title,
+      subtext: `Document · ${target.id}`,
+      group: "Link to document",
+      onItemClick: () => editor.insertInlineContent(documentLink(target)),
+    }));
+
   return (
     <section className="blocknote-shell flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 px-8 pt-4 text-xs text-zinc-400">
@@ -101,7 +113,13 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId }: Pro
         editor={editor}
         onChange={onChange}
         className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 pt-2"
-      />
+      >
+        <SuggestionMenuController
+          triggerCharacter="[["
+          getItems={getDocumentLinkItems}
+          minQueryLength={0}
+        />
+      </BlockNoteView>
     </section>
   );
 }
