@@ -105,8 +105,8 @@ plugin-driven publishing editor.
 
 - [x] Implement the first document/block CRUD and transaction slice in one backend store module.
 - [x] Implement nested tree queries and sibling ordering.
-- [ ] Implement Markdown → block-tree import for headings, paragraphs, lists, tasks,
-  quotes, code, thematic breaks, links, images, and unsupported raw blocks.
+- [x] Implement Markdown → block-tree import for headings, paragraphs, nested lists,
+  tasks, quotes, code, thematic breaks, links, images, and unsupported raw blocks.
 - [ ] Preserve each imported Markdown file under a timestamped migration backup.
 - [ ] Implement block-tree → Markdown export with stable IDs omitted from output.
 - [ ] Add migration report: imported, skipped, duplicate, and failed files.
@@ -154,8 +154,10 @@ plugin-driven publishing editor.
 
 ### Phase 5 — search and indexing
 
-- [ ] Build SQLite FTS5 indexing over block text, titles, tags, and OCR/captions.
-- [ ] Update FTS rows in the same transaction as block writes.
+- [x] Build SQLite FTS5 indexing over canonical block text.
+- [x] Update FTS rows in the same transaction as block writes.
+- [x] Add block-level FTS search results and keep the existing note-search response
+  compatible while the UI gains jump-to-block navigation.
 - [ ] Add search results at block granularity with context and jump-to-block.
 - [ ] Add filters for document, block type, tag, status, and date.
 - [ ] Adapt embedding search to index blocks, not whole notes; keep keyword fallback.

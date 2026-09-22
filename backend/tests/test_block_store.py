@@ -7,10 +7,11 @@ from app.block_store import (
     backup_database,
     bootstrap_markdown,
     check_integrity,
-    connect,
+    connection_scope,
     create_document,
     document_tree,
     replace_document_from_markdown,
+    search_blocks,
     sync_markdown,
 )
 from app.models import BlockOperation
@@ -47,10 +48,10 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(tree["tags"], ["demo"])
             self.assertEqual(
                 [block["type"] for block in tree["children"]],
-                ["heading", "paragraph", "list", "code"],
+                ["heading", "paragraph", "list", "list", "code"],
             )
             self.assertEqual(
-                [block["position"] for block in tree["children"]], [0, 1, 2, 3]
+                [block["position"] for block in tree["children"]], [0, 1, 2, 3, 4]
             )
 
     def test_transactions_insert_update_move_and_delete_atomically(self) -> None:
@@ -88,12 +89,57 @@ class BlockStoreTests(unittest.TestCase):
                 [BlockOperation(operation="delete", block_id=ids[2])],
             )
             self.assertEqual([block["text"] for block in tree["children"]], ["X", "A"])
-            with connect(database) as connection:
+            with connection_scope(database) as connection:
                 self.assertIsNone(
                     connection.execute(
                         "SELECT 1 FROM blocks_fts WHERE block_id = ?", (ids[2],)
                     ).fetchone()
                 )
+
+    def test_imports_nested_tasks_and_rich_markdown_as_child_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "one.md").write_text(
+                "# Guide\n\n"
+                "- [x] Parent with [link](https://example.com)\n"
+                "  - Child with ![image](/media/image.png)\n"
+                "    - Grandchild\n\n"
+                "> A quote\n\n"
+                "```python\nprint('ok')\n```\n",
+                encoding="utf-8",
+            )
+            database = root / ".fortress.sqlite3"
+            bootstrap_markdown(root, database)
+
+            tree = document_tree(database, "one")
+            assert tree is not None
+            self.assertEqual(
+                [block["type"] for block in tree["children"]],
+                ["heading", "list", "quote", "code"],
+            )
+            parent = tree["children"][1]
+            self.assertEqual(parent["attrs"], {"checked": True})
+            self.assertIn("[link](https://example.com)", parent["text"])
+            self.assertEqual(len(parent["children"]), 1)
+            child = parent["children"][0]
+            self.assertIn("![image](/media/image.png)", child["text"])
+            self.assertEqual([nested["text"] for nested in child["children"]], ["- Grandchild"])
+
+    def test_searches_nested_blocks_through_fts5(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "one.md").write_text(
+                "Parent keyword\n\n  - Child phrase\n\nOther text\n", encoding="utf-8"
+            )
+            database = root / ".fortress.sqlite3"
+            bootstrap_markdown(root, database)
+
+            parent_hits = search_blocks(database, "keyword")
+            child_hits = search_blocks(database, "phrase")
+            self.assertEqual(len(parent_hits), 1)
+            self.assertEqual(parent_hits[0]["document_id"], "one")
+            self.assertEqual(child_hits[0]["text"], "- Child phrase")
+            self.assertEqual(search_blocks(database, "not-present"), [])
 
     def test_compatibility_mirror_tracks_block_store_writes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

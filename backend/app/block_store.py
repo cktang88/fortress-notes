@@ -10,11 +10,14 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
+from contextlib import closing, contextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 import frontmatter
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 from ulid import ULID
 
 from .models import BlockOperation
@@ -22,19 +25,16 @@ from .models import BlockOperation
 SCHEMA_VERSION = 1
 DB_FILENAME = ".fortress.sqlite3"
 
-_HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+")
-_LIST_RE = re.compile(r"^ {0,3}(?:[-+*]|\d+[.)])\s+")
-_QUOTE_RE = re.compile(r"^ {0,3}>\s?")
-_FENCE_RE = re.compile(r"^ {0,3}(```|~~~)")
-_THEMATIC_RE = re.compile(r"^ {0,3}(?:\*\s*){3,}$|^ {0,3}(?:-\s*){3,}$|^ {0,3}(?:_\s*){3,}$")
+_TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
 
 
 @dataclass(frozen=True)
 class ImportedBlock:
     id: str
     type: str
-    position: int
     source: str
+    attrs: dict[str, object] = field(default_factory=dict)
+    children: list["ImportedBlock"] = field(default_factory=list)
 
 
 _SCHEMA = """
@@ -116,8 +116,18 @@ def connect(path: Path) -> sqlite3.Connection:
     return connection
 
 
+@contextmanager
+def connection_scope(path: Path):
+    connection = connect(path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
 def initialize(path: Path) -> None:
-    with connect(path) as connection:
+    with connection_scope(path) as connection:
         connection.executescript(_SCHEMA)
         row = connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
@@ -147,7 +157,7 @@ def bootstrap_markdown(notes_path: Path, path: Path) -> int:
 
     initialize(path)
     imported = 0
-    with connect(path) as connection:
+    with connection_scope(path) as connection:
         for note_path in sorted(notes_path.glob("*.md")):
             note_id = note_path.stem
             if connection.execute(
@@ -190,7 +200,7 @@ def create_document(
     """Create the block representation for a newly created compatibility note."""
 
     initialize(path)
-    with connect(path) as connection:
+    with connection_scope(path) as connection:
         if connection.execute(
             "SELECT 1 FROM documents WHERE id = ?", (document_id,)
         ).fetchone():
@@ -216,7 +226,7 @@ def update_document_metadata(
     updated_at: object,
 ) -> None:
     initialize(path)
-    with connect(path) as connection:
+    with connection_scope(path) as connection:
         cursor = connection.execute(
             """UPDATE documents
                SET title = ?, status = ?, tags_json = ?, updated_at = ?
@@ -240,7 +250,7 @@ def replace_document_from_markdown(
     """Re-import the explicit raw/compatibility edit into the block store."""
 
     initialize(path)
-    with connect(path) as connection:
+    with connection_scope(path) as connection:
         existing = connection.execute(
             "SELECT created_at FROM documents WHERE id = ?", (document_id,)
         ).fetchone()
@@ -269,7 +279,7 @@ def replace_document_from_markdown(
 
 def delete_document(path: Path, document_id: str) -> None:
     initialize(path)
-    with connect(path) as connection:
+    with connection_scope(path) as connection:
         connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
 
 
@@ -278,15 +288,49 @@ def backup_database(path: Path, destination: Path) -> None:
 
     initialize(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with connect(path) as source, sqlite3.connect(destination) as target:
+    with connection_scope(path) as source, closing(sqlite3.connect(destination)) as target:
         source.backup(target)
+        target.commit()
 
 
 def check_integrity(path: Path) -> bool:
     initialize(path)
-    with connect(path) as connection:
+    with connection_scope(path) as connection:
         result = connection.execute("PRAGMA quick_check").fetchone()
     return result is not None and result[0] == "ok"
+
+
+def search_blocks(path: Path, query: str, limit: int = 50) -> list[dict[str, object]]:
+    """Search canonical block text with SQLite FTS5 and return block context."""
+
+    terms = re.findall(r"[\w]+", query, flags=re.UNICODE)
+    if not terms:
+        return []
+    match = " AND ".join(f'"{term.replace(chr(34), chr(34) * 2)}"' for term in terms)
+    initialize(path)
+    with connection_scope(path) as connection:
+        rows = connection.execute(
+            """SELECT blocks_fts.block_id, blocks_fts.document_id, documents.title,
+                      blocks.type, blocks.text, bm25(blocks_fts) AS rank
+                 FROM blocks_fts
+                 JOIN blocks ON blocks.id = blocks_fts.block_id
+                 JOIN documents ON documents.id = blocks_fts.document_id
+                WHERE blocks_fts MATCH ?
+                ORDER BY rank, blocks.updated_at DESC
+                LIMIT ?""",
+            (match, max(1, min(limit, 200))),
+        ).fetchall()
+    return [
+        {
+            "block_id": row["block_id"],
+            "document_id": row["document_id"],
+            "document_title": row["title"],
+            "block_type": row["type"],
+            "text": row["text"],
+            "score": -float(row["rank"]),
+        }
+        for row in rows
+    ]
 
 
 def sync_markdown(notes_path: Path, path: Path, document_id: str) -> None:
@@ -337,17 +381,19 @@ def _insert_blocks(
     created_at: str,
     updated_at: str,
 ) -> None:
-    for block in _parse_blocks(body):
+    def insert(block: ImportedBlock, parent_id: str | None, position: int) -> None:
         connection.execute(
             """INSERT INTO blocks(
                    id, document_id, parent_id, position, type, attrs_json,
                    content_json, text, created_at, updated_at
-               ) VALUES (?, ?, NULL, ?, ?, '{}', ?, ?, ?, ?)""",
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 block.id,
                 document_id,
-                block.position,
+                parent_id,
+                position,
                 block.type,
+                json.dumps(block.attrs),
                 json.dumps({"markdown": block.source}),
                 block.source,
                 created_at,
@@ -358,6 +404,11 @@ def _insert_blocks(
             "INSERT INTO blocks_fts(block_id, document_id, text) VALUES (?, ?, ?)",
             (block.id, document_id, block.source),
         )
+        for child_position, child in enumerate(block.children):
+            insert(child, block.id, child_position)
+
+    for position, block in enumerate(_parse_blocks(body)):
+        insert(block, None, position)
 
 
 def _render_markdown(nodes: list[dict], depth: int = 0) -> str:
@@ -413,7 +464,7 @@ def _inline_text(value: object) -> str:
 
 def document_tree(path: Path, document_id: str) -> dict | None:
     initialize(path)
-    with connect(path) as connection:
+    with connection_scope(path) as connection:
         document = connection.execute(
             "SELECT * FROM documents WHERE id = ?", (document_id,)
         ).fetchone()
@@ -462,7 +513,7 @@ def apply_transaction(path: Path, document_id: str, operations: list[BlockOperat
 
     initialize(path)
     now = _now()
-    with connect(path) as connection:
+    with connection_scope(path) as connection:
         document = connection.execute(
             "SELECT 1 FROM documents WHERE id = ?", (document_id,)
         ).fetchone()
@@ -705,54 +756,142 @@ def _refresh_fts(
 
 
 def _parse_blocks(body: str) -> list[ImportedBlock]:
-    blocks: list[ImportedBlock] = []
-    current: list[str] = []
-    current_type = "paragraph"
-    in_fence = False
-
-    def flush() -> None:
-        nonlocal current, current_type
-        source = "\n".join(current).strip()
-        if source:
-            blocks.append(ImportedBlock(str(ULID()), current_type, len(blocks), source))
-        current = []
-        current_type = "paragraph"
-
-    for line in body.splitlines():
-        if _FENCE_RE.match(line):
-            if not in_fence and current:
-                flush()
-            in_fence = not in_fence
-            current_type = "code" if in_fence else "code"
-            current.append(line)
-            if not in_fence:
-                flush()
-            continue
-        if in_fence:
-            current.append(line)
-            continue
-        if not line.strip():
-            flush()
-            continue
-        line_type = _line_type(line)
-        if current and line_type != current_type:
-            flush()
-        current_type = line_type
-        current.append(line)
-    flush()
+    lines = body.splitlines()
+    tokens = MarkdownIt("commonmark").parse(body)
+    blocks, _ = _parse_sequence(tokens, lines, 0)
     return blocks
 
 
-def _line_type(line: str) -> str:
-    if _HEADING_RE.match(line):
-        return "heading"
-    if _LIST_RE.match(line):
-        return "list"
-    if _QUOTE_RE.match(line):
-        return "quote"
-    if _THEMATIC_RE.match(line):
-        return "thematic_break"
-    return "paragraph"
+def _parse_sequence(
+    tokens: list[Token], lines: list[str], index: int, stop: str | None = None
+) -> tuple[list[ImportedBlock], int]:
+    blocks: list[ImportedBlock] = []
+    while index < len(tokens):
+        token = tokens[index]
+        if stop and token.type == stop and token.nesting == -1:
+            return blocks, index + 1
+        if token.type in {"bullet_list_open", "ordered_list_open"}:
+            nested, index = _parse_list(tokens, lines, index)
+            blocks.extend(nested)
+            continue
+        if token.type == "heading_open":
+            block, index = _parse_inline_block(tokens, lines, index, "heading")
+        elif token.type == "paragraph_open":
+            block, index = _parse_inline_block(tokens, lines, index, "paragraph")
+        elif token.type == "blockquote_open":
+            block, index = _parse_container_block(tokens, lines, index, "blockquote_close", "quote")
+        elif token.type in {"fence", "code_block"}:
+            block = ImportedBlock(
+                str(ULID()),
+                "code",
+                _token_source(lines, token),
+                {"language": token.info.strip()} if token.type == "fence" and token.info else {},
+            )
+            index += 1
+        elif token.type == "hr":
+            block = ImportedBlock(str(ULID()), "thematic_break", _token_source(lines, token))
+            index += 1
+        elif token.type in {"html_block", "table_open"}:
+            block = ImportedBlock(str(ULID()), "raw", _token_source(lines, token))
+            index += 1
+        else:
+            index += 1
+            continue
+        blocks.append(block)
+    return blocks, index
+
+
+def _parse_list(
+    tokens: list[Token], lines: list[str], index: int
+) -> tuple[list[ImportedBlock], int]:
+    ordered = tokens[index].type == "ordered_list_open"
+    close_type = "ordered_list_close" if ordered else "bullet_list_close"
+    index += 1
+    blocks: list[ImportedBlock] = []
+    while index < len(tokens) and tokens[index].type != close_type:
+        if tokens[index].type != "list_item_open":
+            index += 1
+            continue
+        block, index = _parse_list_item(tokens, lines, index, ordered)
+        blocks.append(block)
+    return blocks, min(index + 1, len(tokens))
+
+
+def _parse_list_item(
+    tokens: list[Token], lines: list[str], index: int, ordered: bool
+) -> tuple[ImportedBlock, int]:
+    open_token = tokens[index]
+    index += 1
+    source = ""
+    attrs: dict[str, object] = {}
+    if ordered:
+        attrs["ordered"] = True
+    children: list[ImportedBlock] = []
+    while index < len(tokens) and tokens[index].type != "list_item_close":
+        token = tokens[index]
+        if token.type == "paragraph_open":
+            paragraph = tokens[index]
+            source = _token_source(lines, paragraph)
+            task = _TASK_RE.match(source)
+            if task:
+                attrs["checked"] = task.group(1).lower() == "x"
+            index += 1
+            while index < len(tokens) and tokens[index].type != "paragraph_close":
+                index += 1
+            index += 1
+            continue
+        if token.type in {"bullet_list_open", "ordered_list_open"}:
+            nested, index = _parse_list(tokens, lines, index)
+            children.extend(nested)
+            continue
+        if token.type == "blockquote_open":
+            child, index = _parse_container_block(tokens, lines, index, "blockquote_close", "quote")
+            children.append(child)
+            continue
+        if token.type in {"fence", "code_block"}:
+            child = ImportedBlock(str(ULID()), "code", _token_source(lines, token))
+            children.append(child)
+        index += 1
+    if not source:
+        source = _token_source(lines, open_token)
+    return ImportedBlock(str(ULID()), "list", source, attrs, children), min(index + 1, len(tokens))
+
+
+def _parse_inline_block(
+    tokens: list[Token], lines: list[str], index: int, block_type: str
+) -> tuple[ImportedBlock, int]:
+    open_token = tokens[index]
+    source = _token_source(lines, open_token)
+    index += 1
+    while index < len(tokens) and tokens[index].type != f"{block_type}_close":
+        index += 1
+    return ImportedBlock(str(ULID()), block_type, source), min(index + 1, len(tokens))
+
+
+def _parse_container_block(
+    tokens: list[Token], lines: list[str], index: int, close_type: str, block_type: str
+) -> tuple[ImportedBlock, int]:
+    open_token = tokens[index]
+    index += 1
+    start = open_token.map[0] if open_token.map else 0
+    depth = 1
+    while index < len(tokens) and depth:
+        token = tokens[index]
+        if token.type == open_token.type:
+            depth += 1
+        elif token.type == close_type:
+            depth -= 1
+        index += 1
+    end = tokens[index - 1].map[1] if index and tokens[index - 1].map else len(lines)
+    source = "\n".join(lines[start:end]).strip()
+    return ImportedBlock(str(ULID()), block_type, source), index
+
+
+def _token_source(lines: list[str], token: Token) -> str:
+    if not token.map:
+        return ""
+    start, end = token.map
+    return "\n".join(lines[start:end]).strip()
 
 
 def _derive_title(body: str) -> str:

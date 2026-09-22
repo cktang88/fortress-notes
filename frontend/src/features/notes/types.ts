@@ -58,6 +58,15 @@ export interface SearchResult {
   score: number;
 }
 
+export interface BlockSearchResult {
+  block_id: string;
+  document_id: string;
+  document_title: string;
+  block_type: string;
+  text: string;
+  score: number;
+}
+
 export type Severity = "high" | "medium" | "low";
 
 export interface ReviewItem {

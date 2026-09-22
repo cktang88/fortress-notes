@@ -18,6 +18,7 @@ from .models import (
     NoteSummary,
     NoteUpdate,
     BlockTransaction,
+    BlockSearchResult,
     ReviewKind,
     ReviewResponse,
     SearchResult,
@@ -111,6 +112,13 @@ def get_block_document(document_id: str):
     if tree is None:
         raise HTTPException(404, "Block document not found")
     return tree
+
+
+@app.get("/api/block-search", response_model=list[BlockSearchResult])
+def search_blocks(q: str, limit: int = Query(50, ge=1, le=200)):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    return block_store.search_blocks(settings.block_db_path, q, limit)
 
 
 @app.post("/api/block-documents/{document_id}/transactions")

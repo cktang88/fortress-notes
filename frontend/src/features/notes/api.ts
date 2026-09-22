@@ -5,6 +5,7 @@ import type {
   NoteStatus,
   NoteSummary,
   BlockDocument,
+  BlockSearchResult,
   BlockOperation,
   ReviewKind,
   ReviewResponse,
@@ -64,6 +65,8 @@ export const notesApi = {
 
 export const blockApi = {
   get: (id: string) => request<BlockDocument>(`/block-documents/${id}`),
+  search: (q: string, limit = 50) =>
+    request<BlockSearchResult[]>(`/block-search?q=${encodeURIComponent(q)}&limit=${limit}`),
   transaction: (id: string, operations: BlockOperation[]) =>
     request<BlockDocument>(`/block-documents/${id}/transactions`, {
       method: "POST",

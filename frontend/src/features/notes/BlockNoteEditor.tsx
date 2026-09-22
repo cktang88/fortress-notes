@@ -108,12 +108,20 @@ function toPartialBlock(node: BlockNode): PartialBlock {
     } as PartialBlock;
   }
   if (node.type === "list") {
+    const checked = node.attrs.checked;
+    const type =
+      typeof checked === "boolean"
+        ? "checkListItem"
+        : node.attrs.ordered === true
+          ? "numberedListItem"
+          : "bulletListItem";
     return {
       id: node.id,
-      type: "bulletListItem",
+      type,
+      props: typeof checked === "boolean" ? { checked } : undefined,
       content: markdownText(node)
         .split("\n")
-        .map((line) => line.replace(/^\s*(?:[-+*]|\d+[.)])\s+/, ""))
+        .map((line) => line.replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, ""))
         .join("\n"),
       children,
     } as PartialBlock;

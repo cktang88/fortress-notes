@@ -1,6 +1,7 @@
 """Full-text search + embedding search + related notes."""
 
-from . import embeddings, images, notes_store
+from . import block_store, embeddings, images, notes_store
+from .config import get_settings
 from .models import SearchResult
 
 
@@ -21,6 +22,19 @@ def full_text_search(q: str) -> list[SearchResult]:
     results: list[SearchResult] = []
     if not q_lower:
         return results
+    settings = get_settings()
+    if settings.block_db_enabled:
+        hits = block_store.search_blocks(settings.block_db_path, q)
+        summaries = {summary.id: summary for summary in notes_store.list_notes()}
+        scores: dict[str, float] = {}
+        for hit in hits:
+            document_id = str(hit["document_id"])
+            scores[document_id] = max(scores.get(document_id, 0.0), float(hit["score"]))
+        return [
+            SearchResult(note=summaries[document_id], score=score)
+            for document_id, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)
+            if document_id in summaries
+        ]
     for summary in notes_store.list_notes():
         note = notes_store.get_note(summary.id)
         if not note:

@@ -59,6 +59,15 @@ class SearchResult(BaseModel):
     score: float = Field(description="Higher is more relevant")
 
 
+class BlockSearchResult(BaseModel):
+    block_id: str
+    document_id: str
+    document_title: str
+    block_type: str
+    text: str
+    score: float = Field(description="Higher is more relevant")
+
+
 class ReviewItem(BaseModel):
     label: str = ""
     detail: str
