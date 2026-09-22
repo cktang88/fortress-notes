@@ -5,6 +5,7 @@ import type {
   PartialBlock,
   BlockNoteEditor as BlockNoteEditorInstance,
 } from "@blocknote/core";
+import { SuggestionMenu } from "@blocknote/core/extensions";
 import { SuggestionMenuController, useCreateBlockNote } from "@blocknote/react";
 import type { DefaultReactSuggestionItem } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
@@ -97,7 +98,10 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
       title: target.title,
       subtext: `Document · ${target.id}`,
       group: "Link to document",
-      onItemClick: () => editor.insertInlineContent(documentLink(target)),
+      onItemClick: () => {
+        editor.insertInlineContent(documentLink(target));
+        editor.getExtension(SuggestionMenu)?.closeMenu();
+      },
     }));
 
   return (

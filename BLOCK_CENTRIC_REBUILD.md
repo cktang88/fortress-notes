@@ -145,7 +145,7 @@ plugin-driven publishing editor.
 
 - [ ] Add document tree/sidebar with collapsed folders and recent documents.
 - [x] Add outline from heading blocks with click-to-focus navigation.
-- [ ] Add `[[` block/document link autocomplete.
+- [x] Add `[[` document link autocomplete backed by stable document IDs.
 - [ ] Add block references and embeds with live target previews.
 - [x] Persist block/document references and add a backlinks panel grouped by
   source document and block, with click-to-focus navigation.
@@ -202,5 +202,5 @@ plugin-driven publishing editor.
 
 The repository still serves compatibility Markdown endpoints, but the normal note
 surface now reads the SQLite block tree and uses BlockNote for editing. The next
-slice is expanding Markdown migration to nested, lossless-enough structures and
-adding block-level navigation/search on top of the same store.
+slice is adding document hierarchy/navigation and live block link previews on top
+of the same store.
