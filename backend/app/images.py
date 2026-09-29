@@ -5,11 +5,10 @@ the search layer folds into the owning note so images are full-text/embedding se
 """
 
 import re
+from hashlib import sha256
 from pathlib import Path
 
-from ulid import ULID
-
-from . import vision
+from . import assets, block_store, vision
 from .config import get_settings
 
 _EXT_BY_TYPE = {
@@ -27,10 +26,9 @@ _ASSET_RE = re.compile(r"/media/([A-Za-z0-9]+)\.(png|jpe?g|gif|webp)")
 def save_bytes(data: bytes, content_type: str) -> tuple[str, Path]:
     """Save image bytes and return (public_url, path). Fast — no model work."""
     ext = _EXT_BY_TYPE.get(content_type, ".png")
-    image_id = str(ULID())
-    path = get_settings().assets_path / f"{image_id}{ext}"
-    path.write_bytes(data)
-    return f"/media/{image_id}{ext}", path
+    storage_type = content_type if content_type in _EXT_BY_TYPE else "image/png"
+    url, _, path = assets.save_upload(data, f"image{ext}", storage_type)
+    return url, path
 
 
 def extract_and_store(path: Path) -> str:
@@ -41,6 +39,11 @@ def extract_and_store(path: Path) -> str:
     text = vision.describe_image(path)
     if text:
         path.with_suffix(".txt").write_text(text, encoding="utf-8")
+        content_hash = sha256(path.read_bytes()).hexdigest()
+        path.with_name(f"{content_hash}.txt").write_text(text, encoding="utf-8")
+        settings = get_settings()
+        if settings.block_db_enabled:
+            block_store.store_asset_text(settings.block_db_path, content_hash, text)
     return text
 
 

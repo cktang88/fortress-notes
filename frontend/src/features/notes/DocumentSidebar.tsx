@@ -1,11 +1,12 @@
 import { FormEvent, useState } from "react";
 import { StatusBadge } from "./StatusBadge";
-import type { NavigationFolder, NavigationNode } from "./types";
+import type { NavigationDocument, NavigationFolder, NavigationNode } from "./types";
 
 export type { NavigationDocument, NavigationFolder, NavigationNode } from "./types";
 
 export interface DocumentSidebarProps {
   nodes: NavigationNode[];
+  recent: NavigationDocument[];
   selectedId: string | null;
   loading?: boolean;
   onSelect: (id: string) => void;
@@ -17,6 +18,7 @@ export interface DocumentSidebarProps {
 
 export function DocumentSidebar({
   nodes,
+  recent,
   selectedId,
   loading = false,
   onSelect,
@@ -103,6 +105,30 @@ export function DocumentSidebar({
         <p role="alert" className="px-3 pt-2 text-xs text-red-600">
           {actionError}
         </p>
+      )}
+      {!loading && recent.length > 0 && (
+        <section aria-label="Recent documents" className="border-b border-zinc-100 py-1">
+          <h2 className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+            Recent
+          </h2>
+          <ul>
+            {recent.map((document) => (
+              <li key={document.id}>
+                <button
+                  type="button"
+                  data-recent-document-id={document.id}
+                  aria-current={selectedId === document.id ? "page" : undefined}
+                  onClick={() => onSelect(document.id)}
+                  className={`w-full truncate px-3 py-2 text-left text-sm hover:bg-zinc-50 ${
+                    selectedId === document.id ? "bg-zinc-100" : ""
+                  }`}
+                >
+                  {document.title}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
       {loading ? (
         <div className="p-4 text-sm text-zinc-400">Loading documents…</div>

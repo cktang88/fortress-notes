@@ -1,18 +1,45 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Flex } from "@mantine/core";
+import { mergeRefs, useFocusTrap, useFocusWithin } from "@mantine/hooks";
+import { BlockNoteSchema, defaultBlockSpecs } from "@blocknote/core";
 import type {
   Block,
   BlocksChanged,
   PartialBlock,
   BlockNoteEditor as BlockNoteEditorInstance,
 } from "@blocknote/core";
-import { SuggestionMenu } from "@blocknote/core/extensions";
-import { SuggestionMenuController, useCreateBlockNote } from "@blocknote/react";
-import type { DefaultReactSuggestionItem } from "@blocknote/react";
+import { createExtension } from "@blocknote/core";
+import {
+  SuggestionMenu,
+  insertOrUpdateBlockForSlashMenu,
+} from "@blocknote/core/extensions";
+import {
+  ComponentsContext,
+  FormattingToolbarController,
+  getDefaultReactSlashMenuItems,
+  SuggestionMenuController,
+  useComponentsContext,
+  useCreateBlockNote,
+} from "@blocknote/react";
+import type { ComponentProps, DefaultReactSuggestionItem } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
+import { TextSelection } from "@tiptap/pm/state";
+import { calloutBlock } from "./CalloutBlock";
+import { mathPlaceholderBlock } from "./MathPlaceholderBlock";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
-import { blockApi } from "./api";
+import { BlockPropertiesEditor } from "./BlockPropertiesEditor";
+import { BlockReviewPanel } from "./BlockReviewPanel";
+import { embedLoadedSameOriginImages } from "./clipboardImages";
+import { safeSuggestionReplacement } from "./safeSuggestionReplacement";
+import { blockApi, notesApi } from "./api";
+import {
+  asBlockTransaction,
+  makePendingTransaction,
+  readPendingTransactions,
+  writePendingTransactions,
+} from "./pendingBlockTransactions";
 import {
   blockLink,
   documentLink,
@@ -40,20 +67,135 @@ type Location = {
   depth: number;
 };
 
+const slashMenuShortcut = createExtension(() => ({
+  key: "slashMenuShortcut",
+  keyboardShortcuts: {
+    "Mod-/": ({ editor }) => {
+      const menu = editor.getExtension(SuggestionMenu);
+      if (!menu) return false;
+      menu.openSuggestionMenu("/");
+      return true;
+    },
+  },
+}))();
+
+const accessibleFormattingToolbarRoot = forwardRef<
+  HTMLDivElement,
+  ComponentProps["Generic"]["Toolbar"]["Root"]
+>((props, ref) => {
+  const { className, children, onMouseEnter, onMouseLeave, variant } = props;
+  const { ref: focusRef, focused } = useFocusWithin();
+  const trapRef = useFocusTrap(focused);
+
+  return (
+    <Flex
+      className={className}
+      ref={mergeRefs(ref, focusRef, trapRef)}
+      role="group"
+      aria-label="Text formatting"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      gap={variant === "action-toolbar" ? 2 : undefined}
+    >
+      {children}
+    </Flex>
+  );
+});
+
+function AccessibleFormattingToolbarController() {
+  const components = useComponentsContext();
+  const accessibleComponents = useMemo(
+    () => components && {
+      ...components,
+      FormattingToolbar: {
+        ...components.FormattingToolbar,
+        Root: accessibleFormattingToolbarRoot,
+      },
+    },
+    [components],
+  );
+
+  if (!accessibleComponents) return null;
+
+  return (
+    <ComponentsContext.Provider value={accessibleComponents}>
+      <FormattingToolbarController />
+    </ComponentsContext.Provider>
+  );
+}
+
+const editorSchema = BlockNoteSchema.create({
+  blockSpecs: {
+    ...defaultBlockSpecs,
+    callout: calloutBlock(),
+    mathPlaceholder: mathPlaceholderBlock(),
+  },
+});
+type AppEditor = BlockNoteEditorInstance<
+  typeof editorSchema.blockSchema,
+  typeof editorSchema.inlineContentSchema,
+  typeof editorSchema.styleSchema
+>;
+type AppBlock = Block<
+  typeof editorSchema.blockSchema,
+  typeof editorSchema.inlineContentSchema,
+  typeof editorSchema.styleSchema
+>;
+type AppChanges = BlocksChanged<
+  typeof editorSchema.blockSchema,
+  typeof editorSchema.inlineContentSchema,
+  typeof editorSchema.styleSchema
+>;
+type AppPartialBlock = PartialBlock<
+  typeof editorSchema.blockSchema,
+  typeof editorSchema.inlineContentSchema,
+  typeof editorSchema.styleSchema
+>;
+
 export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkTargets }: Props) {
   const queryClient = useQueryClient();
   const initialContent = useMemo(
     () => initialDocument.children.map(toPartialBlock),
     [initialDocument.children],
   );
+  const [editorActionError, setEditorActionError] = useState<string | null>(null);
+  const editorRef = useRef<AppEditor | null>(null);
   const editor = useCreateBlockNote(
-    { initialContent: initialContent.length > 0 ? initialContent : undefined },
+    {
+      schema: editorSchema,
+      domAttributes: { editor: { "aria-label": "Document content" } },
+      initialContent: initialContent.length > 0 ? initialContent : undefined,
+      extensions: [slashMenuShortcut],
+      uploadFile: async (file, blockId) => {
+        setEditorActionError(null);
+        try {
+          return await notesApi.uploadFile(file);
+        } catch (error) {
+          setEditorActionError(
+            error instanceof Error ? `Could not upload ${file.name}: ${error.message}` :
+              `Could not upload ${file.name}`,
+          );
+          if (blockId) {
+            window.setTimeout(() => {
+              const currentEditor = editorRef.current;
+              const block = currentEditor?.getBlock(blockId);
+              if (block && "url" in block.props && !block.props.url) {
+                currentEditor?.removeBlocks([blockId]);
+              }
+            }, 0);
+          }
+          return { props: { url: "", name: file.name } };
+        }
+      },
+    },
     [initialDocument.id],
   );
+  editorRef.current = editor;
   const saveQueue = useRef(Promise.resolve());
   const blockUpdatedAt = useRef(blockUpdatedAtById(initialDocument.children));
   const documentRevision = useRef(initialDocument.revision);
   const saveFailed = useRef(false);
+  const recoveryStarted = useRef(false);
   const hydrating = useRef(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -62,6 +204,91 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
     null,
   );
   const previewQuery = useBlockReference(preview?.blockId ?? null);
+
+  const enqueueOperations = (operations: BlockOperation[]) => {
+    try {
+      const pending = readPendingTransactions(initialDocument.id);
+      pending.push(makePendingTransaction(operations));
+      writePendingTransactions(initialDocument.id, pending);
+    } catch (error) {
+      saveFailed.current = true;
+      setSaveError(error instanceof Error ? error.message : "Could not save edits locally");
+      return Promise.resolve();
+    }
+    saveQueue.current = saveQueue.current.then(async () => {
+      if (saveFailed.current) return;
+      setSaving(true);
+      try {
+        await drainPendingTransactions();
+      } catch (error) {
+        saveFailed.current = true;
+        setSaveError(error instanceof Error ? error.message : "Could not save changes");
+      } finally {
+        setSaving(false);
+      }
+    });
+    return saveQueue.current;
+  };
+
+  const drainPendingTransactions = async () => {
+    let pending = readPendingTransactions(initialDocument.id);
+    while (pending.length > 0) {
+      const head = pending[0];
+      if (head.base_revision === undefined) {
+        head.base_revision = documentRevision.current;
+        head.operations = withExpectedUpdatedAt(head.operations, blockUpdatedAt.current);
+        writePendingTransactions(initialDocument.id, pending);
+      }
+      const document = await blockApi.transaction(
+        initialDocument.id,
+        asBlockTransaction(head, documentRevision.current),
+      );
+      pending = readPendingTransactions(initialDocument.id);
+      const completedIndex = pending.findIndex(
+        (transaction) => transaction.transaction_id === head.transaction_id,
+      );
+      if (completedIndex >= 0) pending.splice(completedIndex, 1);
+      writePendingTransactions(initialDocument.id, pending);
+      blockUpdatedAt.current = blockUpdatedAtById(document.children);
+      documentRevision.current = document.revision;
+      queryClient.setQueryData(["block-document", initialDocument.id], document);
+      void queryClient.invalidateQueries({ queryKey: ["navigation"] });
+      void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
+      void queryClient.invalidateQueries({ queryKey: ["notes"] });
+      void queryClient.invalidateQueries({ queryKey: ["backlinks", initialDocument.id] });
+      void queryClient.invalidateQueries({ queryKey: ["block-search"] });
+      setSaveError(null);
+    }
+  };
+
+  const changeHistory = (action: "undo" | "redo") => {
+    saveQueue.current = saveQueue.current.then(async () => {
+      setSaving(true);
+      try {
+        const document = await blockApi[action](initialDocument.id, documentRevision.current);
+        hydrating.current = true;
+        editor.replaceBlocks(editor.document, document.children.map(toPartialBlock));
+        hydrating.current = false;
+        blockUpdatedAt.current = blockUpdatedAtById(document.children);
+        documentRevision.current = document.revision;
+        saveFailed.current = false;
+        queryClient.setQueryData(["block-document", initialDocument.id], document);
+        void queryClient.invalidateQueries({ queryKey: ["navigation"] });
+        void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
+        void queryClient.invalidateQueries({ queryKey: ["notes"] });
+        void queryClient.invalidateQueries({ queryKey: ["backlinks", initialDocument.id] });
+        void queryClient.invalidateQueries({ queryKey: ["block-search"] });
+        setSaveError(null);
+      } catch (error) {
+        hydrating.current = false;
+        saveFailed.current = true;
+        setSaveError(error instanceof Error ? error.message : `Could not ${action} changes`);
+      } finally {
+        setSaving(false);
+      }
+    });
+    return saveQueue.current;
+  };
 
   const showPreview = (event: React.MouseEvent<HTMLElement>) => {
     const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a");
@@ -77,41 +304,13 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
   };
 
   const onChange = (
-    changedEditor: BlockNoteEditorInstance,
-    context: { getChanges: () => BlocksChanged },
+    changedEditor: AppEditor,
+    context: { getChanges: () => AppChanges },
   ) => {
     if (hydrating.current) return;
     const operations = changesToOperations(changedEditor, context.getChanges());
     if (operations.length === 0) return;
-
-    saveQueue.current = saveQueue.current.then(async () => {
-      if (saveFailed.current) return;
-
-      setSaving(true);
-      try {
-        const document = await blockApi.transaction(
-          initialDocument.id,
-          transactionPayload(
-            documentRevision.current,
-            withExpectedUpdatedAt(operations, blockUpdatedAt.current),
-          ),
-        );
-        blockUpdatedAt.current = blockUpdatedAtById(document.children);
-        documentRevision.current = document.revision;
-        queryClient.setQueryData(["block-document", initialDocument.id], document);
-        void queryClient.invalidateQueries({ queryKey: ["navigation"] });
-        void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
-        void queryClient.invalidateQueries({ queryKey: ["notes"] });
-        void queryClient.invalidateQueries({ queryKey: ["backlinks", initialDocument.id] });
-        void queryClient.invalidateQueries({ queryKey: ["block-search"] });
-        setSaveError(null);
-      } catch (error) {
-        saveFailed.current = true;
-        setSaveError(error instanceof Error ? error.message : "Could not save changes");
-      } finally {
-        setSaving(false);
-      }
-    });
+    void enqueueOperations(operations);
   };
 
   useEffect(() => {
@@ -135,6 +334,24 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
     });
     hydrating.current = false;
   }, [editor, initialDocument]);
+
+  useEffect(() => {
+    if (recoveryStarted.current) return;
+    recoveryStarted.current = true;
+    saveQueue.current = saveQueue.current.then(async () => {
+      try {
+        const pending = readPendingTransactions(initialDocument.id);
+        if (pending.length === 0) return;
+        setSaving(true);
+        await drainPendingTransactions();
+      } catch (error) {
+        saveFailed.current = true;
+        setSaveError(error instanceof Error ? error.message : "Could not recover saved edits");
+      } finally {
+        setSaving(false);
+      }
+    });
+  }, [initialDocument.id]);
 
   useEffect(() => {
     if (!focusBlockId || !editor.getBlock(focusBlockId)) return;
@@ -175,11 +392,108 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
     }));
   };
 
-  const selectionActions = hasBlockSelection ? blockSelectionActions(editor) : null;
+  const getSlashItems = async (query: string): Promise<DefaultReactSuggestionItem[]> => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const defaults = getDefaultReactSlashMenuItems(editor).filter((item) =>
+      `${item.title} ${item.subtext ?? ""}`.toLocaleLowerCase().includes(normalizedQuery),
+    );
+    if (["math placeholder", "math block"].some((term) => term.includes(normalizedQuery))) {
+      defaults.push({
+        title: "Math placeholder",
+        subtext: "Insert a placeholder for a future math block",
+        group: "Blocks",
+        onItemClick: () => {
+          insertOrUpdateBlockForSlashMenu(editor, { type: "mathPlaceholder" });
+          editor.getExtension(SuggestionMenu)?.closeMenu();
+        },
+      });
+    }
+    if ("callout".includes(normalizedQuery)) {
+      defaults.push({
+        title: "Callout",
+        subtext: "Insert a simple rich-text callout block",
+        group: "Blocks",
+        onItemClick: () => {
+          insertOrUpdateBlockForSlashMenu(editor, { type: "callout" });
+          editor.getExtension(SuggestionMenu)?.closeMenu();
+        },
+      });
+    }
+    const targets: BlockLinkTarget[] = await blockApi.linkTargets(query);
+    const references = targets.map((target) => ({
+      key: "paragraph",
+      title: `Embed block: ${target.text || `${target.block_type} block`}`,
+      subtext: `${target.document_title} · ${target.block_id}`,
+      group: "Embeds",
+      onItemClick: () => {
+        editor.insertInlineContent(blockLink(target));
+        editor.getExtension(SuggestionMenu)?.closeMenu();
+      },
+    }));
+    return [...defaults, ...references];
+  };
+
+  const selectionActions = hasBlockSelection ? blockSelectionActions(editor, initialDocument.id) : null;
+  const selectedBlock =
+    selectionActions?.count === 1
+      ? flattenNodes(initialDocument.children).find((node) => node.id === selectionActions.blockId)
+      : undefined;
 
   return (
     <section
       className="blocknote-shell relative flex min-h-0 flex-1 flex-col"
+      onCopy={(event) => {
+        const clipboardHtml = event.clipboardData.getData("text/html");
+        let html = clipboardHtml;
+        const selection = window.getSelection();
+        const selectionRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        const editorDom = editor.domElement;
+        if (
+          !html &&
+          selection &&
+          selectionRange &&
+          editorDom?.contains(selectionRange.commonAncestorContainer)
+        ) {
+          const selectedContent = document.createElement("div");
+          for (let index = 0; index < selection.rangeCount; index += 1) {
+            selectedContent.append(selection.getRangeAt(index).cloneContents());
+          }
+          html = selectedContent.innerHTML;
+        }
+        if (!html) {
+          const selectedBlocks = editor.getSelection()?.blocks;
+          if (selectedBlocks?.length) html = editor.blocksToHTMLLossy(selectedBlocks);
+        }
+        if (!/<img\b/i.test(html)) return;
+
+        const embeddedHtml = embedLoadedSameOriginImages(
+          html,
+          editorDom?.querySelectorAll("img") ?? [],
+          window.location.href,
+        );
+        if (embeddedHtml) {
+          event.clipboardData.setData("text/html", embeddedHtml);
+          if (!event.clipboardData.getData("text/plain")) {
+            event.clipboardData.setData("text/plain", selection?.toString() ?? "");
+          }
+          event.preventDefault();
+        }
+      }}
+      onKeyDownCapture={(event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement) || !target.closest('[contenteditable="true"]')) {
+          return;
+        }
+
+        if ((!event.metaKey && !event.ctrlKey) || event.altKey) return;
+        const style = event.key.toLowerCase();
+        if (style !== "b" && style !== "i") return;
+
+        syncNativeTextSelection(editor);
+        event.preventDefault();
+        event.stopPropagation();
+        editor.toggleStyles(style === "b" ? { bold: true } : { italic: true });
+      }}
       onMouseOver={showPreview}
       onClick={(event) => {
         const anchor = (event.target as HTMLElement).closest("a");
@@ -194,11 +508,110 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
         <span className="font-medium uppercase tracking-wide text-zinc-500">
           {editor.document.length} blocks
         </span>
-        {saving && <span>Saving…</span>}
-        {saveError && <span className="text-red-600">{saveError}</span>}
+        {(saving || saveError) && (
+          <span
+            role="status"
+            aria-live="polite"
+            className={saveError ? "text-red-600" : undefined}
+          >
+            {saveError ?? "Saving…"}
+          </span>
+        )}
+        <span className="ml-auto flex gap-1">
+          <button
+            type="button"
+            className="rounded border px-2 py-1 disabled:opacity-40"
+            aria-label="Undo saved change"
+            disabled={saving || !!saveError || !initialDocument.can_undo}
+            onClick={() => void changeHistory("undo")}
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            className="rounded border px-2 py-1 disabled:opacity-40"
+            aria-label="Redo saved change"
+            disabled={saving || !!saveError || !initialDocument.can_redo}
+            onClick={() => void changeHistory("redo")}
+          >
+            Redo
+          </button>
+        </span>
       </div>
       {selectionActions && (
-        <div className="flex items-center gap-2 px-8 pt-2 text-xs">
+        <div role="group" aria-label="Selected block actions" className="flex items-center gap-2 px-8 pt-2 text-xs">
+          {selectionActions.count === 1 && (
+            <>
+              <button
+                type="button"
+                className="rounded border px-2 py-1"
+                onClick={() => {
+                  setEditorActionError(null);
+                  void selectionActions.copyLink().catch(() => {
+                    setEditorActionError("Could not copy block link");
+                  });
+                }}
+              >
+                Copy block link
+              </button>
+              <button
+                type="button"
+                className="rounded border px-2 py-1"
+                onClick={() => {
+                  setEditorActionError(null);
+                  void selectionActions.copyEmbed().catch(() => {
+                    setEditorActionError("Could not copy block embed");
+                  });
+                }}
+              >
+                Copy block embed
+              </button>
+              <button
+                type="button"
+                className="rounded border px-2 py-1"
+                onClick={() => selectionActions.insertAbove()}
+              >
+                Insert above
+              </button>
+              <label className="flex items-center gap-1">
+                Convert
+                <select
+                  aria-label="Convert selected block"
+                  className="rounded border px-2 py-1"
+                  value=""
+                  onChange={(event) => {
+                    const type = event.target.value as ConvertibleBlockType;
+                    if (type) selectionActions.convert(type);
+                  }}
+                >
+                  <option value="" disabled>To…</option>
+                  <option value="paragraph">Paragraph</option>
+                  <option value="heading">Heading</option>
+                  <option value="quote">Quote</option>
+                  <option value="bulletListItem">Bulleted list</option>
+                  <option value="numberedListItem">Numbered list</option>
+                  <option value="checkListItem">Task list</option>
+                  <option value="codeBlock">Code</option>
+                </select>
+          </label>
+            </>
+          )}
+          <button
+            type="button"
+            className="rounded border px-2 py-1"
+            aria-label="Move selected blocks up"
+            onClick={() => selectionActions.move("up")}
+          >
+            Move up
+          </button>
+          <button
+            type="button"
+            className="rounded border px-2 py-1"
+            aria-label="Move selected blocks down"
+            onClick={() => selectionActions.move("down")}
+          >
+            Move down
+          </button>
           <button
             type="button"
             className="rounded border px-2 py-1"
@@ -218,25 +631,61 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
           </span>
         </div>
       )}
+      {selectedBlock && (
+        <BlockPropertiesEditor
+          key={selectedBlock.id}
+          blockId={selectedBlock.id}
+          values={selectedBlock.user_attrs}
+          saving={saving}
+          onSave={(user_attrs) =>
+            enqueueOperations([
+              { operation: "set_user_attrs", block_id: selectedBlock.id, user_attrs },
+            ])
+          }
+        />
+      )}
+      {selectionActions?.count && selectionActions.blockIds[0] && (
+        <BlockReviewPanel
+          key={`review-${selectionActions.blockIds.join("-")}`}
+          documentId={initialDocument.id}
+          blockId={selectionActions.blockIds[0]}
+          selectedBlockIds={selectionActions.blockIds}
+          canApplySuggestion={({ blockId, before }) => {
+            const block = editor.getBlock(blockId);
+            return !!block && safeSuggestionReplacement(block.content, before, "") !== null;
+          }}
+          onApplySuggestion={({ blockId, before, after }) => {
+            const block = editor.getBlock(blockId);
+            if (!block) return false;
+            const content = safeSuggestionReplacement(block.content, before, after);
+            if (content === null) return false;
+            editor.updateBlock(blockId, { content } as PartialBlock);
+            return true;
+          }}
+        />
+      )}
+      {editorActionError && (
+        <div role="alert" className="px-8 pt-2 text-xs text-red-600">
+          {editorActionError}
+        </div>
+      )}
       <BlockNoteView
         editor={editor}
+        slashMenu={false}
+        formattingToolbar={false}
         editable={!saveError}
         onChange={onChange}
         onSelectionChange={() => {
-          setHasBlockSelection((editor.getSelection()?.blocks.length ?? 0) > 0);
-        }}
-        onKeyDown={(event) => {
-          if (!selectionActions || event.defaultPrevented) return;
-          if (event.key === "Delete" || event.key === "Backspace") {
-            event.preventDefault();
-            selectionActions.remove();
-          } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "d") {
-            event.preventDefault();
-            selectionActions.duplicate();
-          }
+          setHasBlockSelection(isBlockLevelSelection(editor.prosemirrorState.selection));
         }}
         className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 pt-2"
       >
+        <AccessibleFormattingToolbarController />
+        <SuggestionMenuController
+          triggerCharacter="/"
+          getItems={getSlashItems}
+          minQueryLength={0}
+        />
         <SuggestionMenuController
           triggerCharacter="[["
           getItems={getDocumentLinkItems}
@@ -273,15 +722,49 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
 }
 
 type BlockSelectionEditor = Pick<
-  BlockNoteEditorInstance,
-  "getSelection" | "insertBlocks" | "removeBlocks"
+  AppEditor,
+  | "getSelection"
+  | "insertBlocks"
+  | "removeBlocks"
+  | "updateBlock"
+  | "moveBlocksUp"
+  | "moveBlocksDown"
 >;
+
+export type ConvertibleBlockType =
+  | "paragraph"
+  | "heading"
+  | "quote"
+  | "bulletListItem"
+  | "numberedListItem"
+  | "checkListItem"
+  | "codeBlock";
+
+export function convertSelectedBlock(
+  editor: BlockSelectionEditor,
+  type: ConvertibleBlockType,
+): void {
+  const block = editor.getSelection()?.blocks[0];
+  if (block) editor.updateBlock(block.id, { type } as AppPartialBlock);
+}
+
+export function insertParagraphAbove(editor: BlockSelectionEditor): string | null {
+  const block = editor.getSelection()?.blocks[0];
+  if (!block) return null;
+  return editor.insertBlocks([{ type: "paragraph" }], block.id, "before")[0]?.id ?? null;
+}
+
+export function moveSelectedBlocks(editor: BlockSelectionEditor, direction: "up" | "down"): void {
+  if ((editor.getSelection()?.blocks.length ?? 0) === 0) return;
+  if (direction === "up") editor.moveBlocksUp();
+  else editor.moveBlocksDown();
+}
 
 export function selectedBlockIds(editor: BlockSelectionEditor): string[] {
   return (editor.getSelection()?.blocks ?? []).map((block) => block.id);
 }
 
-function cloneForInsert(block: Block): PartialBlock {
+function cloneForInsert(block: AppBlock): AppPartialBlock {
   return {
     type: block.type,
     props: block.props,
@@ -307,14 +790,85 @@ export function deleteSelectedBlocks(editor: BlockSelectionEditor): string[] {
   return ids;
 }
 
-function blockSelectionActions(editor: BlockSelectionEditor) {
+function blockSelectionActions(editor: BlockSelectionEditor, documentId?: string) {
+  const blocks = editor.getSelection()?.blocks ?? [];
   return {
+    count: blocks.length,
+    blockIds: blocks.map((block) => block.id),
+    blockId: blocks.length === 1 ? blocks[0]?.id : undefined,
+    copyEmbed: async () => {
+      const block = blocks[0];
+      if (blocks.length !== 1 || !block) return;
+      await navigator.clipboard.writeText(blockLink({ block_id: block.id, text: "" }));
+    },
+    copyLink: async () => {
+      const block = blocks[0];
+      if (blocks.length !== 1 || !block || !documentId) return;
+      await navigator.clipboard.writeText(
+        buildBlockPermalink(window.location.href, documentId, block.id),
+      );
+    },
+    insertAbove: () => insertParagraphAbove(editor),
+    move: (direction: "up" | "down") => moveSelectedBlocks(editor, direction),
+    convert: (type: ConvertibleBlockType) => convertSelectedBlock(editor, type),
     duplicate: () => duplicateSelectedBlocks(editor),
     remove: () => deleteSelectedBlocks(editor),
   };
 }
 
-function toPartialBlock(node: BlockNode): PartialBlock {
+export function buildBlockPermalink(baseUrl: string, documentId: string, blockId: string): string {
+  const url = new URL(baseUrl);
+  url.searchParams.set("note", documentId);
+  url.hash = `block=${encodeURIComponent(blockId)}`;
+  return url.toString();
+}
+
+export function isBlockLevelSelection(selection: { toJSON(): unknown }): boolean {
+  // BlockNote returns blocks for text ranges too; its drag-handle block range
+  // uses the serialized "multiple-node" selection type.
+  const serialized = selection.toJSON();
+  if (typeof serialized !== "object" || serialized === null || !("type" in serialized)) {
+    return false;
+  }
+  return serialized.type === "node" || serialized.type === "multiple-node";
+}
+
+function syncNativeTextSelection(editor: AppEditor): void {
+  const selection = window.getSelection();
+  const view = editor.prosemirrorView;
+  const anchorNode = selection?.anchorNode;
+  const focusNode = selection?.focusNode;
+  if (
+    !selection ||
+    selection.isCollapsed ||
+    !anchorNode ||
+    !focusNode ||
+    !view.dom.contains(anchorNode) ||
+    !view.dom.contains(focusNode)
+  ) {
+    return;
+  }
+
+  const anchor = view.posAtDOM(anchorNode, selection.anchorOffset);
+  const head = view.posAtDOM(focusNode, selection.focusOffset);
+  const state = editor.prosemirrorState;
+  if (
+    anchor < 0 ||
+    head < 0 ||
+    anchor > state.doc.content.size ||
+    head > state.doc.content.size ||
+    !state.doc.resolve(anchor).parent.inlineContent ||
+    !state.doc.resolve(head).parent.inlineContent ||
+    (state.selection.anchor === anchor && state.selection.head === head)
+  ) {
+    return;
+  }
+
+  const textSelection = TextSelection.create(state.doc, anchor, head);
+  editor.transact((tr) => tr.setSelection(textSelection));
+}
+
+export function toPartialBlock(node: BlockNode): AppPartialBlock {
   const storedContent = node.content.blocknote;
   const content = storedContent === undefined ? markdownText(node) : storedContent;
   const children = node.children.map(toPartialBlock);
@@ -372,6 +926,18 @@ function toPartialBlock(node: BlockNode): PartialBlock {
   if (node.type === "thematic_break") {
     return { id: node.id, type: "divider", children } as PartialBlock;
   }
+  if (node.type === "mathPlaceholder") {
+    return { id: node.id, type: "mathPlaceholder", children } as unknown as PartialBlock;
+  }
+  if (node.type === "callout") {
+    return { id: node.id, type: "callout", content, children } as unknown as PartialBlock;
+  }
+  if (["image", "file", "audio", "video"].includes(node.type)) {
+    const props = Object.fromEntries(
+      Object.entries(node.attrs).filter(([key]) => key !== "id"),
+    );
+    return { id: node.id, type: node.type, props, children } as PartialBlock;
+  }
   return { id: node.id, type: "paragraph", content, children } as PartialBlock;
 }
 
@@ -384,8 +950,8 @@ function flattenNodes(nodes: readonly BlockNode[]): BlockNode[] {
 }
 
 function changesToOperations(
-  editor: BlockNoteEditorInstance,
-  changes: BlocksChanged,
+  editor: AppEditor,
+  changes: AppChanges,
 ): BlockOperation[] {
   const locations = new Map<string, Location>();
   indexLocations(editor.document, locations);
@@ -421,8 +987,8 @@ function changesToOperations(
 }
 
 function toOperation(
-  editor: BlockNoteEditorInstance,
-  block: Block,
+  editor: AppEditor,
+  block: AppBlock,
   operation: "insert" | "update",
   location: Location,
 ): BlockOperation {
@@ -435,14 +1001,17 @@ function toOperation(
     attrs: block.props,
     content: {
       blocknote: block.content,
-      markdown: editor.blocksToMarkdownLossy([block]),
+      markdown:
+        block.type === "mathPlaceholder"
+          ? "Math placeholder"
+          : editor.blocksToMarkdownLossy([block]),
     },
-    text: inlineText(block.content),
+    text: block.type === "mathPlaceholder" ? "Math placeholder" : inlineText(block.content),
   };
 }
 
-function indexLocations(blocks: readonly Block[], output: Map<string, Location>): void {
-  const visit = (children: readonly Block[], parentId: string | null, depth: number) => {
+function indexLocations(blocks: readonly AppBlock[], output: Map<string, Location>): void {
+  const visit = (children: readonly AppBlock[], parentId: string | null, depth: number) => {
     children.forEach((block, position) => {
       output.set(block.id, { parentId, position, depth });
       visit(block.children, block.id, depth + 1);
@@ -465,7 +1034,7 @@ function inlineText(content: unknown): string {
     .join("");
 }
 
-function hasDeletedAncestor(id: string, changes: BlocksChanged): boolean {
+function hasDeletedAncestor(id: string, changes: AppChanges): boolean {
   const block = changes.find((change) => change.block.id === id)?.block;
   if (!block) return false;
   return changes.some(
@@ -474,7 +1043,7 @@ function hasDeletedAncestor(id: string, changes: BlocksChanged): boolean {
   );
 }
 
-function containsDescendant(block: Block, id: string): boolean {
+function containsDescendant(block: AppBlock, id: string): boolean {
   return block.children.some((child) => child.id === id || containsDescendant(child, id));
 }
 

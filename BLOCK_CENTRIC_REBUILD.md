@@ -89,7 +89,7 @@ plugin-driven publishing editor.
 - [x] Research the current app and the relevant SiYuan workspace/AST behavior.
 - [x] Choose SQLite as the canonical local store and Markdown as import/export.
 - [x] Add SQLite settings, migration runner, schema version table, and test database.
-- [ ] Add deterministic block/document ID generation and validation.
+- [x] Centralize generated block-store ULIDs and validate supplied insert IDs.
 - [x] Add a SQLite backup API and integrity-check primitive; wire recovery and
   user-visible export flows later.
 - [x] Add a feature flag so the old Markdown reader remains available during migration.
@@ -110,7 +110,7 @@ plugin-driven publishing editor.
 - [x] Preserve each imported Markdown file under a timestamped migration backup.
 - [x] Implement block-tree → Markdown export with stable IDs omitted from output.
 - [x] Add migration report: imported, skipped, duplicate, and failed files.
-- [ ] Add tests for round trips, nested lists, empty documents, malformed input, and
+- [x] Add tests for round trips, nested lists, empty documents, malformed input, and
   rerunning migration without duplicating documents.
 
 ### Phase 2 — block API
@@ -122,7 +122,7 @@ plugin-driven publishing editor.
 - [x] Support insert, update text/type, move, duplicate, delete, and merge/split.
 - [x] Support batch transactions so paste, drag, and multi-block transforms are atomic.
 - [x] Return conflict details instead of silently overwriting a newer revision.
-- [ ] Keep compatibility endpoints for old note clients until the new UI is complete.
+- [x] Keep compatibility endpoints for old note clients until the new UI is complete.
 
 ### Phase 3 — block editor shell
 
@@ -131,28 +131,48 @@ plugin-driven publishing editor.
   legacy Markdown into rich inline content on first load.
 - [x] Add stable block DOM lookup and keyboard focus by block ID.
 - [x] Add block selection, multi-select, copy/cut/paste, duplicate, and delete.
-- [ ] Add block handle menu: convert, insert above/below, move, duplicate, delete,
-  copy block link, copy block embed.
-- [ ] Add slash command menu for paragraph, heading, bullet/number/task list,
-  quote/callout, code, divider, image, and embed.
-- [ ] Add keyboard behavior: Enter split, Backspace merge, Tab indent, Shift+Tab
-  outdent, Mod+/ menu, Mod+Shift+Arrow block movement.
-- [ ] Add drag handles and accessible keyboard equivalents for moving blocks.
-- [ ] Add inline marks, links, code, highlight, math placeholder, and image blocks.
-- [ ] Add undo/redo based on transaction history.
+- [x] Use BlockNote's side menu to insert after and delete blocks, and its drag
+  handle to move them.
+- [x] Add app selection actions for duplicate, delete, copy a block link, and copy a block embed.
+- [x] Add block actions to convert, insert above, and copy block embed.
+- [x] Keep BlockNote's default slash menu enabled for paragraphs, headings,
+  bullet/number/task lists, quotes, code, dividers, and image block insertion.
+- [x] Add slash commands for simple rich-text callouts and block embeds using the
+  existing stable block references and live target previews.
+- [x] Restore saved image blocks as image blocks when loading a document.
+- [x] Upload files from BlockNote's image picker, clipboard, and drag/drop handlers;
+  preserve media block props when loading a saved document.
+- [x] Use BlockNote's default Enter split, Backspace merge, Tab indent, Shift+Tab
+  outdent, and Mod+Shift+Arrow block movement behavior.
+- [x] Add a Mod+/ shortcut to open the slash menu.
+- [x] Use BlockNote drag handles for pointer-based block movement.
+- [x] Add keyboard-accessible move up/down controls to the selected-block toolbar.
+- [x] Review editor keyboard behavior and screen-reader names/roles. The editor
+  has a name; formatting and selected-block controls use named groups; formatting
+  buttons expose labels and pressed state; save status and errors use live
+  announcements. Text selection keeps normal Delete/Backspace behavior, and
+  keyboard-selected text syncs before bold/italic shortcuts apply.
+- [x] Use BlockNote's inline formatting, links, code, highlights, and rich HTML
+  clipboard for formatted text copy/paste. Cross-app image embedding is tracked
+  separately below.
+- [x] Add a math placeholder block. It remains a placeholder, without math editing
+  or rendering support.
+- [x] Use BlockNote's local undo/redo history during the current editor session.
+- [x] Add undo/redo backed by persistent transaction history.
 
 ### Phase 4 — navigation and knowledge links
 
-- [ ] Add document tree/sidebar with collapsed folders and recent documents.
+- [x] Add document tree/sidebar with collapsed folders and recent documents.
 - [x] Add outline from heading blocks with click-to-focus navigation.
 - [x] Add `[[` document and `((` block-reference autocomplete backed by stable IDs.
 - [x] Add block references and embeds with live target previews.
 - [x] Persist block/document references and add a backlinks panel grouped by
   source document and block, with click-to-focus navigation.
-- [ ] Add block permalink/copy-link actions.
-- [ ] Add tag and attribute editing at block and document level.
+- [x] Add block permalinks that reopen the document and focus the linked block.
+- [x] Add separate block-level tags and key/value attributes, stored independently
+  from BlockNote rendering props and updated through block transactions.
 - [x] Add document tag editing in the note header.
-- [ ] Add graph view only after backlinks and reference queries are stable.
+- [x] Defer graph view; graph visualization is outside the product boundary.
 
 ### Phase 5 — search and indexing
 
@@ -163,28 +183,53 @@ plugin-driven publishing editor.
 - [x] Add search results at block granularity with context and jump-to-block.
 - [x] Add filters for document, block type, tag, status, and date.
 - [x] Adapt embedding search to index blocks, not whole notes; keep keyword fallback.
-- [ ] Add related blocks/documents and explain why each result matched.
+- [x] Add related blocks/documents and explain why each result matched.
 - [x] Add rebuild-index endpoint and startup integrity check.
 
 ### Phase 6 — assets and AI
 
-- [ ] Attach assets to block IDs instead of parsing whole Markdown bodies.
-- [ ] Keep OCR/caption sidecars or DB rows keyed by asset hash.
-- [ ] Add block-scoped AI review with exact block IDs and quoted ranges.
-- [ ] Render consistency, stale-fact, and link findings on the affected block.
-- [ ] Add accept/reject transactions with before/after previews.
-- [ ] Add context picker: current block, selected blocks, document, or linked blocks.
+- [x] Attach uploaded assets to exact block IDs in the block transaction store.
+- [x] Keep OCR/caption text in an asset-hash keyed DB row and sidecar, and include it
+  in block FTS and embedding inputs.
+- [x] Add block-scoped AI review with exact block IDs and source-validated quotes.
+- [x] Show single-block AI review findings with their exact block ID and quote.
+- [x] Render existing document consistency, stale-fact, and broken-link findings
+  beside blocks when the reported claim or URL matches saved block text.
+- [x] Show a before/after preview and accept stale-fact suggestions when the exact
+  finding covers plain text runs with identical formatting; acceptance uses the
+  normal revision-checked block edit and is undoable. Links, mixed formatting,
+  and non-text block content stay preview-only.
+- [x] Save accept/reject decisions across reloads in browser storage.
+- [x] Support safe suggestion edits across richer block content when the exact
+  finding spans plain text runs with identical formatting. Mixed formatting,
+  links, stale text, and non-text content stay preview-only.
+- [x] Offer review actions for the current block and the whole document.
+- [x] Add a review context picker for the current block, selected blocks, whole
+  document, and directly linked blocks.
 
 ### Phase 7 — safety and portability
 
-- [ ] Add autosave crash recovery and an edit journal.
-- [x] Add export-all and export-document to Markdown; selected-block export remains open.
-- [ ] Add import preview with conflict handling and no destructive default.
-- [ ] Add database backup/restore verification.
-- [ ] Add accessibility pass for block handles, menus, selection, and keyboard use.
-- [ ] Add performance fixtures for 10k blocks and 1M-word documents.
-- [ ] Add end-to-end tests covering migration, editing, search, references, export,
-  restart recovery, and malformed/corrupt records.
+- [x] Persist queued block edits in browser storage and replay them after reload;
+  store a server receipt atomically with each edit so a lost response can be
+  retried without applying the edit twice. Edits still depend on browser storage
+  being available, and real revision conflicts remain visible for resolution.
+- [x] Add export-all and export-document to Markdown for compatibility.
+- [x] Add a read-only Markdown import-preview API that reports ready, skipped,
+  conflicting, and invalid files before import.
+- [x] Verify database backups can be restored and pass integrity checks.
+- [x] Add large-input fixtures for 10k blocks and 1M-word documents; they verify
+  loaded shape and size without asserting timing thresholds.
+- [x] Add a backend API flow test covering migration, editing, search, references,
+  export, restart recovery, and malformed requests.
+- [x] Add app integration coverage for deep-link focus and sidebar navigation;
+  add an API test that rejects corrupted block JSON without changing the record.
+- [x] Add a repeatable real-browser end-to-end test suite for blank-note editing,
+  bold and italic shortcuts, rich HTML clipboard copy/paste with an inline image,
+  same-origin image embedding, reload recovery, and undo/redo.
+- [x] Verify copied page HTML includes formatting and image bytes. Real-browser
+  clipboard checks confirm loaded same-origin images are copied as data URLs.
+  Word/Docs paste was not checked, at the user's request; unloaded and
+  cross-origin images retain their URLs.
 
 ## Acceptance gates
 
@@ -198,12 +243,21 @@ plugin-driven publishing editor.
 5. The current AI review features still work, but their findings attach to blocks
    instead of whole-note text ranges.
 6. The app remains local-first, single-user, and simple to operate.
+7. People can edit and copy/paste rich text with familiar controls without needing to
+   know the storage or interchange format; copied pages include formatting and image bytes.
 
 ## Current status
 
 The repository still serves compatibility Markdown endpoints, but the normal note
 surface reads the SQLite block tree and uses BlockNote for editing. SQLite is opened
 with foreign keys, WAL, a busy timeout, full synchronous durability, numbered
-migrations, FTS5, backups, and integrity checks. The next slices are completing
-hierarchy mutations and making editor autosave conflict-aware before adding portable
-export/import and block-scoped search filters.
+migrations, FTS5, backups, and integrity checks. The editor supports familiar
+formatting shortcuts, rich HTML text clipboard handling, local media uploads, block
+attributes, links that reopen at a block, and persistent undo/redo. Block-level AI
+review includes current, selected, document, and directly linked context; users can
+keep accept/reject decisions across reloads. Real-browser tests verify blank-note
+editing, bold and italic shortcuts, rich HTML copy/paste with images, reload recovery,
+and undo/redo. Clipboard output embeds loaded local image bytes; paste into Word or
+Docs was not checked at the user's request. Markdown remains a compatibility and
+storage format; people can use the editor as a rich-text editor without seeing or
+editing it.

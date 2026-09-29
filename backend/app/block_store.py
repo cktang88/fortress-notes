@@ -7,6 +7,7 @@ without making the first migration destructive.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -20,14 +21,38 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 from ulid import ULID
 
-from .models import BlockOperation
+from .models import BlockOperation, BlockReviewContextKind
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 9
 DB_FILENAME = ".fortress.sqlite3"
 
 _TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
 _BLOCK_REF_RE = re.compile(r"\(\(\s*([A-Za-z0-9_-]+)(?:\s+[\"']([^\"']*)[\"'])?\s*\)\)")
 _DOCUMENT_REF_RE = re.compile(r"\[\[([A-Za-z0-9_-]+)(?:\|([^\]]+))?\]\]")
+_MEDIA_REF_RE = re.compile(r"/media/([A-Za-z0-9_-]+\.[A-Za-z0-9]+)")
+_UPLOAD_ID_RE = re.compile(r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$")
+_MIME_BY_EXTENSION = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+    ".m4a": "audio/mp4",
+    ".mp4": "video/mp4",
+    ".ogv": "video/ogg",
+    ".mov": "video/quicktime",
+    ".pdf": "application/pdf",
+}
+
+
+def _new_ulid() -> str:
+    """Generate a stable-format ID for records created by the block store."""
+
+    return str(ULID())
 
 
 @dataclass(frozen=True)
@@ -93,6 +118,13 @@ CREATE TABLE IF NOT EXISTS block_attrs (
     PRIMARY KEY (block_id, name)
 );
 
+CREATE TABLE IF NOT EXISTS block_user_attrs (
+    block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (block_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS block_refs (
     source_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
     target_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
@@ -112,6 +144,44 @@ CREATE TABLE IF NOT EXISTS revisions (
     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     block_id TEXT,
     operation_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS document_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,
+    patches_json TEXT NOT NULL,
+    undone INTEGER NOT NULL DEFAULT 0 CHECK (undone IN (0, 1)),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS document_history_order
+    ON document_history(document_id, id);
+
+CREATE TABLE IF NOT EXISTS assets (
+    content_hash TEXT NOT NULL,
+    media_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    text_updated_at TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (content_hash, media_name)
+);
+
+CREATE TABLE IF NOT EXISTS block_assets (
+    block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+    content_hash TEXT NOT NULL,
+    media_name TEXT NOT NULL,
+    PRIMARY KEY (block_id, content_hash, media_name),
+    FOREIGN KEY (content_hash, media_name)
+        REFERENCES assets(content_hash, media_name) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS transaction_receipts (
+    transaction_id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    request_hash TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 
@@ -144,6 +214,54 @@ _MIGRATIONS = {
     CREATE INDEX IF NOT EXISTS documents_folder_position ON documents(folder_id, position);
     """,
     4: "",
+    5: """
+    CREATE TABLE IF NOT EXISTS block_user_attrs (
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (block_id, name)
+    );
+    """,
+    6: """
+    CREATE TABLE IF NOT EXISTS assets (
+        content_hash TEXT NOT NULL,
+        media_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        text TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (content_hash, media_name)
+    );
+    CREATE TABLE IF NOT EXISTS block_assets (
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        content_hash TEXT NOT NULL,
+        media_name TEXT NOT NULL,
+        PRIMARY KEY (block_id, content_hash, media_name),
+        FOREIGN KEY (content_hash, media_name)
+            REFERENCES assets(content_hash, media_name) ON DELETE CASCADE
+    );
+    """,
+    7: "",
+    8: """
+    CREATE TABLE IF NOT EXISTS document_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL,
+        patches_json TEXT NOT NULL,
+        undone INTEGER NOT NULL DEFAULT 0 CHECK (undone IN (0, 1)),
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS document_history_order
+        ON document_history(document_id, id);
+    """,
+    9: """
+    CREATE TABLE IF NOT EXISTS transaction_receipts (
+        transaction_id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        request_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    """,
 }
 
 _ready_paths: set[Path] = set()
@@ -202,6 +320,110 @@ def initialize(path: Path) -> None:
     _ready_paths.add(path.resolve())
 
 
+def register_asset(db_path: Path, asset_path: Path, content_hash: str, mime_type: str) -> None:
+    """Record an uploaded asset before a block references it."""
+    initialize(db_path)
+    with connection_scope(db_path) as connection:
+        connection.execute(
+            """INSERT INTO assets(content_hash, media_name, mime_type, file_path, created_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(content_hash, media_name) DO UPDATE SET
+                 mime_type = excluded.mime_type, file_path = excluded.file_path""",
+            (content_hash, asset_path.name, mime_type, str(asset_path), _now()),
+        )
+
+
+def store_asset_text(path: Path, content_hash: str, text: str) -> None:
+    initialize(path)
+    with connection_scope(path) as connection:
+        cursor = connection.execute(
+            "UPDATE assets SET text = ?, text_updated_at = ? "
+            "WHERE content_hash = ? AND text <> ?",
+            (text, _now(), content_hash, text),
+        )
+        if cursor.rowcount == 0:
+            return
+        rows = connection.execute(
+            """SELECT DISTINCT blocks.id, blocks.document_id, blocks.text
+                 FROM blocks JOIN block_assets ON block_assets.block_id = blocks.id
+                WHERE block_assets.content_hash = ?""",
+            (content_hash,),
+        ).fetchall()
+        for row in rows:
+            _refresh_fts(connection, row["id"], row["document_id"], row["text"])
+
+
+def backfill_assets(db_path: Path, assets_path: Path) -> int:
+    """Register older generated media files and migrate their text sidecars.
+
+    Only ULID-named upload files with a supported media extension are considered.
+    Existing asset rows and hash sidecars are preserved, making startup retries safe.
+    """
+    initialize(db_path)
+    if not assets_path.is_dir():
+        return 0
+    registered = 0
+    with connection_scope(db_path) as connection:
+        for asset_path in sorted(assets_path.iterdir()):
+            mime_type = _MIME_BY_EXTENSION.get(asset_path.suffix.lower())
+            if (
+                not mime_type
+                or not _UPLOAD_ID_RE.fullmatch(asset_path.stem)
+                or asset_path.is_symlink()
+                or not asset_path.is_file()
+            ):
+                continue
+            try:
+                data = asset_path.read_bytes()
+            except OSError:
+                continue
+            content_hash = hashlib.sha256(data).hexdigest()
+            old_sidecar = asset_path.with_suffix(".txt")
+            try:
+                text = (
+                    old_sidecar.read_text(encoding="utf-8")
+                    if old_sidecar.is_file() and not old_sidecar.is_symlink()
+                    else ""
+                )
+            except (OSError, UnicodeError):
+                text = ""
+            registered_at = _now()
+            connection.execute(
+                """INSERT INTO assets(
+                       content_hash, media_name, mime_type, file_path, text,
+                       text_updated_at, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(content_hash, media_name) DO UPDATE SET
+                     mime_type = excluded.mime_type, file_path = excluded.file_path,
+                     text = CASE WHEN assets.text = '' THEN excluded.text ELSE assets.text END,
+                     text_updated_at = CASE WHEN assets.text = '' AND excluded.text <> ''
+                                            THEN excluded.text_updated_at
+                                            ELSE assets.text_updated_at END""",
+                (
+                    content_hash,
+                    asset_path.name,
+                    mime_type,
+                    str(asset_path),
+                    text,
+                    registered_at if text else None,
+                    registered_at,
+                ),
+            )
+            if text:
+                hash_sidecar = assets_path / f"{content_hash}.txt"
+                if not hash_sidecar.exists() and not hash_sidecar.is_symlink():
+                    try:
+                        hash_sidecar.write_text(text, encoding="utf-8")
+                    except OSError:
+                        pass
+            registered += 1
+        document_ids = connection.execute("SELECT id FROM documents").fetchall()
+        for row in document_ids:
+            _rebuild_document_assets(connection, row["id"])
+    rebuild_fts(db_path)
+    return registered
+
+
 def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
     if version == 3:
         columns = {
@@ -242,6 +464,16 @@ def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
             connection.execute(
                 "ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
             )
+    if version == 7:
+        columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(assets)").fetchall()
+        }
+        if "text_updated_at" not in columns:
+            connection.execute("ALTER TABLE assets ADD COLUMN text_updated_at TEXT")
+        connection.execute(
+            "UPDATE assets SET text_updated_at = created_at "
+            "WHERE text <> '' AND text_updated_at IS NULL"
+        )
     connection.executescript(_MIGRATIONS[version])
 
 
@@ -297,6 +529,7 @@ def create_document(
     body: str,
     created_at: object,
     updated_at: object,
+    ensure_empty_paragraph: bool = False,
 ) -> None:
     """Create the block representation for a newly created compatibility note."""
 
@@ -315,6 +548,7 @@ def create_document(
             body,
             _iso(created_at),
             _iso(updated_at),
+            ensure_empty_paragraph,
         )
 
 
@@ -336,9 +570,12 @@ def list_documents(path: Path) -> list[dict[str, object]]:
 def create_block_document(
     path: Path, title: str, status: str, tags: list[str], body: str
 ) -> dict:
-    document_id = str(ULID())
+    document_id = _new_ulid()
     now = _now()
-    create_document(path, document_id, title, status, tags, body, now, now)
+    create_document(
+        path, document_id, title, status, tags, body, now, now,
+        ensure_empty_paragraph=True,
+    )
     tree = document_tree(path, document_id)
     assert tree is not None
     return tree
@@ -410,9 +647,16 @@ def replace_document_from_markdown(
             return
         connection.execute(
             """UPDATE documents
-               SET title = ?, status = ?, tags_json = ?, updated_at = ?
+               SET title = ?, status = ?, tags_json = ?, updated_at = ?,
+                   revision = revision + 1
                WHERE id = ?""",
             (title, status, json.dumps(tags), _iso(updated_at), document_id),
+        )
+        # A whole-document Markdown replacement has no block-level inverse patch.
+        # Treat it as a new revision and discard old undo/redo entries so they
+        # cannot restore a tree from before this compatibility edit.
+        connection.execute(
+            "DELETE FROM document_history WHERE document_id = ?", (document_id,)
         )
         connection.execute("DELETE FROM blocks_fts WHERE document_id = ?", (document_id,))
         connection.execute("DELETE FROM blocks WHERE document_id = ?", (document_id,))
@@ -439,7 +683,7 @@ def create_folder(
     with connection_scope(path) as connection:
         _validate_folder_parent(connection, parent_id)
         target_position = _folder_insert_position(connection, parent_id, position)
-        folder_id = str(ULID())
+        folder_id = _new_ulid()
         connection.execute(
             """INSERT INTO folders(id, parent_id, name, position, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
@@ -751,7 +995,18 @@ def rebuild_fts(path: Path) -> None:
         connection.execute("DELETE FROM blocks_fts")
         connection.execute(
             """INSERT INTO blocks_fts(block_id, document_id, text)
-                 SELECT blocks.id, blocks.document_id, blocks.text
+                 SELECT blocks.id, blocks.document_id,
+                        blocks.text || CASE WHEN COALESCE((
+                            SELECT group_concat(assets.text, char(10))
+                              FROM block_assets
+                              JOIN assets USING (content_hash, media_name)
+                             WHERE block_assets.block_id = blocks.id
+                        ), '') = '' THEN '' ELSE char(10) || (
+                            SELECT group_concat(assets.text, char(10))
+                              FROM block_assets
+                              JOIN assets USING (content_hash, media_name)
+                             WHERE block_assets.block_id = blocks.id
+                        ) END
                    FROM blocks
                    JOIN documents ON documents.id = blocks.document_id
                   WHERE documents.deleted_at IS NULL"""
@@ -768,14 +1023,43 @@ def embedding_documents(path: Path) -> list[tuple[str, str, str, str]]:
     initialize(path)
     with connection_scope(path) as connection:
         rows = connection.execute(
-            """SELECT blocks.id, blocks.document_id, blocks.updated_at, blocks.text
+            """SELECT blocks.id, blocks.document_id,
+                      blocks.updated_at || '|' || COALESCE((
+                          SELECT group_concat(asset_version.version, '|')
+                            FROM (
+                                SELECT block_assets.media_name || ':' ||
+                                       COALESCE(assets.text_updated_at, '') AS version
+                                  FROM block_assets
+                                  JOIN assets USING (content_hash, media_name)
+                                 WHERE block_assets.block_id = blocks.id
+                                 ORDER BY block_assets.media_name
+                            ) AS asset_version
+                      ), '') AS updated_at,
+                      blocks.text,
+                      (SELECT group_concat(assets.text, char(10))
+                         FROM block_assets
+                         JOIN assets USING (content_hash, media_name)
+                        WHERE block_assets.block_id = blocks.id AND trim(assets.text) <> '')
+                          AS asset_text
                  FROM blocks
                  JOIN documents ON documents.id = blocks.document_id
-                WHERE documents.deleted_at IS NULL AND trim(blocks.text) <> ''
+                WHERE documents.deleted_at IS NULL
+                  AND (trim(blocks.text) <> '' OR EXISTS (
+                      SELECT 1 FROM block_assets
+                      JOIN assets USING (content_hash, media_name)
+                      WHERE block_assets.block_id = blocks.id AND trim(assets.text) <> ''
+                  ))
                 ORDER BY blocks.document_id, blocks.position, blocks.id"""
         ).fetchall()
     return [
-        (str(row["id"]), str(row["document_id"]), str(row["updated_at"]), str(row["text"]))
+        (
+            str(row["id"]),
+            str(row["document_id"]),
+            str(row["updated_at"]),
+            "\n\n".join(
+                part for part in (str(row["text"]), row["asset_text"] or "") if part
+            ),
+        )
         for row in rows
     ]
 
@@ -799,7 +1083,7 @@ def search_blocks(path: Path, query: str, limit: int = 50) -> list[dict[str, obj
     with connection_scope(path) as connection:
         rows = connection.execute(
             """SELECT blocks_fts.block_id, blocks_fts.document_id, documents.title,
-                      blocks.type, blocks.text, bm25(blocks_fts) AS rank
+                      blocks.type, blocks_fts.text, bm25(blocks_fts) AS rank
                 FROM blocks_fts
                  JOIN blocks ON blocks.id = blocks_fts.block_id
                  JOIN documents ON documents.id = blocks_fts.document_id
@@ -951,6 +1235,7 @@ def _insert_document(
     body: str,
     created_at: str,
     updated_at: str,
+    ensure_empty_paragraph: bool = False,
 ) -> None:
     position = connection.execute(
         """SELECT COALESCE(MAX(position) + 1, 0)
@@ -964,7 +1249,9 @@ def _insert_document(
                ) VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?)""",
         (document_id, title, status, json.dumps(tags), position, created_at, updated_at),
     )
-    _insert_blocks(connection, document_id, body, created_at, updated_at)
+    _insert_blocks(
+        connection, document_id, body, created_at, updated_at, ensure_empty_paragraph
+    )
 
 
 def _navigation_document(row: sqlite3.Row) -> dict[str, object]:
@@ -988,6 +1275,7 @@ def _insert_blocks(
     body: str,
     created_at: str,
     updated_at: str,
+    ensure_empty_paragraph: bool = False,
 ) -> None:
     def insert(block: ImportedBlock, parent_id: str | None, position: int) -> None:
         connection.execute(
@@ -1015,9 +1303,38 @@ def _insert_blocks(
         for child_position, child in enumerate(block.children):
             insert(child, block.id, child_position)
 
-    for position, block in enumerate(_parse_blocks(body)):
+    blocks = _parse_blocks(body)
+    if not blocks and ensure_empty_paragraph:
+        # BlockNote edits a paragraph even when the document is initially blank.
+        # Persist that block so the first keystroke updates a real stable ID.
+        blocks = [ImportedBlock(_new_ulid(), "paragraph", "")]
+    for position, block in enumerate(blocks):
         insert(block, None, position)
     _rebuild_document_references(connection, document_id)
+    _rebuild_document_assets(connection, document_id)
+
+
+def _rebuild_document_assets(connection: sqlite3.Connection, document_id: str) -> None:
+    """Refresh links from each persisted block to uploaded assets it contains."""
+    connection.execute(
+        """DELETE FROM block_assets WHERE block_id IN
+           (SELECT id FROM blocks WHERE document_id = ?)""",
+        (document_id,),
+    )
+    rows = connection.execute(
+        "SELECT id, attrs_json, content_json, text FROM blocks WHERE document_id = ?",
+        (document_id,),
+    ).fetchall()
+    for row in rows:
+        serialized = f"{row['attrs_json']}\n{row['content_json']}"
+        media_names = set(_MEDIA_REF_RE.findall(serialized))
+        for media_name in media_names:
+            connection.execute(
+                """INSERT OR IGNORE INTO block_assets(block_id, content_hash, media_name)
+                   SELECT ?, content_hash, media_name FROM assets WHERE media_name = ?""",
+                (row["id"], media_name),
+            )
+        _refresh_fts(connection, row["id"], document_id, row["text"])
 
 
 def _rebuild_document_references(connection: sqlite3.Connection, document_id: str) -> None:
@@ -1026,6 +1343,19 @@ def _rebuild_document_references(connection: sqlite3.Connection, document_id: st
     ).fetchall()
     for row in source_ids:
         _replace_references(connection, row["id"], document_id)
+
+
+def _rebuild_inbound_block_references(
+    connection: sqlite3.Connection, target_block_ids: set[str]
+) -> None:
+    for target_id in target_block_ids:
+        rows = connection.execute(
+            """SELECT id, document_id FROM blocks
+               WHERE instr(text, ?) > 0 OR instr(content_json, ?) > 0""",
+            (target_id, target_id),
+        ).fetchall()
+        for row in rows:
+            _replace_references(connection, row["id"], row["document_id"])
 
 
 def _replace_references(
@@ -1123,18 +1453,40 @@ def _inline_text(value: object) -> str:
 def document_tree(path: Path, document_id: str) -> dict | None:
     initialize(path)
     with connection_scope(path) as connection:
-        document = connection.execute(
-            "SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
-        ).fetchone()
-        if document is None:
-            return None
-        rows = connection.execute(
-            """SELECT id, document_id, parent_id, position, type, attrs_json,
-                      content_json, text, created_at, updated_at
-                 FROM blocks WHERE document_id = ?
-                 ORDER BY parent_id, position""",
-            (document_id,),
-        ).fetchall()
+        return _document_tree(connection, document_id)
+
+
+def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | None:
+    document = connection.execute(
+        "SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
+    ).fetchone()
+    if document is None:
+        return None
+    history_state = connection.execute(
+        """SELECT MAX(CASE WHEN undone = 0 THEN 1 ELSE 0 END) AS can_undo,
+                  MAX(CASE WHEN undone = 1 THEN 1 ELSE 0 END) AS can_redo
+             FROM document_history WHERE document_id = ?""",
+        (document_id,),
+    ).fetchone()
+    rows = connection.execute(
+        """SELECT id, document_id, parent_id, position, type, attrs_json,
+                  content_json, text, created_at, updated_at
+             FROM blocks WHERE document_id = ?
+             ORDER BY parent_id, position""",
+        (document_id,),
+    ).fetchall()
+    user_attr_rows = connection.execute(
+        """SELECT attrs.block_id, attrs.name, attrs.value
+             FROM block_user_attrs AS attrs
+             JOIN blocks ON blocks.id = attrs.block_id
+            WHERE blocks.document_id = ?""",
+        (document_id,),
+    ).fetchall()
+    user_attrs_by_block: dict[str, dict[str, object]] = {}
+    for row in user_attr_rows:
+        user_attrs_by_block.setdefault(row["block_id"], {})[row["name"]] = json.loads(
+            row["value"]
+        )
     nodes = {
         row["id"]: {
             "id": row["id"],
@@ -1143,6 +1495,7 @@ def document_tree(path: Path, document_id: str) -> dict | None:
             "position": row["position"],
             "type": row["type"],
             "attrs": json.loads(row["attrs_json"]),
+            "user_attrs": user_attrs_by_block.get(row["id"], {}),
             "content": json.loads(row["content_json"]),
             "text": row["text"],
             "created_at": row["created_at"],
@@ -1163,6 +1516,8 @@ def document_tree(path: Path, document_id: str) -> dict | None:
         "created_at": document["created_at"],
         "updated_at": document["updated_at"],
         "revision": document["revision"],
+        "can_undo": bool(history_state["can_undo"]),
+        "can_redo": bool(history_state["can_redo"]),
         "children": roots,
     }
 
@@ -1213,6 +1568,75 @@ def document_subtree(path: Path, document_id: str, block_id: str | None = None) 
     }
 
 
+def document_review_context(
+    path: Path,
+    document_id: str,
+    context: BlockReviewContextKind,
+    block_ids: list[str],
+) -> dict | None:
+    """Resolve canonical target blocks and direct linked context for a review request."""
+    initialize(path)
+    with connection_scope(path) as connection:
+        tree = _document_tree(connection, document_id)
+        if tree is None:
+            return None
+
+        document_blocks: dict[str, dict] = {}
+
+        def collect(nodes: list[dict]) -> None:
+            for node in nodes:
+                document_blocks[node["id"]] = node
+                collect(node["children"])
+
+        collect(tree["children"])
+        if context == "document":
+            target_ids = list(document_blocks)
+        else:
+            invalid_ids = [block_id for block_id in block_ids if block_id not in document_blocks]
+            if invalid_ids:
+                raise ValueError("block_ids must belong to the requested document")
+            target_ids = block_ids
+
+        targets = [document_blocks[block_id] for block_id in target_ids]
+        linked_ids: set[str] = set()
+        if context == "linked":
+            focus_id = target_ids[0]
+            linked_ids = {
+                row["block_id"]
+                for row in connection.execute(
+                    """SELECT target_block_id AS block_id FROM block_refs WHERE source_block_id = ?
+                       UNION
+                       SELECT source_block_id AS block_id FROM block_refs WHERE target_block_id = ?
+                       ORDER BY block_id""",
+                    (focus_id, focus_id),
+                )
+            }
+
+        linked_context: list[dict] = []
+        if linked_ids:
+            placeholders = ",".join("?" for _ in linked_ids)
+            rows = connection.execute(
+                f"""SELECT blocks.id, blocks.document_id, blocks.type, blocks.attrs_json,
+                           blocks.content_json, blocks.text
+                      FROM blocks JOIN documents ON documents.id = blocks.document_id
+                     WHERE blocks.id IN ({placeholders}) AND documents.deleted_at IS NULL
+                     ORDER BY blocks.document_id, blocks.position, blocks.id""",
+                sorted(linked_ids),
+            ).fetchall()
+            linked_context = [
+                {
+                    "id": row["id"],
+                    "document_id": row["document_id"],
+                    "type": row["type"],
+                    "attrs": json.loads(row["attrs_json"]),
+                    "content": json.loads(row["content_json"]),
+                    "text": row["text"],
+                }
+                for row in rows
+            ]
+        return {"targets": targets, "linked_context": linked_context}
+
+
 class DocumentRevisionConflict(RuntimeError):
     """Raised when a transaction was composed from an older document version."""
 
@@ -1239,6 +1663,7 @@ def apply_transaction(
     document_id: str,
     operations: list[BlockOperation],
     base_revision: int,
+    transaction_id: str | None = None,
 ) -> dict:
     """Apply operations for ``base_revision`` atomically and return the new tree."""
 
@@ -1248,6 +1673,25 @@ def apply_transaction(
         # Acquire the SQLite writer lock before reading the version. Without this,
         # two writers could both read the same revision before either starts a write.
         connection.execute("BEGIN IMMEDIATE")
+        request_hash = hashlib.sha256(
+            json.dumps(
+                {"base_revision": base_revision, "operations": [operation.model_dump(mode="json") for operation in operations]},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if transaction_id is not None:
+            receipt = connection.execute(
+                "SELECT document_id, request_hash FROM transaction_receipts WHERE transaction_id = ?",
+                (transaction_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["document_id"] != document_id or receipt["request_hash"] != request_hash:
+                    raise ValueError("transaction_id was already used for a different request")
+                tree = _document_tree(connection, document_id)
+                if tree is None:
+                    raise KeyError("document not found")
+                return tree
         document = connection.execute(
             "SELECT revision FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
         ).fetchone()
@@ -1257,12 +1701,296 @@ def apply_transaction(
             raise DocumentRevisionConflict(
                 document_id, base_revision, document["revision"]
             )
+        connection.execute(
+            "DELETE FROM document_history WHERE document_id = ? AND undone = 1",
+            (document_id,),
+        )
+        patches: list[dict] = []
         for operation in operations:
-            _apply_operation(connection, document_id, operation, now)
+            if operation.operation == "insert" and operation.block_id is None:
+                operation = operation.model_copy(update={"block_id": _new_ulid()})
+            target_ids = _history_target_ids(connection, document_id, operation)
+            before = {
+                block_id: _block_snapshot(
+                    connection, block_id, recursive=operation.operation == "delete"
+                )
+                for block_id in target_ids
+            }
+            generated_id = _apply_operation(connection, document_id, operation, now)
+            if generated_id is not None and generated_id not in target_ids:
+                target_ids.append(generated_id)
+                before[generated_id] = None
+            patches.append(
+                {
+                    "before": [
+                        {"id": block_id, "snapshot": before[block_id]}
+                        for block_id in target_ids
+                    ],
+                    "after": [
+                        {
+                            "id": block_id,
+                            "snapshot": _block_snapshot(
+                                connection,
+                                block_id,
+                                recursive=operation.operation == "duplicate",
+                            ),
+                        }
+                        for block_id in target_ids
+                    ],
+                }
+            )
         _rebuild_document_references(connection, document_id)
+        _rebuild_document_assets(connection, document_id)
         connection.execute(
             "UPDATE documents SET updated_at = ?, revision = revision + 1 WHERE id = ?",
             (now, document_id),
+        )
+        connection.execute(
+            """INSERT INTO document_history(document_id, revision, patches_json, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (document_id, base_revision + 1, json.dumps(patches), now),
+        )
+        tree = _document_tree(connection, document_id)
+        if tree is None:  # pragma: no cover - protected by the transaction above
+            raise KeyError("document not found")
+        if transaction_id is not None:
+            connection.execute(
+                "INSERT INTO transaction_receipts(transaction_id, document_id, request_hash, created_at) VALUES (?, ?, ?, ?)",
+                (transaction_id, document_id, request_hash, now),
+            )
+    return tree
+
+
+def _history_target_ids(
+    connection: sqlite3.Connection, document_id: str, operation: BlockOperation
+) -> list[str]:
+    if operation.operation in {"insert", "duplicate"}:
+        return [operation.block_id] if operation.operation == "insert" else []
+    if not operation.block_id:
+        raise ValueError(f"{operation.operation} requires block_id")
+    targets = [operation.block_id]
+    if operation.operation == "merge":
+        row = connection.execute(
+            "SELECT parent_id, position FROM blocks WHERE id = ? AND document_id = ?",
+            (operation.block_id, document_id),
+        ).fetchone()
+        if row is not None:
+            next_row = connection.execute(
+                "SELECT id FROM blocks WHERE document_id = ? AND parent_id IS ? AND position = ?",
+                (document_id, row["parent_id"], row["position"] + 1),
+            ).fetchone()
+            if next_row is not None:
+                targets.append(next_row["id"])
+    return targets
+
+
+def _block_snapshot(
+    connection: sqlite3.Connection, block_id: str, recursive: bool = True
+) -> dict | None:
+    rows = (
+        _subtree_rows(connection, block_id)
+        if recursive
+        else connection.execute("SELECT * FROM blocks WHERE id = ?", (block_id,)).fetchall()
+    )
+    if not rows:
+        return None
+    user_attrs: dict[str, dict[str, object]] = {}
+    if recursive:
+        attr_rows = connection.execute(
+            """WITH RECURSIVE subtree(id) AS (
+                   SELECT id FROM blocks WHERE id = ?
+                   UNION ALL SELECT blocks.id FROM blocks JOIN subtree
+                     ON blocks.parent_id = subtree.id
+               ) SELECT block_user_attrs.block_id, block_user_attrs.name, block_user_attrs.value
+                   FROM block_user_attrs JOIN subtree ON subtree.id = block_user_attrs.block_id""",
+            (block_id,),
+        )
+    else:
+        attr_rows = connection.execute(
+            "SELECT block_id, name, value FROM block_user_attrs WHERE block_id = ?",
+            (block_id,),
+        )
+    for item in attr_rows:
+        user_attrs.setdefault(item["block_id"], {})[item["name"]] = json.loads(item["value"])
+    nodes = {
+        row["id"]: {
+            "id": row["id"],
+            "parent_id": row["parent_id"],
+            "position": row["position"],
+            "type": row["type"],
+            "attrs": json.loads(row["attrs_json"]),
+            "content": json.loads(row["content_json"]),
+            "text": row["text"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "user_attrs": user_attrs.get(row["id"], {}),
+            "children": [],
+        }
+        for row in rows
+    }
+    for node in nodes.values():
+        parent = nodes.get(node["parent_id"])
+        if parent is not None:
+            parent["children"].append(node)
+    root = nodes[block_id]
+    root["recursive"] = recursive
+    return root
+
+
+def _restore_history_entries(
+    connection: sqlite3.Connection,
+    document_id: str,
+    entries: list[dict],
+    now: str,
+) -> set[str]:
+    restored_ids: set[str] = set()
+    current_rows = []
+    for entry in entries:
+        row = connection.execute(
+            "SELECT * FROM blocks WHERE id = ? AND document_id = ?",
+            (entry["id"], document_id),
+        ).fetchone()
+        snapshot = entry["snapshot"]
+        if row is not None and (snapshot is None or snapshot.get("recursive", True)):
+            current_rows.append(row)
+    current_rows.sort(key=lambda row: (str(row["parent_id"]), -row["position"]))
+    for row in current_rows:
+        _delete_block(connection, document_id, row)
+    for entry in entries:
+        snapshot = entry["snapshot"]
+        if snapshot is not None:
+            current = connection.execute(
+                "SELECT * FROM blocks WHERE id = ? AND document_id = ?",
+                (entry["id"], document_id),
+            ).fetchone()
+            if current is not None and not snapshot.get("recursive", True):
+                _restore_shallow_snapshot(connection, document_id, current, snapshot, now)
+            else:
+                _insert_snapshot(connection, document_id, snapshot, now)
+                restored_ids.update(_snapshot_block_ids(snapshot))
+    return restored_ids
+
+
+def _snapshot_block_ids(node: dict) -> set[str]:
+    ids = {node["id"]}
+    for child in node["children"]:
+        ids.update(_snapshot_block_ids(child))
+    return ids
+
+
+def _restore_shallow_snapshot(
+    connection: sqlite3.Connection,
+    document_id: str,
+    row: sqlite3.Row,
+    node: dict,
+    now: str,
+) -> None:
+    if row["parent_id"] != node["parent_id"] or row["position"] != node["position"]:
+        _move_block(
+            connection,
+            document_id,
+            row,
+            BlockOperation(
+                operation="move",
+                block_id=node["id"],
+                parent_id=node["parent_id"],
+                position=node["position"],
+            ),
+            now,
+        )
+    connection.execute(
+        """UPDATE blocks SET type = ?, attrs_json = ?, content_json = ?, text = ?,
+           created_at = ?, updated_at = ? WHERE id = ?""",
+        (
+            node["type"], json.dumps(node["attrs"]), json.dumps(node["content"]),
+            node["text"], node["created_at"], node["updated_at"], node["id"],
+        ),
+    )
+    _replace_attrs(connection, node["id"], node["attrs"])
+    _replace_user_attrs(connection, node["id"], node["user_attrs"])
+    _refresh_fts(connection, node["id"], document_id, node["text"])
+
+
+def _insert_snapshot(
+    connection: sqlite3.Connection, document_id: str, node: dict, now: str
+) -> None:
+    parent_id = node["parent_id"]
+    _validate_parent(connection, document_id, parent_id)
+    position = int(node["position"])
+    _shift_positions(connection, document_id, parent_id, position, 1)
+    attrs = node["attrs"]
+    connection.execute(
+        """INSERT INTO blocks(id, document_id, parent_id, position, type, attrs_json,
+           content_json, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            node["id"], document_id, parent_id, position, node["type"],
+            json.dumps(attrs), json.dumps(node["content"]), node["text"],
+            node["created_at"], node["updated_at"],
+        ),
+    )
+    _replace_attrs(connection, node["id"], attrs)
+    _replace_user_attrs(connection, node["id"], node["user_attrs"])
+    _refresh_fts(connection, node["id"], document_id, node["text"])
+    for child in node["children"]:
+        _insert_snapshot(connection, document_id, child, now)
+
+
+def _change_history(
+    path: Path, document_id: str, base_revision: int, redo: bool
+) -> dict:
+    initialize(path)
+    now = _now()
+    with connection_scope(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        document = connection.execute(
+            "SELECT revision FROM documents WHERE id = ? AND deleted_at IS NULL",
+            (document_id,),
+        ).fetchone()
+        if document is None:
+            raise KeyError("document not found")
+        if base_revision != document["revision"]:
+            raise DocumentRevisionConflict(document_id, base_revision, document["revision"])
+        if redo:
+            history = connection.execute(
+                """SELECT * FROM document_history WHERE document_id = ? AND undone = 1
+                   ORDER BY id LIMIT 1""",
+                (document_id,),
+            ).fetchone()
+        else:
+            history = connection.execute(
+                """SELECT * FROM document_history WHERE document_id = ? AND undone = 0
+                   ORDER BY id DESC LIMIT 1""",
+                (document_id,),
+            ).fetchone()
+        if history is None:
+            raise ValueError("nothing to redo" if redo else "nothing to undo")
+        patches = json.loads(history["patches_json"])
+        restored_ids: set[str] = set()
+        if redo:
+            for patch in patches:
+                restored_ids.update(
+                    _restore_history_entries(connection, document_id, patch["after"], now)
+                )
+        else:
+            for patch in reversed(patches):
+                restored_ids.update(
+                    _restore_history_entries(connection, document_id, patch["before"], now)
+                )
+        _rebuild_document_references(connection, document_id)
+        _rebuild_inbound_block_references(connection, restored_ids)
+        _rebuild_document_assets(connection, document_id)
+        connection.execute(
+            "UPDATE document_history SET undone = ? WHERE id = ?",
+            (0 if redo else 1, history["id"]),
+        )
+        connection.execute(
+            "UPDATE documents SET updated_at = ?, revision = revision + 1 WHERE id = ?",
+            (now, document_id),
+        )
+        connection.execute(
+            """INSERT INTO revisions(document_id, block_id, operation_json, created_at)
+               VALUES (?, NULL, ?, ?)""",
+            (document_id, json.dumps({"operation": "redo" if redo else "undo", "history_id": history["id"]}), now),
         )
     tree = document_tree(path, document_id)
     if tree is None:  # pragma: no cover - protected by the transaction above
@@ -1270,15 +1998,22 @@ def apply_transaction(
     return tree
 
 
+def undo_transaction(path: Path, document_id: str, base_revision: int) -> dict:
+    return _change_history(path, document_id, base_revision, redo=False)
+
+
+def redo_transaction(path: Path, document_id: str, base_revision: int) -> dict:
+    return _change_history(path, document_id, base_revision, redo=True)
+
+
 def _apply_operation(
     connection: sqlite3.Connection,
     document_id: str,
     operation: BlockOperation,
     now: str,
-) -> None:
+) -> str | None:
     if operation.operation == "insert":
-        _insert_block(connection, document_id, operation, now)
-        return
+        return _insert_block(connection, document_id, operation, now)
     if not operation.block_id:
         raise ValueError(f"{operation.operation} requires block_id")
     row = connection.execute(
@@ -1294,12 +2029,11 @@ def _apply_operation(
         raise RuntimeError(f"block changed since {operation.expected_updated_at}")
     if operation.operation == "update":
         attrs = operation.attrs if operation.attrs is not None else json.loads(row["attrs_json"])
-        content = (
-            operation.content
-            if operation.content is not None
-            else json.loads(row["content_json"])
-        )
+        content = operation.content if operation.content is not None else json.loads(row["content_json"])
         text = operation.text if operation.text is not None else row["text"]
+        if operation.content is None and operation.text is not None and isinstance(content, dict):
+            if isinstance(content.get("markdown"), str):
+                content = {**content, "markdown": operation.text}
         connection.execute(
             """UPDATE blocks SET type = ?, attrs_json = ?, content_json = ?, text = ?,
                       updated_at = ? WHERE id = ?""",
@@ -1321,14 +2055,20 @@ def _apply_operation(
             (json.dumps(attrs), now, operation.block_id),
         )
         _replace_attrs(connection, operation.block_id, attrs)
+    elif operation.operation == "set_user_attrs":
+        _replace_user_attrs(connection, operation.block_id, operation.user_attrs or {})
+        connection.execute(
+            "UPDATE blocks SET updated_at = ? WHERE id = ?",
+            (now, operation.block_id),
+        )
     elif operation.operation == "move":
         _move_block(connection, document_id, row, operation, now)
     elif operation.operation == "delete":
         _delete_block(connection, document_id, row)
     elif operation.operation == "duplicate":
-        _duplicate_block(connection, document_id, row, operation, now)
+        generated_id = _duplicate_block(connection, document_id, row, operation, now)
     elif operation.operation == "split":
-        _split_block(connection, document_id, row, operation, now)
+        generated_id = _split_block(connection, document_id, row, operation, now)
     elif operation.operation == "merge":
         _merge_block(connection, document_id, row, now)
     else:  # pragma: no cover - Pydantic validates operation values
@@ -1338,6 +2078,7 @@ def _apply_operation(
            VALUES (?, ?, ?, ?)""",
         (document_id, operation.block_id, operation.model_dump_json(), now),
     )
+    return generated_id if operation.operation in {"duplicate", "split"} else None
 
 
 def _insert_block(
@@ -1345,8 +2086,8 @@ def _insert_block(
     document_id: str,
     operation: BlockOperation,
     now: str,
-) -> None:
-    block_id = operation.block_id or str(ULID())
+) -> str:
+    block_id = operation.block_id or _new_ulid()
     parent_id = operation.parent_id
     _validate_parent(connection, document_id, parent_id)
     position = _next_position(connection, document_id, parent_id)
@@ -1375,12 +2116,14 @@ def _insert_block(
         ),
     )
     _replace_attrs(connection, block_id, attrs)
+    _replace_user_attrs(connection, block_id, operation.user_attrs or {})
     _refresh_fts(connection, block_id, document_id, text)
     connection.execute(
         """INSERT INTO revisions(document_id, block_id, operation_json, created_at)
            VALUES (?, ?, ?, ?)""",
         (document_id, block_id, operation.model_dump_json(), now),
     )
+    return block_id
 
 
 def _move_block(
@@ -1396,12 +2139,24 @@ def _move_block(
         raise ValueError("cannot move a block into itself or its descendant")
     old_parent = row["parent_id"]
     old_position = row["position"]
-    _shift_positions(connection, document_id, old_parent, old_position + 1, -1)
-    position = operation.position
-    if position is None:
-        position = _next_position(connection, document_id, parent_id)
-    else:
+    if old_parent == parent_id:
+        # Vacate the unique sibling slot before shifting rows in the same list.
+        connection.execute("UPDATE blocks SET position = -1 WHERE id = ?", (row["id"],))
+        _shift_positions(
+            connection, document_id, old_parent, old_position + 1, -1,
+            exclude_block_id=row["id"],
+        )
+        position = operation.position
+        if position is None:
+            position = _next_position(connection, document_id, parent_id)
         _shift_positions(connection, document_id, parent_id, position, 1)
+    else:
+        _shift_positions(connection, document_id, old_parent, old_position + 1, -1)
+        position = operation.position
+        if position is None:
+            position = _next_position(connection, document_id, parent_id)
+        else:
+            _shift_positions(connection, document_id, parent_id, position, 1)
     connection.execute(
         "UPDATE blocks SET parent_id = ?, position = ?, updated_at = ? WHERE id = ?",
         (parent_id, position, now, row["id"]),
@@ -1440,13 +2195,13 @@ def _subtree_rows(connection: sqlite3.Connection, block_id: str) -> list[sqlite3
 
 
 def _duplicate_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row,
-                     operation: BlockOperation, now: str) -> None:
+                     operation: BlockOperation, now: str) -> str:
     parent_id = row["parent_id"]
     position = row["position"] + 1 if operation.position is None else operation.position
     _shift_positions(connection, document_id, parent_id, position, 1)
     id_map: dict[str, str] = {}
     for source in _subtree_rows(connection, row["id"]):
-        new_id = str(ULID())
+        new_id = _new_ulid()
         id_map[source["id"]] = new_id
         new_parent = id_map.get(source["parent_id"], parent_id)
         new_position = position if source["id"] == row["id"] else source["position"]
@@ -1457,11 +2212,19 @@ def _duplicate_block(connection: sqlite3.Connection, document_id: str, row: sqli
              source["content_json"], source["text"], now, now),
         )
         _replace_attrs(connection, new_id, json.loads(source["attrs_json"]))
+        source_user_attrs = connection.execute(
+            "SELECT name, value FROM block_user_attrs WHERE block_id = ?", (source["id"],)
+        ).fetchall()
+        connection.executemany(
+            "INSERT INTO block_user_attrs(block_id, name, value) VALUES (?, ?, ?)",
+            [(new_id, item["name"], item["value"]) for item in source_user_attrs],
+        )
         _refresh_fts(connection, new_id, document_id, source["text"])
+    return id_map[row["id"]]
 
 
 def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row,
-                 operation: BlockOperation, now: str) -> None:
+                 operation: BlockOperation, now: str) -> str:
     offset = operation.split_at
     if offset is None or offset > len(row["text"]):
         raise ValueError("split requires split_at within block text")
@@ -1472,7 +2235,7 @@ def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.
                        (first, json.dumps({"markdown": first}), now, row["id"]))
     _refresh_fts(connection, row["id"], document_id, first)
     _shift_positions(connection, document_id, row["parent_id"], row["position"] + 1, 1)
-    new_id = str(ULID())
+    new_id = _new_ulid()
     connection.execute(
         """INSERT INTO blocks(id, document_id, parent_id, position, type, attrs_json,
            content_json, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -1481,6 +2244,7 @@ def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.
     )
     _replace_attrs(connection, new_id, json.loads(row["attrs_json"]))
     _refresh_fts(connection, new_id, document_id, second)
+    return new_id
 
 
 def _merge_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row, now: str) -> None:
@@ -1544,12 +2308,46 @@ def _shift_positions(
     parent_id: str | None,
     from_position: int,
     delta: int,
+    exclude_block_id: str | None = None,
 ) -> None:
-    connection.execute(
-        """UPDATE blocks SET position = position + ?
-           WHERE document_id = ? AND parent_id IS ? AND position >= ?""",
-        (delta, document_id, parent_id, from_position),
-    )
+    bounds = connection.execute(
+        """SELECT MAX(position) AS maximum FROM blocks
+           WHERE document_id = ? AND parent_id IS ?""",
+        (document_id, parent_id),
+    ).fetchone()
+    maximum = bounds["maximum"]
+    if maximum is None:
+        return
+    offset = int(maximum) + abs(delta) + 1
+    if delta > 0:
+        connection.execute(
+            """UPDATE blocks SET position = position + ?
+               WHERE document_id = ? AND parent_id IS ? AND position >= ?""",
+            (offset, document_id, parent_id, from_position),
+        )
+        connection.execute(
+            """UPDATE blocks SET position = position - ? + ?
+               WHERE document_id = ? AND parent_id IS ? AND position >= ?""",
+            (offset, delta, document_id, parent_id, from_position + offset),
+        )
+    else:
+        connection.execute(
+            """UPDATE blocks SET position = position - ?
+               WHERE document_id = ? AND parent_id IS ? AND position >= ?""",
+            (offset, document_id, parent_id, from_position),
+        )
+        if exclude_block_id is None:
+            connection.execute(
+                """UPDATE blocks SET position = position + ? + ?
+                   WHERE document_id = ? AND parent_id IS ? AND position < 0""",
+                (offset, delta, document_id, parent_id),
+            )
+        else:
+            connection.execute(
+                """UPDATE blocks SET position = position + ? + ?
+                   WHERE document_id = ? AND parent_id IS ? AND position < 0 AND id <> ?""",
+                (offset, delta, document_id, parent_id, exclude_block_id),
+            )
 
 
 def _replace_attrs(
@@ -1562,13 +2360,31 @@ def _replace_attrs(
     )
 
 
+def _replace_user_attrs(
+    connection: sqlite3.Connection, block_id: str, user_attrs: dict[str, object]
+) -> None:
+    connection.execute("DELETE FROM block_user_attrs WHERE block_id = ?", (block_id,))
+    connection.executemany(
+        "INSERT INTO block_user_attrs(block_id, name, value) VALUES (?, ?, ?)",
+        [(block_id, name, json.dumps(value)) for name, value in user_attrs.items()],
+    )
+
+
 def _refresh_fts(
     connection: sqlite3.Connection, block_id: str, document_id: str, text: str
 ) -> None:
+    asset_texts = connection.execute(
+        """SELECT assets.text FROM block_assets
+             JOIN assets USING (content_hash, media_name)
+            WHERE block_assets.block_id = ? AND trim(assets.text) <> ''
+            ORDER BY block_assets.media_name""",
+        (block_id,),
+    ).fetchall()
+    indexed_text = "\n\n".join([text, *(row["text"] for row in asset_texts)])
     connection.execute("DELETE FROM blocks_fts WHERE block_id = ?", (block_id,))
     connection.execute(
         "INSERT INTO blocks_fts(block_id, document_id, text) VALUES (?, ?, ?)",
-        (block_id, document_id, text),
+        (block_id, document_id, indexed_text),
     )
 
 
@@ -1599,17 +2415,17 @@ def _parse_sequence(
             block, index = _parse_container_block(tokens, lines, index, "blockquote_close", "quote")
         elif token.type in {"fence", "code_block"}:
             block = ImportedBlock(
-                str(ULID()),
+                _new_ulid(),
                 "code",
                 _token_source(lines, token),
                 {"language": token.info.strip()} if token.type == "fence" and token.info else {},
             )
             index += 1
         elif token.type == "hr":
-            block = ImportedBlock(str(ULID()), "thematic_break", _token_source(lines, token))
+            block = ImportedBlock(_new_ulid(), "thematic_break", _token_source(lines, token))
             index += 1
         elif token.type in {"html_block", "table_open"}:
-            block = ImportedBlock(str(ULID()), "raw", _token_source(lines, token))
+            block = ImportedBlock(_new_ulid(), "raw", _token_source(lines, token))
             index += 1
         else:
             index += 1
@@ -1666,12 +2482,12 @@ def _parse_list_item(
             children.append(child)
             continue
         if token.type in {"fence", "code_block"}:
-            child = ImportedBlock(str(ULID()), "code", _token_source(lines, token))
+            child = ImportedBlock(_new_ulid(), "code", _token_source(lines, token))
             children.append(child)
         index += 1
     if not source:
         source = _token_source(lines, open_token)
-    return ImportedBlock(str(ULID()), "list", source, attrs, children), min(index + 1, len(tokens))
+    return ImportedBlock(_new_ulid(), "list", source, attrs, children), min(index + 1, len(tokens))
 
 
 def _parse_inline_block(
@@ -1682,7 +2498,7 @@ def _parse_inline_block(
     index += 1
     while index < len(tokens) and tokens[index].type != f"{block_type}_close":
         index += 1
-    return ImportedBlock(str(ULID()), block_type, source), min(index + 1, len(tokens))
+    return ImportedBlock(_new_ulid(), block_type, source), min(index + 1, len(tokens))
 
 
 def _parse_container_block(
@@ -1701,7 +2517,7 @@ def _parse_container_block(
         index += 1
     end = tokens[index - 1].map[1] if index and tokens[index - 1].map else len(lines)
     source = "\n".join(lines[start:end]).strip()
-    return ImportedBlock(str(ULID()), block_type, source), index
+    return ImportedBlock(_new_ulid(), block_type, source), index
 
 
 def _token_source(lines: list[str], token: Token) -> str:

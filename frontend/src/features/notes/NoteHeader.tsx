@@ -12,8 +12,6 @@ interface Props {
   onConsistency: () => void;
   onLint: () => void;
   checking: boolean;
-  rawView: boolean;
-  onToggleRaw: () => void;
 }
 
 function formatDate(iso: string): string {
@@ -34,8 +32,6 @@ export function NoteHeader({
   onConsistency,
   onLint,
   checking,
-  rawView,
-  onToggleRaw,
 }: Props) {
   const [newTag, setNewTag] = useState("");
 
@@ -60,12 +56,6 @@ export function NoteHeader({
           className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
         >
           Clarify
-        </button>
-        <button
-          onClick={onToggleRaw}
-          className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50"
-        >
-          {rawView ? "Rich" : "Raw"}
         </button>
       </div>
 

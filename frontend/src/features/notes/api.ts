@@ -15,8 +15,12 @@ import type {
   BlockTransaction,
   ReviewKind,
   ReviewResponse,
+  BlockReviewResponse,
+  BlockReviewContext,
+  BlockReviewContextResponse,
   SearchMode,
   SearchResult,
+  RelatedResult,
 } from "./types";
 
 const API = "/api";
@@ -57,7 +61,7 @@ export const notesApi = {
   search: (q: string, mode: SearchMode) =>
     request<SearchResult[]>(`/search?q=${encodeURIComponent(q)}&mode=${mode}`),
 
-  related: (id: string, k = 5) => request<SearchResult[]>(`/notes/${id}/related?k=${k}`),
+  related: (id: string, k = 5) => request<RelatedResult[]>(`/notes/${id}/related?k=${k}`),
 
   review: (id: string, kind: ReviewKind) =>
     request<ReviewResponse>(`/notes/${id}/review?kind=${kind}`, { method: "POST" }),
@@ -71,6 +75,14 @@ export const notesApi = {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch(`${API}/images`, { method: "POST", body: form });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.json();
+  },
+
+  uploadFile: async (file: File): Promise<{ props: { url: string; name: string } }> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API}/files`, { method: "POST", body: form });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     return res.json();
   },
@@ -93,6 +105,28 @@ export const blockApi = {
       body: JSON.stringify({ folder_id, position }),
     }),
   get: (id: string) => request<BlockDocument>(`/block-documents/${id}`),
+  review: (documentId: string, blockId: string, kind: ReviewKind = "factcheck") =>
+    request<BlockReviewResponse>(
+      `/block-documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(blockId)}/review?kind=${kind}`,
+      { method: "POST" },
+    ),
+  reviewContext: (
+    documentId: string,
+    context: BlockReviewContext,
+    blockIds: string[],
+    kind: ReviewKind = "factcheck",
+  ) =>
+    request<BlockReviewContextResponse>(
+      `/block-documents/${encodeURIComponent(documentId)}/review-context`,
+      { method: "POST", body: JSON.stringify({ kind, context, block_ids: blockIds }) },
+    ),
+  healthFindings: async (documentId: string) => {
+    const [consistency, healing] = await Promise.all([
+      notesApi.consistency(documentId),
+      notesApi.heal(documentId),
+    ]);
+    return { consistency, healing };
+  },
   backlinks: (id: string, limit = 100) =>
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),
   search: (q: string, filters: BlockSearchFilters = {}, limit = 50) =>
@@ -103,6 +137,16 @@ export const blockApi = {
     request<BlockDocument>(`/block-documents/${id}/transactions`, {
       method: "POST",
       body: JSON.stringify(transaction),
+    }),
+  undo: (id: string, base_revision: number) =>
+    request<BlockDocument>(`/block-documents/${id}/undo`, {
+      method: "POST",
+      body: JSON.stringify({ base_revision }),
+    }),
+  redo: (id: string, base_revision: number) =>
+    request<BlockDocument>(`/block-documents/${id}/redo`, {
+      method: "POST",
+      body: JSON.stringify({ base_revision }),
     }),
 };
 

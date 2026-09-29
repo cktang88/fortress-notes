@@ -6,7 +6,15 @@ import httpx
 
 from . import images
 from .config import get_settings
-from .models import ReviewItem, ReviewKind, ReviewResponse
+from .models import (
+    BlockReviewContextKind,
+    BlockReviewContextResponse,
+    BlockReviewItem,
+    BlockReviewResponse,
+    ReviewItem,
+    ReviewKind,
+    ReviewResponse,
+)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -113,3 +121,109 @@ async def review_note(kind: ReviewKind, title: str, body: str) -> ReviewResponse
         for i in data.get("items", [])
     ]
     return ReviewResponse(kind=kind, summary=data.get("summary", ""), items=items)
+
+
+async def review_block(
+    kind: ReviewKind, block_id: str, block_text: str, content: dict
+) -> BlockReviewResponse:
+    """Review one persisted block; findings are retained only with exact source quotes."""
+    try:
+        data = await chat_json(
+            f"{_SYSTEM_PROMPTS[kind]} {_RESPONSE_INSTRUCTION.replace('note', 'block')}",
+            "Review this single canonical note block. Do not use surrounding document context.\n"
+            f"block_id: {block_id}\n"
+            f"block_text: {block_text}\n"
+            f"block_content: {json.dumps(content, ensure_ascii=False)}",
+        )
+    except LLMNotConfigured:
+        return BlockReviewResponse(
+            kind=kind,
+            summary="OPENROUTER_API_KEY is not set. Add it to backend/.env to enable AI review.",
+            block_id=block_id,
+            items=[],
+        )
+    if "_raw" in data:
+        return BlockReviewResponse(
+            kind=kind, summary=data["_raw"], block_id=block_id, items=[]
+        )
+    items = []
+    for item in data.get("items", []):
+        quote = item.get("quote", "")
+        if not isinstance(quote, str) or not quote or quote not in block_text:
+            continue
+        items.append(
+            BlockReviewItem(
+                block_id=block_id,
+                label=item.get("label", ""),
+                detail=item.get("detail", ""),
+                quote=quote,
+                severity=item.get("severity", "medium"),
+            )
+        )
+    return BlockReviewResponse(
+        kind=kind, summary=data.get("summary", ""), block_id=block_id, items=items
+    )
+
+
+async def review_blocks(
+    kind: ReviewKind,
+    context: BlockReviewContextKind,
+    targets: list[dict],
+    linked_context: list[dict],
+) -> BlockReviewContextResponse:
+    """Review canonical blocks, retaining only findings quoted from their target block."""
+    target_sources = {
+        block["id"]: block["text"] for block in targets if isinstance(block.get("text"), str)
+    }
+    target_payload = [
+        {key: block[key] for key in ("id", "text", "content")} for block in targets
+    ]
+    linked_payload = [
+        {key: block[key] for key in ("id", "document_id", "type", "text", "content")}
+        for block in linked_context
+    ]
+    try:
+        data = await chat_json(
+            _SYSTEM_PROMPTS[kind],
+            "Review the target blocks using the supplied context. Return findings only for "
+            "target blocks, never for linked context blocks. Each finding must include the "
+            "target block_id and a quote copied exactly from that block's text. "
+            "Return JSON with a summary and an items array. Each item must have block_id, "
+            "label, detail, quote, and severity (high, medium, or low). Return no more than "
+            "7 findings.\n"
+            f"target_blocks: {json.dumps(target_payload, ensure_ascii=False)}\n"
+            f"linked_context_blocks: {json.dumps(linked_payload, ensure_ascii=False)}",
+        )
+    except LLMNotConfigured:
+        return BlockReviewContextResponse(
+            kind=kind,
+            context=context,
+            summary="OPENROUTER_API_KEY is not set. Add it to backend/.env to enable AI review.",
+            items=[],
+        )
+    if "_raw" in data:
+        return BlockReviewContextResponse(
+            kind=kind, context=context, summary=data["_raw"], items=[]
+        )
+
+    items = []
+    for item in data.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        block_id = item.get("block_id")
+        quote = item.get("quote")
+        source = target_sources.get(block_id) if isinstance(block_id, str) else None
+        if source is None or not isinstance(quote, str) or not quote or quote not in source:
+            continue
+        items.append(
+            BlockReviewItem(
+                block_id=block_id,
+                label=item.get("label", ""),
+                detail=item.get("detail", ""),
+                quote=quote,
+                severity=item.get("severity", "medium"),
+            )
+        )
+    return BlockReviewContextResponse(
+        kind=kind, context=context, summary=data.get("summary", ""), items=items
+    )

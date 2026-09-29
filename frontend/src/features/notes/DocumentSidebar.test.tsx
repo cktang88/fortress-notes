@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { DocumentSidebar } from "./DocumentSidebar";
-import type { NavigationNode } from "./DocumentSidebar";
+import type { NavigationDocument, NavigationNode } from "./DocumentSidebar";
 
 const navigation: NavigationNode[] = [
   {
@@ -75,6 +75,21 @@ const navigation: NavigationNode[] = [
   },
 ];
 
+const recentDocuments: NavigationDocument[] = [
+  {
+    kind: "document",
+    id: "welcome",
+    title: "Welcome",
+    status: "rough",
+    tags: [],
+    snippet: "",
+    folder_id: null,
+    position: 0,
+    created_at: "2026-09-21T14:00:00Z",
+    updated_at: "2026-09-21T14:00:00Z",
+  },
+];
+
 describe("DocumentSidebar", () => {
   let root: Root | undefined;
   let container: HTMLDivElement | undefined;
@@ -104,6 +119,20 @@ describe("DocumentSidebar", () => {
     expect(documentButton?.textContent).toContain("Roadmap");
     expect(documentButton?.textContent).toContain("polished");
     expect(documentButton?.textContent).toContain("Edited");
+  });
+
+  it("shows recent documents and opens them from the recent section", () => {
+    const onSelect = vi.fn();
+    const rendered = renderSidebar({ onSelect });
+    const recentButton = rendered.querySelector<HTMLButtonElement>(
+      '[data-recent-document-id="welcome"]',
+    );
+
+    expect(rendered.querySelector('[aria-label="Recent documents"]')?.textContent).toContain(
+      "Welcome",
+    );
+    act(() => recentButton?.click());
+    expect(onSelect).toHaveBeenCalledWith("welcome");
   });
 
   it("collapses and expands folders without losing selection behavior", () => {
@@ -236,6 +265,7 @@ describe("DocumentSidebar", () => {
   function renderSidebar(
     overrides: Partial<{
       nodes: NavigationNode[];
+      recent: NavigationDocument[];
       selectedId: string | null;
       loading: boolean;
       onSelect: (id: string) => void;
@@ -252,6 +282,7 @@ describe("DocumentSidebar", () => {
       root?.render(
         <DocumentSidebar
           nodes={overrides.nodes ?? navigation}
+          recent={overrides.recent ?? recentDocuments}
           selectedId={overrides.selectedId ?? null}
           loading={overrides.loading ?? false}
           onSelect={overrides.onSelect ?? vi.fn()}

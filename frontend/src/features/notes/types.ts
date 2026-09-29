@@ -73,6 +73,7 @@ export interface BlockNode {
   position: number;
   type: BlockType | string;
   attrs: Record<string, unknown>;
+  user_attrs: Record<string, unknown>;
   content: Record<string, unknown>;
   text: string;
   created_at: string;
@@ -83,6 +84,8 @@ export interface BlockNode {
 export interface BlockDocument {
   id: string;
   revision: number;
+  can_undo?: boolean;
+  can_redo?: boolean;
   title: string;
   status: NoteStatus;
   tags: string[];
@@ -92,25 +95,42 @@ export interface BlockDocument {
 }
 
 export interface BlockTransaction {
+  transaction_id?: string;
   base_revision: number;
   operations: BlockOperation[];
 }
 
 export interface BlockOperation {
-  operation: "insert" | "update" | "move" | "delete" | "set_attrs";
+  operation:
+    | "insert"
+    | "update"
+    | "move"
+    | "delete"
+    | "set_attrs"
+    | "set_user_attrs"
+    | "duplicate"
+    | "split"
+    | "merge";
   block_id?: string;
   parent_id?: string | null;
   position?: number;
   type?: BlockType | string;
   attrs?: Record<string, unknown>;
+  user_attrs?: Record<string, unknown>;
   content?: Record<string, unknown>;
   text?: string;
+  split_at?: number;
   expected_updated_at?: string;
 }
 
 export interface SearchResult {
   note: NoteSummary;
   score: number;
+}
+
+export interface RelatedResult extends SearchResult {
+  matched_block_id: string | null;
+  matched_block_text: string;
 }
 
 export interface BlockSearchResult {
@@ -154,6 +174,26 @@ export interface ReviewResponse {
   items: ReviewItem[];
 }
 
+export interface BlockReviewItem extends ReviewItem {
+  block_id: string;
+}
+
+export interface BlockReviewResponse {
+  kind: ReviewKind;
+  summary: string;
+  block_id: string;
+  items: BlockReviewItem[];
+}
+
+export type BlockReviewContext = "current" | "selected" | "document" | "linked";
+
+export interface BlockReviewContextResponse {
+  kind: ReviewKind;
+  context: BlockReviewContext;
+  summary: string;
+  items: BlockReviewItem[];
+}
+
 export interface ConsistencyIssue {
   related_note_id: string;
   related_note_title: string;
@@ -183,4 +223,9 @@ export interface HealReport {
   summary: string;
   dead_links: DeadLink[];
   stale_facts: StaleFact[];
+}
+
+export interface DocumentHealthFindings {
+  consistency: ConsistencyReport;
+  healing: HealReport;
 }

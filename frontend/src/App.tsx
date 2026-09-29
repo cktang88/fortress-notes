@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SearchBar } from "./features/notes/SearchBar";
 import { NoteList } from "./features/notes/NoteList";
 import { DocumentSidebar } from "./features/notes/DocumentSidebar";
@@ -8,7 +8,6 @@ import { BacklinksPanel } from "./features/notes/BacklinksPanel";
 import { OutlinePanel } from "./features/notes/OutlinePanel";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteEditor } from "./features/notes/NoteEditor";
-import { RawEditor } from "./features/notes/RawEditor";
 import { BlockNoteEditor } from "./features/notes/BlockNoteEditor";
 import type { Annotation } from "./features/notes/annotations";
 import {
@@ -32,13 +31,16 @@ import {
 import type { BlockSearchFilters, ReviewKind, SearchMode } from "./features/notes/types";
 
 export function App() {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [focusBlockId, setFocusBlockId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get("note"),
+  );
+  const [focusBlockId, setFocusBlockId] = useState<string | null>(() =>
+    blockIdFromHash(window.location.hash),
+  );
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("text");
   const [blockSearchFilters, setBlockSearchFilters] = useState<BlockSearchFilters>({});
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  const [rawView, setRawView] = useState(false);
 
   const searching = query.trim().length > 0;
   const hasBlockSearchFilters = Object.values(blockSearchFilters).some(Boolean);
@@ -101,9 +103,22 @@ export function App() {
 
   const brokenLinks = (heal.data?.dead_links ?? []).map((d) => d.url);
 
+  useEffect(() => {
+    const restoreLocation = () => {
+      setSelectedId(new URLSearchParams(window.location.search).get("note"));
+      setFocusBlockId(blockIdFromHash(window.location.hash));
+    };
+    window.addEventListener("popstate", restoreLocation);
+    return () => window.removeEventListener("popstate", restoreLocation);
+  }, []);
+
   const selectNote = (id: string, blockId: string | null = null) => {
     setSelectedId(id);
     setFocusBlockId(blockId);
+    const url = new URL(window.location.href);
+    url.searchParams.set("note", id);
+    url.hash = blockId ? `block=${encodeURIComponent(blockId)}` : "";
+    window.history.replaceState(null, "", url);
     setDismissed(new Set());
     consistency.reset();
     heal.reset();
@@ -178,6 +193,7 @@ export function App() {
         ) : (
           <DocumentSidebar
             nodes={navigation.data?.items ?? []}
+            recent={navigation.data?.recent ?? []}
             selectedId={selectedId}
             loading={navigation.isLoading}
             onSelect={selectNote}
@@ -215,16 +231,8 @@ export function App() {
               onConsistency={() => runCheck("consistency")}
               onLint={() => runCheck("heal")}
               checking={consistency.isPending || heal.isPending || review.isPending}
-              rawView={rawView}
-              onToggleRaw={() => setRawView((v) => !v)}
             />
-            {rawView ? (
-              <RawEditor
-                key={`raw-${note.data.id}`}
-                initialMarkdown={note.data.body}
-                onSave={(body) => updateNote.mutate({ id: note.data!.id, body })}
-              />
-            ) : blockDocument.data ? (
+            {blockDocument.data ? (
               <BlockNoteEditor
                 key={blockDocument.data.id}
                 document={blockDocument.data}
@@ -248,4 +256,14 @@ export function App() {
       </main>
     </div>
   );
+}
+
+function blockIdFromHash(hash: string): string | null {
+  if (!hash.startsWith("#block=")) return null;
+  const encodedId = hash.slice("#block=".length);
+  try {
+    return decodeURIComponent(encodedId) || null;
+  } catch {
+    return null;
+  }
 }

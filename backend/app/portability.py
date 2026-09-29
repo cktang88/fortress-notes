@@ -51,6 +51,58 @@ class ImportReport:
         return sum(item.status == "conflict" for item in self.items)
 
 
+@dataclass(frozen=True)
+class ImportPreview:
+    """A read-only summary of what a directory import would do."""
+
+    items: tuple[ImportItem, ...]
+
+    @property
+    def ready_count(self) -> int:
+        return sum(item.status == "ready" for item in self.items)
+
+    @property
+    def skipped_count(self) -> int:
+        return sum(item.status == "skipped" for item in self.items)
+
+    @property
+    def error_count(self) -> int:
+        return sum(item.status == "error" for item in self.items)
+
+    @property
+    def conflict_count(self) -> int:
+        return sum(item.status == "conflict" for item in self.items)
+
+
+def preview_markdown_directory(database_path: Path, source_directory: Path) -> ImportPreview:
+    """Inspect top-level Markdown files without writing backups or documents."""
+
+    items: list[ImportItem] = []
+    for source_path in sorted(source_directory.glob("*.md")):
+        document_id = source_path.stem
+        try:
+            state = _document_state(database_path, document_id)
+            if state == "active":
+                items.append(ImportItem(source_path, document_id, "skipped", "document exists"))
+                continue
+            if state == "deleted":
+                items.append(
+                    ImportItem(
+                        source_path,
+                        document_id,
+                        "conflict",
+                        "document is soft-deleted; restore or purge it before importing",
+                    )
+                )
+                continue
+            _read_import_source(source_path)
+        except Exception as error:  # File data is an untrusted import boundary.
+            items.append(ImportItem(source_path, document_id, "error", str(error)))
+        else:
+            items.append(ImportItem(source_path, document_id, "ready"))
+    return ImportPreview(tuple(items))
+
+
 def export_document_markdown(database_path: Path, document_id: str) -> str:
     """Return a document's portable Markdown without exposing SQLite block IDs."""
 
@@ -109,15 +161,7 @@ def import_markdown_directory(database_path: Path, source_directory: Path) -> Im
                     )
                 )
                 continue
-            post = frontmatter.loads(raw.decode("utf-8"))
-            metadata = post.metadata
-            title = str(metadata.get("title") or _derive_title(post.content))
-            status = metadata.get("status", "rough")
-            status = status if status in {"rough", "polished"} else "rough"
-            tags = metadata.get("tags", []) or []
-            if not isinstance(tags, list):
-                tags = [str(tags)]
-            now = datetime.now(timezone.utc).isoformat()
+            post, title, status, tags, created_at, updated_at = _read_import_source(source_path, raw)
             create_document(
                 database_path,
                 document_id,
@@ -125,14 +169,36 @@ def import_markdown_directory(database_path: Path, source_directory: Path) -> Im
                 status,
                 [str(tag) for tag in tags],
                 post.content,
-                metadata.get("created_at", now),
-                metadata.get("updated_at", now),
+                created_at,
+                updated_at,
             )
         except Exception as error:  # File data is an untrusted import boundary.
             items.append(ImportItem(source_path, document_id, "error", str(error)))
         else:
             items.append(ImportItem(source_path, document_id, "imported"))
     return ImportReport(backup_directory, tuple(items))
+
+
+def _read_import_source(source_path: Path, raw: bytes | None = None):
+    if raw is None:
+        raw = source_path.read_bytes()
+    post = frontmatter.loads(raw.decode("utf-8"))
+    metadata = post.metadata
+    title = str(metadata.get("title") or _derive_title(post.content))
+    status = metadata.get("status", "rough")
+    status = status if status in {"rough", "polished"} else "rough"
+    tags = metadata.get("tags", []) or []
+    if not isinstance(tags, list):
+        tags = [str(tags)]
+    now = datetime.now(timezone.utc).isoformat()
+    return (
+        post,
+        title,
+        status,
+        [str(tag) for tag in tags],
+        metadata.get("created_at", now),
+        metadata.get("updated_at", now),
+    )
 
 
 def _document_state(database_path: Path, document_id: str) -> str | None:

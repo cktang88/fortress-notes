@@ -2,7 +2,9 @@
 
 from . import block_store, embeddings, images, notes_store
 from .config import get_settings
-from .models import SearchResult
+from .models import RelatedResult, SearchResult
+
+_RELATED_EXCERPT_LENGTH = 240
 
 
 def _all_docs() -> list[tuple[str, str, str]]:
@@ -73,7 +75,7 @@ def embedding_search(q: str, k: int = 20) -> list[SearchResult]:
     return results[:k]
 
 
-def related_notes(note_id: str, k: int = 5) -> list[SearchResult]:
+def related_notes(note_id: str, k: int = 5) -> list[RelatedResult]:
     note = notes_store.get_note(note_id)
     if not note:
         return []
@@ -87,18 +89,27 @@ def related_notes(note_id: str, k: int = 5) -> list[SearchResult]:
             query, [(block_id, updated_at, text) for block_id, _, updated_at, text in block_docs]
         )
         document_ids = {block_id: document_id for block_id, document_id, _, _ in block_docs}
-        note_scores: dict[str, float] = {}
+        block_texts = {block_id: text for block_id, _, _, text in block_docs}
+        note_matches: dict[str, tuple[float, str, str]] = {}
         for block_id, score in scores.items():
             document_id = document_ids[block_id]
-            note_scores[document_id] = max(note_scores.get(document_id, 0.0), score)
+            current = note_matches.get(document_id)
+            if current is None or score > current[0]:
+                note_matches[document_id] = (score, block_id, block_texts[block_id])
     else:
         docs = [d for d in _all_docs() if d[0] != note_id]
-        note_scores = embeddings.score_documents(query, docs)
+        scores = embeddings.score_documents(query, docs)
+        note_matches = {nid: (score, "", "") for nid, score in scores.items()}
     summaries = {s.id: s for s in notes_store.list_notes()}
     results = [
-        SearchResult(note=summaries[nid], score=score)
-        for nid, score in note_scores.items()
-        if nid in summaries and score > 0
+        RelatedResult(
+            note=summaries[nid],
+            score=match[0],
+            matched_block_id=match[1] or None,
+            matched_block_text=match[2][:_RELATED_EXCERPT_LENGTH],
+        )
+        for nid, match in note_matches.items()
+        if nid in summaries and match[0] > 0
     ]
     results.sort(key=lambda r: r.score, reverse=True)
     return results[:k]
