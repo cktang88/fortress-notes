@@ -5,7 +5,7 @@ the search layer folds into the owning note so images are full-text/embedding se
 """
 
 import re
-from hashlib import sha256
+from threading import Lock
 from pathlib import Path
 
 from . import assets, block_store, vision
@@ -21,6 +21,7 @@ _EXT_BY_TYPE = {
 
 # Matches /media/<id>.<ext> references inside a note body.
 _ASSET_RE = re.compile(r"/media/([A-Za-z0-9]+)\.(png|jpe?g|gif|webp)")
+_extraction_lock = Lock()
 
 
 def save_bytes(data: bytes, content_type: str) -> tuple[str, Path]:
@@ -32,19 +33,52 @@ def save_bytes(data: bytes, content_type: str) -> tuple[str, Path]:
 
 
 def extract_and_store(path: Path) -> str:
-    """Run caption + OCR for an image and write the `<id>.txt` sidecar cache.
+    """Reuse or compute caption + OCR and write per-image and content-hash caches.
 
     Heavy/slow — run in a background thread, not on the request path.
     """
-    text = vision.describe_image(path)
-    if text:
-        path.with_suffix(".txt").write_text(text, encoding="utf-8")
-        content_hash = sha256(path.read_bytes()).hexdigest()
-        path.with_name(f"{content_hash}.txt").write_text(text, encoding="utf-8")
-        settings = get_settings()
+    content_hash = assets.content_hash(path.read_bytes())
+    settings = get_settings()
+    image_sidecar = path.with_suffix(".txt")
+    hash_sidecar = path.with_name(f"{content_hash}.txt")
+
+    # Model instances are shared between background upload threads. Keeping cache
+    # lookup and inference under one lock also prevents duplicate work for same bytes.
+    with _extraction_lock:
+        text = _read_cached_text(hash_sidecar, settings.vlm_caption_enabled)
+        if not text:
+            text = _read_cached_text(image_sidecar, settings.vlm_caption_enabled)
+        if not text:
+            text = vision.describe_image(path)
+        if not text.strip():
+            return ""
+
+        _write_cache(image_sidecar, text)
+        _write_cache(hash_sidecar, text)
         if settings.block_db_enabled:
             block_store.store_asset_text(settings.block_db_path, content_hash, text)
     return text
+
+
+def _read_cached_text(path: Path, caption_enabled: bool) -> str:
+    if path.is_symlink() or not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+    if not text.strip():
+        return ""
+    # Older OCR-only sidecars use this prefix. Recompute them after captions are enabled.
+    if caption_enabled and text.lstrip().startswith("Text in image:"):
+        return ""
+    return text
+
+
+def _write_cache(path: Path, text: str) -> None:
+    if path.is_symlink():
+        return
+    path.write_text(text, encoding="utf-8")
 
 
 def _sidecar_text(image_id: str) -> str:
@@ -75,8 +109,7 @@ _IMG_MD_RE = re.compile(
 
 
 def inline_for_llm(body: str) -> str:
-    """Replace each image reference with its caption/OCR text, so an LLM 'sees' the
-    image content (used for fact-check, consistency, heal)."""
+    """Replace each image reference with its caption/OCR text for AI review."""
 
     def repl(match: re.Match) -> str:
         text = _sidecar_text(match.group(1)).strip()

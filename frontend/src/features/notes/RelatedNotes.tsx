@@ -2,16 +2,17 @@ import { useRelated } from "./hooks";
 
 interface Props {
   noteId: string | null;
+  blockId: string | null;
   onSelect: (id: string, blockId?: string | null) => void;
 }
 
-export function RelatedNotes({ noteId, onSelect }: Props) {
-  const { data, isLoading } = useRelated(noteId);
+export function RelatedNotes({ noteId, blockId, onSelect }: Props) {
+  const { data, isLoading } = useRelated(noteId, blockId);
 
   return (
     <div className="border-t border-zinc-200 bg-zinc-50/60">
       <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
-        Related notes
+        {blockId ? "Related to this block" : "Related notes"}
       </div>
       <div className="max-h-64 overflow-y-auto pb-2">
         {!noteId && <Empty>Open a note to see related ones.</Empty>}

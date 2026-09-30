@@ -1,6 +1,4 @@
 import type {
-  ConsistencyReport,
-  HealReport,
   Note,
   NoteStatus,
   NoteSummary,
@@ -21,6 +19,7 @@ import type {
   SearchMode,
   SearchResult,
   RelatedResult,
+  LinkCheckResponse,
 } from "./types";
 
 const API = "/api";
@@ -48,8 +47,11 @@ export const notesApi = {
 
   get: (id: string) => request<Note>(`/notes/${id}`),
 
-  create: (body = "") =>
-    request<Note>("/notes", { method: "POST", body: JSON.stringify({ body }) }),
+  create: (body = "", folderId: string | null = null) =>
+    request<Note>("/notes", {
+      method: "POST",
+      body: JSON.stringify({ body, folder_id: folderId }),
+    }),
 
   update: (id: string, patch: Partial<Pick<Note, "title" | "body" | "status" | "tags">>) =>
     request<Note>(`/notes/${id}`, { method: "PUT", body: JSON.stringify(patch) }),
@@ -61,15 +63,14 @@ export const notesApi = {
   search: (q: string, mode: SearchMode) =>
     request<SearchResult[]>(`/search?q=${encodeURIComponent(q)}&mode=${mode}`),
 
-  related: (id: string, k = 5) => request<RelatedResult[]>(`/notes/${id}/related?k=${k}`),
+  related: (id: string, k = 5, blockId?: string | null) => {
+    const params = new URLSearchParams({ k: String(k) });
+    if (blockId) params.set("block_id", blockId);
+    return request<RelatedResult[]>(`/notes/${id}/related?${params.toString()}`);
+  },
 
   review: (id: string, kind: ReviewKind) =>
     request<ReviewResponse>(`/notes/${id}/review?kind=${kind}`, { method: "POST" }),
-
-  consistency: (id: string) =>
-    request<ConsistencyReport>(`/notes/${id}/consistency`, { method: "POST" }),
-
-  heal: (id: string) => request<HealReport>(`/notes/${id}/heal`, { method: "POST" }),
 
   uploadImage: async (file: File): Promise<{ url: string; text: string }> => {
     const form = new FormData();
@@ -99,12 +100,19 @@ export const blockApi = {
   renameFolder: (id: string, name: string) =>
     request<Folder>(`/folders/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   removeFolder: (id: string) => request<void>(`/folders/${id}`, { method: "DELETE" }),
+  moveFolder: (id: string, parent_id: string | null) =>
+    request<Folder>(`/folders/${id}/move`, {
+      method: "POST",
+      body: JSON.stringify({ parent_id }),
+    }),
   moveDocument: (id: string, folder_id: string | null, position?: number) =>
     request<DocumentOrganization>(`/block-documents/${id}/move`, {
       method: "POST",
       body: JSON.stringify({ folder_id, position }),
     }),
   get: (id: string) => request<BlockDocument>(`/block-documents/${id}`),
+  checkLinks: (id: string) =>
+    request<LinkCheckResponse>(`/block-documents/${id}/link-checks`, { method: "POST" }),
   review: (documentId: string, blockId: string, kind: ReviewKind = "factcheck") =>
     request<BlockReviewResponse>(
       `/block-documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(blockId)}/review?kind=${kind}`,
@@ -120,13 +128,6 @@ export const blockApi = {
       `/block-documents/${encodeURIComponent(documentId)}/review-context`,
       { method: "POST", body: JSON.stringify({ kind, context, block_ids: blockIds }) },
     ),
-  healthFindings: async (documentId: string) => {
-    const [consistency, healing] = await Promise.all([
-      notesApi.consistency(documentId),
-      notesApi.heal(documentId),
-    ]);
-    return { consistency, healing };
-  },
   backlinks: (id: string, limit = 100) =>
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),
   search: (q: string, filters: BlockSearchFilters = {}, limit = 50) =>

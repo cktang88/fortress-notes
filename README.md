@@ -26,23 +26,21 @@ you're reading.
   showing the most semantically related notes (late-interaction similarity).
 - **Rough vs. polished notes** — a `status` flag distinguishes braindump/brainstorm
   notes from polished ones. Promote a rough note to polished in one click.
-- **AI review** — a button feeds the current note to an LLM (`deepseek/deepseek-v4-flash`
-  via [OpenRouter](https://openrouter.ai)) which fact-checks, asks clarifying
-  questions, and raises objections / inconsistencies.
-- **Cross-note consistency check** — agentic "code review for your notes": ColBERT
-  retrieves related notes, the LLM flags contradictions, shown as **red squiggles**
-  directly on the offending text. Click a squiggle → popup with the explanation and
-  Accept/Reject.
-- **Self-healing** — detects broken links (concurrent HTTP checks) and uses LLM +
-  web search to flag stale/out-of-date facts. Stale claims get a squiggle whose popup
-  offers a one-click **Accept** to apply the suggested fix.
+- **Selection review** — highlight text or select blocks to fact-check them with
+  `z-ai/glm-5.3-flash` via [OpenRouter](https://openrouter.ai). The help button explains
+  this and other editor shortcuts.
+- **Nested folders** — drag notes and folders into folders or back to All notes.
+  Right-click to create items, and double-click a sidebar name to rename it.
+- **Monthly link checks** — opening a note checks links in blocks that have not been
+  edited for 30 days. Valid checks are cached in SQLite, and failed links can be retried
+  the next time the note opens.
 - **Smart links** — URLs are auto-detected, highlighted **blue**, and open in the
   browser on click; links found broken are highlighted **red**.
 - **Paste & resize images** — paste an image straight into the editor; it's uploaded
   and inserted instantly, and is drag-resizable. OCR runs once per image in the
   background so **image text is searchable** by both full-text and embedding search.
-  (An optional tiny VLM can also caption images — off by default; CPU captioning is
-  slow, so enable it only on a GPU.)
+  The small VLM adds local captions, and content-hash caching reuses OCR and captions
+  for duplicate image bytes.
 
 See [`spec.md`](./spec.md) for the full design, data model, API, and roadmap.
 
@@ -57,7 +55,7 @@ backend  (FastAPI, Python)
         ├── notes_store   compatibility Markdown API and export mirror
         ├── search        full-text + ColBERT late-interaction (PyLate)
         ├── vision        SmolVLM-256M caption + RapidOCR for pasted images
-        └── llm           OpenRouter review / consistency / heal
+        └── llm           OpenRouter review
         │
         ▼
    ./notes/.fortress.sqlite3 ← the canonical local store
@@ -117,13 +115,13 @@ Backend `.env` (see `backend/.env.example`):
 | --- | --- | --- |
 | `NOTES_DIR` | `../notes` | Workspace containing the SQLite store and Markdown compatibility files |
 | `OPENROUTER_API_KEY` | — | Required for AI review |
-| `OPENROUTER_MODEL` | `deepseek/deepseek-v4-flash` | OpenRouter model id |
+| `OPENROUTER_MODEL` | `z-ai/glm-5.3-flash` | OpenRouter model id; `deepseek/deepseek-v4.1-flash` is also supported |
 | `EMBEDDINGS_ENABLED` | `true` | Turn off to skip the ColBERT model |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
 | `REINDEX_INTERVAL_S` | `5` | Background re-encode interval for changed notes |
 | `VISION_ENABLED` | `true` | Image OCR (fast, ~1s/image) — makes image text searchable |
-| `VLM_CAPTION_ENABLED` | `false` | VLM captioning (~3 min/image on CPU) — enable only on GPU |
-| `VLM_MODEL` | `HuggingFaceTB/SmolVLM-256M-Instruct` | Tiny VLM used when captioning is on |
+| `VLM_CAPTION_ENABLED` | `true` | Run local image captioning with OCR |
+| `VLM_MODEL` | `HuggingFaceTB/SmolVLM-256M-Instruct` | Small local VLM used for captions |
 
 ## Frontend toolchain
 
@@ -144,5 +142,5 @@ Tailwind) inside the same config.
 - **Search: PyLate + ColBERT** — late-interaction (token-level MaxSim) beats
   single-vector embeddings for retrieval quality on small/medium collections,
   and brute-force MaxSim is plenty fast for a personal note set.
-- **LLM: OpenRouter** — one API for many models; `deepseek/deepseek-v4-flash` per request.
+- **LLM: OpenRouter** — one API for many models; `z-ai/glm-5.3-flash` by default, with `deepseek/deepseek-v4.1-flash` as an alternative.
 ```

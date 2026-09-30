@@ -75,15 +75,27 @@ def embedding_search(q: str, k: int = 20) -> list[SearchResult]:
     return results[:k]
 
 
-def related_notes(note_id: str, k: int = 5) -> list[RelatedResult]:
+def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list[RelatedResult]:
     note = notes_store.get_note(note_id)
     if not note:
         return []
     query = f"{note.title}\n\n{note.body}"
     settings = get_settings()
+    if block_id is not None:
+        if not settings.block_db_enabled:
+            raise KeyError("Block store is disabled")
+        source = block_store.document_subtree(settings.block_db_path, note_id, block_id)
+        if source is None:
+            raise KeyError("Block document not found")
+        query = source["subtree"]["text"]
     if settings.block_db_enabled:
+        all_blocks = block_store.embedding_documents(settings.block_db_path)
+        if block_id is not None:
+            query = next((text for bid, _, _, text in all_blocks if bid == block_id), query)
+            if not query.strip():
+                return []
         block_docs = [
-            d for d in block_store.embedding_documents(settings.block_db_path) if d[1] != note_id
+            d for d in all_blocks if d[1] != note_id
         ]
         scores = embeddings.score_documents(
             query, [(block_id, updated_at, text) for block_id, _, updated_at, text in block_docs]

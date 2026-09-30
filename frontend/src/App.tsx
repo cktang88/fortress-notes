@@ -11,18 +11,18 @@ import { NoteEditor } from "./features/notes/NoteEditor";
 import { BlockNoteEditor } from "./features/notes/BlockNoteEditor";
 import type { Annotation } from "./features/notes/annotations";
 import {
-  useConsistency,
   useCreateNote,
   useCreateFolder,
   useDeleteFolder,
   useDeleteNote,
-  useHeal,
+  useLinkChecks,
   useNote,
   useBlockDocument,
   useBlockSearch,
   useNavigation,
   useNotes,
   useMoveDocument,
+  useMoveFolder,
   useRenameFolder,
   useReview,
   useSearch,
@@ -37,6 +37,7 @@ export function App() {
   const [focusBlockId, setFocusBlockId] = useState<string | null>(() =>
     blockIdFromHash(window.location.hash),
   );
+  const [activeBlockId, setActiveBlockId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("text");
   const [blockSearchFilters, setBlockSearchFilters] = useState<BlockSearchFilters>({});
@@ -60,11 +61,11 @@ export function App() {
   const renameFolder = useRenameFolder();
   const deleteFolder = useDeleteFolder();
   const moveDocument = useMoveDocument();
+  const moveFolder = useMoveFolder();
   const updateNote = useUpdateNote();
   const deleteNote = useDeleteNote();
   const review = useReview();
-  const consistency = useConsistency();
-  const heal = useHeal();
+  const linkChecks = useLinkChecks(selectedId);
 
   const listNotes = searching
     ? (searchResults.data ?? []).map((r) => r.note)
@@ -73,7 +74,7 @@ export function App() {
     ? Object.fromEntries((searchResults.data ?? []).map((r) => [r.note.id, r.score]))
     : undefined;
 
-  // All AI findings (review, consistency, stale facts) become inline annotations.
+  // Review findings stay attached to their quoted text in the editor.
   const annotations: Annotation[] = [
     ...(review.data?.items ?? [])
       .filter((it) => it.quote)
@@ -84,29 +85,17 @@ export function App() {
         severity: it.severity,
         message: it.detail,
       })),
-    ...(consistency.data?.issues ?? []).map((iss, i) => ({
-      id: `c${i}`,
-      claim: iss.claim,
-      type: "consistency" as const,
-      severity: iss.severity,
-      message: `Conflicts with "${iss.related_note_title}": ${iss.conflict}`,
-    })),
-    ...(heal.data?.stale_facts ?? []).map((f, i) => ({
-      id: `s${i}`,
-      claim: f.claim,
-      type: "stale" as const,
-      severity: "high" as const,
-      message: f.finding,
-      suggestion: f.suggestion,
-    })),
   ].filter((a) => !dismissed.has(a.id));
 
-  const brokenLinks = (heal.data?.dead_links ?? []).map((d) => d.url);
+  const brokenLinks = (linkChecks.data?.links ?? [])
+    .filter((link) => link.status !== "ok")
+    .map((link) => link.url);
 
   useEffect(() => {
     const restoreLocation = () => {
       setSelectedId(new URLSearchParams(window.location.search).get("note"));
       setFocusBlockId(blockIdFromHash(window.location.hash));
+      setActiveBlockId(null);
     };
     window.addEventListener("popstate", restoreLocation);
     return () => window.removeEventListener("popstate", restoreLocation);
@@ -115,38 +104,36 @@ export function App() {
   const selectNote = (id: string, blockId: string | null = null) => {
     setSelectedId(id);
     setFocusBlockId(blockId);
+    setActiveBlockId(null);
     const url = new URL(window.location.href);
     url.searchParams.set("note", id);
     url.hash = blockId ? `block=${encodeURIComponent(blockId)}` : "";
     window.history.replaceState(null, "", url);
     setDismissed(new Set());
-    consistency.reset();
-    heal.reset();
     review.reset();
   };
 
-  const handleNew = async () => {
-    const created = await createNote.mutateAsync();
+  const handleNew = async (folderId: string | null = null) => {
+    const created = await createNote.mutateAsync(folderId);
     selectNote(created.id);
   };
 
-  const handleDelete = () => {
-    if (!selectedId) return;
-    deleteNote.mutate(selectedId);
-    setSelectedId(null);
+  const handleDelete = async (id = selectedId) => {
+    if (!id) return;
+    await deleteNote.mutateAsync(id);
+    if (id === selectedId) {
+      setSelectedId(null);
+      setActiveBlockId(null);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("note");
+      window.history.replaceState(null, "", url);
+    }
   };
 
   const handleReview = (kind: ReviewKind) => {
     if (!selectedId) return;
     setDismissed(new Set());
     review.mutate({ id: selectedId, kind });
-  };
-
-  const runCheck = (which: "consistency" | "heal") => {
-    if (!selectedId) return;
-    setDismissed(new Set());
-    if (which === "consistency") consistency.mutate(selectedId);
-    else heal.mutate(selectedId);
   };
 
   const dismiss = (id: string) => setDismissed((prev) => new Set(prev).add(id));
@@ -197,17 +184,21 @@ export function App() {
             selectedId={selectedId}
             loading={navigation.isLoading}
             onSelect={selectNote}
-            onCreateFolder={(name) => createFolder.mutateAsync({ name })}
+            onCreateFolder={(name, parentId) => createFolder.mutateAsync({ name, parentId })}
+            onCreateNote={handleNew}
             onRenameFolder={(id, name) => renameFolder.mutateAsync({ id, name })}
+            onRenameDocument={(id, title) => updateNote.mutateAsync({ id, title })}
             onDeleteFolder={(id) => deleteFolder.mutateAsync(id)}
+            onDeleteDocument={async (id) => handleDelete(id)}
             onMoveDocument={(id, folderId) => moveDocument.mutateAsync({ id, folderId })}
+            onMoveFolder={(id, parentId) => moveFolder.mutateAsync({ id, parentId })}
           />
         )}
         <OutlinePanel
           document={blockDocument.data ?? null}
           onFocus={(blockId) => selectedId && selectNote(selectedId, blockId)}
         />
-        <RelatedNotes noteId={selectedId} onSelect={selectNote} />
+        <RelatedNotes noteId={selectedId} blockId={activeBlockId} onSelect={selectNote} />
         <BacklinksPanel documentId={selectedId} onSelect={selectNote} />
       </aside>
 
@@ -223,14 +214,10 @@ export function App() {
             <NoteHeader
               note={note.data}
               onTitle={(title) => updateNote.mutate({ id: note.data!.id, title })}
-              onTags={(tags) => updateNote.mutate({ id: note.data!.id, tags })}
               onDelete={handleDelete}
               onSetStatus={(status) => updateNote.mutate({ id: note.data!.id, status })}
-              onFactcheck={() => handleReview("factcheck")}
               onClarify={() => handleReview("clarify")}
-              onConsistency={() => runCheck("consistency")}
-              onLint={() => runCheck("heal")}
-              checking={consistency.isPending || heal.isPending || review.isPending}
+              checking={review.isPending}
             />
             {blockDocument.data ? (
               <BlockNoteEditor
@@ -238,6 +225,8 @@ export function App() {
                 document={blockDocument.data}
                 focusBlockId={focusBlockId}
                 linkTargets={allNotes.data ?? []}
+                linkChecks={linkChecks.data?.links ?? []}
+                onFocusedBlockChange={setActiveBlockId}
               />
             ) : blockDocument.isLoading ? (
               <div className="p-8 text-sm text-zinc-400">Loading blocks…</div>

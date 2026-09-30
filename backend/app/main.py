@@ -10,7 +10,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
 
 from . import (
-    analysis,
     assets,
     block_query,
     block_store,
@@ -29,9 +28,8 @@ from .portability import (
     preview_markdown_directory,
 )
 from .config import get_settings
+from . import link_checks
 from .models import (
-    ConsistencyReport,
-    HealReport,
     Note,
     NoteCreate,
     NoteStatus,
@@ -243,13 +241,17 @@ def list_block_documents():
 def create_block_document(data: NoteCreate):
     if not settings.block_db_enabled:
         raise HTTPException(404, "Block store is disabled")
-    tree = block_store.create_block_document(
-        settings.block_db_path,
-        data.title or "Untitled",
-        data.status,
-        data.tags,
-        data.body,
-    )
+    try:
+        tree = block_store.create_block_document(
+            settings.block_db_path,
+            data.title or "Untitled",
+            data.status,
+            data.tags,
+            data.body,
+            folder_id=data.folder_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
     block_store.sync_markdown(settings.notes_path, settings.block_db_path, tree["id"])
     return tree
 
@@ -420,6 +422,18 @@ def get_backlinks(document_id: str, limit: int = Query(100, ge=1, le=500)):
     return block_store.document_backlinks(settings.block_db_path, document_id, limit)
 
 
+@app.post("/api/block-documents/{document_id}/link-checks")
+async def check_block_document_links(document_id: str):
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    try:
+        return await link_checks.check_document_links(
+            settings.block_db_path, document_id
+        )
+    except KeyError as exc:
+        raise HTTPException(404, "Block document not found") from exc
+
+
 @app.post("/api/block-documents/{document_id}/transactions")
 def apply_block_transaction(document_id: str, transaction: BlockTransaction):
     if not settings.block_db_enabled:
@@ -521,19 +535,28 @@ def list_notes(status: NoteStatus | None = None):
 
 @app.post("/api/notes", response_model=Note, status_code=201)
 def create_note(data: NoteCreate):
+    if data.folder_id is not None and not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
     note = notes_store.create_note(data)
     if settings.block_db_enabled:
-        block_store.create_document(
-            settings.block_db_path,
-            note.id,
-            note.title,
-            note.status,
-            note.tags,
-            note.body,
-            note.created_at,
-            note.updated_at,
-            ensure_empty_paragraph=True,
-        )
+        try:
+            block_store.create_document(
+                settings.block_db_path,
+                note.id,
+                note.title,
+                note.status,
+                note.tags,
+                note.body,
+                note.created_at,
+                note.updated_at,
+                ensure_empty_paragraph=True,
+                folder_id=data.folder_id,
+            )
+        except Exception as exc:
+            notes_store.delete_note(note.id)
+            if isinstance(exc, KeyError):
+                raise HTTPException(404, str(exc)) from exc
+            raise
     return note
 
 
@@ -608,10 +631,13 @@ def search_notes(q: str, mode: str = Query("text", pattern="^(text|embedding)$")
 
 
 @app.get("/api/notes/{note_id}/related", response_model=list[RelatedResult])
-def related(note_id: str, k: int = Query(5, ge=1, le=50)):
+def related(note_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None = None):
     if notes_store.get_note(note_id) is None:
         raise HTTPException(404, "Note not found")
-    return search.related_notes(note_id, k)
+    try:
+        return search.related_notes(note_id, k, block_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @app.post("/api/notes/{note_id}/review", response_model=ReviewResponse)
@@ -662,17 +688,3 @@ async def review_block_context(document_id: str, request: BlockReviewContextRequ
         resolved["targets"],
         resolved["linked_context"],
     )
-
-
-@app.post("/api/notes/{note_id}/consistency", response_model=ConsistencyReport)
-async def consistency(note_id: str, k: int = 5):
-    if notes_store.get_note(note_id) is None:
-        raise HTTPException(404, "Note not found")
-    return await analysis.check_consistency(note_id, k)
-
-
-@app.post("/api/notes/{note_id}/heal", response_model=HealReport)
-async def heal(note_id: str):
-    if notes_store.get_note(note_id) is None:
-        raise HTTPException(404, "Note not found")
-    return await analysis.heal_note(note_id)

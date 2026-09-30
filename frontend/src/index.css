@@ -1,76 +1,76 @@
 @import "tailwindcss";
 
-/* Tiptap editor content styling */
-.tiptap {
+/* Styling for the legacy Markdown editor. BlockNote owns its own block spacing. */
+.legacy-note-editor .tiptap {
   outline: none;
   min-height: 60vh;
 }
-.tiptap h1 {
+.legacy-note-editor .tiptap h1 {
   font-size: 1.6rem;
   font-weight: 700;
   margin: 0.8em 0 0.4em;
 }
-.tiptap h2 {
+.legacy-note-editor .tiptap h2 {
   font-size: 1.3rem;
   font-weight: 700;
   margin: 0.8em 0 0.4em;
 }
-.tiptap h3 {
+.legacy-note-editor .tiptap h3 {
   font-size: 1.1rem;
   font-weight: 600;
   margin: 0.8em 0 0.4em;
 }
-.tiptap p {
+.legacy-note-editor .tiptap p {
   margin: 0.5em 0;
   line-height: 1.7;
 }
-.tiptap ul {
+.legacy-note-editor .tiptap ul {
   list-style: disc;
   padding-left: 1.4em;
   margin: 0.5em 0;
 }
-.tiptap ol {
+.legacy-note-editor .tiptap ol {
   list-style: decimal;
   padding-left: 1.4em;
   margin: 0.5em 0;
 }
-.tiptap blockquote {
+.legacy-note-editor .tiptap blockquote {
   border-left: 3px solid #d4d4d8;
   padding-left: 1em;
   color: #52525b;
 }
-.tiptap code {
+.legacy-note-editor .tiptap code {
   background: #f4f4f5;
   padding: 0.1em 0.3em;
   border-radius: 4px;
   font-size: 0.9em;
 }
-.tiptap pre {
+.legacy-note-editor .tiptap pre {
   background: #18181b;
   color: #fafafa;
   padding: 0.8em;
   border-radius: 8px;
   overflow-x: auto;
 }
-.tiptap pre code {
+.legacy-note-editor .tiptap pre code {
   background: none;
   padding: 0;
 }
 /* Inline annotations — color by severity: red / yellow / light gray */
-.tiptap .squiggle {
+.legacy-note-editor .tiptap .squiggle {
   text-decoration-line: underline;
   text-decoration-style: wavy;
   text-decoration-skip-ink: none;
   text-underline-offset: 3px;
   cursor: pointer;
 }
-.tiptap .squiggle-high {
+.legacy-note-editor .tiptap .squiggle-high {
   text-decoration-color: #ef4444;
 }
-.tiptap .squiggle-medium {
+.legacy-note-editor .tiptap .squiggle-medium {
   text-decoration-color: #eab308;
 }
-.tiptap .squiggle-low {
+.legacy-note-editor .tiptap .squiggle-low {
   text-decoration-color: #9ca3af;
 }
 
@@ -83,25 +83,31 @@
   text-decoration: underline;
   cursor: pointer;
 }
-.tiptap .link-broken {
+.legacy-note-editor .tiptap .link-broken {
   color: #dc2626 !important;
   background: #fef2f2 !important;
 }
 
+.blocknote-shell a[data-link-status] {
+  color: #dc2626;
+  text-decoration: underline wavy #dc2626;
+  text-underline-offset: 2px;
+}
+
 /* Resizable images */
-.tiptap .img-resize-wrapper {
+.legacy-note-editor .tiptap .img-resize-wrapper {
   position: relative;
   display: inline-block;
   line-height: 0;
 }
-.tiptap .img-resize-wrapper img {
+.legacy-note-editor .tiptap .img-resize-wrapper img {
   max-width: 100%;
   border-radius: 6px;
 }
-.tiptap .img-resize-wrapper.ProseMirror-selectednode img {
+.legacy-note-editor .tiptap .img-resize-wrapper.ProseMirror-selectednode img {
   outline: 2px solid #6366f1;
 }
-.tiptap .img-resize-handle {
+.legacy-note-editor .tiptap .img-resize-handle {
   position: absolute;
   right: -5px;
   bottom: -5px;
@@ -113,7 +119,7 @@
   cursor: nwse-resize;
 }
 
-.tiptap p.is-editor-empty:first-child::before {
+.legacy-note-editor .tiptap p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: #a1a1aa;
   float: left;

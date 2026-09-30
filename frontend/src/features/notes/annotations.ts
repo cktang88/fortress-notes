@@ -3,7 +3,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 
-export type AnnotationType = "consistency" | "stale" | "review";
+export type AnnotationType = "review";
 export type Severity = "high" | "medium" | "low";
 
 export interface Annotation {
@@ -14,8 +14,6 @@ export interface Annotation {
   /** Drives squiggle color: high=red, medium=yellow, low=light gray. */
   severity: Severity;
   message: string;
-  /** Replacement text offered on Accept (stale facts only). */
-  suggestion?: string;
 }
 
 export interface AnnotationState {

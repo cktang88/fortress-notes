@@ -194,38 +194,13 @@ export interface BlockReviewContextResponse {
   items: BlockReviewItem[];
 }
 
-export interface ConsistencyIssue {
-  related_note_id: string;
-  related_note_title: string;
-  claim: string;
-  conflict: string;
-  severity: "low" | "medium" | "high";
-}
-
-export interface ConsistencyReport {
-  summary: string;
-  issues: ConsistencyIssue[];
-  checked_against: string[];
-}
-
-export interface DeadLink {
+export interface LinkCheck {
   url: string;
   status: string;
+  checked_at: string;
+  block_ids: string[];
 }
 
-export interface StaleFact {
-  claim: string;
-  finding: string;
-  suggestion: string;
-}
-
-export interface HealReport {
-  summary: string;
-  dead_links: DeadLink[];
-  stale_facts: StaleFact[];
-}
-
-export interface DocumentHealthFindings {
-  consistency: ConsistencyReport;
-  healing: HealReport;
+export interface LinkCheckResponse {
+  links: LinkCheck[];
 }

@@ -42,6 +42,12 @@ export function useDeleteFolder() {
   return useNavigationMutation((id: string) => blockApi.removeFolder(id));
 }
 
+export function useMoveFolder() {
+  return useNavigationMutation(({ id, parentId }: { id: string; parentId: string | null }) =>
+    blockApi.moveFolder(id, parentId),
+  );
+}
+
 export function useMoveDocument() {
   return useNavigationMutation(({ id, folderId }: { id: string; folderId: string | null }) =>
     blockApi.moveDocument(id, folderId),
@@ -93,6 +99,16 @@ export function useBlockReference(blockId: string | null) {
   });
 }
 
+export function useLinkChecks(documentId: string | null) {
+  return useQuery({
+    queryKey: ["link-checks", documentId],
+    queryFn: () => blockApi.checkLinks(documentId!),
+    enabled: !!documentId,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
 export function useSearch(q: string, mode: SearchMode, enabled = true) {
   return useQuery({
     queryKey: ["search", mode, q],
@@ -101,10 +117,10 @@ export function useSearch(q: string, mode: SearchMode, enabled = true) {
   });
 }
 
-export function useRelated(id: string | null) {
+export function useRelated(id: string | null, blockId: string | null = null) {
   return useQuery({
-    queryKey: ["related", id],
-    queryFn: () => notesApi.related(id!),
+    queryKey: ["related", id, blockId],
+    queryFn: () => notesApi.related(id!, 5, blockId),
     enabled: !!id,
   });
 }
@@ -112,7 +128,7 @@ export function useRelated(id: string | null) {
 export function useCreateNote() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => notesApi.create(""),
+    mutationFn: (folderId: string | null = null) => notesApi.create("", folderId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["navigation"] });
@@ -131,6 +147,7 @@ export function useUpdateNote() {
       qc.invalidateQueries({ queryKey: ["navigation"] });
       qc.invalidateQueries({ queryKey: ["block-search"] });
       qc.setQueryData(["note", note.id], note);
+      qc.invalidateQueries({ queryKey: ["block-document", note.id] });
     },
   });
 }
@@ -163,12 +180,4 @@ export function useReview() {
   return useMutation({
     mutationFn: ({ id, kind }: { id: string; kind: ReviewKind }) => notesApi.review(id, kind),
   });
-}
-
-export function useConsistency() {
-  return useMutation({ mutationFn: (id: string) => notesApi.consistency(id) });
-}
-
-export function useHeal() {
-  return useMutation({ mutationFn: (id: string) => notesApi.heal(id) });
 }

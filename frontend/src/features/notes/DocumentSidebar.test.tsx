@@ -1,8 +1,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { DocumentSidebar } from "./DocumentSidebar";
 import type { NavigationDocument, NavigationNode } from "./DocumentSidebar";
+
+const { DocumentSidebar, canDropIntoFolder } = await import("./DocumentSidebar");
 
 const navigation: NavigationNode[] = [
   {
@@ -142,18 +143,18 @@ describe("DocumentSidebar", () => {
     );
 
     expect(folderButton?.getAttribute("aria-expanded")).toBe("true");
-    expect(rendered.querySelector('[data-document-id="roadmap"]')).not.toBeNull();
+    expect(rendered.querySelector('[data-document-row-id="roadmap"]')).not.toBeNull();
 
     act(() => folderButton?.click());
 
     expect(folderButton?.getAttribute("aria-expanded")).toBe("false");
-    expect(rendered.querySelector('[data-document-id="roadmap"]')).toBeNull();
-    expect(rendered.querySelector('[data-document-id="welcome"]')).not.toBeNull();
+    expect(rendered.querySelector('[data-document-row-id="roadmap"]')).toBeNull();
+    expect(rendered.querySelector('[data-document-row-id="welcome"]')).not.toBeNull();
 
     act(() => folderButton?.click());
 
     expect(folderButton?.getAttribute("aria-expanded")).toBe("true");
-    expect(rendered.querySelector('[data-document-id="roadmap"]')).not.toBeNull();
+    expect(rendered.querySelector('[data-document-row-id="roadmap"]')).not.toBeNull();
   });
 
   it("reports the selected document ID", () => {
@@ -168,14 +169,15 @@ describe("DocumentSidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("welcome");
   });
 
-  it("creates a root folder from the sidebar action", async () => {
+  it("creates a root folder from the sidebar context menu", async () => {
     const onCreateFolder = vi.fn().mockResolvedValue(undefined);
     const rendered = renderSidebar({ onCreateFolder });
 
     await act(async () => {
-      rendered.querySelector<HTMLButtonElement>("button")?.click();
+      contextMenu(rendered.querySelector('[aria-label="Documents"]'));
     });
-    const input = rendered.querySelector<HTMLInputElement>('[aria-label="Folder name"]');
+    await act(async () => menuItem(rendered, "New folder")?.click());
+    const input = rendered.querySelector<HTMLInputElement>('[aria-label^="Folder name"]');
     await act(async () => {
       if (!input) return;
       setInputValue(input, "Ideas");
@@ -187,16 +189,86 @@ describe("DocumentSidebar", () => {
         ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });
 
-    expect(onCreateFolder).toHaveBeenCalledWith("Ideas");
+    expect(onCreateFolder).toHaveBeenCalledWith("Ideas", null);
   });
 
-  it("renames and deletes empty folders with inline controls", async () => {
-    const onRenameFolder = vi.fn().mockResolvedValue(undefined);
-    const onDeleteFolder = vi.fn().mockResolvedValue(undefined);
-    const rendered = renderSidebar({ onRenameFolder, onDeleteFolder });
+  it("creates a nested folder from a folder context menu", async () => {
+    const onCreateFolder = vi.fn().mockResolvedValue(undefined);
+    const rendered = renderSidebar({ onCreateFolder });
+
+    await act(async () => contextMenu(rendered.querySelector('[data-folder-id="projects"]')));
+    await act(async () => menuItem(rendered, "New folder")?.click());
+    const input = rendered.querySelector<HTMLInputElement>('[aria-label^="Folder name"]');
+    await act(async () => {
+      if (!input) return;
+      setInputValue(input, "Planning");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input
+        .closest("form")
+        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(onCreateFolder).toHaveBeenCalledWith("Planning", "projects");
+  });
+
+  it("opens a note creation action for a folder and root", async () => {
+    const onCreateNote = vi.fn().mockResolvedValue(undefined);
+    const rendered = renderSidebar({ onCreateNote });
+
+    await act(async () => contextMenu(rendered.querySelector('[data-folder-id="archive"]')));
+    await act(async () => menuItem(rendered, "New note")?.click());
+    expect(onCreateNote).toHaveBeenLastCalledWith("archive");
+
+    await act(async () => contextMenu(rendered.querySelector('[aria-label="Documents"]')));
+    await act(async () => menuItem(rendered, "New note")?.click());
+    expect(onCreateNote).toHaveBeenLastCalledWith(null);
+  });
+
+  it("supports renaming a recent note and keyboard context menu controls", async () => {
+    const onRenameDocument = vi.fn().mockResolvedValue(undefined);
+    const rendered = renderSidebar({ onRenameDocument });
+    const recentButton = rendered.querySelector<HTMLButtonElement>(
+      '[data-recent-document-id="welcome"]',
+    );
 
     await act(async () => {
-      rendered.querySelector<HTMLButtonElement>('[aria-label="Rename Projects"]')?.click();
+      recentButton?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    });
+    const input = rendered.querySelector<HTMLInputElement>('[aria-label="Rename Welcome"]');
+    await act(async () => {
+      if (!input) return;
+      setInputValue(input, "Welcome guide");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input
+        .closest("form")
+        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(onRenameDocument).toHaveBeenCalledWith("welcome", "Welcome guide");
+    expect(rendered.querySelector('[aria-label="Rename Welcome"]')).toBeNull();
+
+    const folderButton = rendered.querySelector<HTMLButtonElement>(
+      '[aria-label="Folder: Projects"]',
+    );
+    await act(async () => {
+      folderButton?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true }),
+      );
+    });
+    expect(rendered.querySelector('[role="menu"]')).not.toBeNull();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(rendered.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(folderButton);
+  });
+
+  it("renames folders and notes on double click and supports cancel", async () => {
+    const onRenameFolder = vi.fn().mockResolvedValue(undefined);
+    const onRenameDocument = vi.fn().mockResolvedValue(undefined);
+    const rendered = renderSidebar({ onRenameFolder, onRenameDocument });
+
+    await act(async () => {
+      doubleClick(rendered.querySelector('[data-folder-id="projects"]'));
     });
     const input = rendered.querySelector<HTMLInputElement>('[aria-label="Rename Projects"]');
     await act(async () => {
@@ -210,32 +282,72 @@ describe("DocumentSidebar", () => {
 
     expect(onRenameFolder).toHaveBeenCalledWith("projects", "Plans");
 
-    const archiveDelete = rendered.querySelector<HTMLButtonElement>(
-      '[aria-label="Delete Archive"]',
-    );
-    const emptyDelete = rendered.querySelector<HTMLButtonElement>('[aria-label="Delete Empty"]');
     await act(async () => {
-      emptyDelete?.click();
+      doubleClick(rendered.querySelector('[data-document-id="roadmap"]'));
     });
+    const noteInput = rendered.querySelector<HTMLInputElement>('[aria-label="Rename Roadmap"]');
+    await act(async () => {
+      if (!noteInput) return;
+      setInputValue(noteInput, "Product roadmap");
+      noteInput.dispatchEvent(new Event("input", { bubbles: true }));
+      noteInput
+        .closest("form")
+        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(onRenameDocument).toHaveBeenCalledWith("roadmap", "Product roadmap");
 
-    expect(archiveDelete?.disabled).toBe(true);
-    expect(emptyDelete?.disabled).toBe(false);
-    expect(onDeleteFolder).toHaveBeenCalledWith("empty");
+    await act(async () => doubleClick(rendered.querySelector('[data-folder-id="empty"]')));
+    const emptyInput = rendered.querySelector<HTMLInputElement>('[aria-label="Rename Empty"]');
+    const cancel = [
+      ...(emptyInput?.closest("form")?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+    ].find((button) => button.textContent?.trim() === "Cancel");
+    await act(async () => cancel?.click());
+    expect(rendered.querySelector('[aria-label="Rename Empty"]')).toBeNull();
+
+    await act(async () => doubleClick(rendered.querySelector('[data-folder-id="empty"]')));
+    const escapeInput = rendered.querySelector<HTMLInputElement>('[aria-label="Rename Empty"]');
+    await act(async () => {
+      escapeInput?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(rendered.querySelector('[aria-label="Rename Empty"]')).toBeNull();
   });
 
-  it("moves the selected document with an accessible folder picker", async () => {
-    const onMoveDocument = vi.fn().mockResolvedValue(undefined);
-    const rendered = renderSidebar({ selectedId: "welcome", onMoveDocument });
-    const picker = rendered.querySelector<HTMLSelectElement>('[aria-label="Move Welcome"]');
+  it("allows valid folder drops and rejects self, current-parent, and descendant drops", () => {
+    expect(
+      canDropIntoFolder(navigation, { kind: "document", id: "welcome", parentId: null }, "empty"),
+    ).toBe(true);
+    expect(
+      canDropIntoFolder(
+        navigation,
+        { kind: "folder", id: "archive", parentId: "projects" },
+        "empty",
+      ),
+    ).toBe(true);
+    expect(
+      canDropIntoFolder(navigation, { kind: "folder", id: "projects", parentId: null }, "projects"),
+    ).toBe(false);
+    expect(
+      canDropIntoFolder(
+        navigation,
+        { kind: "document", id: "roadmap", parentId: "projects" },
+        "projects",
+      ),
+    ).toBe(false);
+    expect(
+      canDropIntoFolder(navigation, { kind: "folder", id: "projects", parentId: null }, "archive"),
+    ).toBe(false);
+  });
 
-    await act(async () => {
-      if (!picker) return;
-      picker.value = "projects";
-      picker.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-
-    expect(picker?.textContent).toContain("Projects");
-    expect(onMoveDocument).toHaveBeenCalledWith("welcome", "projects");
+  it("closes a context menu on an outside click", async () => {
+    const rendered = renderSidebar();
+    await act(async () => contextMenu(rendered.querySelector('[data-folder-id="empty"]')));
+    expect(rendered.querySelector('[role="menu"]')).not.toBeNull();
+    await act(async () =>
+      rendered
+        .querySelector('[data-folder-id="projects"]')
+        ?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })),
+    );
+    expect(rendered.querySelector('[role="menu"]')).toBeNull();
   });
 
   it("keeps the folder form open and shows an error when creation fails", async () => {
@@ -243,9 +355,10 @@ describe("DocumentSidebar", () => {
     const rendered = renderSidebar({ onCreateFolder });
 
     await act(async () => {
-      rendered.querySelector<HTMLButtonElement>("button")?.click();
+      contextMenu(rendered.querySelector('[aria-label="Documents"]'));
     });
-    const input = rendered.querySelector<HTMLInputElement>('[aria-label="Folder name"]');
+    await act(async () => menuItem(rendered, "New folder")?.click());
+    const input = rendered.querySelector<HTMLInputElement>('[aria-label^="Folder name"]');
     await act(async () => {
       if (!input) return;
       setInputValue(input, "Ideas");
@@ -259,7 +372,7 @@ describe("DocumentSidebar", () => {
     expect(rendered.querySelector('[role="alert"]')?.textContent).toContain(
       "Folder name is unavailable",
     );
-    expect(rendered.querySelector('[aria-label="Folder name"]')).not.toBeNull();
+    expect(rendered.querySelector('[aria-label^="Folder name"]')).not.toBeNull();
   });
 
   function renderSidebar(
@@ -269,10 +382,14 @@ describe("DocumentSidebar", () => {
       selectedId: string | null;
       loading: boolean;
       onSelect: (id: string) => void;
-      onCreateFolder: (name: string) => Promise<unknown>;
+      onCreateFolder: (name: string, parentId: string | null) => Promise<unknown>;
       onRenameFolder: (id: string, name: string) => Promise<unknown>;
       onDeleteFolder: (id: string) => Promise<unknown>;
       onMoveDocument: (id: string, folderId: string | null) => Promise<unknown>;
+      onCreateNote: (folderId: string | null) => Promise<unknown>;
+      onDeleteDocument: (id: string) => Promise<unknown>;
+      onRenameDocument: (id: string, title: string) => Promise<unknown>;
+      onMoveFolder: (id: string, parentId: string | null) => Promise<unknown>;
     }> = {},
   ) {
     container = document.createElement("div");
@@ -287,9 +404,13 @@ describe("DocumentSidebar", () => {
           loading={overrides.loading ?? false}
           onSelect={overrides.onSelect ?? vi.fn()}
           onCreateFolder={overrides.onCreateFolder ?? vi.fn().mockResolvedValue(undefined)}
+          onCreateNote={overrides.onCreateNote ?? vi.fn().mockResolvedValue(undefined)}
           onRenameFolder={overrides.onRenameFolder ?? vi.fn().mockResolvedValue(undefined)}
+          onRenameDocument={overrides.onRenameDocument ?? vi.fn().mockResolvedValue(undefined)}
+          onDeleteDocument={overrides.onDeleteDocument ?? vi.fn().mockResolvedValue(undefined)}
           onDeleteFolder={overrides.onDeleteFolder ?? vi.fn().mockResolvedValue(undefined)}
           onMoveDocument={overrides.onMoveDocument ?? vi.fn().mockResolvedValue(undefined)}
+          onMoveFolder={overrides.onMoveFolder ?? vi.fn().mockResolvedValue(undefined)}
         />,
       );
     });
@@ -299,5 +420,21 @@ describe("DocumentSidebar", () => {
   function setInputValue(input: HTMLInputElement, value: string) {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     setter?.call(input, value);
+  }
+
+  function contextMenu(element: Element | null) {
+    const target = element?.querySelector("button") ?? element;
+    target?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  }
+
+  function doubleClick(element: Element | null) {
+    const target = element?.querySelector("button") ?? element;
+    target?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  }
+
+  function menuItem(parent: ParentNode, name: string) {
+    return [...parent.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+      (item) => item.textContent?.trim() === name,
+    );
   }
 });

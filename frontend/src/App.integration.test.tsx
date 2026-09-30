@@ -98,7 +98,9 @@ describe("App navigation integration", () => {
       ).toBe("block-1"),
     );
 
-    const secondNote = container.querySelector<HTMLButtonElement>('[data-document-id="second"]');
+    const secondNote = container.querySelector<HTMLButtonElement>(
+      '[data-document-row-id="second"] button',
+    );
     expect(secondNote).not.toBeNull();
     await act(async () => secondNote?.click());
     await waitFor(() => expect(window.location.search).toContain("note=second"));

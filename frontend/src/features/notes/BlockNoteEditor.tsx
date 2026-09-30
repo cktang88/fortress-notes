@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Flex } from "@mantine/core";
 import { mergeRefs, useFocusTrap, useFocusWithin } from "@mantine/hooks";
 import { BlockNoteSchema, defaultBlockSpecs } from "@blocknote/core";
+import { SideMenuExtension } from "@blocknote/core/extensions";
 import type {
   Block,
   BlocksChanged,
@@ -10,21 +11,24 @@ import type {
   BlockNoteEditor as BlockNoteEditorInstance,
 } from "@blocknote/core";
 import { createExtension } from "@blocknote/core";
-import {
-  SuggestionMenu,
-  insertOrUpdateBlockForSlashMenu,
-} from "@blocknote/core/extensions";
+import { SuggestionMenu, insertOrUpdateBlockForSlashMenu } from "@blocknote/core/extensions";
 import {
   ComponentsContext,
   FormattingToolbarController,
   getDefaultReactSlashMenuItems,
   SuggestionMenuController,
+  SideMenu,
+  SideMenuController,
+  useBlockNoteEditor,
   useComponentsContext,
   useCreateBlockNote,
+  useEditorState,
+  useExtension,
+  useExtensionState,
 } from "@blocknote/react";
-import type { ComponentProps, DefaultReactSuggestionItem } from "@blocknote/react";
+import type { ComponentProps, DefaultReactSuggestionItem, SideMenuProps } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
-import { TextSelection } from "@tiptap/pm/state";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import { calloutBlock } from "./CalloutBlock";
 import { mathPlaceholderBlock } from "./MathPlaceholderBlock";
 import "@blocknote/core/fonts/inter.css";
@@ -32,7 +36,6 @@ import "@blocknote/mantine/style.css";
 import { BlockPropertiesEditor } from "./BlockPropertiesEditor";
 import { BlockReviewPanel } from "./BlockReviewPanel";
 import { embedLoadedSameOriginImages } from "./clipboardImages";
-import { safeSuggestionReplacement } from "./safeSuggestionReplacement";
 import { blockApi, notesApi } from "./api";
 import {
   asBlockTransaction,
@@ -52,6 +55,7 @@ import type {
   BlockLinkTarget,
   BlockNode,
   BlockOperation,
+  LinkCheck,
   NoteSummary,
 } from "./types";
 
@@ -59,6 +63,8 @@ interface Props {
   document: BlockDocument;
   focusBlockId?: string | null;
   linkTargets: readonly NoteSummary[];
+  linkChecks: readonly LinkCheck[];
+  onFocusedBlockChange: (blockId: string | null) => void;
 }
 
 type Location = {
@@ -104,14 +110,23 @@ const accessibleFormattingToolbarRoot = forwardRef<
 
 function AccessibleFormattingToolbarController() {
   const components = useComponentsContext();
-  const accessibleComponents = useMemo(
-    () => components && {
-      ...components,
-      FormattingToolbar: {
-        ...components.FormattingToolbar,
-        Root: accessibleFormattingToolbarRoot,
-      },
+  const editor = useBlockNoteEditor();
+  const selectionIncludesImage = useEditorState({
+    editor,
+    selector: ({ editor: currentEditor }) => {
+      const selection = currentEditor.prosemirrorState.selection;
+      return selection instanceof NodeSelection && selection.node.type.name === "image";
     },
+  });
+  const accessibleComponents = useMemo(
+    () =>
+      components && {
+        ...components,
+        FormattingToolbar: {
+          ...components.FormattingToolbar,
+          Root: accessibleFormattingToolbarRoot,
+        },
+      },
     [components],
   );
 
@@ -119,8 +134,55 @@ function AccessibleFormattingToolbarController() {
 
   return (
     <ComponentsContext.Provider value={accessibleComponents}>
-      <FormattingToolbarController />
+      <FormattingToolbarController
+        floatingUIOptions={
+          selectionIncludesImage ? { useFloatingOptions: { placement: "bottom-start" } } : undefined
+        }
+      />
     </ComponentsContext.Provider>
+  );
+}
+
+function DelayedSideMenu(props: SideMenuProps) {
+  const extension = useExtension(SideMenuExtension);
+  const state = useExtensionState(SideMenuExtension, {
+    selector: (current) =>
+      current
+        ? {
+            blockId: current.block?.id ?? null,
+            show: current.show,
+            frozen: extension.menuFrozen,
+          }
+        : null,
+  });
+  const [readyBlockId, setReadyBlockId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!state?.show || !state.blockId) {
+      setReadyBlockId(null);
+      return;
+    }
+    if (state.frozen) {
+      setReadyBlockId(state.blockId);
+      return;
+    }
+    setReadyBlockId(null);
+    const timer = window.setTimeout(() => setReadyBlockId(state.blockId), 1000);
+    return () => window.clearTimeout(timer);
+  }, [state?.blockId, state?.frozen, state?.show]);
+
+  const visible = Boolean(state?.show && state.blockId && state.blockId === readyBlockId);
+  return (
+    <div
+      aria-hidden={!visible}
+      inert={!visible}
+      style={{
+        visibility: visible ? "visible" : "hidden",
+        pointerEvents: visible ? "auto" : "none",
+      }}
+    >
+      <SideMenu {...props} />
+    </div>
   );
 }
 
@@ -152,7 +214,13 @@ type AppPartialBlock = PartialBlock<
   typeof editorSchema.styleSchema
 >;
 
-export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkTargets }: Props) {
+export function BlockNoteEditor({
+  document: initialDocument,
+  focusBlockId,
+  linkTargets,
+  linkChecks,
+  onFocusedBlockChange,
+}: Props) {
   const queryClient = useQueryClient();
   const initialContent = useMemo(
     () => initialDocument.children.map(toPartialBlock),
@@ -172,8 +240,9 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
           return await notesApi.uploadFile(file);
         } catch (error) {
           setEditorActionError(
-            error instanceof Error ? `Could not upload ${file.name}: ${error.message}` :
-              `Could not upload ${file.name}`,
+            error instanceof Error
+              ? `Could not upload ${file.name}: ${error.message}`
+              : `Could not upload ${file.name}`,
           );
           if (blockId) {
             window.setTimeout(() => {
@@ -200,10 +269,16 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [hasBlockSelection, setHasBlockSelection] = useState(false);
+  const [reviewBlockIds, setReviewBlockIds] = useState<string[]>([]);
   const [preview, setPreview] = useState<{ blockId: string; left: number; top: number } | null>(
     null,
   );
+  const originalLinkTitles = useRef(new WeakMap<HTMLAnchorElement, string | null>());
   const previewQuery = useBlockReference(preview?.blockId ?? null);
+  useEffect(
+    () => applyLinkCheckMarkers(editor.domElement ?? null, linkChecks, originalLinkTitles.current),
+    [editor, linkChecks],
+  );
 
   const enqueueOperations = (operations: BlockOperation[]) => {
     try {
@@ -256,6 +331,7 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
       void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
       void queryClient.invalidateQueries({ queryKey: ["notes"] });
       void queryClient.invalidateQueries({ queryKey: ["backlinks", initialDocument.id] });
+      void queryClient.invalidateQueries({ queryKey: ["related", initialDocument.id] });
       void queryClient.invalidateQueries({ queryKey: ["block-search"] });
       setSaveError(null);
     }
@@ -277,6 +353,7 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
         void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
         void queryClient.invalidateQueries({ queryKey: ["notes"] });
         void queryClient.invalidateQueries({ queryKey: ["backlinks", initialDocument.id] });
+        void queryClient.invalidateQueries({ queryKey: ["related", initialDocument.id] });
         void queryClient.invalidateQueries({ queryKey: ["block-search"] });
         setSaveError(null);
       } catch (error) {
@@ -303,10 +380,7 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
     });
   };
 
-  const onChange = (
-    changedEditor: AppEditor,
-    context: { getChanges: () => AppChanges },
-  ) => {
+  const onChange = (changedEditor: AppEditor, context: { getChanges: () => AppChanges }) => {
     if (hydrating.current) return;
     const operations = changesToOperations(changedEditor, context.getChanges());
     if (operations.length === 0) return;
@@ -433,7 +507,10 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
     return [...defaults, ...references];
   };
 
-  const selectionActions = hasBlockSelection ? blockSelectionActions(editor, initialDocument.id) : null;
+  const selectionActions = hasBlockSelection
+    ? blockSelectionActions(editor, initialDocument.id)
+    : null;
+  const reviewBlockId = reviewBlockIds[0];
   const selectedBlock =
     selectionActions?.count === 1
       ? flattenNodes(initialDocument.children).find((node) => node.id === selectionActions.blockId)
@@ -503,17 +580,18 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
         }
       }}
       onMouseLeave={() => setPreview(null)}
+      onFocusCapture={() => onFocusedBlockChange(editor.getTextCursorPosition().block.id)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+          onFocusedBlockChange(null);
+      }}
     >
       <div className="flex items-center gap-2 px-8 pt-4 text-xs text-zinc-400">
         <span className="font-medium uppercase tracking-wide text-zinc-500">
           {editor.document.length} blocks
         </span>
         {(saving || saveError) && (
-          <span
-            role="status"
-            aria-live="polite"
-            className={saveError ? "text-red-600" : undefined}
-          >
+          <span role="status" aria-live="polite" className={saveError ? "text-red-600" : undefined}>
             {saveError ?? "Saving…"}
           </span>
         )}
@@ -538,8 +616,53 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
           </button>
         </span>
       </div>
+      {editorActionError && (
+        <div role="alert" className="px-8 pt-2 text-xs text-red-600">
+          {editorActionError}
+        </div>
+      )}
+      <BlockNoteView
+        editor={editor}
+        slashMenu={false}
+        formattingToolbar={false}
+        sideMenu={false}
+        editable={!saveError}
+        onChange={onChange}
+        onSelectionChange={() => {
+          const selection = editor.prosemirrorState.selection;
+          const blockSelection = isBlockLevelSelection(selection);
+          setHasBlockSelection(blockSelection);
+          setReviewBlockIds(blockSelection || !selection.empty ? selectedBlockIds(editor) : []);
+          if (editor.isFocused()) {
+            onFocusedBlockChange(editor.getTextCursorPosition().block.id);
+          }
+        }}
+        className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 pt-2"
+      >
+        <AccessibleFormattingToolbarController />
+        <SideMenuController sideMenu={DelayedSideMenu} />
+        <SuggestionMenuController
+          triggerCharacter="/"
+          getItems={getSlashItems}
+          minQueryLength={0}
+        />
+        <SuggestionMenuController
+          triggerCharacter="[["
+          getItems={getDocumentLinkItems}
+          minQueryLength={0}
+        />
+        <SuggestionMenuController
+          triggerCharacter="(("
+          getItems={getBlockLinkItems}
+          minQueryLength={1}
+        />
+      </BlockNoteView>
       {selectionActions && (
-        <div role="group" aria-label="Selected block actions" className="flex items-center gap-2 px-8 pt-2 text-xs">
+        <div
+          role="group"
+          aria-label="Selected block actions"
+          className="flex items-center gap-2 px-8 pt-2 text-xs"
+        >
           {selectionActions.count === 1 && (
             <>
               <button
@@ -584,7 +707,9 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
                     if (type) selectionActions.convert(type);
                   }}
                 >
-                  <option value="" disabled>To…</option>
+                  <option value="" disabled>
+                    To…
+                  </option>
                   <option value="paragraph">Paragraph</option>
                   <option value="heading">Heading</option>
                   <option value="quote">Quote</option>
@@ -593,7 +718,7 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
                   <option value="checkListItem">Task list</option>
                   <option value="codeBlock">Code</option>
                 </select>
-          </label>
+              </label>
             </>
           )}
           <button
@@ -644,59 +769,13 @@ export function BlockNoteEditor({ document: initialDocument, focusBlockId, linkT
           }
         />
       )}
-      {selectionActions?.count && selectionActions.blockIds[0] && (
+      {reviewBlockId && (
         <BlockReviewPanel
-          key={`review-${selectionActions.blockIds.join("-")}`}
+          key={`review-${reviewBlockIds.join("-")}`}
           documentId={initialDocument.id}
-          blockId={selectionActions.blockIds[0]}
-          selectedBlockIds={selectionActions.blockIds}
-          canApplySuggestion={({ blockId, before }) => {
-            const block = editor.getBlock(blockId);
-            return !!block && safeSuggestionReplacement(block.content, before, "") !== null;
-          }}
-          onApplySuggestion={({ blockId, before, after }) => {
-            const block = editor.getBlock(blockId);
-            if (!block) return false;
-            const content = safeSuggestionReplacement(block.content, before, after);
-            if (content === null) return false;
-            editor.updateBlock(blockId, { content } as PartialBlock);
-            return true;
-          }}
+          selectedBlockIds={reviewBlockIds}
         />
       )}
-      {editorActionError && (
-        <div role="alert" className="px-8 pt-2 text-xs text-red-600">
-          {editorActionError}
-        </div>
-      )}
-      <BlockNoteView
-        editor={editor}
-        slashMenu={false}
-        formattingToolbar={false}
-        editable={!saveError}
-        onChange={onChange}
-        onSelectionChange={() => {
-          setHasBlockSelection(isBlockLevelSelection(editor.prosemirrorState.selection));
-        }}
-        className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 pt-2"
-      >
-        <AccessibleFormattingToolbarController />
-        <SuggestionMenuController
-          triggerCharacter="/"
-          getItems={getSlashItems}
-          minQueryLength={0}
-        />
-        <SuggestionMenuController
-          triggerCharacter="[["
-          getItems={getDocumentLinkItems}
-          minQueryLength={0}
-        />
-        <SuggestionMenuController
-          triggerCharacter="(("
-          getItems={getBlockLinkItems}
-          minQueryLength={1}
-        />
-      </BlockNoteView>
       {preview && (
         <div
           role="status"
@@ -868,6 +947,45 @@ function syncNativeTextSelection(editor: AppEditor): void {
   editor.transact((tr) => tr.setSelection(textSelection));
 }
 
+function applyLinkCheckMarkers(
+  root: HTMLElement | null,
+  links: readonly LinkCheck[],
+  originalTitles: WeakMap<HTMLAnchorElement, string | null>,
+) {
+  if (!root) return;
+  const statusByUrl = new Map(
+    links.filter((link) => link.status !== "ok").map((link) => [link.url, link]),
+  );
+  const update = () => {
+    for (const anchor of root.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+      const checked =
+        statusByUrl.get(anchor.href) ?? statusByUrl.get(anchor.getAttribute("href") ?? "");
+      const blockId = anchor.closest<HTMLElement>("[data-id]")?.dataset.id;
+      const inCheckedBlock = !!checked && checked.block_ids.includes(blockId ?? "");
+      if (checked && inCheckedBlock) {
+        if (!originalTitles.has(anchor)) originalTitles.set(anchor, anchor.getAttribute("title"));
+        anchor.dataset.linkStatus = checked.status;
+        anchor.title = `Link check: ${checked.status}`;
+      } else if (anchor.dataset.linkStatus) {
+        delete anchor.dataset.linkStatus;
+        const oldTitle = originalTitles.get(anchor);
+        if (oldTitle) anchor.setAttribute("title", oldTitle);
+        else anchor.removeAttribute("title");
+      }
+    }
+  };
+  update();
+  const observer = new MutationObserver(update);
+  observer.observe(root, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["href"],
+  });
+  return () => observer.disconnect();
+}
+
 export function toPartialBlock(node: BlockNode): AppPartialBlock {
   const storedContent = node.content.blocknote;
   const content = storedContent === undefined ? markdownText(node) : storedContent;
@@ -933,9 +1051,7 @@ export function toPartialBlock(node: BlockNode): AppPartialBlock {
     return { id: node.id, type: "callout", content, children } as unknown as PartialBlock;
   }
   if (["image", "file", "audio", "video"].includes(node.type)) {
-    const props = Object.fromEntries(
-      Object.entries(node.attrs).filter(([key]) => key !== "id"),
-    );
+    const props = Object.fromEntries(Object.entries(node.attrs).filter(([key]) => key !== "id"));
     return { id: node.id, type: node.type, props, children } as PartialBlock;
   }
   return { id: node.id, type: "paragraph", content, children } as PartialBlock;
@@ -949,10 +1065,7 @@ function flattenNodes(nodes: readonly BlockNode[]): BlockNode[] {
   return nodes.flatMap((node) => [node, ...flattenNodes(node.children)]);
 }
 
-function changesToOperations(
-  editor: AppEditor,
-  changes: AppChanges,
-): BlockOperation[] {
+function changesToOperations(editor: AppEditor, changes: AppChanges): BlockOperation[] {
   const locations = new Map<string, Location>();
   indexLocations(editor.document, locations);
   const operations: BlockOperation[] = [];

@@ -55,7 +55,7 @@ them.
 - `embeddings.py` — ColBERT late-interaction via PyLate; encode + MaxSim scoring,
   with a keyword fallback when disabled/unavailable.
 - `search.py` — full-text search + orchestration of embedding search & related notes.
-- `llm.py` — OpenRouter chat completion (`deepseek/deepseek-v4-flash`) for note review.
+- `llm.py` — OpenRouter chat completion (`z-ai/glm-5.3-flash`) for note review.
 - `main.py` — FastAPI app, routes, CORS.
 
 ### API
@@ -71,8 +71,7 @@ them.
 | `GET` | `/api/search` | `?q=&mode=text\|embedding` | `SearchResult[]` (summary + score) |
 | `GET` | `/api/notes/{id}/related` | `?k=5` | `SearchResult[]` |
 | `POST` | `/api/notes/{id}/review` | `?kind=factcheck\|clarify\|object` | `ReviewResponse` |
-| `POST` | `/api/notes/{id}/consistency` | `?k=5` | `ConsistencyReport` |
-| `POST` | `/api/notes/{id}/heal` | — | `HealReport` |
+| `POST` | `/api/block-documents/{id}/link-checks` | — | `{links: [{url, status, checked_at, block_ids}]}` |
 | `POST` | `/api/images` | multipart `file` | `{url, text}` (saves image, runs caption+OCR) |
 | `GET` | `/media/{file}` | — | image bytes (StaticFiles) |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
@@ -88,8 +87,8 @@ them.
   background task (`_reindex_loop`, every `REINDEX_INTERVAL_S`, default 5s) pre-encodes
   any changed notes via `embeddings.warm_index()` so searches stay instant; it also
   evicts embeddings for deleted notes. Steady-state (nothing changed) it's a no-op.
-- **Related notes**: treat the current note's body as the query, exclude itself,
-  return top-k.
+- **Related notes**: start with the current note's body as the query, then use the
+  focused block. Exclude the current note and return top-k.
 - **Fallback**: if embeddings disabled or model missing, score by keyword overlap so
   the UI still works.
 
@@ -125,47 +124,23 @@ them.
 ### Features → components (`src/features/notes/`)
 - `NoteList` — list + status filter; clicking selects a note.
 - `SearchBar` — query input + mode toggle (text/embedding); drives the list.
-- `RelatedNotes` — bottom-left; refetches on selected-note change.
+- `RelatedNotes` — bottom-left; refetches on selected-note or focused-block change.
 - `BlockNoteEditor` — nested block editor; debounced transactional autosave.
-- `NoteHeader` — title, status badge, Promote button, AI review dropdown.
-- `ReviewPanel` — shows LLM `factcheck`/`clarify`/`object` output.
+- `NoteHeader` — title, status badge, Promote button.
+- `BlockReviewPanel` — fact-checks highlighted text or selected blocks.
 - `api.ts` — typed fetch wrappers; `hooks.ts` — TanStack Query hooks.
 
 State: TanStack Query for server state; a little local UI state (selected id, search
 mode, query). No `useEffect` for data; rely on React Compiler (no manual memoization).
 
-## 5. Agentic passes (implemented)
+## 5. Automatic link checks
 
-Both are `analysis.py`, exposed as POST endpoints and driven from the note header.
-Findings are **not** shown in side panels — they render as **inline annotations**
-directly on the offending text via a ProseMirror decoration plugin
-(`annotations.ts` + `AnnotationExtension`):
-
-- Each finding's `claim` text is located in the document and gets a **red wavy
-  squiggle**. Clicking it opens a small floating popup (`AnnotationPopup`) with the
-  explanation and **Accept / Reject**. For stale facts, Accept replaces the text with
-  the suggestion; Reject (or Dismiss for consistency) just clears the annotation.
-- **Links** are auto-detected (Tiptap `Link`, `autolink`), highlighted **blue**, and
-  open in a new browser tab on click. Links the heal pass found broken are
-  highlighted **red** (`link-broken` decoration keyed on the dead-link URL set).
-
-### Cross-note inconsistency detection (`POST /consistency`)
-"Code review for your notes." Retrieves the top-k related notes via ColBERT
-late-interaction, sends the target note + related notes to the LLM, which returns
-`ConsistencyReport { summary, issues[], checked_against[] }`. Each `ConsistencyIssue`
-names the conflicting related note (clickable in the UI), the target's claim, the
-conflicting claim, and a severity. Returns no issues when notes are merely different.
-
-### Self-healing notes (`POST /heal`)
-Two parallel passes returning `HealReport { summary, dead_links[], stale_facts[] }`:
-- **Dead-link detection** — extracts URLs from the body and HTTP-checks them
-  concurrently (`httpx`); reports status code or error reason. Runs fully locally,
-  no API key needed.
-- **Stale-fact detection** — uses the LLM with **OpenRouter's web search plugin**
-  (`plugins:[{id:"web"}]`) to flag time-sensitive claims that look outdated and
-  suggest updates (`StaleFact { claim, finding, suggestion }`).
-
-Heal reports suggestions only; it does not auto-edit the note (safer; user applies).
+When a document opens, the client requests `POST /api/block-documents/{id}/link-checks`.
+The server checks links in blocks last edited at least 30 days ago. Successful checks
+are cached in SQLite for 30 days. Failed status codes and network error names are
+returned and retried on a later open; they never edit note content. Results include
+the current block IDs for each link, so removed or changed links do not keep stale
+associations.
 
 ## 6. Images & vision (`images.py`, `vision.py`)
 
@@ -178,17 +153,15 @@ Heal reports suggestions only; it does not auto-edit the note (safer; user appli
 - **Resize**: `ImageResize` (extends Tiptap `Image`) adds a drag handle that writes a
   `width` attribute; turndown `keep(['img'])` preserves `<img width=…>` as raw HTML so
   the size round-trips through Markdown.
-- **Searchable images**: **RapidOCR** (~1s/image) runs once per image and writes a
-  `assets/<id>.txt` sidecar (compute-once cache — never re-run). `note_search_text`
+- **Searchable images**: **RapidOCR** and local SmolVLM captions run once per image and
+  write per-image and content-hash sidecars (cache reused across duplicate bytes). `note_search_text`
   folds title + body + sidecar text so full-text and embedding search cover image text;
-  the text is also mirrored into the note's `images:` frontmatter on save. An optional
-  tiny VLM caption (**SmolVLM-256M**) is gated behind `VLM_CAPTION_ENABLED` (off by
-  default — ~3 min/image on CPU; GPU only). Models lazy-load + pre-warm in the
-  background at startup, with graceful fallback when disabled.
+  the text is also mirrored into the note's `images:` frontmatter on save. Captions are
+  enabled by default and use the small **SmolVLM-256M** model; OCR and captioning run
+  locally. Models lazy-load + pre-warm in the background at startup.
 
 ## 7. Roadmap / potential features
 
-- **Auto-apply heal suggestions** (with a diff/confirm step).
 - **Backlinks & wiki-links** (`[[note]]`), graph view.
 - **PLAID/Voyager index** for embedding search at larger scale.
 - **Tag management**, saved searches, keyboard navigation.

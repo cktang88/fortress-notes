@@ -34,6 +34,7 @@ class NoteCreate(BaseModel):
     body: str = ""
     status: NoteStatus = "rough"
     tags: list[str] = []
+    folder_id: str | None = None
 
 
 class NoteUpdate(BaseModel):
@@ -210,40 +211,3 @@ class BlockReviewContextResponse(BaseModel):
     context: BlockReviewContextKind
     summary: str
     items: list[BlockReviewItem] = []
-
-
-# ---- cross-note inconsistency detection ---------------------------------------
-
-
-class ConsistencyIssue(BaseModel):
-    related_note_id: str = ""
-    related_note_title: str = ""
-    claim: str = Field(description="What this note says")
-    conflict: str = Field(description="What the related note says that contradicts it")
-    severity: Literal["low", "medium", "high"] = "medium"
-
-
-class ConsistencyReport(BaseModel):
-    summary: str
-    issues: list[ConsistencyIssue] = []
-    checked_against: list[str] = Field(default=[], description="Titles of related notes checked")
-
-
-# ---- self-healing notes -------------------------------------------------------
-
-
-class DeadLink(BaseModel):
-    url: str
-    status: str = Field(description="HTTP status code or error reason")
-
-
-class StaleFact(BaseModel):
-    claim: str = Field(description="The possibly-outdated claim in the note")
-    finding: str = Field(description="What current web search suggests")
-    suggestion: str = Field(description="Suggested update")
-
-
-class HealReport(BaseModel):
-    summary: str
-    dead_links: list[DeadLink] = []
-    stale_facts: list[StaleFact] = []

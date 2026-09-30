@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
 from .config import get_settings
 
@@ -23,6 +24,7 @@ class _Cache:
 
 
 _cache = _Cache()
+_vlm_load_lock = Lock()
 
 
 def _get_vlm():
@@ -31,15 +33,29 @@ def _get_vlm():
         return None, None
     if _cache.vlm is not None:
         return _cache.vlm, _cache.processor
-    try:
-        from transformers import AutoModelForImageTextToText, AutoProcessor
+    with _vlm_load_lock:
+        if _cache.vlm is not None:
+            return _cache.vlm, _cache.processor
+        if _cache.vlm_failed:
+            return None, None
+        try:
+            import torch
+            from transformers import AutoModelForImageTextToText, AutoProcessor
 
-        _cache.processor = AutoProcessor.from_pretrained(settings.vlm_model)
-        _cache.vlm = AutoModelForImageTextToText.from_pretrained(settings.vlm_model)
-        return _cache.vlm, _cache.processor
-    except Exception:
-        _cache.vlm_failed = True
-        return None, None
+            processor = AutoProcessor.from_pretrained(settings.vlm_model)
+            model = AutoModelForImageTextToText.from_pretrained(settings.vlm_model)
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
+            model.to(device)
+            _cache.processor, _cache.vlm = processor, model
+            return model, processor
+        except Exception:
+            _cache.vlm_failed = True
+            return None, None
 
 
 def _get_ocr():
@@ -75,11 +91,10 @@ def _caption(path: Path) -> str:
             }
         ]
         prompt = processor.apply_chat_template(messages, add_generation_prompt=True)
-        inputs = processor(text=prompt, images=[image], return_tensors="pt")
+        inputs = processor(text=prompt, images=[image], return_tensors="pt").to(model.device)
         out = model.generate(**inputs, max_new_tokens=64)
-        decoded = processor.batch_decode(out, skip_special_tokens=True)[0]
-        # The decode includes the prompt; keep only the assistant's answer.
-        return decoded.split("Assistant:")[-1].strip()
+        generated = out if model.config.is_encoder_decoder else out[:, inputs["input_ids"].shape[1]:]
+        return processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
     except Exception:
         return ""
 

@@ -112,34 +112,21 @@ export function NoteEditor({
     );
   }, [editor, annotations, brokenLinks]);
 
-  const resolve = (accept: boolean) => {
-    if (!popup || !editor) return;
-    const { annotation } = popup;
-    if (accept && annotation.suggestion) {
-      const range = findAnnotationRange(editor.state.doc, annotation.claim);
-      if (range) {
-        editor
-          .chain()
-          .focus()
-          .insertContentAt({ from: range[0], to: range[1] }, annotation.suggestion)
-          .run();
-        onSave(htmlToMarkdown(editor.getHTML()));
-      }
-    }
-    onResolve(annotation.id);
+  const resolve = () => {
+    if (!popup) return;
+    onResolve(popup.annotation.id);
     setPopup(null);
   };
 
   return (
-    <div className="px-8 py-6">
+    <div className="legacy-note-editor px-8 py-6">
       <EditorContent editor={editor} />
       {popup && (
         <AnnotationPopup
           annotation={popup.annotation}
           x={popup.x}
           y={popup.y}
-          onAccept={() => resolve(true)}
-          onReject={() => resolve(false)}
+          onDismiss={resolve}
         />
       )}
     </div>

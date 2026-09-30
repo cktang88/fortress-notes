@@ -9,13 +9,13 @@ class Settings(BaseSettings):
 
     notes_dir: Path = Path("../notes")
     openrouter_api_key: str = ""
-    openrouter_model: str = "deepseek/deepseek-v4-flash"
+    openrouter_model: str = "z-ai/glm-5.3-flash"
     embeddings_enabled: bool = True
     colbert_model: str = "lightonai/Agent-ModernColBERT"
     reindex_interval_s: float = 5.0
     vision_enabled: bool = True  # OCR (fast); makes image text searchable
-    # VLM captioning is ~3 min/image on CPU and low value — off by default, enable on GPU.
-    vlm_caption_enabled: bool = False
+    # Captions and OCR run locally in the background and reuse cached image text.
+    vlm_caption_enabled: bool = True
     vlm_model: str = "HuggingFaceTB/SmolVLM-256M-Instruct"
     frontend_origin: str = "http://localhost:5173"
     block_db_enabled: bool = True

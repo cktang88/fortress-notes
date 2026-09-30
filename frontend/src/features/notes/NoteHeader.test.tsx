@@ -1,14 +1,37 @@
-import { describe, expect, it } from "vite-plus/test";
-import { editTags } from "./NoteHeader";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { NoteHeader } from "./NoteHeader";
 
-describe("editTags", () => {
-  it("adds trimmed tags without duplicates or empty values", () => {
-    expect(editTags(["work"], "  ideas  ", "add")).toEqual(["work", "ideas"]);
-    expect(editTags(["work"], "work", "add")).toEqual(["work"]);
-    expect(editTags(["work"], "   ", "add")).toEqual(["work"]);
-  });
+describe("NoteHeader", () => {
+  it("keeps note metadata editing out of the header", () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <NoteHeader
+          note={{
+            id: "note-1",
+            title: "Example",
+            body: "Example body",
+            status: "rough",
+            tags: ["work"],
+            snippet: "",
+            created_at: "2026-09-01T00:00:00Z",
+            updated_at: "2026-09-01T00:00:00Z",
+          }}
+          onTitle={vi.fn()}
+          onDelete={vi.fn()}
+          onSetStatus={vi.fn()}
+          onClarify={vi.fn()}
+          checking={false}
+        />,
+      );
+    });
 
-  it("removes only the requested tag", () => {
-    expect(editTags(["work", "ideas"], " work ", "remove")).toEqual(["ideas"]);
+    expect(container.textContent).not.toMatch(/tags|fact-check|lint/i);
+    expect(container.textContent).toContain("Clarify");
+
+    act(() => root.unmount());
   });
 });

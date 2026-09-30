@@ -20,7 +20,6 @@ describe("SearchBar", () => {
     const status = rendered.container.querySelector<HTMLSelectElement>(
       '[aria-label="Document status"]',
     );
-    const tag = rendered.container.querySelector<HTMLInputElement>('[aria-label="Tag"]');
 
     act(() => {
       setValue(type!, "heading");
@@ -30,20 +29,47 @@ describe("SearchBar", () => {
       setValue(status!, "polished");
       status?.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    act(() => {
-      setValue(tag!, "work");
-      tag?.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-
     expect(onFilters).toHaveBeenNthCalledWith(1, { blockType: "heading" });
     expect(onFilters).toHaveBeenNthCalledWith(2, { status: "polished" });
-    expect(onFilters).toHaveBeenNthCalledWith(3, { tag: "work" });
+    expect(rendered.container.querySelector('[aria-label="Tag"]')).toBeNull();
   });
 
   it("keeps block filters out of embedding search", () => {
     rendered = renderSearchBar({ mode: "embedding" });
 
     expect(rendered.container.querySelector('[aria-label="Block search filters"]')).toBeNull();
+  });
+
+  it("starts a new note without passing the click event to its callback", () => {
+    const onNew = vi.fn();
+    rendered = renderSearchBar({ onNew });
+    act(() => {
+      [...rendered!.container.querySelectorAll("button")]
+        .find((button) => button.textContent === "+ New")
+        ?.click();
+    });
+
+    expect(onNew.mock.calls).toEqual([[]]);
+  });
+
+  it("opens help with folder, selection, and automatic link tips", () => {
+    const dialogPrototype = HTMLDialogElement.prototype;
+    const originalShowModal = Object.getOwnPropertyDescriptor(dialogPrototype, "showModal");
+    const showModal = vi.fn(function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    Object.defineProperty(dialogPrototype, "showModal", { configurable: true, value: showModal });
+    rendered = renderSearchBar();
+    act(() => {
+      rendered?.container.querySelector<HTMLButtonElement>('[aria-label="Help and tips"]')?.click();
+    });
+
+    expect(showModal).toHaveBeenCalledOnce();
+    expect(rendered.container.querySelector("dialog")?.textContent).toMatch(/highlight text/i);
+    expect(rendered.container.textContent).toMatch(/checked automatically/i);
+    expect(rendered.container.textContent).toMatch(/right-click/i);
+    if (originalShowModal) Object.defineProperty(dialogPrototype, "showModal", originalShowModal);
+    else delete (dialogPrototype as { showModal?: unknown }).showModal;
   });
 });
 

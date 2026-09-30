@@ -1,4 +1,4 @@
-"""OpenRouter chat completions: note review, consistency check, self-healing."""
+"""OpenRouter chat completions for note review."""
 
 import json
 

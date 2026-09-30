@@ -23,7 +23,7 @@ from ulid import ULID
 
 from .models import BlockOperation, BlockReviewContextKind
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 DB_FILENAME = ".fortress.sqlite3"
 
 _TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
@@ -185,6 +185,12 @@ CREATE TABLE IF NOT EXISTS transaction_receipts (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS link_check_cache (
+    url TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    checked_at TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
     block_id UNINDEXED,
     document_id UNINDEXED,
@@ -260,6 +266,13 @@ _MIGRATIONS = {
         document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         request_hash TEXT NOT NULL,
         created_at TEXT NOT NULL
+    );
+    """,
+    10: """
+    CREATE TABLE IF NOT EXISTS link_check_cache (
+        url TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        checked_at TEXT NOT NULL
     );
     """,
 }
@@ -351,6 +364,33 @@ def store_asset_text(path: Path, content_hash: str, text: str) -> None:
         ).fetchall()
         for row in rows:
             _refresh_fts(connection, row["id"], row["document_id"], row["text"])
+
+
+def get_link_check_cache(path: Path, urls: list[str]) -> dict[str, dict[str, str]]:
+    if not urls:
+        return {}
+    initialize(path)
+    placeholders = ",".join("?" for _ in urls)
+    with connection_scope(path) as connection:
+        rows = connection.execute(
+            f"SELECT url, status, checked_at FROM link_check_cache WHERE url IN ({placeholders})",
+            urls,
+        ).fetchall()
+    return {
+        row["url"]: {"status": row["status"], "checked_at": row["checked_at"]}
+        for row in rows
+    }
+
+
+def store_link_check(path: Path, url: str, status: str, checked_at: str) -> None:
+    initialize(path)
+    with connection_scope(path) as connection:
+        connection.execute(
+            """INSERT INTO link_check_cache(url, status, checked_at) VALUES (?, ?, ?)
+               ON CONFLICT(url) DO UPDATE SET status = excluded.status,
+                                              checked_at = excluded.checked_at""",
+            (url, status, checked_at),
+        )
 
 
 def backfill_assets(db_path: Path, assets_path: Path) -> int:
@@ -530,11 +570,13 @@ def create_document(
     created_at: object,
     updated_at: object,
     ensure_empty_paragraph: bool = False,
+    folder_id: str | None = None,
 ) -> None:
     """Create the block representation for a newly created compatibility note."""
 
     initialize(path)
     with connection_scope(path) as connection:
+        _validate_folder_parent(connection, folder_id)
         if connection.execute(
             "SELECT 1 FROM documents WHERE id = ?", (document_id,)
         ).fetchone():
@@ -550,6 +592,12 @@ def create_document(
             _iso(updated_at),
             ensure_empty_paragraph,
         )
+        if folder_id is not None:
+            position = _document_insert_position(connection, folder_id, None)
+            connection.execute(
+                "UPDATE documents SET folder_id = ?, position = ? WHERE id = ?",
+                (folder_id, position, document_id),
+            )
 
 
 def list_documents(path: Path) -> list[dict[str, object]]:
@@ -568,13 +616,15 @@ def list_documents(path: Path) -> list[dict[str, object]]:
 
 
 def create_block_document(
-    path: Path, title: str, status: str, tags: list[str], body: str
+    path: Path, title: str, status: str, tags: list[str], body: str,
+    folder_id: str | None = None,
 ) -> dict:
     document_id = _new_ulid()
     now = _now()
     create_document(
         path, document_id, title, status, tags, body, now, now,
         ensure_empty_paragraph=True,
+        folder_id=folder_id,
     )
     tree = document_tree(path, document_id)
     assert tree is not None
