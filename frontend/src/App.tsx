@@ -30,30 +30,24 @@ import {
   useRestoreDocument,
   useSavedSearches,
   useSaveSearch,
-  useSearch,
   useTrashDocument,
   useUpdateDocument,
 } from "./features/notes/hooks";
-import type { BlockSearchFilters, SavedSearch, SearchMode } from "./features/notes/types";
+import type { BlockSearchFilters, SavedSearch } from "./features/notes/types";
 
 export function App() {
   const selection = useNoteSelection();
   const { selectedId } = selection;
   const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<SearchMode>("text");
   const [blockSearchFilters, setBlockSearchFilters] = useState<BlockSearchFilters>({});
   const [notice, setNotice] = useState<Notice | null>(null);
   const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
 
   const settledQuery = useDebouncedValue(query.trim());
   const searching = query.trim().length > 0;
-  const hasBlockSearchFilters = Object.values(blockSearchFilters).some(Boolean);
   const allNotes = useNotes();
   const navigation = useNavigation();
-  const blockSearch = useBlockSearch(settledQuery, blockSearchFilters, mode === "text");
-  const useNoteLevelSearch =
-    mode === "embedding" || (blockSearch.isError && !hasBlockSearchFilters);
-  const noteSearch = useSearch(settledQuery, mode, useNoteLevelSearch);
+  const blockSearch = useBlockSearch(settledQuery, blockSearchFilters);
   const document = useBlockDocument(selectedId);
   const linkChecks = useLinkChecks(selectedId);
 
@@ -111,7 +105,6 @@ export function App() {
   };
 
   const applySavedSearch = (saved: SavedSearch) => {
-    setMode(saved.mode);
     setBlockSearchFilters(saved.filters ?? {});
     setQuery(saved.query);
   };
@@ -122,8 +115,8 @@ export function App() {
       {
         name: savedQuery,
         query: savedQuery,
-        mode,
-        filters: mode === "text" ? blockSearchFilters : {},
+        mode: "text",
+        filters: blockSearchFilters,
       },
       {
         onSuccess: () => showNotice({ message: `Saved search “${savedQuery}”` }),
@@ -154,7 +147,6 @@ export function App() {
     return () => window.document.removeEventListener("keydown", listener);
   }, []);
 
-  const noteResults = noteSearch.data ?? [];
   const searchSettling = settledQuery !== query.trim();
 
   return (
@@ -163,8 +155,6 @@ export function App() {
         <SearchBar
           query={query}
           onQuery={setQuery}
-          mode={mode}
-          onMode={setMode}
           filters={blockSearchFilters}
           onFilters={setBlockSearchFilters}
           documents={allNotes.data ?? []}
@@ -176,22 +166,12 @@ export function App() {
           actions={<WorkspaceMenu onNotice={showNotice} onOpenNote={(id) => selectNote(id)} />}
         />
         {searching ? (
-          useNoteLevelSearch ? (
-            <NoteList
-              notes={noteResults.map((result) => result.note)}
-              selectedId={selectedId}
-              onSelect={selectNote}
-              scores={Object.fromEntries(noteResults.map((r) => [r.note.id, r.score]))}
-              loading={noteSearch.isLoading || (searchSettling && !noteSearch.data)}
-            />
-          ) : (
-            <BlockSearchResults
-              results={blockSearch.data ?? []}
-              loading={blockSearch.isLoading || (searchSettling && !blockSearch.data)}
-              error={blockSearch.isError}
-              onSelect={(documentId, blockId) => selectNote(documentId, blockId)}
-            />
-          )
+          <BlockSearchResults
+            results={blockSearch.data ?? []}
+            loading={blockSearch.isLoading || (searchSettling && !blockSearch.data)}
+            error={blockSearch.isError}
+            onSelect={(documentId, blockId) => selectNote(documentId, blockId)}
+          />
         ) : navigation.isError ? (
           <NoteList
             notes={allNotes.data ?? []}

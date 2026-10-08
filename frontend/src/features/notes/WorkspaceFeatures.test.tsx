@@ -47,8 +47,6 @@ const saved: SavedSearch = {
 
 describe("saved searches", () => {
   const baseProps = {
-    mode: "text" as const,
-    onMode: vi.fn(),
     filters: {},
     onFilters: vi.fn(),
     onNew: vi.fn(),

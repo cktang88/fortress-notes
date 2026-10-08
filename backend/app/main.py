@@ -524,6 +524,31 @@ def search_blocks(
     )
 
 
+@app.get("/api/unified-search")
+def unified_search(
+    q: str,
+    limit: int = Query(30, ge=1, le=100),
+    document_id: str | None = None,
+    block_type: str | None = None,
+    status: NoteStatus | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+):
+    """Blocks matching by exact words, meaning, or note title, in one ranked list."""
+
+    return search.unified_search(
+        q,
+        block_query.BlockSearchFilters(
+            document_id=document_id,
+            block_type=block_type,
+            status=status,
+            updated_after=updated_after,
+            updated_before=updated_before,
+        ),
+        limit=limit,
+    )
+
+
 @app.post("/api/block-search/rebuild")
 def rebuild_block_search_index():
     block_store.rebuild_fts(settings.block_db_path)

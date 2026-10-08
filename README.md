@@ -18,10 +18,10 @@ you're reading.
   originals; every note is also mirrored to a readable `.md` file.
 - **Two-pane UI** — left: search + document tree + related/backlink panes; right: a
   BlockNote rich-text editor for the selected document.
-- **Two search modes** (toggle in the search bar):
-  - **Full-text** — fast substring/keyword search across all notes.
-  - **Embedding search** — late-interaction (ColBERT / `lightonai/Agent-ModernColBERT`)
-    multi-vector retrieval via [PyLate](https://github.com/lightonai/pylate).
+- **One search box** — results combine exact words (SQLite FTS5), meaning (late-interaction
+  ColBERT / `lightonai/Agent-ModernColBERT` via [PyLate](https://github.com/lightonai/pylate))
+  and note titles using reciprocal rank fusion. Each result shows the matching passage with
+  your words highlighted and says why it matched; Enter jumps to that paragraph.
 - **Related notes** — the bottom-left pane auto-refreshes whenever you open a note,
   showing the most semantically related notes (late-interaction similarity).
 - **Rough vs. polished notes** — a `status` flag distinguishes braindump/brainstorm

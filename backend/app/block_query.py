@@ -179,3 +179,71 @@ def _normalize_timestamp(
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
+
+
+def allowed_block_ids(path: Path, filters: BlockSearchFilters | None) -> set[str] | None:
+    """IDs of active blocks passing ``filters``; ``None`` when nothing is filtered."""
+
+    if filters is None or filters == BlockSearchFilters():
+        return None
+    predicates = ["documents.deleted_at IS NULL"]
+    parameters: list[object] = []
+    if not _add_filters(predicates, parameters, filters):
+        return set()
+    initialize(path)
+    with connection_scope(path) as connection:
+        rows = connection.execute(
+            f"""SELECT blocks.id FROM blocks
+                  JOIN documents ON documents.id = blocks.document_id
+                 WHERE {' AND '.join(predicates)}""",
+            parameters,
+        ).fetchall()
+    return {row["id"] for row in rows}
+
+
+def block_details(path: Path, block_ids: list[str]) -> dict[str, dict[str, object]]:
+    """Display details for active blocks, keyed by block ID."""
+
+    if not block_ids:
+        return {}
+    initialize(path)
+    placeholders = ",".join("?" for _ in block_ids)
+    with connection_scope(path) as connection:
+        rows = connection.execute(
+            f"""SELECT blocks.id, blocks.document_id, blocks.type, blocks.text,
+                       blocks.updated_at, documents.title AS document_title
+                  FROM blocks JOIN documents ON documents.id = blocks.document_id
+                 WHERE blocks.id IN ({placeholders}) AND documents.deleted_at IS NULL""",
+            block_ids,
+        ).fetchall()
+    return {row["id"]: dict(row) for row in rows}
+
+
+def title_matches(path: Path, query: str, limit: int = 20) -> list[dict[str, object]]:
+    """Documents whose title contains query words (most words first), with their first block."""
+
+    tokens = sorted({token.lower() for token in _FTS_TOKEN.findall(query)})
+    if not tokens:
+        return []
+    hits = " + ".join("(instr(lower(documents.title), ?) > 0)" for _ in tokens)
+    initialize(path)
+    with connection_scope(path) as connection:
+        rows = connection.execute(
+            f"""SELECT * FROM (
+                    SELECT documents.id AS document_id, ({hits}) AS hits, documents.updated_at,
+                           (SELECT blocks.id FROM blocks
+                             WHERE blocks.document_id = documents.id
+                               AND blocks.parent_id IS NULL
+                             ORDER BY blocks.position LIMIT 1) AS block_id
+                      FROM documents
+                     WHERE documents.deleted_at IS NULL
+                ) WHERE hits > 0
+                ORDER BY hits DESC, updated_at DESC
+                LIMIT ?""",
+            (*tokens, limit),
+        ).fetchall()
+    return [dict(row) for row in rows if row["block_id"]]
+
+
+def query_tokens(query: str) -> list[str]:
+    return [token.lower() for token in _FTS_TOKEN.findall(query)]
