@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
@@ -18,8 +17,8 @@ from . import (
     block_store,
     embeddings,
     images,
+    documents,
     llm,
-    notes_store,
     search,
     vision,
     workspace,
@@ -105,20 +104,19 @@ async def _backup_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    if settings.block_db_enabled:
-        if settings.block_db_import_on_startup:
-            await asyncio.to_thread(
-                import_markdown_if_empty, settings.block_db_path, settings.notes_path
-            )
-        else:
-            await asyncio.to_thread(block_store.initialize, settings.block_db_path)
+    if settings.block_db_import_on_startup:
         await asyncio.to_thread(
-            block_store.backfill_assets, settings.block_db_path, settings.assets_path
+            import_markdown_if_empty, settings.block_db_path, settings.notes_path
         )
-        await asyncio.to_thread(block_store.ensure_fts_integrity, settings.block_db_path)
+    else:
+        await asyncio.to_thread(block_store.initialize, settings.block_db_path)
+    await asyncio.to_thread(
+        block_store.backfill_assets, settings.block_db_path, settings.assets_path
+    )
+    await asyncio.to_thread(block_store.ensure_fts_integrity, settings.block_db_path)
     backup_task = (
         asyncio.create_task(_backup_loop())
-        if settings.block_db_enabled and getattr(settings, "auto_backup_enabled", True)
+        if getattr(settings, "auto_backup_enabled", True)
         else None
     )
     task = (
@@ -172,22 +170,17 @@ def health() -> dict:
         "model_loaded": embeddings.model_loaded(),
         "vision_enabled": settings.vision_enabled,
         "vision_loaded": vision.loaded(),
-        "block_db_enabled": settings.block_db_enabled,
         "block_db_ready": block_store.is_ready(settings.block_db_path),
     }
 
 
 @app.get("/api/navigation")
 def get_navigation(recent_limit: int = Query(10, ge=1, le=50)):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     return block_store.navigation(settings.block_db_path, recent_limit)
 
 
 @app.post("/api/folders", response_model=Folder, status_code=201)
 def create_folder(data: FolderCreate):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         return block_store.create_folder(
             settings.block_db_path, data.name, data.parent_id, data.position
@@ -198,8 +191,6 @@ def create_folder(data: FolderCreate):
 
 @app.patch("/api/folders/{folder_id}", response_model=Folder)
 def rename_folder(folder_id: str, data: FolderRename):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         return block_store.rename_folder(settings.block_db_path, folder_id, data.name)
     except KeyError as exc:
@@ -208,8 +199,6 @@ def rename_folder(folder_id: str, data: FolderRename):
 
 @app.post("/api/folders/{folder_id}/move", response_model=Folder)
 def move_folder(folder_id: str, data: FolderMove):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         parent_id = (
             data.parent_id
@@ -227,8 +216,6 @@ def move_folder(folder_id: str, data: FolderMove):
 
 @app.delete("/api/folders/{folder_id}", status_code=204)
 def delete_folder(folder_id: str):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         block_store.delete_folder(settings.block_db_path, folder_id)
     except KeyError as exc:
@@ -242,8 +229,6 @@ def delete_folder(folder_id: str):
     "/api/block-documents/{document_id}/move", response_model=DocumentOrganization
 )
 def move_block_document(document_id: str, data: DocumentMove):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         folder_id = (
             data.folder_id
@@ -259,50 +244,35 @@ def move_block_document(document_id: str, data: DocumentMove):
 
 @app.get("/api/block-documents")
 def list_block_documents():
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     return block_store.list_documents(settings.block_db_path)
 
 
 @app.post("/api/block-documents", status_code=201)
 def create_block_document(data: NoteCreate):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
-        tree = block_store.create_block_document(
-            settings.block_db_path,
-            data.title or "Untitled",
-            data.status,
-            data.tags,
-            data.body,
-            folder_id=data.folder_id,
-        )
+        note = documents.create(data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    block_store.sync_markdown(settings.notes_path, settings.block_db_path, tree["id"])
-    return tree
+    return block_store.document_tree(settings.block_db_path, note.id)
 
 
 @app.patch("/api/block-documents/{document_id}")
-def rename_block_document(document_id: str, data: NoteUpdate):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
-    if data.title is None:
-        raise HTTPException(422, "title is required")
+def update_block_document(document_id: str, data: NoteUpdate):
+    """Change a document's title and/or status (the body changes through transactions)."""
+
+    if data.body is not None:
+        raise HTTPException(422, "edit the body with block transactions")
     try:
-        tree = block_store.rename_document(settings.block_db_path, document_id, data.title)
+        documents.update(document_id, data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    block_store.sync_markdown(settings.notes_path, settings.block_db_path, document_id)
-    return tree
+    return block_store.document_tree(settings.block_db_path, document_id)
 
 
 @app.delete("/api/block-documents/{document_id}", status_code=204)
 def delete_block_document(document_id: str):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
-        block_store.delete_document(settings.block_db_path, document_id)
+        documents.trash(document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     return Response(status_code=204)
@@ -312,8 +282,6 @@ def delete_block_document(document_id: str):
 def get_block_document(document_id: str):
     """Read the bootstrapped block tree while the legacy note API remains active."""
 
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     tree = block_store.document_tree(settings.block_db_path, document_id)
     if tree is None:
         raise HTTPException(404, "Block document not found")
@@ -322,8 +290,6 @@ def get_block_document(document_id: str):
 
 @app.get("/api/block-documents/{document_id}/subtree")
 def get_block_subtree(document_id: str, block_id: str | None = None):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         subtree = block_store.document_subtree(
             settings.block_db_path, document_id, block_id
@@ -337,8 +303,6 @@ def get_block_subtree(document_id: str, block_id: str | None = None):
 
 @app.get("/api/block-documents/{document_id}/markdown")
 def export_block_document_markdown(document_id: str, download: bool = False):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         markdown = export_document_markdown(settings.block_db_path, document_id)
     except KeyError as exc:
@@ -360,8 +324,9 @@ async def import_uploaded_markdown(
 ):
     """Create one new note per uploaded Markdown file."""
 
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
+    folder_id = folder_id or None
+    if folder_id is not None and not block_store.folder_exists(settings.block_db_path, folder_id):
+        raise HTTPException(404, "folder not found")
     imported: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
     for upload in files:
@@ -372,17 +337,16 @@ async def import_uploaded_markdown(
             continue
         try:
             parsed = parse_uploaded_markdown(name, raw)
-            note = _create_note(
+            note = documents.create(
                 NoteCreate(
                     title=parsed.title,
                     body=parsed.body,
                     status=parsed.status,
                     tags=parsed.tags,
-                    folder_id=folder_id or None,
-                )
+                    folder_id=folder_id,
+                ),
+                created_at=parsed.created_at,
             )
-        except KeyError as exc:
-            raise HTTPException(404, "folder not found") from exc
         except ValueError as exc:
             errors.append({"name": name, "detail": str(exc)})
             continue
@@ -395,38 +359,26 @@ def _attachment(filename: str) -> str:
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
 
 
-def _write_markdown_mirror(document_id: str) -> None:
-    """Recreate the compatibility Markdown file from the canonical document."""
-
-    markdown = export_document_markdown(settings.block_db_path, document_id)
-    (settings.notes_path / f"{document_id}.md").write_text(markdown, encoding="utf-8")
-
-
 # --- Trash ---------------------------------------------------------------------
 
 
 @app.get("/api/trash")
 def list_trash():
-    _require_block_db()
     return workspace.list_trash(settings.block_db_path)
 
 
 @app.post("/api/trash/{document_id}/restore")
 def restore_from_trash(document_id: str):
-    _require_block_db()
     try:
-        result = workspace.restore_document(settings.block_db_path, document_id)
+        return documents.restore(document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    _write_markdown_mirror(document_id)
-    return result
 
 
 @app.delete("/api/trash/{document_id}", status_code=204)
 def delete_forever(document_id: str):
-    _require_block_db()
     try:
-        workspace.purge_document(settings.block_db_path, document_id)
+        documents.purge(document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     return Response(status_code=204)
@@ -434,8 +386,7 @@ def delete_forever(document_id: str):
 
 @app.delete("/api/trash")
 def empty_trash():
-    _require_block_db()
-    return {"deleted": workspace.empty_trash(settings.block_db_path)}
+    return {"deleted": documents.empty_trash()}
 
 
 # --- Saved searches ------------------------------------------------------------
@@ -443,13 +394,11 @@ def empty_trash():
 
 @app.get("/api/saved-searches")
 def list_saved_searches():
-    _require_block_db()
     return workspace.list_saved_searches(settings.block_db_path)
 
 
 @app.post("/api/saved-searches", status_code=201)
 def create_saved_search(data: SavedSearchCreate):
-    _require_block_db()
     try:
         return workspace.create_saved_search(
             settings.block_db_path, data.name, data.query, data.mode, data.filters
@@ -460,7 +409,6 @@ def create_saved_search(data: SavedSearchCreate):
 
 @app.delete("/api/saved-searches/{search_id}", status_code=204)
 def delete_saved_search(search_id: str):
-    _require_block_db()
     try:
         workspace.delete_saved_search(settings.block_db_path, search_id)
     except KeyError as exc:
@@ -473,13 +421,11 @@ def delete_saved_search(search_id: str):
 
 @app.get("/api/backups")
 def list_backups():
-    _require_block_db()
     return backups.list_backups(backups.backup_directory(settings.notes_path))
 
 
 @app.post("/api/backups", status_code=201)
 def create_backup():
-    _require_block_db()
     directory = backups.backup_directory(settings.notes_path)
     path = backups.create_backup(settings.block_db_path, directory, "manual")
     return next(item for item in backups.list_backups(directory) if item["name"] == path.name)
@@ -487,7 +433,6 @@ def create_backup():
 
 @app.get("/api/backups/{name}/download")
 def download_backup(name: str):
-    _require_block_db()
     try:
         path = backups.resolve_backup(backups.backup_directory(settings.notes_path), name)
     except KeyError as exc:
@@ -497,7 +442,6 @@ def download_backup(name: str):
 
 @app.post("/api/backups/{name}/restore")
 def restore_backup(name: str):
-    _require_block_db()
     directory = backups.backup_directory(settings.notes_path)
     try:
         safety = backups.restore_backup(settings.block_db_path, directory, name)
@@ -505,42 +449,17 @@ def restore_backup(name: str):
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    _rebuild_markdown_mirrors(directory / f"mirrors-before-{safety.stem}")
+    documents.rebuild_mirrors(directory / f"mirrors-before-{safety.stem}")
     return {"restored": name, "safety_backup": safety.name}
-
-
-def _rebuild_markdown_mirrors(stash: Path) -> None:
-    """Make the Markdown mirrors match the restored database.
-
-    Mirrors for documents the restored database does not contain are moved
-    aside into ``stash`` rather than deleted.
-    """
-
-    active = {item["id"] for item in block_store.list_documents(settings.block_db_path)}
-    for mirror in settings.notes_path.glob("*.md"):
-        if mirror.stem not in active:
-            stash.mkdir(parents=True, exist_ok=True)
-            mirror.replace(stash / mirror.name)
-    for document_id in active:
-        _write_markdown_mirror(document_id)
-
-
-def _require_block_db() -> None:
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
 
 
 @app.get("/api/markdown-export")
 def export_all_block_markdown():
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     return export_all_markdown(settings.block_db_path)
 
 
 @app.get("/api/markdown-import/preview")
 def preview_workspace_markdown_import():
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     preview = preview_markdown_directory(settings.block_db_path, settings.notes_path)
     return {
         "items": [
@@ -561,8 +480,6 @@ def preview_workspace_markdown_import():
 
 @app.post("/api/markdown-import")
 def import_workspace_markdown():
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     report = import_markdown_directory(settings.block_db_path, settings.notes_path)
     return {
         "backup_directory": f".fortress-import-backups/{report.backup_directory.name}",
@@ -592,8 +509,6 @@ def search_blocks(
     updated_after: str | None = None,
     updated_before: str | None = None,
 ):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     return block_query.search_blocks(
         settings.block_db_path,
         q,
@@ -611,23 +526,17 @@ def search_blocks(
 
 @app.post("/api/block-search/rebuild")
 def rebuild_block_search_index():
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     block_store.rebuild_fts(settings.block_db_path)
     return {"ok": block_store.fts_is_consistent(settings.block_db_path)}
 
 
 @app.get("/api/block-link-targets", response_model=list[BlockLinkTarget])
 def block_link_targets(q: str = "", limit: int = Query(50, ge=1, le=200)):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     return block_store.block_link_targets(settings.block_db_path, q, limit)
 
 
 @app.get("/api/block-documents/{document_id}/backlinks", response_model=list[Backlink])
 def get_backlinks(document_id: str, limit: int = Query(100, ge=1, le=500)):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     if block_store.document_tree(settings.block_db_path, document_id) is None:
         raise HTTPException(404, "Block document not found")
     return block_store.document_backlinks(settings.block_db_path, document_id, limit)
@@ -635,8 +544,6 @@ def get_backlinks(document_id: str, limit: int = Query(100, ge=1, le=500)):
 
 @app.post("/api/block-documents/{document_id}/link-checks")
 async def check_block_document_links(document_id: str):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         return await link_checks.check_document_links(
             settings.block_db_path, document_id
@@ -647,8 +554,6 @@ async def check_block_document_links(document_id: str):
 
 @app.post("/api/block-documents/{document_id}/transactions")
 def apply_block_transaction(document_id: str, transaction: BlockTransaction):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         tree = block_store.apply_transaction(
             settings.block_db_path,
@@ -657,7 +562,7 @@ def apply_block_transaction(document_id: str, transaction: BlockTransaction):
             transaction.base_revision,
             transaction.transaction_id,
         )
-        block_store.sync_markdown(settings.notes_path, settings.block_db_path, document_id)
+        documents.write_mirror(document_id)
         return tree
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -669,13 +574,11 @@ def apply_block_transaction(document_id: str, transaction: BlockTransaction):
 
 @app.post("/api/block-documents/{document_id}/undo")
 def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         tree = block_store.undo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
-        block_store.sync_markdown(settings.notes_path, settings.block_db_path, document_id)
+        documents.write_mirror(document_id)
         return tree
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -687,13 +590,11 @@ def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
 
 @app.post("/api/block-documents/{document_id}/redo")
 def redo_block_transaction(document_id: str, request: BlockHistoryRequest):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         tree = block_store.redo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
-        block_store.sync_markdown(settings.notes_path, settings.block_db_path, document_id)
+        documents.write_mirror(document_id)
         return tree
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -711,11 +612,10 @@ async def upload_image(file: UploadFile = File(...)):
     # Save the file and return immediately so the image appears instantly. Caption + OCR
     # (slow, only needed for search) run in the background to populate the sidecar cache.
     url, path = images.save_bytes(data, file.content_type or "image/png")
-    if settings.block_db_enabled:
-        block_store.register_asset(
-            settings.block_db_path, path, assets.content_hash(data),
-            (file.content_type or "image/png").split(";", 1)[0].strip().lower(),
-        )
+    block_store.register_asset(
+        settings.block_db_path, path, assets.content_hash(data),
+        (file.content_type or "image/png").split(";", 1)[0].strip().lower(),
+    )
     _spawn(asyncio.to_thread(images.extract_and_store, path))
     return {"url": url, "text": ""}
 
@@ -727,11 +627,10 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(415, "Unsupported image type")
     data = await file.read()
     url, name, path = assets.save_upload(data, file.filename, file.content_type)
-    if settings.block_db_enabled:
-        block_store.register_asset(
-            settings.block_db_path, path, assets.content_hash(data),
-            (file.content_type or "application/octet-stream").split(";", 1)[0].strip().lower(),
-        )
+    block_store.register_asset(
+        settings.block_db_path, path, assets.content_hash(data),
+        (file.content_type or "application/octet-stream").split(";", 1)[0].strip().lower(),
+    )
     if assets.is_supported_image_type(file.content_type):
         _spawn(asyncio.to_thread(images.extract_and_store, path))
     # BlockNote's uploadFile result is a partial block; its file insertion
@@ -741,46 +640,20 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.get("/api/notes", response_model=list[NoteSummary])
 def list_notes(status: NoteStatus | None = None):
-    return notes_store.list_notes(status)
+    return documents.list_notes(status)
 
 
 @app.post("/api/notes", response_model=Note, status_code=201)
 def create_note(data: NoteCreate):
-    if data.folder_id is not None and not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
-        return _create_note(data)
+        return documents.create(data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
 
-def _create_note(data: NoteCreate) -> Note:
-    """Create the Markdown mirror and the canonical SQLite document together."""
-
-    note = notes_store.create_note(data)
-    if settings.block_db_enabled:
-        try:
-            block_store.create_document(
-                settings.block_db_path,
-                note.id,
-                note.title,
-                note.status,
-                note.tags,
-                note.body,
-                note.created_at,
-                note.updated_at,
-                ensure_empty_paragraph=True,
-                folder_id=data.folder_id,
-            )
-        except Exception:
-            notes_store.delete_note(note.id)
-            raise
-    return note
-
-
 @app.get("/api/notes/{note_id}", response_model=Note)
 def get_note(note_id: str):
-    note = notes_store.get_note(note_id)
+    note = documents.get_note(note_id)
     if note is None:
         raise HTTPException(404, "Note not found")
     return note
@@ -788,57 +661,27 @@ def get_note(note_id: str):
 
 @app.put("/api/notes/{note_id}", response_model=Note)
 def update_note(note_id: str, data: NoteUpdate):
-    note = notes_store.update_note(note_id, data)
-    if note is None:
-        raise HTTPException(404, "Note not found")
-    if settings.block_db_enabled:
-        if data.body is not None:
-            block_store.replace_document_from_markdown(
-                settings.block_db_path,
-                note.id,
-                note.title,
-                note.status,
-                note.tags,
-                note.body,
-                note.created_at,
-                note.updated_at,
-            )
-        else:
-            block_store.update_document_metadata(
-                settings.block_db_path,
-                note.id,
-                note.title,
-                note.status,
-                note.tags,
-                note.updated_at,
-            )
-    return note
+    try:
+        return documents.update(note_id, data)
+    except KeyError as exc:
+        raise HTTPException(404, "Note not found") from exc
 
 
 @app.delete("/api/notes/{note_id}", status_code=204)
 def delete_note(note_id: str):
-    if not notes_store.delete_note(note_id):
-        raise HTTPException(404, "Note not found")
-    if settings.block_db_enabled:
-        block_store.delete_document(settings.block_db_path, note_id)
+    try:
+        documents.trash(note_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Note not found") from exc
     return Response(status_code=204)
 
 
 @app.post("/api/notes/{note_id}/promote", response_model=Note)
 def promote_note(note_id: str):
-    note = notes_store.promote_note(note_id)
-    if note is None:
-        raise HTTPException(404, "Note not found")
-    if settings.block_db_enabled:
-        block_store.update_document_metadata(
-            settings.block_db_path,
-            note.id,
-            note.title,
-            note.status,
-            note.tags,
-            note.updated_at,
-        )
-    return note
+    try:
+        return documents.update(note_id, NoteUpdate(status="polished"))
+    except KeyError as exc:
+        raise HTTPException(404, "Note not found") from exc
 
 
 @app.get("/api/search", response_model=list[SearchResult])
@@ -850,7 +693,7 @@ def search_notes(q: str, mode: str = Query("text", pattern="^(text|embedding)$")
 
 @app.get("/api/notes/{note_id}/related", response_model=list[RelatedResult])
 def related(note_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None = None):
-    if notes_store.get_note(note_id) is None:
+    if documents.get_note(note_id) is None:
         raise HTTPException(404, "Note not found")
     try:
         return search.related_notes(note_id, k, block_id)
@@ -860,7 +703,7 @@ def related(note_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None =
 
 @app.post("/api/notes/{note_id}/review", response_model=ReviewResponse)
 async def review(note_id: str, kind: ReviewKind = "factcheck"):
-    note = notes_store.get_note(note_id)
+    note = documents.get_note(note_id)
     if note is None:
         raise HTTPException(404, "Note not found")
     return await llm.review_note(kind, note.title, note.body)
@@ -871,8 +714,6 @@ async def review(note_id: str, kind: ReviewKind = "factcheck"):
     response_model=BlockReviewResponse,
 )
 async def review_block(document_id: str, block_id: str, kind: ReviewKind = "factcheck"):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         result = block_store.document_subtree(
             settings.block_db_path, document_id, block_id
@@ -890,8 +731,6 @@ async def review_block(document_id: str, block_id: str, kind: ReviewKind = "fact
     response_model=BlockReviewContextResponse,
 )
 async def review_block_context(document_id: str, request: BlockReviewContextRequest):
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
     try:
         resolved = block_store.document_review_context(
             settings.block_db_path, document_id, request.context, request.block_ids

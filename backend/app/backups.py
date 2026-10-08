@@ -11,6 +11,7 @@ import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from . import block_store
 
@@ -24,14 +25,21 @@ def backup_directory(notes_path: Path) -> Path:
     return notes_path / BACKUP_DIRNAME
 
 
-def create_backup(db_path: Path, directory: Path, kind: str = "manual") -> Path:
+def create_backup(
+    db_path: Path, directory: Path, kind: str = "manual", keep: Path | None = None
+) -> Path:
+    """Snapshot the live database; ``keep`` is never pruned (e.g. a restore source)."""
+
     if kind not in KEEP:
         raise ValueError(f"unknown backup kind {kind!r}")
     directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     destination = directory / f"fortress-{stamp}-{kind}.sqlite3"
     block_store.backup_database(db_path, destination)
-    _prune(directory, kind)
+    # Snapshots are single self-contained files, not WAL databases with sidecars.
+    with closing(sqlite3.connect(destination)) as snapshot:
+        snapshot.execute("PRAGMA journal_mode = DELETE")
+    _prune(directory, kind, keep)
     return destination
 
 
@@ -84,20 +92,30 @@ def restore_backup(db_path: Path, directory: Path, name: str) -> Path:
 
     source = resolve_backup(directory, name)
     _verify_snapshot(source)
-    safety = create_backup(db_path, directory, "pre-restore")
-    with closing(sqlite3.connect(source)) as snapshot, block_store.connection_scope(
+    # The safety copy must never prune the snapshot we are about to read.
+    safety = create_backup(db_path, directory, "pre-restore", keep=source)
+    with block_store.connection_scope(db_path) as live:
+        newest_revision = live.execute(
+            "SELECT COALESCE(MAX(revision), 0) FROM documents"
+        ).fetchone()[0]
+    with closing(_open_read_only(source)) as snapshot, block_store.connection_scope(
         db_path
     ) as live:
         snapshot.backup(live)
     # Older snapshots may predate later migrations; bring them up to date.
     block_store.initialize(db_path)
+    with block_store.connection_scope(db_path) as live:
+        # Revisions went backwards. Move them past every revision an open editor
+        # could hold so its next save is rejected as a conflict instead of
+        # silently writing stale blocks over the restored ones.
+        live.execute("UPDATE documents SET revision = revision + ?", (newest_revision + 1,))
     block_store.rebuild_fts(db_path)
     return safety
 
 
 def _verify_snapshot(path: Path) -> None:
     try:
-        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as connection:
+        with closing(_open_read_only(path)) as connection:
             check = connection.execute("PRAGMA quick_check").fetchone()
             version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
     except sqlite3.DatabaseError as exc:
@@ -108,7 +126,18 @@ def _verify_snapshot(path: Path) -> None:
         raise ValueError("backup was made by a newer version of Fortress Notes")
 
 
-def _prune(directory: Path, kind: str) -> None:
-    same_kind = [item for item in list_backups(directory) if item["kind"] == kind]
+def _open_read_only(path: Path) -> sqlite3.Connection:
+    # Never create a file: a vanished snapshot must fail, not restore emptiness.
+    return sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True)
+
+
+def _prune(directory: Path, kind: str, keep: Path | None = None) -> None:
+    same_kind = [
+        item
+        for item in list_backups(directory)
+        if item["kind"] == kind and (keep is None or item["name"] != keep.name)
+    ]
     for item in same_kind[KEEP[kind]:]:
         (directory / str(item["name"])).unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            (directory / f"{item['name']}{suffix}").unlink(missing_ok=True)

@@ -55,8 +55,7 @@ def extract_and_store(path: Path) -> str:
 
         _write_cache(image_sidecar, text)
         _write_cache(hash_sidecar, text)
-        if settings.block_db_enabled:
-            block_store.store_asset_text(settings.block_db_path, content_hash, text)
+        block_store.store_asset_text(settings.block_db_path, content_hash, text)
     return text
 
 

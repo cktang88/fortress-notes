@@ -8,7 +8,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .block_store import _new_ulid, _now, connection_scope, initialize
+from .block_store import (
+    _new_ulid,
+    _now,
+    _rebuild_document_assets,
+    connection_scope,
+    initialize,
+)
 
 SAVED_SEARCH_MODES = {"text", "embedding"}
 
@@ -68,6 +74,8 @@ def restore_document(path: Path, document_id: str) -> dict[str, object]:
                 WHERE id = ?""",
             (folder_id, position, now, document_id),
         )
+        # Trashing removed the document from search; put it back.
+        _rebuild_document_assets(connection, document_id)
     return {"id": document_id, "folder_id": folder_id, "position": position}
 
 
@@ -83,7 +91,9 @@ def purge_document(path: Path, document_id: str) -> None:
         _purge(connection, [document_id])
 
 
-def empty_trash(path: Path) -> int:
+def empty_trash(path: Path) -> list[str]:
+    """Purge every trashed document; returns the purged IDs."""
+
     initialize(path)
     with connection_scope(path) as connection:
         ids = [
@@ -93,7 +103,7 @@ def empty_trash(path: Path) -> int:
             ).fetchall()
         ]
         _purge(connection, ids)
-    return len(ids)
+    return ids
 
 
 def _purge(connection, document_ids: list[str]) -> None:

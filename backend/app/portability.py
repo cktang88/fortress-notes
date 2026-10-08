@@ -15,7 +15,14 @@ from pathlib import Path
 
 import frontmatter
 
-from .block_store import connection_scope, create_document, document_tree, navigation
+from .block_store import (
+    connection_scope,
+    create_document,
+    derive_title as _derive_title,
+    document_tree,
+    navigation,
+    render_markdown as _render_markdown,
+)
 
 
 @dataclass(frozen=True)
@@ -256,48 +263,6 @@ def _navigation_document_ids(data: dict[str, object]) -> list[str]:
     return document_ids
 
 
-def _render_markdown(nodes: object, depth: int = 0) -> str:
-    if not isinstance(nodes, list):
-        return ""
-    fragments: list[str] = []
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        source = _node_markdown(node)
-        if node.get("type") == "divider" and not source:
-            source = "---"
-        if depth and source:
-            prefix = "  " * depth
-            source = "\n".join(f"{prefix}{line}" if line else line for line in source.splitlines())
-        if source:
-            fragments.append(source)
-        children = _render_markdown(node.get("children"), depth + 1)
-        if children:
-            fragments.append(children)
-    return "\n\n".join(fragments)
-
-
-def _node_markdown(node: dict[str, object]) -> str:
-    content = node.get("content")
-    if isinstance(content, dict):
-        markdown = content.get("markdown")
-        if isinstance(markdown, str):
-            return markdown
-        blocknote = content.get("blocknote")
-        if isinstance(blocknote, str):
-            return blocknote
-    text = node.get("text")
-    return text if isinstance(text, str) else ""
-
-
-def _derive_title(body: str) -> str:
-    for line in body.splitlines():
-        text = line.strip().lstrip("#").strip()
-        if text:
-            return text[:120]
-    return "Untitled"
-
-
 # --- Download filenames / uploaded import ----------------------------------
 
 _UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
@@ -317,6 +282,7 @@ class UploadedNote:
     status: str
     tags: list[str]
     body: str
+    created_at: object | None = None
 
 
 def parse_uploaded_markdown(filename: str, raw: bytes) -> UploadedNote:
@@ -333,13 +299,15 @@ def parse_uploaded_markdown(filename: str, raw: bytes) -> UploadedNote:
     metadata = post.metadata
     stem = Path(filename).stem.strip()
     title = str(metadata.get("title") or "").strip() or stem or _derive_title(post.content)
-    status = metadata.get("status", "rough")
+    status = metadata.get("status")
     tags = metadata.get("tags", []) or []
     if not isinstance(tags, list):
         tags = [tags]
+    created_at = metadata.get("created_at")
     return UploadedNote(
         title=title[:200],
-        status=status if status in {"rough", "polished"} else "rough",
+        status=status if isinstance(status, str) and status in {"rough", "polished"} else "rough",
         tags=[str(tag) for tag in tags if str(tag).strip()],
         body=post.content,
+        created_at=created_at if isinstance(created_at, (str, datetime)) else None,
     )

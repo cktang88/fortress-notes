@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 class WorkspaceFeatureTests(unittest.TestCase):
     def setUp(self) -> None:
-        from app import main, notes_store
+        from app import documents, main, search
 
         self.main = main
         self._directory = tempfile.TemporaryDirectory()
@@ -30,7 +30,8 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.settings.assets_path.mkdir()
         patches = [
             patch.object(main, "settings", self.settings),
-            patch.object(notes_store, "get_settings", lambda: self.settings),
+            patch.object(documents, "get_settings", lambda: self.settings),
+            patch.object(search, "get_settings", lambda: self.settings),
         ]
         for item in patches:
             item.start()
@@ -186,6 +187,125 @@ class WorkspaceFeatureTests(unittest.TestCase):
             files=[("files", ("a.md", b"hello", "text/markdown"))],
         )
         self.assertEqual(response.status_code, 404)
+
+
+    # --- Regression tests for review findings ---------------------------------
+
+    def test_restoring_the_oldest_safety_snapshot_keeps_its_data(self) -> None:
+        from app import backups
+
+        self.create("Keep me", "important data")
+        name = self.client.post("/api/backups").json()["name"]
+        first_safety = self.client.post(f"/api/backups/{name}/restore").json()["safety_backup"]
+        for _ in range(backups.KEEP["pre-restore"]):
+            self.client.post(f"/api/backups/{name}/restore")
+        names = {item["name"] for item in self.client.get("/api/backups").json()}
+        oldest = min(
+            (n for n in names if n.endswith("pre-restore.sqlite3")),
+            key=lambda n: n,
+        )
+        self.assertNotEqual(oldest, first_safety)  # pruning has happened
+        response = self.client.post(f"/api/backups/{oldest}/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        titles = [doc["title"] for doc in self.client.get("/api/block-documents").json()]
+        self.assertEqual(titles, ["Keep me"])
+        self.assertTrue(self.notes.joinpath(f"{self.client.get('/api/notes').json()[0]['id']}.md").exists())
+
+    def test_restore_makes_open_editors_conflict_instead_of_overwriting(self) -> None:
+        note = self.create("Doc", "before")
+        tree = self.client.get(f"/api/block-documents/{note['id']}").json()
+        name = self.client.post("/api/backups").json()["name"]
+        self.client.post(f"/api/backups/{name}/restore")
+        stale = self.client.post(
+            f"/api/block-documents/{note['id']}/transactions",
+            json={
+                "base_revision": tree["revision"],
+                "operations": [
+                    {"operation": "update", "block_id": tree["children"][0]["id"], "text": "stale"}
+                ],
+            },
+        )
+        self.assertEqual(stale.status_code, 409)
+
+    def test_snapshots_are_self_contained_files(self) -> None:
+        from app import backups
+
+        self.create("Doc")
+        name = self.client.post("/api/backups").json()["name"]
+        directory = backups.backup_directory(self.notes)
+        self.client.get(f"/api/backups/{name}/download")
+        self.client.post(f"/api/backups/{name}/restore")
+        leftovers = [p.name for p in directory.iterdir() if p.name.endswith(("-wal", "-shm"))]
+        self.assertEqual(leftovers, [])
+
+    def test_restored_note_is_searchable_after_an_index_rebuild(self) -> None:
+        from app import block_store
+
+        note = self.create("Alpha", "zebracorn text")
+        self.client.delete(f"/api/notes/{note['id']}")
+        self.assertTrue(block_store.fts_is_consistent(self.settings.block_db_path))
+        block_store.ensure_fts_integrity(self.settings.block_db_path)  # as at startup
+        self.client.post(f"/api/trash/{note['id']}/restore")
+        hits = self.client.get("/api/block-search", params={"q": "zebracorn"}).json()
+        self.assertEqual([hit["document_id"] for hit in hits], [note["id"]])
+
+    def test_trashing_keeps_folder_order_dense(self) -> None:
+        folder = self.client.post("/api/folders", json={"name": "F"}).json()["id"]
+        ids = {title: self.create(title, folder=folder)["id"] for title in "ABC"}
+        self.client.delete(f"/api/notes/{ids['B']}")
+        self.create("D", folder=folder)
+        children = self.client.get("/api/navigation").json()["items"][0]["children"]
+        self.assertEqual(
+            [(child["title"], child["position"]) for child in children],
+            [("A", 0), ("C", 1), ("D", 2)],
+        )
+        self.assertEqual(self.client.delete(f"/api/notes/{ids['B']}").status_code, 404)
+
+    def test_markdown_mirror_follows_the_document_lifecycle(self) -> None:
+        created = self.client.post("/api/block-documents", json={"title": "Block doc"}).json()
+        mirror = self.notes / f"{created['id']}.md"
+        self.assertTrue(mirror.exists())
+        self.assertEqual(self.client.get(f"/api/notes/{created['id']}").json()["title"], "Block doc")
+
+        self.client.patch(f"/api/block-documents/{created['id']}", json={"status": "polished"})
+        self.assertIn("status: polished", mirror.read_text())
+        self.assertEqual(
+            [note["id"] for note in self.client.get("/api/notes?status=polished").json()],
+            [created["id"]],
+        )
+
+        self.client.delete(f"/api/block-documents/{created['id']}")
+        self.assertFalse(mirror.exists())
+        self.assertEqual(self.client.get("/api/notes").json(), [])
+        self.assertEqual(
+            self.client.put(f"/api/notes/{created['id']}", json={"status": "rough"}).status_code,
+            404,
+        )
+        self.client.delete(f"/api/trash/{created['id']}")
+        self.assertEqual(
+            self.client.put(f"/api/notes/{created['id']}", json={"body": "back?"}).status_code, 404
+        )
+        self.assertEqual(self.client.get("/api/block-documents").json(), [])
+
+    def test_mirrors_never_feed_back_into_reads(self) -> None:
+        (self.notes / "broken.md").write_text("---\ntitle: [unclosed\n---\nbody", encoding="utf-8")
+        self.create("Fine", "needle text")
+        self.assertEqual([n["title"] for n in self.client.get("/api/notes").json()], ["Fine"])
+        found = self.client.get("/api/search", params={"q": "needle"}).json()
+        self.assertEqual([hit["note"]["title"] for hit in found], ["Fine"])
+
+    def test_upload_import_tolerates_odd_front_matter(self) -> None:
+        response = self.client.post(
+            "/api/markdown-import/files",
+            files=[
+                ("files", ("odd.md", b"---\nstatus: [a]\ncreated_at: 2020-05-01T00:00:00Z\n---\nhi", "text/markdown")),
+            ],
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        note_id = response.json()["imported"][0]["id"]
+        note = self.client.get(f"/api/notes/{note_id}").json()
+        self.assertEqual(note["status"], "rough")
+        self.assertTrue(note["created_at"].startswith("2020-05-01"))
 
 
 if __name__ == "__main__":

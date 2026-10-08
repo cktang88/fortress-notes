@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 class FocusedRelatedTests(unittest.TestCase):
     def test_focus_changes_query_and_rejects_other_documents_blocks(self) -> None:
-        from app import embeddings, main, notes_store, search
+        from app import documents, embeddings, main, search
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)
@@ -25,7 +25,7 @@ class FocusedRelatedTests(unittest.TestCase):
             )
             with (
                 patch.object(main, "settings", settings),
-                patch.object(notes_store, "get_settings", return_value=settings),
+                patch.object(documents, "get_settings", return_value=settings),
                 patch.object(search, "get_settings", return_value=settings),
                 patch.object(embeddings, "get_settings", return_value=settings),
                 TestClient(main.app) as client,
