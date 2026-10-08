@@ -45,6 +45,11 @@ export function AnswerCard({ question, loading, error, response, onOpen, onDismi
           Answers need an AI key: set <code>OPENROUTER_API_KEY</code> in <code>backend/.env</code>.
         </p>
       )}
+      {response?.status === "unavailable" && (
+        <p className="text-zinc-600">
+          Couldn't reach the AI service. The closest passages are listed below.
+        </p>
+      )}
       {response?.status === "timeout" && (
         <p className="text-zinc-600">
           That took too long to answer. The closest passages are listed below.

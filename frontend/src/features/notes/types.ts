@@ -162,7 +162,7 @@ export interface AskCitation {
 }
 
 export interface AskResponse {
-  status: "answered" | "not_found" | "not_configured" | "timeout";
+  status: "answered" | "not_found" | "not_configured" | "timeout" | "unavailable";
   answer: { text: string; citations: AskCitation[] }[];
   sources: { block_id: string; document_id: string; document_title: string; text: string }[];
   /** Extra looks the model took beyond the first search (grep a pattern, read a note). */

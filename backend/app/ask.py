@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
+
+import httpx
 
 from . import block_query, block_store, llm, search
 from .config import get_settings
@@ -233,8 +236,12 @@ async def ask(question: str) -> dict[str, object]:
             )
         except llm.LLMNotConfigured:
             return _result("not_configured", [], sources, steps, started)
-        except Exception:  # Too slow or unreachable: show the closest passages instead.
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            # Too slow: show the closest passages instead of making you wait.
             return _result("timeout", [], sources, steps, started)
+        except Exception:
+            logging.getLogger("fortress").warning("Ask could not reach the model", exc_info=True)
+            return _result("unavailable", [], sources, steps, started)
         if not isinstance(data, dict):
             break
         action = data.get("action", "answer")

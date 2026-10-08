@@ -174,6 +174,14 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertEqual(timed_out["status"], "timeout")
         self.assertTrue(timed_out["sources"])
 
+        async def unreachable(*_args, **_kwargs):
+            raise ConnectionError("proxy said 403")
+
+        with patch.object(llm, "chat_json", unreachable):
+            down = self.client.post("/api/ask", json={"question": "hotel?"}).json()
+        self.assertEqual(down["status"], "unavailable")
+        self.assertTrue(down["sources"])
+
     def test_read_tool_returns_a_whole_note(self) -> None:
         from app import ask
 
