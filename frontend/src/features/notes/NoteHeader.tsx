@@ -7,11 +7,13 @@ interface HeaderDocument {
   status: NoteStatus;
   created_at: string;
   updated_at: string;
+  title_auto?: boolean;
 }
 
 interface Props {
   note: HeaderDocument;
-  /** Called with the finished title (after a pause, on Enter, or on blur). */
+  /** Called with the finished title (after a pause, on Enter, or on blur); "" hands
+   * the title back to the note's first line. */
   onTitle: (title: string) => void;
   onDelete: () => void;
   onSetStatus: (status: NoteStatus) => void;
@@ -19,8 +21,6 @@ interface Props {
   checking: boolean;
   /** URL that downloads this note as Markdown. */
   exportUrl?: string;
-  /** Focus and select the title, e.g. right after creating the note. */
-  autoFocusTitle?: boolean;
 }
 
 const TITLE_SAVE_DELAY_MS = 600;
@@ -43,7 +43,6 @@ export function NoteHeader({
   onClarify,
   checking,
   exportUrl,
-  autoFocusTitle = false,
 }: Props) {
   const [draft, setDraft] = useState(note.title);
   const committed = useRef(note.title);
@@ -57,18 +56,12 @@ export function NoteHeader({
     setDraft(note.title);
   }, [note.title]);
 
-  useEffect(() => {
-    if (!autoFocusTitle) return;
-    titleRef.current?.focus();
-    titleRef.current?.select();
-  }, [autoFocusTitle]);
-
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
   function commit(value: string) {
     window.clearTimeout(timer.current);
-    const title = value.trim() || "Untitled";
-    if (title === committed.current) return;
+    const title = value.trim();
+    if (title === committed.current || (!title && note.title_auto)) return;
     committed.current = title;
     onTitle(title);
   }
@@ -97,7 +90,14 @@ export function NoteHeader({
               setDraft(committed.current);
             }
           }}
-          className="flex-1 text-2xl font-bold text-zinc-900 focus:outline-none"
+          title={
+            note.title_auto
+              ? "Follows the first line of your note — type here to choose a title"
+              : undefined
+          }
+          className={`flex-1 text-2xl font-bold focus:outline-none ${
+            note.title_auto && draft === note.title ? "text-zinc-400" : "text-zinc-900"
+          }`}
           placeholder="Untitled"
         />
         <button

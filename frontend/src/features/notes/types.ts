@@ -84,6 +84,8 @@ export interface BlockNode {
 export interface BlockDocument {
   id: string;
   revision: number;
+  /** True while the title follows the note's first line (no title chosen yet). */
+  title_auto?: boolean;
   can_undo?: boolean;
   can_redo?: boolean;
   title: string;
