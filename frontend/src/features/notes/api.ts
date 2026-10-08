@@ -20,23 +20,30 @@ import type {
   SearchResult,
   RelatedResult,
   LinkCheckResponse,
+  TrashedDocument,
+  TagCount,
+  SavedSearch,
+  Backup,
+  MarkdownUploadResult,
 } from "./types";
 
 const API = "/api";
+
+async function failure(res: Response): Promise<Error> {
+  const body = await res.json().catch(() => null);
+  const detail =
+    body && typeof body === "object" && "detail" in body && typeof body.detail === "string"
+      ? body.detail
+      : null;
+  return new Error(`${res.status} ${detail ?? res.statusText}`);
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    const detail =
-      body && typeof body === "object" && "detail" in body && typeof body.detail === "string"
-        ? body.detail
-        : null;
-    throw new Error(`${res.status} ${detail ?? res.statusText}`);
-  }
+  if (!res.ok) throw await failure(res);
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -165,4 +172,62 @@ export function blockSearchParams(q: string, filters: BlockSearchFilters = {}, l
     if (value) params.set(name, value);
   }
   return params.toString();
+}
+
+/** Workspace-level actions: trash, tags, saved searches, backups, import/export. */
+export const workspaceApi = {
+  trash: () => request<TrashedDocument[]>("/trash"),
+  restore: (id: string) =>
+    request<DocumentOrganization>(`/trash/${encodeURIComponent(id)}/restore`, { method: "POST" }),
+  deleteForever: (id: string) =>
+    request<void>(`/trash/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  emptyTrash: () => request<{ deleted: number }>("/trash", { method: "DELETE" }),
+
+  tags: () => request<TagCount[]>("/tags"),
+  renameTag: (tag: string, name: string) =>
+    request<{ documents: string[] }>("/tags/rename", {
+      method: "POST",
+      body: JSON.stringify({ tag, name }),
+    }),
+  deleteTag: (tag: string) =>
+    request<{ documents: string[] }>("/tags/delete", {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    }),
+
+  savedSearches: () => request<SavedSearch[]>("/saved-searches"),
+  saveSearch: (search: Pick<SavedSearch, "name" | "query" | "mode" | "filters">) =>
+    request<SavedSearch>("/saved-searches", {
+      method: "POST",
+      body: JSON.stringify({ ...search, filters: savedSearchFilters(search.filters) }),
+    }),
+  deleteSavedSearch: (id: string) =>
+    request<void>(`/saved-searches/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  backups: () => request<Backup[]>("/backups"),
+  createBackup: () => request<Backup>("/backups", { method: "POST" }),
+  restoreBackup: (name: string) =>
+    request<{ restored: string; safety_backup: string }>(
+      `/backups/${encodeURIComponent(name)}/restore`,
+      { method: "POST" },
+    ),
+  backupUrl: (name: string) => `${API}/backups/${encodeURIComponent(name)}/download`,
+
+  importMarkdown: async (files: File[], folderId: string | null = null) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    if (folderId) form.append("folder_id", folderId);
+    const res = await fetch(`${API}/markdown-import/files`, { method: "POST", body: form });
+    if (!res.ok) throw await failure(res);
+    return (await res.json()) as MarkdownUploadResult;
+  },
+  exportAllUrl: `${API}/markdown-export.zip`,
+  documentMarkdownUrl: (id: string) =>
+    `${API}/block-documents/${encodeURIComponent(id)}/markdown?download=true`,
+};
+
+function savedSearchFilters(filters: BlockSearchFilters): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(filters).filter((entry): entry is [string, string] => !!entry[1]),
+  );
 }

@@ -42,6 +42,17 @@ you're reading.
   The small VLM adds local captions, and content-hash caching reuses OCR and captions
   for duplicate image bytes.
 
+- **Trash with Undo** — deleting moves a note to Trash; undo it from the toast or
+  restore it later from **⋯ → Trash**.
+- **Automatic backups** — a SQLite snapshot is saved daily; **⋯ → Backups** downloads a
+  fresh one or restores any snapshot (your current notes are saved first).
+- **Import & export** — import `.md` files from **⋯**; export one note from its header,
+  or everything as a zip that keeps your folders and images.
+- **Tags & saved searches** — right-click a note → *Edit tags…*, browse tags in the
+  sidebar, filter search by tag, and save searches as one-click chips.
+- **Keyboard first** — ⌘/Ctrl+K or `/` to search, Alt+N for a new note, arrow keys and
+  Enter through results, Esc to clear, `?` for tips.
+
 See [`spec.md`](./spec.md) for the full design, data model, API, and roadmap.
 
 ## Architecture
@@ -61,6 +72,7 @@ backend  (FastAPI, Python)
    ./notes/.fortress.sqlite3 ← the canonical local store
    ./notes/*.md            ← imported/compatibility Markdown files
    ./notes/assets/*.{png,…}  ← pasted images (+ <id>.txt caption/OCR cache)
+   ./notes/.fortress-backups ← daily / manual / pre-restore SQLite snapshots
 ```
 
 The embedding model needs Python, so the backend is Python-only (FastAPI). If the
@@ -122,6 +134,7 @@ Backend `.env` (see `backend/.env.example`):
 | `VISION_ENABLED` | `true` | Image OCR (fast, ~1s/image) — makes image text searchable |
 | `VLM_CAPTION_ENABLED` | `true` | Run local image captioning with OCR |
 | `VLM_MODEL` | `HuggingFaceTB/SmolVLM-256M-Instruct` | Small local VLM used for captions |
+| `AUTO_BACKUP_ENABLED` | `true` | Keep a daily SQLite snapshot in `NOTES_DIR/.fortress-backups` |
 
 ## Frontend toolchain
 

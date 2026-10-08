@@ -204,3 +204,38 @@ export interface LinkCheck {
 export interface LinkCheckResponse {
   links: LinkCheck[];
 }
+
+export interface TrashedDocument {
+  id: string;
+  title: string;
+  status: NoteStatus;
+  tags: string[];
+  deleted_at: string;
+  snippet: string;
+}
+
+export interface TagCount {
+  tag: string;
+  count: number;
+}
+
+export interface SavedSearch {
+  id: string;
+  name: string;
+  query: string;
+  mode: SearchMode;
+  filters: BlockSearchFilters;
+  created_at: string;
+}
+
+export interface Backup {
+  name: string;
+  kind: "auto" | "manual" | "pre-restore";
+  created_at: string;
+  size: number;
+}
+
+export interface MarkdownUploadResult {
+  imported: { name: string; id: string; title: string }[];
+  errors: { name: string; detail: string }[];
+}

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { blockApi, notesApi } from "./api";
-import type { BlockSearchFilters, NoteStatus, ReviewKind, SearchMode } from "./types";
+import { blockApi, notesApi, workspaceApi } from "./api";
+import type { BlockSearchFilters, NoteStatus, ReviewKind, SavedSearch, SearchMode } from "./types";
 
 export function useNotes(status?: NoteStatus) {
   return useQuery({ queryKey: ["notes", status], queryFn: () => notesApi.list(status) });
@@ -148,6 +148,7 @@ export function useUpdateNote() {
       qc.invalidateQueries({ queryKey: ["block-search"] });
       qc.setQueryData(["note", note.id], note);
       qc.invalidateQueries({ queryKey: ["block-document", note.id] });
+      qc.invalidateQueries({ queryKey: ["tags"] });
     },
   });
 }
@@ -157,6 +158,8 @@ export function useDeleteNote() {
   return useMutation({
     mutationFn: (id: string) => notesApi.remove(id),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["trash"] });
+      qc.invalidateQueries({ queryKey: ["tags"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["navigation"] });
       qc.invalidateQueries({ queryKey: ["block-search"] });
@@ -179,5 +182,135 @@ export function usePromoteNote() {
 export function useReview() {
   return useMutation({
     mutationFn: ({ id, kind }: { id: string; kind: ReviewKind }) => notesApi.review(id, kind),
+  });
+}
+
+/** Every query that lists or shows documents; refreshed after workspace-wide changes. */
+const documentQueryKeys = [
+  ["notes"],
+  ["navigation"],
+  ["block-search"],
+  ["search"],
+  ["tags"],
+  ["trash"],
+] as const;
+
+function useInvalidateDocuments() {
+  const qc = useQueryClient();
+  return () => {
+    for (const queryKey of documentQueryKeys) qc.invalidateQueries({ queryKey });
+  };
+}
+
+export function useTrash(enabled = true) {
+  return useQuery({ queryKey: ["trash"], queryFn: workspaceApi.trash, enabled, retry: false });
+}
+
+export function useRestoreDocument() {
+  const invalidate = useInvalidateDocuments();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => workspaceApi.restore(id),
+    onSuccess: (_result, id) => {
+      invalidate();
+      qc.invalidateQueries({ queryKey: ["note", id] });
+      qc.invalidateQueries({ queryKey: ["block-document", id] });
+    },
+  });
+}
+
+export function useDeleteForever() {
+  const invalidate = useInvalidateDocuments();
+  return useMutation({
+    mutationFn: (id: string) => workspaceApi.deleteForever(id),
+    onSuccess: invalidate,
+  });
+}
+
+export function useEmptyTrash() {
+  const invalidate = useInvalidateDocuments();
+  return useMutation({ mutationFn: () => workspaceApi.emptyTrash(), onSuccess: invalidate });
+}
+
+export function useTags() {
+  return useQuery({ queryKey: ["tags"], queryFn: workspaceApi.tags, retry: false });
+}
+
+function useTagMutation<TVariables>(
+  mutationFn: (variables: TVariables) => Promise<{ documents: string[] }>,
+) {
+  const invalidate = useInvalidateDocuments();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: ({ documents }) => {
+      invalidate();
+      for (const id of documents) qc.invalidateQueries({ queryKey: ["note", id] });
+    },
+  });
+}
+
+export function useRenameTag() {
+  return useTagMutation(({ tag, name }: { tag: string; name: string }) =>
+    workspaceApi.renameTag(tag, name),
+  );
+}
+
+export function useDeleteTag() {
+  return useTagMutation((tag: string) => workspaceApi.deleteTag(tag));
+}
+
+export function useSavedSearches() {
+  return useQuery({
+    queryKey: ["saved-searches"],
+    queryFn: workspaceApi.savedSearches,
+    retry: false,
+  });
+}
+
+export function useSaveSearch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (search: Pick<SavedSearch, "name" | "query" | "mode" | "filters">) =>
+      workspaceApi.saveSearch(search),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["saved-searches"] }),
+  });
+}
+
+export function useDeleteSavedSearch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => workspaceApi.deleteSavedSearch(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["saved-searches"] }),
+  });
+}
+
+export function useBackups(enabled = true) {
+  return useQuery({ queryKey: ["backups"], queryFn: workspaceApi.backups, enabled, retry: false });
+}
+
+export function useCreateBackup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => workspaceApi.createBackup(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["backups"] }),
+  });
+}
+
+export function useRestoreBackup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => workspaceApi.restoreBackup(name),
+    // A restore can change any document, so refresh everything.
+    onSuccess: () => qc.invalidateQueries(),
+  });
+}
+
+export function useImportMarkdown() {
+  const invalidate = useInvalidateDocuments();
+  return useMutation({
+    mutationFn: ({ files, folderId }: { files: File[]; folderId?: string | null }) =>
+      workspaceApi.importMarkdown(files, folderId ?? null),
+    onSuccess: invalidate,
   });
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { SearchBar } from "./features/notes/SearchBar";
 import { NoteList } from "./features/notes/NoteList";
 import { DocumentSidebar } from "./features/notes/DocumentSidebar";
@@ -9,6 +9,13 @@ import { OutlinePanel } from "./features/notes/OutlinePanel";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteEditor } from "./features/notes/NoteEditor";
 import { BlockNoteEditor } from "./features/notes/BlockNoteEditor";
+import { TagsPanel } from "./features/notes/TagsPanel";
+import { TaggedNotes } from "./features/notes/TaggedNotes";
+import { TagEditorDialog } from "./features/notes/TagEditorDialog";
+import { WorkspaceMenu } from "./features/notes/WorkspaceMenu";
+import { Toast, type Notice } from "./features/notes/Toast";
+import { workspaceApi } from "./features/notes/api";
+import { isEditableTarget, SEARCH_INPUT_ID } from "./features/notes/listKeyboard";
 import type { Annotation } from "./features/notes/annotations";
 import {
   useCreateNote,
@@ -24,11 +31,21 @@ import {
   useMoveDocument,
   useMoveFolder,
   useRenameFolder,
+  useRestoreDocument,
   useReview,
+  useSavedSearches,
+  useSaveSearch,
+  useDeleteSavedSearch,
+  useTags,
   useSearch,
   useUpdateNote,
 } from "./features/notes/hooks";
-import type { BlockSearchFilters, ReviewKind, SearchMode } from "./features/notes/types";
+import type {
+  BlockSearchFilters,
+  ReviewKind,
+  SavedSearch,
+  SearchMode,
+} from "./features/notes/types";
 
 export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(() =>
@@ -42,6 +59,9 @@ export function App() {
   const [mode, setMode] = useState<SearchMode>("text");
   const [blockSearchFilters, setBlockSearchFilters] = useState<BlockSearchFilters>({});
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [tagEditorId, setTagEditorId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
 
   const searching = query.trim().length > 0;
   const hasBlockSearchFilters = Object.values(blockSearchFilters).some(Boolean);
@@ -66,6 +86,13 @@ export function App() {
   const deleteNote = useDeleteNote();
   const review = useReview();
   const linkChecks = useLinkChecks(selectedId);
+  const restoreDocument = useRestoreDocument();
+  const tags = useTags();
+  const savedSearches = useSavedSearches();
+  const saveSearch = useSaveSearch();
+  const deleteSavedSearch = useDeleteSavedSearch();
+  const tagNames = (tags.data ?? []).map((item) => item.tag);
+  const tagEditorNote = (allNotes.data ?? []).find((item) => item.id === tagEditorId) ?? null;
 
   const listNotes = searching
     ? (searchResults.data ?? []).map((r) => r.note)
@@ -113,6 +140,8 @@ export function App() {
     review.reset();
   };
 
+  const showNotice = (next: Omit<Notice, "id">) => setNotice({ ...next, id: Date.now() });
+
   const handleNew = async (folderId: string | null = null) => {
     const created = await createNote.mutateAsync(folderId);
     selectNote(created.id);
@@ -120,7 +149,22 @@ export function App() {
 
   const handleDelete = async (id = selectedId) => {
     if (!id) return;
+    const title =
+      (allNotes.data ?? []).find((item) => item.id === id)?.title ??
+      (id === selectedId ? note.data?.title : undefined) ??
+      "note";
     await deleteNote.mutateAsync(id);
+    showNotice({
+      message: `Moved “${title}” to Trash`,
+      action: {
+        label: "Undo",
+        run: () =>
+          restoreDocument.mutate(id, {
+            onSuccess: () => selectNote(id),
+            onError: (error) => showNotice({ tone: "error", message: error.message }),
+          }),
+      },
+    });
     if (id === selectedId) {
       setSelectedId(null);
       setActiveBlockId(null);
@@ -138,6 +182,49 @@ export function App() {
 
   const dismiss = (id: string) => setDismissed((prev) => new Set(prev).add(id));
 
+  const applySavedSearch = (saved: SavedSearch) => {
+    setActiveTag(null);
+    setMode(saved.mode);
+    setBlockSearchFilters(saved.filters ?? {});
+    setQuery(saved.query);
+  };
+
+  const handleSaveSearch = () => {
+    saveSearch.mutate(
+      {
+        name: query.trim(),
+        query: query.trim(),
+        mode,
+        filters: mode === "text" ? blockSearchFilters : {},
+      },
+      {
+        onSuccess: () => showNotice({ message: `Saved search “${query.trim()}”` }),
+        onError: (error) => showNotice({ tone: "error", message: error.message }),
+      },
+    );
+  };
+
+  // Global shortcuts: ⌘/Ctrl+K or "/" to search, Alt+N for a new note.
+  const onShortcut = useEffectEvent((event: KeyboardEvent) => {
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      focusSearch();
+    } else if (event.key === "/" && !mod && !isEditableTarget(event.target)) {
+      event.preventDefault();
+      focusSearch();
+    } else if (event.altKey && !mod && event.code === "KeyN") {
+      event.preventDefault();
+      void handleNew();
+    }
+  });
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => onShortcut(event);
+    document.addEventListener("keydown", listener);
+    return () => document.removeEventListener("keydown", listener);
+  }, []);
+
   return (
     <div className="flex h-screen text-zinc-900">
       {/* Left column */}
@@ -150,7 +237,21 @@ export function App() {
           filters={blockSearchFilters}
           onFilters={setBlockSearchFilters}
           documents={allNotes.data ?? []}
+          tags={tagNames}
+          savedSearches={savedSearches.data ?? []}
+          onSaveSearch={handleSaveSearch}
+          onApplySavedSearch={applySavedSearch}
+          onDeleteSavedSearch={(id) => deleteSavedSearch.mutate(id)}
           onNew={handleNew}
+          actions={
+            <WorkspaceMenu
+              onNotice={showNotice}
+              onOpenNote={(id) => {
+                setActiveTag(null);
+                selectNote(id);
+              }}
+            />
+          }
         />
         {searching && mode === "text" ? (
           blockSearch.isError && !hasBlockSearchFilters ? (
@@ -169,6 +270,14 @@ export function App() {
               onSelect={(documentId, blockId) => selectNote(documentId, blockId)}
             />
           )
+        ) : activeTag ? (
+          <TaggedNotes
+            tag={activeTag}
+            notes={allNotes.data ?? []}
+            selectedId={selectedId}
+            onSelect={selectNote}
+            onTagChange={setActiveTag}
+          />
         ) : navigation.isError ? (
           <NoteList
             notes={listNotes}
@@ -192,8 +301,10 @@ export function App() {
             onDeleteDocument={async (id) => handleDelete(id)}
             onMoveDocument={(id, folderId) => moveDocument.mutateAsync({ id, folderId })}
             onMoveFolder={(id, parentId) => moveFolder.mutateAsync({ id, parentId })}
+            onEditTags={setTagEditorId}
           />
         )}
+        <TagsPanel activeTag={activeTag} onSelectTag={setActiveTag} />
         <OutlinePanel
           document={blockDocument.data ?? null}
           onFocus={(blockId) => selectedId && selectNote(selectedId, blockId)}
@@ -205,8 +316,14 @@ export function App() {
       {/* Right pane */}
       <main className="flex flex-1 flex-col overflow-y-auto">
         {!selectedId && (
-          <div className="flex flex-1 items-center justify-center text-zinc-400">
-            Select a note or create a new one.
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-zinc-400">
+            <p>Select a note or create a new one.</p>
+            <p className="text-xs">
+              <kbd className="rounded border border-zinc-300 px-1">Alt</kbd>+
+              <kbd className="rounded border border-zinc-300 px-1">N</kbd> new note ·{" "}
+              <kbd className="rounded border border-zinc-300 px-1">⌘K</kbd> search ·{" "}
+              <kbd className="rounded border border-zinc-300 px-1">?</kbd> tips
+            </p>
           </div>
         )}
         {selectedId && note.data && (
@@ -214,10 +331,13 @@ export function App() {
             <NoteHeader
               note={note.data}
               onTitle={(title) => updateNote.mutate({ id: note.data!.id, title })}
-              onDelete={handleDelete}
+              onDelete={() => void handleDelete()}
               onSetStatus={(status) => updateNote.mutate({ id: note.data!.id, status })}
               onClarify={() => handleReview("clarify")}
               checking={review.isPending}
+              exportUrl={
+                blockDocument.data ? workspaceApi.documentMarkdownUrl(note.data.id) : undefined
+              }
             />
             {blockDocument.data ? (
               <BlockNoteEditor
@@ -243,8 +363,31 @@ export function App() {
           </>
         )}
       </main>
+      <TagEditorDialog
+        open={tagEditorNote !== null}
+        title={tagEditorNote?.title ?? ""}
+        tags={tagEditorNote?.tags ?? []}
+        suggestions={tagNames}
+        onChange={(next) => {
+          if (tagEditorNote)
+            updateNote.mutate(
+              { id: tagEditorNote.id, tags: next },
+              { onError: (error) => showNotice({ tone: "error", message: error.message }) },
+            );
+        }}
+        onClose={() => setTagEditorId(null)}
+      />
+      <Toast notice={notice} onDismiss={() => setNotice(null)} />
     </div>
   );
+}
+
+function focusSearch() {
+  const input = document.getElementById(SEARCH_INPUT_ID);
+  if (input instanceof HTMLInputElement) {
+    input.focus();
+    input.select();
+  }
 }
 
 function blockIdFromHash(hash: string): string | null {

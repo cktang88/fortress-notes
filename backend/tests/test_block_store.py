@@ -59,7 +59,7 @@ class BlockStoreTests(unittest.TestCase):
                     "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
                 ).fetchone()["version"]
             self.assertIsNotNone(table)
-            self.assertEqual(version, 10)
+            self.assertEqual(version, 11)
 
     def test_empty_document_starts_with_a_persisted_paragraph(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1070,7 +1070,7 @@ class BlockStoreTests(unittest.TestCase):
                     "SELECT version FROM schema_migrations ORDER BY version"
                 ).fetchall()
                 self.assertEqual(
-                    [row["version"] for row in versions], [2, 3, 4, 5, 6, 7, 8, 9, 10]
+                    [row["version"] for row in versions], [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
                 )
                 self.assertIsNotNone(
                     connection.execute(

@@ -3,14 +3,18 @@ import contextlib
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
 
 from . import (
     assets,
+    backups,
     block_query,
     block_store,
     embeddings,
@@ -19,10 +23,14 @@ from . import (
     notes_store,
     search,
     vision,
+    workspace,
 )
 from .portability import (
     export_all_markdown,
     export_document_markdown,
+    export_workspace_zip,
+    parse_uploaded_markdown,
+    safe_filename,
     import_markdown_directory,
     import_markdown_if_empty,
     preview_markdown_directory,
@@ -53,6 +61,9 @@ from .models import (
     FolderCreate,
     FolderMove,
     FolderRename,
+    SavedSearchCreate,
+    TagDelete,
+    TagRename,
 )
 
 settings = get_settings()
@@ -82,6 +93,20 @@ async def _reindex_loop() -> None:
             await asyncio.to_thread(embeddings.warm_index)
 
 
+async def _backup_loop() -> None:
+    """Keep one automatic snapshot per day; checking hourly is cheap."""
+    while True:
+        try:
+            await asyncio.to_thread(
+                backups.ensure_daily_backup,
+                settings.block_db_path,
+                backups.backup_directory(settings.notes_path),
+            )
+        except Exception:
+            logging.getLogger("fortress").exception("automatic backup failed")
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     if settings.block_db_enabled:
@@ -95,6 +120,11 @@ async def lifespan(_app: FastAPI):
             block_store.backfill_assets, settings.block_db_path, settings.assets_path
         )
         await asyncio.to_thread(block_store.ensure_fts_integrity, settings.block_db_path)
+    backup_task = (
+        asyncio.create_task(_backup_loop())
+        if settings.block_db_enabled and getattr(settings, "auto_backup_enabled", True)
+        else None
+    )
     task = (
         asyncio.create_task(_reindex_loop()) if settings.embeddings_enabled else None
     )
@@ -105,10 +135,11 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        if task:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        for running in (task, backup_task):
+            if running:
+                running.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await running
 
 
 app = FastAPI(title="Fortress Notes", lifespan=lifespan)
@@ -309,14 +340,244 @@ def get_block_subtree(document_id: str, block_id: str | None = None):
 
 
 @app.get("/api/block-documents/{document_id}/markdown")
-def export_block_document_markdown(document_id: str):
+def export_block_document_markdown(document_id: str, download: bool = False):
     if not settings.block_db_enabled:
         raise HTTPException(404, "Block store is disabled")
     try:
         markdown = export_document_markdown(settings.block_db_path, document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return Response(content=markdown, media_type="text/markdown")
+    headers = {}
+    if download:
+        tree = block_store.document_tree(settings.block_db_path, document_id)
+        title = safe_filename(str(tree["title"])) if tree else document_id
+        headers["Content-Disposition"] = _attachment(f"{title}.md")
+    return Response(content=markdown, media_type="text/markdown", headers=headers)
+
+
+@app.get("/api/markdown-export.zip")
+def export_workspace_markdown_zip():
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    data = export_workspace_zip(settings.block_db_path, settings.assets_path)
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": _attachment(f"Fortress Notes {stamp}.zip")},
+    )
+
+
+MAX_IMPORT_BYTES = 5 * 1024 * 1024
+
+
+@app.post("/api/markdown-import/files")
+async def import_uploaded_markdown(
+    files: list[UploadFile] = File(...), folder_id: str | None = Form(None)
+):
+    """Create one new note per uploaded Markdown file."""
+
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
+    imported: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    for upload in files:
+        name = upload.filename or "untitled.md"
+        raw = await upload.read(MAX_IMPORT_BYTES + 1)
+        if len(raw) > MAX_IMPORT_BYTES:
+            errors.append({"name": name, "detail": "file is larger than 5 MB"})
+            continue
+        try:
+            parsed = parse_uploaded_markdown(name, raw)
+            note = _create_note(
+                NoteCreate(
+                    title=parsed.title,
+                    body=parsed.body,
+                    status=parsed.status,
+                    tags=parsed.tags,
+                    folder_id=folder_id or None,
+                )
+            )
+        except KeyError as exc:
+            raise HTTPException(404, "folder not found") from exc
+        except ValueError as exc:
+            errors.append({"name": name, "detail": str(exc)})
+            continue
+        imported.append({"name": name, "id": note.id, "title": note.title})
+    return {"imported": imported, "errors": errors}
+
+
+def _attachment(filename: str) -> str:
+    ascii_name = filename.encode("ascii", "ignore").decode() or "download"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+def _write_markdown_mirror(document_id: str) -> None:
+    """Recreate the compatibility Markdown file from the canonical document."""
+
+    markdown = export_document_markdown(settings.block_db_path, document_id)
+    (settings.notes_path / f"{document_id}.md").write_text(markdown, encoding="utf-8")
+
+
+# --- Trash ---------------------------------------------------------------------
+
+
+@app.get("/api/trash")
+def list_trash():
+    _require_block_db()
+    return workspace.list_trash(settings.block_db_path)
+
+
+@app.post("/api/trash/{document_id}/restore")
+def restore_from_trash(document_id: str):
+    _require_block_db()
+    try:
+        result = workspace.restore_document(settings.block_db_path, document_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    _write_markdown_mirror(document_id)
+    return result
+
+
+@app.delete("/api/trash/{document_id}", status_code=204)
+def delete_forever(document_id: str):
+    _require_block_db()
+    try:
+        workspace.purge_document(settings.block_db_path, document_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(status_code=204)
+
+
+@app.delete("/api/trash")
+def empty_trash():
+    _require_block_db()
+    return {"deleted": workspace.empty_trash(settings.block_db_path)}
+
+
+# --- Tags ----------------------------------------------------------------------
+
+
+@app.get("/api/tags")
+def list_tags():
+    _require_block_db()
+    return workspace.list_tags(settings.block_db_path)
+
+
+@app.post("/api/tags/rename")
+def rename_tag(data: TagRename):
+    _require_block_db()
+    try:
+        changed = workspace.rename_tag(settings.block_db_path, data.tag, data.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _sync_mirrors(changed)
+    return {"documents": changed}
+
+
+@app.post("/api/tags/delete")
+def delete_tag(data: TagDelete):
+    _require_block_db()
+    changed = workspace.delete_tag(settings.block_db_path, data.tag)
+    _sync_mirrors(changed)
+    return {"documents": changed}
+
+
+def _sync_mirrors(document_ids: list[str]) -> None:
+    for document_id in document_ids:
+        block_store.sync_markdown(settings.notes_path, settings.block_db_path, document_id)
+
+
+# --- Saved searches ------------------------------------------------------------
+
+
+@app.get("/api/saved-searches")
+def list_saved_searches():
+    _require_block_db()
+    return workspace.list_saved_searches(settings.block_db_path)
+
+
+@app.post("/api/saved-searches", status_code=201)
+def create_saved_search(data: SavedSearchCreate):
+    _require_block_db()
+    try:
+        return workspace.create_saved_search(
+            settings.block_db_path, data.name, data.query, data.mode, data.filters
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.delete("/api/saved-searches/{search_id}", status_code=204)
+def delete_saved_search(search_id: str):
+    _require_block_db()
+    try:
+        workspace.delete_saved_search(settings.block_db_path, search_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(status_code=204)
+
+
+# --- Backups -------------------------------------------------------------------
+
+
+@app.get("/api/backups")
+def list_backups():
+    _require_block_db()
+    return backups.list_backups(backups.backup_directory(settings.notes_path))
+
+
+@app.post("/api/backups", status_code=201)
+def create_backup():
+    _require_block_db()
+    directory = backups.backup_directory(settings.notes_path)
+    path = backups.create_backup(settings.block_db_path, directory, "manual")
+    return next(item for item in backups.list_backups(directory) if item["name"] == path.name)
+
+
+@app.get("/api/backups/{name}/download")
+def download_backup(name: str):
+    _require_block_db()
+    try:
+        path = backups.resolve_backup(backups.backup_directory(settings.notes_path), name)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(path, media_type="application/vnd.sqlite3", filename=name)
+
+
+@app.post("/api/backups/{name}/restore")
+def restore_backup(name: str):
+    _require_block_db()
+    directory = backups.backup_directory(settings.notes_path)
+    try:
+        safety = backups.restore_backup(settings.block_db_path, directory, name)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _rebuild_markdown_mirrors(directory / f"mirrors-before-{safety.stem}")
+    return {"restored": name, "safety_backup": safety.name}
+
+
+def _rebuild_markdown_mirrors(stash: Path) -> None:
+    """Make the Markdown mirrors match the restored database.
+
+    Mirrors for documents the restored database does not contain are moved
+    aside into ``stash`` rather than deleted.
+    """
+
+    active = {item["id"] for item in block_store.list_documents(settings.block_db_path)}
+    for mirror in settings.notes_path.glob("*.md"):
+        if mirror.stem not in active:
+            stash.mkdir(parents=True, exist_ok=True)
+            mirror.replace(stash / mirror.name)
+    for document_id in active:
+        _write_markdown_mirror(document_id)
+
+
+def _require_block_db() -> None:
+    if not settings.block_db_enabled:
+        raise HTTPException(404, "Block store is disabled")
 
 
 @app.get("/api/markdown-export")
@@ -537,6 +798,15 @@ def list_notes(status: NoteStatus | None = None):
 def create_note(data: NoteCreate):
     if data.folder_id is not None and not settings.block_db_enabled:
         raise HTTPException(404, "Block store is disabled")
+    try:
+        return _create_note(data)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+def _create_note(data: NoteCreate) -> Note:
+    """Create the Markdown mirror and the canonical SQLite document together."""
+
     note = notes_store.create_note(data)
     if settings.block_db_enabled:
         try:
@@ -552,10 +822,8 @@ def create_note(data: NoteCreate):
                 ensure_empty_paragraph=True,
                 folder_id=data.folder_id,
             )
-        except Exception as exc:
+        except Exception:
             notes_store.delete_note(note.id)
-            if isinstance(exc, KeyError):
-                raise HTTPException(404, str(exc)) from exc
             raise
     return note
 

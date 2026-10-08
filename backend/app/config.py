@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:5173"
     block_db_enabled: bool = True
     block_db_import_on_startup: bool = True
+    # Keep a daily SQLite snapshot in NOTES_DIR/.fortress-backups (last 7 kept).
+    auto_backup_enabled: bool = True
 
     @property
     def notes_path(self) -> Path:

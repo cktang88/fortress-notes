@@ -8,6 +8,9 @@ never replaced.
 
 from __future__ import annotations
 
+import io
+import re
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -295,3 +298,98 @@ def _derive_title(body: str) -> str:
         if text:
             return text[:120]
     return "Untitled"
+
+
+# --- Downloadable export / uploaded import ----------------------------------
+
+_UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+_MEDIA_LINK = re.compile(r"/media/([A-Za-z0-9_-]+\.[A-Za-z0-9]+)")
+
+
+def safe_filename(name: str, fallback: str = "Untitled") -> str:
+    """Turn a title into a filename that is valid on every desktop OS."""
+
+    cleaned = _UNSAFE_NAME.sub(" ", name).strip().strip(".")
+    cleaned = " ".join(cleaned.split())[:100]
+    return cleaned or fallback
+
+
+def export_workspace_zip(database_path: Path, assets_path: Path) -> bytes:
+    """Zip every active document as Markdown, mirroring the folder tree.
+
+    Images and files referenced through ``/media/`` are bundled under
+    ``media/`` and links are rewritten to relative paths, so the archive opens
+    correctly in any Markdown editor.
+    """
+
+    buffer = io.BytesIO()
+    used: set[str] = set()
+    media: set[str] = set()
+
+    def unique(path: str) -> str:
+        stem, suffix = path[:-3], ".md"
+        candidate, counter = path, 2
+        while candidate.lower() in used:
+            candidate = f"{stem} ({counter}){suffix}"
+            counter += 1
+        used.add(candidate.lower())
+        return candidate
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+
+        def visit(nodes: object, prefix: list[str]) -> None:
+            if not isinstance(nodes, list):
+                return
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                if node.get("kind") == "folder":
+                    visit(node.get("children"), [*prefix, safe_filename(str(node.get("name")))])
+                elif node.get("kind") == "document":
+                    markdown = export_document_markdown(database_path, str(node["id"]))
+                    media.update(_MEDIA_LINK.findall(markdown))
+                    up = "../" * len(prefix)
+                    markdown = _MEDIA_LINK.sub(rf"{up}media/\1", markdown)
+                    name = unique("/".join([*prefix, f"{safe_filename(str(node.get('title')))}.md"]))
+                    archive.writestr(name, markdown)
+
+        visit(navigation(database_path).get("items"), [])
+        for media_name in sorted(media):
+            source = assets_path / media_name
+            if source.is_file():
+                archive.write(source, f"media/{media_name}")
+    return buffer.getvalue()
+
+
+@dataclass(frozen=True)
+class UploadedNote:
+    title: str
+    status: str
+    tags: list[str]
+    body: str
+
+
+def parse_uploaded_markdown(filename: str, raw: bytes) -> UploadedNote:
+    """Read one uploaded Markdown file; raises ValueError for unusable input."""
+
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("file is not UTF-8 text") from exc
+    try:
+        post = frontmatter.loads(text)
+    except Exception as exc:  # Malformed YAML is user data, not a server error.
+        raise ValueError(f"could not read front matter: {exc}") from exc
+    metadata = post.metadata
+    stem = Path(filename).stem.strip()
+    title = str(metadata.get("title") or "").strip() or stem or _derive_title(post.content)
+    status = metadata.get("status", "rough")
+    tags = metadata.get("tags", []) or []
+    if not isinstance(tags, list):
+        tags = [tags]
+    return UploadedNote(
+        title=title[:200],
+        status=status if status in {"rough", "polished"} else "rough",
+        tags=[str(tag) for tag in tags if str(tag).strip()],
+        body=post.content,
+    )

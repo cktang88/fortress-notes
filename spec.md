@@ -74,6 +74,19 @@ them.
 | `POST` | `/api/block-documents/{id}/link-checks` | — | `{links: [{url, status, checked_at, block_ids}]}` |
 | `POST` | `/api/images` | multipart `file` | `{url, text}` (saves image, runs caption+OCR) |
 | `GET` | `/media/{file}` | — | image bytes (StaticFiles) |
+| `GET` | `/api/trash` | — | trashed documents, newest first |
+| `POST` | `/api/trash/{id}/restore` | — | `{id, folder_id, position}` (also rewrites the Markdown mirror) |
+| `DELETE` | `/api/trash/{id}` · `/api/trash` | — | delete one forever · empty the trash |
+| `GET` | `/api/tags` | — | `[{tag, count}]` over active documents |
+| `POST` | `/api/tags/rename` · `/api/tags/delete` | `{tag, name}` · `{tag}` | `{documents}` changed |
+| `GET` · `POST` | `/api/saved-searches` | `{name, query, mode, filters}` | saved searches |
+| `DELETE` | `/api/saved-searches/{id}` | — | `204` |
+| `GET` · `POST` | `/api/backups` | — | list snapshots · take a manual snapshot |
+| `GET` | `/api/backups/{name}/download` | — | SQLite snapshot file |
+| `POST` | `/api/backups/{name}/restore` | — | `{restored, safety_backup}` |
+| `GET` | `/api/block-documents/{id}/markdown` | `?download=true` | one note as Markdown |
+| `GET` | `/api/markdown-export.zip` | — | every note, folder tree preserved, media bundled |
+| `POST` | `/api/markdown-import/files` | multipart `files[]`, `folder_id?` | `{imported, errors}` |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
 
 ### Late-interaction search (PyLate)
@@ -160,14 +173,30 @@ associations.
   enabled by default and use the small **SmolVLM-256M** model; OCR and captioning run
   locally. Models lazy-load + pre-warm in the background at startup.
 
-## 7. Roadmap / potential features
+## 7. Workspace safety and organization
 
-- **Backlinks & wiki-links** (`[[note]]`), graph view.
+- **Trash**: deleting a note soft-deletes it in SQLite. The app shows an Undo toast;
+  the Trash dialog (⋯ menu) restores notes or deletes them forever.
+- **Backups**: a background task keeps one automatic snapshot per day in
+  `NOTES_DIR/.fortress-backups` (last 7 daily, 10 manual, 5 pre-restore). Restoring
+  verifies the snapshot, saves the current state as `pre-restore` first, and moves
+  Markdown mirrors of documents that are not in the snapshot aside rather than
+  deleting them. Set `AUTO_BACKUP_ENABLED=false` to turn off daily snapshots.
+- **Import/export**: the ⋯ menu imports `.md` files as new notes and exports the
+  workspace as a zip; each note exports from its header or right-click menu.
+- **Tags**: edited from a note's right-click menu, browsed in the sidebar's Tags
+  section, renamed/merged/removed across all notes, and usable as a search filter.
+- **Saved searches**: saved from the search box and re-run from chips beneath it.
+- **Keyboard**: ⌘/Ctrl+K or `/` search, Alt+N new note, ↑/↓/Enter through results,
+  Esc clears search, `?` shows tips.
+
+## 8. Roadmap / potential features
+
 - **PLAID/Voyager index** for embedding search at larger scale.
-- **Tag management**, saved searches, keyboard navigation.
-- Export; larger leaderboard-class OCR/VLM (e.g. PaddleOCR-VL) as an opt-in.
+- Larger leaderboard-class OCR/VLM (e.g. PaddleOCR-VL) as an opt-in.
+- Graph view stays deferred (outside the single-user product boundary).
 
-## 8. Open questions
+## 9. Open questions
 - Chunking strategy for very long notes (per-paragraph vs whole-note vectors).
 - Whether to persist the embedding cache to disk between runs (v1: in-memory).
 - Debounce window + conflict handling if a file changes on disk while editing.

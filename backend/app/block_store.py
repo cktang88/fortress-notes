@@ -23,7 +23,7 @@ from ulid import ULID
 
 from .models import BlockOperation, BlockReviewContextKind
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 DB_FILENAME = ".fortress.sqlite3"
 
 _TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
@@ -191,6 +191,15 @@ CREATE TABLE IF NOT EXISTS link_check_cache (
     checked_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    query TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'text',
+    filters_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
     block_id UNINDEXED,
     document_id UNINDEXED,
@@ -273,6 +282,16 @@ _MIGRATIONS = {
         url TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         checked_at TEXT NOT NULL
+    );
+    """,
+    11: """
+    CREATE TABLE IF NOT EXISTS saved_searches (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        query TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'text',
+        filters_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
     );
     """,
 }

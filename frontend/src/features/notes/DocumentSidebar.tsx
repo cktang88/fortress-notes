@@ -6,6 +6,8 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/react";
 import { FormEvent, KeyboardEvent, MouseEvent, useEffect, useRef, useState } from "react";
+import { workspaceApi } from "./api";
+import { triggerDownload } from "./download";
 import { StatusBadge } from "./StatusBadge";
 import type { NavigationDocument, NavigationFolder, NavigationNode } from "./types";
 
@@ -25,6 +27,7 @@ export interface DocumentSidebarProps {
   onDeleteDocument: (id: string) => Promise<unknown>;
   onMoveDocument: (id: string, folderId: string | null) => Promise<unknown>;
   onMoveFolder: (id: string, parentId: string | null) => Promise<unknown>;
+  onEditTags?: (id: string) => void;
 }
 
 type MenuTarget =
@@ -50,6 +53,7 @@ export function DocumentSidebar({
   onDeleteDocument,
   onMoveDocument,
   onMoveFolder,
+  onEditTags,
 }: DocumentSidebarProps) {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>(() =>
     collectFolderIds(nodes).reduce<Record<string, boolean>>((expanded, id) => {
@@ -403,6 +407,26 @@ export function DocumentSidebar({
                 >
                   Rename
                 </MenuButton>
+                {onEditTags && (
+                  <MenuButton
+                    onClick={() => {
+                      const id = menuTargetId(menu.target);
+                      closeMenu();
+                      onEditTags(id);
+                    }}
+                  >
+                    Edit tags…
+                  </MenuButton>
+                )}
+                <MenuButton
+                  onClick={() => {
+                    const id = menuTargetId(menu.target);
+                    closeMenu();
+                    triggerDownload(workspaceApi.documentMarkdownUrl(id));
+                  }}
+                >
+                  Download as Markdown
+                </MenuButton>
                 <MenuButton
                   onClick={() => {
                     const node = findDocument(nodes, menuTargetId(menu.target));
@@ -420,7 +444,7 @@ export function DocumentSidebar({
                     void runAction(() => onDeleteDocument(id)).catch(() => undefined);
                   }}
                 >
-                  Delete note
+                  Move to Trash
                 </MenuButton>
               </>
             )}
