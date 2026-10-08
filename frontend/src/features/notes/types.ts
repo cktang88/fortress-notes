@@ -7,7 +7,6 @@ export interface BlockSearchFilters {
   documentId?: string;
   blockType?: BlockType;
   status?: NoteStatus;
-  tag?: string;
   updatedAfter?: string;
   updatedBefore?: string;
 }

@@ -84,11 +84,10 @@ describe("blockSearchParams", () => {
       blockSearchParams("road map", {
         blockType: "heading",
         status: "polished",
-        tag: "  work  ",
         updatedAfter: "2026-01-01T00:00:00Z",
       }),
     ).toBe(
-      "q=road+map&limit=50&block_type=heading&status=polished&tag=work&updated_after=2026-01-01T00%3A00%3A00Z",
+      "q=road+map&limit=50&block_type=heading&status=polished&updated_after=2026-01-01T00%3A00%3A00Z",
     );
   });
 });
