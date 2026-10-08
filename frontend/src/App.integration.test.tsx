@@ -200,7 +200,7 @@ describe("App trash and shortcuts", () => {
     ]);
   });
 
-  it("focuses search with Ctrl+K", async () => {
+  it("opens the palette with Ctrl+K and focuses text search with /", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -222,6 +222,17 @@ describe("App trash and shortcuts", () => {
     });
     act(() => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+    });
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Go to a note or run a command",
+    );
+    act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }),
+      );
+    });
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
     });
     expect(document.activeElement?.id).toBe("workspace-search");
   });

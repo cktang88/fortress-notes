@@ -4,21 +4,31 @@ import { useImportMarkdown } from "./hooks";
 import { TrashDialog } from "./TrashDialog";
 import type { Notice } from "./Toast";
 
+export type WorkspaceAction = "import" | "trash" | "backups";
+
 interface Props {
   onNotice: (notice: Omit<Notice, "id">) => void;
   onOpenNote: (id: string) => void;
+  /** Run an action from elsewhere (e.g. the command palette); `nonce` repeats it. */
+  request?: { action: WorkspaceAction; nonce: number } | null;
 }
 
 type DialogName = "trash" | "backups" | null;
 
 /** Import, trash and backups: the things you do to the whole workspace. */
-export function WorkspaceMenu({ onNotice, onOpenNote }: Props) {
+export function WorkspaceMenu({ onNotice, onOpenNote, request = null }: Props) {
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<DialogName>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const importMarkdown = useImportMarkdown();
+
+  useEffect(() => {
+    if (!request) return;
+    if (request.action === "import") fileRef.current?.click();
+    else setDialog(request.action);
+  }, [request]);
 
   useEffect(() => {
     if (!open) return;

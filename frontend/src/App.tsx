@@ -13,7 +13,8 @@ import { RelatedNotes } from "./features/notes/RelatedNotes";
 import { SearchBar } from "./features/notes/SearchBar";
 import { Toast, type Notice } from "./features/notes/Toast";
 import { useNoteSelection } from "./features/notes/useNoteSelection";
-import { WorkspaceMenu } from "./features/notes/WorkspaceMenu";
+import { WorkspaceMenu, type WorkspaceAction } from "./features/notes/WorkspaceMenu";
+import { CommandPalette } from "./features/notes/CommandPalette";
 import {
   useBlockDocument,
   useBlockSearch,
@@ -45,6 +46,11 @@ export function App() {
   const [mode, setMode] = useState<SearchMode>("text");
   const [blockSearchFilters, setBlockSearchFilters] = useState<BlockSearchFilters>({});
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [workspaceRequest, setWorkspaceRequest] = useState<{
+    action: WorkspaceAction;
+    nonce: number;
+  } | null>(null);
   const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
 
   const settledQuery = useDebouncedValue(query.trim());
@@ -82,11 +88,16 @@ export function App() {
     selection.select(id, blockId);
   };
 
-  const handleNew = async (folderId: string | null = null) => {
+  const handleNew = async (folderId: string | null = null, title = "") => {
     try {
-      const created = await createDocument.mutateAsync({ folderId });
-      setJustCreatedId(created.id);
-      selectNote(created.id);
+      const created = await createDocument.mutateAsync({ folderId, title });
+      if (title) {
+        // Already named: go straight to writing.
+        selectNote(created.id, created.children[0]?.id ?? null);
+      } else {
+        setJustCreatedId(created.id);
+        selectNote(created.id);
+      }
     } catch (error) {
       showError(error);
     }
@@ -136,13 +147,14 @@ export function App() {
     );
   };
 
-  // Global shortcuts: ⌘/Ctrl+K or "/" to search, Alt+N for a new note. Alt+N is ignored
-  // inside text fields, where Option+N on a Mac types accents such as ñ.
+  // Global shortcuts: ⌘/Ctrl+K opens the palette, "/" focuses full-text search, Alt+N
+  // makes a new note. Alt+N is ignored inside text fields, where Option+N on a Mac
+  // types accents such as ñ.
   const onShortcut = useEffectEvent((event: KeyboardEvent) => {
     const mod = event.metaKey || event.ctrlKey;
     if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
       event.preventDefault();
-      focusSearch();
+      setPaletteOpen((open) => !open);
     } else if (event.key === "/" && !mod && !isEditableTarget(event.target)) {
       event.preventDefault();
       focusSearch();
@@ -177,7 +189,13 @@ export function App() {
           onApplySavedSearch={applySavedSearch}
           onDeleteSavedSearch={(id) => deleteSavedSearch.mutate(id, { onError: showError })}
           onNew={() => void handleNew()}
-          actions={<WorkspaceMenu onNotice={showNotice} onOpenNote={(id) => selectNote(id)} />}
+          actions={
+            <WorkspaceMenu
+              onNotice={showNotice}
+              onOpenNote={(id) => selectNote(id)}
+              request={workspaceRequest}
+            />
+          }
         />
         {searching ? (
           useNoteLevelSearch ? (
@@ -292,6 +310,20 @@ export function App() {
           <div className="p-8 text-sm text-zinc-400">Loading…</div>
         )}
       </main>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        notes={allNotes.data ?? []}
+        recentIds={(navigation.data?.recent ?? []).map((item) => item.id)}
+        onOpenNote={(id) => selectNote(id)}
+        onCreateNote={(title) => void handleNew(null, title)}
+        onSearchEverywhere={(text) => {
+          setMode("text");
+          setQuery(text);
+          focusSearch();
+        }}
+        onWorkspaceAction={(action) => setWorkspaceRequest({ action, nonce: Date.now() })}
+      />
       <Toast notice={notice} onDismiss={() => setNotice(null)} />
     </div>
   );
@@ -304,7 +336,7 @@ function EmptyState() {
       <p className="text-xs">
         <kbd className="rounded border border-zinc-300 px-1">Alt</kbd>+
         <kbd className="rounded border border-zinc-300 px-1">N</kbd> new note ·{" "}
-        <kbd className="rounded border border-zinc-300 px-1">⌘K</kbd> search ·{" "}
+        <kbd className="rounded border border-zinc-300 px-1">⌘K</kbd> go to ·{" "}
         <kbd className="rounded border border-zinc-300 px-1">?</kbd> tips
       </p>
     </div>
