@@ -111,7 +111,7 @@ export function SearchBar({
               focusFirstResult()?.click();
             }
           }}
-          placeholder="Search… (⌘K)"
+          placeholder="Search text… (/)"
           className="min-w-0 flex-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm focus:border-zinc-500 focus:outline-none"
         />
         <button
@@ -287,8 +287,8 @@ export function SearchBar({
         </ul>
         <h3 className="mt-4 mb-2 text-sm font-semibold text-zinc-900">Keyboard shortcuts</h3>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm text-zinc-700">
-          <Shortcut keys={["⌘/Ctrl", "K"]}>Search notes</Shortcut>
-          <Shortcut keys={["/"]}>Search (when not typing)</Shortcut>
+          <Shortcut keys={["⌘/Ctrl", "K"]}>Go to a note or run a command</Shortcut>
+          <Shortcut keys={["/"]}>Search inside notes (when not typing)</Shortcut>
           <Shortcut keys={["Alt", "N"]}>New note</Shortcut>
           <Shortcut keys={["↓", "↑"]}>Move through search results</Shortcut>
           <Shortcut keys={["Enter"]}>Open the highlighted result</Shortcut>

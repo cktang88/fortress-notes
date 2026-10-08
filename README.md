@@ -48,7 +48,9 @@ you're reading.
   fresh one or restores any snapshot (your current notes are saved first).
 - **Import & export** — import `.md` files from **⋯**; export a note from its header.
 - **Saved searches** — save a search and re-run it from a one-click chip.
-- **Keyboard first** — ⌘/Ctrl+K or `/` to search, Alt+N for a new note, arrow keys and
+- **⌘K to go anywhere** — jump to a note by title (fuzzy), type a new title to create
+  it, search everywhere, or open Trash, Backups and Import.
+- **Keyboard first** — `/` to search inside notes, Alt+N for a new note, arrow keys and
   Enter through results, Esc to clear, `?` for tips.
 
 See [`spec.md`](./spec.md) for the full design, data model, API, and roadmap.
