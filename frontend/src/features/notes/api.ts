@@ -113,6 +113,11 @@ export const blockApi = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+  capture: (text: string) =>
+    request<{ document_id: string; title: string; folder: string }>("/capture", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
   /** Moves the document to the trash. */
   remove: (id: string) =>
     request<void>(`/block-documents/${encodeURIComponent(id)}`, { method: "DELETE" }),

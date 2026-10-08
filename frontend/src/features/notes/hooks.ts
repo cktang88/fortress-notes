@@ -287,3 +287,11 @@ export function useImportMarkdown() {
     onSuccess: () => invalidateDocumentLists(qc),
   });
 }
+
+export function useCapture() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (text: string) => blockApi.capture(text),
+    onSuccess: () => invalidateDocumentLists(qc),
+  });
+}

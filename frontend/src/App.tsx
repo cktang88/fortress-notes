@@ -3,6 +3,7 @@ import { ApiError, workspaceApi } from "./features/notes/api";
 import { BacklinksPanel } from "./features/notes/BacklinksPanel";
 import { BlockNoteEditor } from "./features/notes/BlockNoteEditor";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
+import { CaptureBox, CAPTURE_INPUT_ID } from "./features/notes/CaptureBox";
 import { DocumentSidebar } from "./features/notes/DocumentSidebar";
 import { isEditableTarget, SEARCH_INPUT_ID } from "./features/notes/listKeyboard";
 import { NoteHeader } from "./features/notes/NoteHeader";
@@ -15,6 +16,7 @@ import { useNoteSelection } from "./features/notes/useNoteSelection";
 import { WorkspaceMenu } from "./features/notes/WorkspaceMenu";
 import {
   useBlockDocument,
+  useCapture,
   useBlockSearch,
   useCreateDocument,
   useCreateFolder,
@@ -60,6 +62,7 @@ export function App() {
   const deleteFolder = useDeleteFolder();
   const moveDocument = useMoveDocument();
   const moveFolder = useMoveFolder();
+  const capture = useCapture();
   const savedSearches = useSavedSearches();
   const saveSearch = useSaveSearch();
   const deleteSavedSearch = useDeleteSavedSearch();
@@ -129,7 +132,11 @@ export function App() {
   // inside text fields, where Option+N on a Mac types accents such as ñ.
   const onShortcut = useEffectEvent((event: KeyboardEvent) => {
     const mod = event.metaKey || event.ctrlKey;
-    if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+    if (mod && event.shiftKey && event.code === "Space") {
+      // Quick capture works from anywhere, even mid-sentence in a note.
+      event.preventDefault();
+      window.document.getElementById(CAPTURE_INPUT_ID)?.focus();
+    } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
       event.preventDefault();
       focusSearch();
     } else if (event.key === "/" && !mod && !isEditableTarget(event.target)) {
@@ -164,6 +171,21 @@ export function App() {
           onDeleteSavedSearch={(id) => deleteSavedSearch.mutate(id, { onError: showError })}
           onNew={() => void handleNew()}
           actions={<WorkspaceMenu onNotice={showNotice} onOpenNote={(id) => selectNote(id)} />}
+        />
+        <CaptureBox
+          onCapture={(text) =>
+            capture.mutateAsync(text).then(
+              (result) =>
+                showNotice({
+                  message: `Saved “${result.title}” to ${result.folder}`,
+                  action: { label: "Open", run: () => selectNote(result.document_id) },
+                }),
+              (error: unknown) => {
+                showError(error);
+                throw error;
+              },
+            )
+          }
         />
         {searching ? (
           <BlockSearchResults

@@ -130,6 +130,44 @@ def empty_trash() -> int:
     return len(purged)
 
 
+# --- Quick capture -----------------------------------------------------------
+
+UNCATEGORIZED = "Uncategorized"
+
+
+def capture(text: str) -> dict[str, object]:
+    """Save a quick thought as its own note in the Uncategorized folder.
+
+    The note is titled from its first line and placed at the top of the folder
+    (newest first), so captures can be filed later by dragging them elsewhere.
+    The folder is created on first use and found again by its name.
+    """
+
+    body = text.strip()
+    if not body:
+        raise ValueError("nothing to capture")
+    db_path, _ = _paths()
+    folder_id = _uncategorized_folder(db_path)
+    tree = block_store.create_block_document(
+        db_path,
+        block_store.derive_title(body)[:80],
+        "rough",
+        [],
+        body,
+        folder_id=folder_id,
+    )
+    block_store.move_document(db_path, tree["id"], folder_id, position=0)
+    write_mirror(tree["id"])
+    return {"document_id": tree["id"], "title": tree["title"], "folder": UNCATEGORIZED}
+
+
+def _uncategorized_folder(db_path: Path) -> str:
+    for item in block_store.navigation(db_path)["items"]:
+        if item.get("kind") == "folder" and item.get("name") == UNCATEGORIZED:
+            return str(item["id"])
+    return str(block_store.create_folder(db_path, UNCATEGORIZED, None, position=0)["id"])
+
+
 # --- Mirrors -----------------------------------------------------------------
 
 

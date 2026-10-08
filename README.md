@@ -42,6 +42,10 @@ you're reading.
   The small VLM adds local captions, and content-hash caching reuses OCR and captions
   for duplicate image bytes.
 
+- **Quick capture** — type into "Jot something down…" at the top of the sidebar (or press
+  ⌘/Ctrl+Shift+Space from anywhere) and Enter saves it as its own note in the
+  **Uncategorized** folder, titled from its first line, without leaving what you're doing.
+  Drag captures into real folders whenever you like.
 - **Trash with Undo** — deleting moves a note to Trash; undo it from the toast or
   restore it later from **⋯ → Trash**.
 - **Automatic backups** — a SQLite snapshot is saved daily; **⋯ → Backups** downloads a
