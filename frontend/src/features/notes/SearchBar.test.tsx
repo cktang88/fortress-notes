@@ -15,7 +15,7 @@ describe("SearchBar", () => {
 
   it("updates compact block filters in full-text mode", () => {
     const onFilters = vi.fn();
-    rendered = renderSearchBar({ onFilters });
+    rendered = renderSearchBar({ onFilters, query: "budget" });
     const type = rendered.container.querySelector<HTMLSelectElement>('[aria-label="Block type"]');
     const status = rendered.container.querySelector<HTMLSelectElement>(
       '[aria-label="Document status"]',
@@ -32,6 +32,11 @@ describe("SearchBar", () => {
     expect(onFilters).toHaveBeenNthCalledWith(1, { blockType: "heading" });
     expect(onFilters).toHaveBeenNthCalledWith(2, { status: "polished" });
     expect(rendered.container.querySelector('[aria-label="Tag"]')).toBeNull();
+  });
+
+  it("shows block filters only once there is something to filter", () => {
+    rendered = renderSearchBar();
+    expect(rendered.container.querySelector('[aria-label="Block search filters"]')).toBeNull();
   });
 
   it("keeps block filters out of embedding search", () => {

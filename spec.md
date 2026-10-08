@@ -13,8 +13,13 @@ nested folders.
 
 ## 2. Data model
 
-Each note is one Markdown file in `NOTES_DIR` (default `./notes`), named `<id>.md`.
-YAML frontmatter holds metadata; the body is the note content (Markdown).
+SQLite (`NOTES_DIR/.fortress.sqlite3`) is the only source of truth: documents,
+folders, nested blocks with stable IDs, references, history, assets, and the FTS
+index. Every write goes to SQLite first. Each active note also gets a read-only
+Markdown mirror, `NOTES_DIR/<id>.md`, rewritten atomically after every change and
+removed when the note is trashed, so notes stay readable outside the app. The app
+never reads the mirrors back; only the explicit Markdown importer reads `.md` files.
+A mirror looks like this (extra front-matter keys added by hand are preserved):
 
 ```markdown
 ---
@@ -41,9 +46,8 @@ resized width survives the round-trip).
 - **title**: if empty, derived from the first heading/line of the body.
 - Timestamps are UTC ISO-8601. `updated_at` is set on every save.
 
-SQLite is authoritative for the active block workspace. Markdown files are preserved
-as migration inputs and compatibility mirrors; import/export must never silently delete
-them.
+On first start an empty database imports any existing `NOTES_DIR/*.md` files once,
+copying the originals to a timestamped backup folder first.
 
 ## 3. Backend (FastAPI, Python / uv)
 
@@ -51,7 +55,8 @@ them.
 - `config.py` — settings from env (`pydantic-settings`).
 - `models.py` — Pydantic schemas (`Note`, `NoteSummary`, `NoteCreate`, `NoteUpdate`,
   `SearchResult`, `ReviewResponse`).
-- `notes_store.py` — CRUD over Markdown files (frontmatter parse via `python-frontmatter`).
+- `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS, rendering.
+- `documents.py` — note lifecycle (create/update/trash/restore/purge) and Markdown mirrors.
 - `embeddings.py` — ColBERT late-interaction via PyLate; encode + MaxSim scoring,
   with a keyword fallback when disabled/unavailable.
 - `search.py` — full-text search + orchestration of embedding search & related notes.
@@ -122,7 +127,7 @@ them.
 │ ▸ Document tree (scroll) │                                     │
 │   • note A    rough      │   ┌───────────────────────────────┐ │
 │   • note B    polished   │   │  BlockNote rich-text editor  │ │
-│   • ...                  │   │  (Markdown-backed)            │ │
+│   • ...                  │   │  (SQLite-backed)              │ │
 │                          │   │                               │ │
 ├──────────────────────────┤   └───────────────────────────────┘ │
 │ Related notes (auto)     │   [AI review panel, when open]      │

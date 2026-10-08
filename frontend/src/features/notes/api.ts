@@ -1,5 +1,4 @@
 import type {
-  Note,
   NoteStatus,
   NoteSummary,
   NavigationResponse,
@@ -12,7 +11,6 @@ import type {
   Backlink,
   BlockTransaction,
   ReviewKind,
-  ReviewResponse,
   BlockReviewResponse,
   BlockReviewContext,
   BlockReviewContextResponse,
@@ -28,13 +26,24 @@ import type {
 
 const API = "/api";
 
-async function failure(res: Response): Promise<Error> {
+/** An HTTP error from the API; `status` lets callers tell conflicts from outages. */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function failure(res: Response): Promise<ApiError> {
   const body = await res.json().catch(() => null);
   const detail =
     body && typeof body === "object" && "detail" in body && typeof body.detail === "string"
       ? body.detail
       : null;
-  return new Error(`${res.status} ${detail ?? res.statusText}`);
+  return new ApiError(res.status, `${res.status} ${detail ?? res.statusText}`);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -51,21 +60,6 @@ export const notesApi = {
   list: (status?: NoteStatus) =>
     request<NoteSummary[]>(`/notes${status ? `?status=${status}` : ""}`),
 
-  get: (id: string) => request<Note>(`/notes/${id}`),
-
-  create: (body = "", folderId: string | null = null) =>
-    request<Note>("/notes", {
-      method: "POST",
-      body: JSON.stringify({ body, folder_id: folderId }),
-    }),
-
-  update: (id: string, patch: Partial<Pick<Note, "title" | "body" | "status" | "tags">>) =>
-    request<Note>(`/notes/${id}`, { method: "PUT", body: JSON.stringify(patch) }),
-
-  remove: (id: string) => request<void>(`/notes/${id}`, { method: "DELETE" }),
-
-  promote: (id: string) => request<Note>(`/notes/${id}/promote`, { method: "POST" }),
-
   search: (q: string, mode: SearchMode) =>
     request<SearchResult[]>(`/search?q=${encodeURIComponent(q)}&mode=${mode}`),
 
@@ -74,9 +68,6 @@ export const notesApi = {
     if (blockId) params.set("block_id", blockId);
     return request<RelatedResult[]>(`/notes/${id}/related?${params.toString()}`);
   },
-
-  review: (id: string, kind: ReviewKind) =>
-    request<ReviewResponse>(`/notes/${id}/review?kind=${kind}`, { method: "POST" }),
 
   uploadImage: async (file: File): Promise<{ url: string; text: string }> => {
     const form = new FormData();
@@ -117,6 +108,19 @@ export const blockApi = {
       body: JSON.stringify({ folder_id, position }),
     }),
   get: (id: string) => request<BlockDocument>(`/block-documents/${id}`),
+  create: (folderId: string | null = null, title = "") =>
+    request<BlockDocument>("/block-documents", {
+      method: "POST",
+      body: JSON.stringify({ title, folder_id: folderId }),
+    }),
+  update: (id: string, patch: { title?: string; status?: NoteStatus }) =>
+    request<BlockDocument>(`/block-documents/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  /** Moves the document to the trash. */
+  remove: (id: string) =>
+    request<void>(`/block-documents/${encodeURIComponent(id)}`, { method: "DELETE" }),
   checkLinks: (id: string) =>
     request<LinkCheckResponse>(`/block-documents/${id}/link-checks`, { method: "POST" }),
   review: (documentId: string, blockId: string, kind: ReviewKind = "factcheck") =>

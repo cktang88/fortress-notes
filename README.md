@@ -15,7 +15,7 @@ you're reading.
 - **SQLite block store** — documents contain stable, nested blocks with atomic
   transactions, references, backlinks, and an FTS5 search index.
 - **Markdown portability** — existing Markdown notes are imported without deleting the
-  originals; compatibility mirrors and export keep the data easy to inspect.
+  originals; every note is also mirrored to a readable `.md` file.
 - **Two-pane UI** — left: search + document tree + related/backlink panes; right: a
   BlockNote rich-text editor for the selected document.
 - **Two search modes** (toggle in the search bar):
@@ -61,14 +61,14 @@ frontend (Vite + React + TanStack Query + Tailwind + BlockNote)
         ▼
 backend  (FastAPI, Python)
         ├── block_store   SQLite documents, blocks, references, FTS5, migrations
-        ├── notes_store   compatibility Markdown API and export mirror
+        ├── documents     note lifecycle + read-only Markdown mirrors
         ├── search        full-text + ColBERT late-interaction (PyLate)
         ├── vision        SmolVLM-256M caption + RapidOCR for pasted images
         └── llm           OpenRouter review
         │
         ▼
    ./notes/.fortress.sqlite3 ← the canonical local store
-   ./notes/*.md            ← imported/compatibility Markdown files
+   ./notes/*.md            ← read-only Markdown mirrors (one per note)
    ./notes/assets/*.{png,…}  ← pasted images (+ <id>.txt caption/OCR cache)
    ./notes/.fortress-backups ← daily / manual / pre-restore SQLite snapshots
 ```
@@ -123,7 +123,7 @@ Backend `.env` (see `backend/.env.example`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `NOTES_DIR` | `../notes` | Workspace containing the SQLite store and Markdown compatibility files |
+| `NOTES_DIR` | `../notes` | Workspace containing the SQLite store and Markdown mirrors |
 | `OPENROUTER_API_KEY` | — | Required for AI review |
 | `OPENROUTER_MODEL` | `z-ai/glm-5.3-flash` | OpenRouter model id; `deepseek/deepseek-v4.1-flash` is also supported |
 | `EMBEDDINGS_ENABLED` | `true` | Turn off to skip the ColBERT model |

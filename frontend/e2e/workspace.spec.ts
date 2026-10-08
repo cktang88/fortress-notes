@@ -1,14 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { proxyToBackend } from "./backend";
 
-test.beforeEach(async ({ page }, testInfo) => {
-  const backendUrl = String(testInfo.config.metadata.backendUrl);
-  // Proxy through Node so downloads and API calls reach the test backend.
-  await page.route("**/api/**", async (route) => {
-    const url = new URL(route.request().url());
-    const response = await route.fetch({ url: `${backendUrl}${url.pathname}${url.search}` });
-    return route.fulfill({ response });
-  });
-});
+test.beforeEach(async ({ page }, testInfo) => proxyToBackend(page, testInfo));
 
 test("trash with undo, saved searches and backups work together", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });

@@ -1,17 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { proxyToBackend } from "./backend";
 
-test.beforeEach(async ({ page }, testInfo) => {
-  const backendUrl = String(testInfo.config.metadata.backendUrl);
-  await page.route("**/api/**", (route) => {
-    const url = new URL(route.request().url());
-    return route.continue({ url: `${backendUrl}${url.pathname}${url.search}` });
-  });
-  await page.route("**/media/**", async (route) => {
-    const url = new URL(route.request().url());
-    const response = await route.fetch({ url: `${backendUrl}${url.pathname}${url.search}` });
-    return route.fulfill({ response });
-  });
-});
+test.beforeEach(async ({ page }, testInfo) => proxyToBackend(page, testInfo));
 
 interface NavigationNode {
   kind: "folder" | "document";
@@ -45,10 +35,11 @@ test("manages nested notes with context menus and drag and drop across reloads",
   const research = page.getByRole("button", { name: "Folder: Research" });
   await expect(research).toBeVisible();
   await research.click({ button: "right" });
-  await page.screenshot({ path: "/private/tmp/fortress-sidebar.png" });
   await page.getByRole("menuitem", { name: "New note" }).click();
 
-  const note = page.locator("[data-document-id]").first();
+  // The new note opens straight away; rename its row in the folder tree.
+  // (the Recent list above the tree shows it too, so take the tree's row).
+  const note = page.locator('[data-document-id][aria-current="page"]').last();
   await expect(note).toBeVisible();
   await note.dblclick();
   const renameInput = page.getByRole("textbox", { name: /^Rename / });

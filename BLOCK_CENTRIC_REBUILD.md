@@ -250,6 +250,17 @@ plugin-driven publishing editor.
 - [x] Add keyboard navigation: ⌘/Ctrl+K or `/` to search, Alt+N for a new note,
   arrow keys and Enter through results, Escape to clear, `?` for tips.
 
+### Phase 9 — one source of truth and a sturdier editor
+
+- [x] Serve every note read from SQLite and write SQLite first; `.md` files become
+  atomic, write-only mirrors managed by `documents.py`. The legacy Markdown editor
+  fallback (which could replace a whole block document) and `notes_store` are gone.
+- [x] Batch editor keystrokes into one save per pause; keep editing offline with
+  automatic retry; show a "load latest version" choice on a real conflict; adopt
+  outside changes such as a backup restore.
+- [x] Fix backup restore pruning its own source, FTS gaps after trash/restore,
+  folder position drift, and title edits that raced per keystroke.
+
 ## Acceptance gates
 
 1. A fresh workspace can create, edit, move, nest, split, merge, and delete blocks;

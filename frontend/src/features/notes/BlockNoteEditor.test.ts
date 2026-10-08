@@ -11,6 +11,7 @@ import {
   transactionPayload,
   toPartialBlock,
   withExpectedUpdatedAt,
+  mergeOperations,
 } from "./BlockNoteEditor";
 import type { BlockNode, BlockOperation } from "./types";
 
@@ -262,5 +263,27 @@ describe("block selection actions", () => {
 
     moveSelectedBlocks(editor, "down");
     expect(moved).toEqual(["down"]);
+  });
+});
+
+describe("mergeOperations", () => {
+  it("collapses consecutive updates to one block and keeps everything else in order", () => {
+    const merged = mergeOperations(
+      [
+        { operation: "insert", block_id: "a", text: "" },
+        { operation: "update", block_id: "a", text: "h", type: "paragraph" },
+      ],
+      [
+        { operation: "update", block_id: "a", text: "hi" },
+        { operation: "update", block_id: "b", text: "x" },
+        { operation: "update", block_id: "a", text: "hi!" },
+      ],
+    );
+    expect(merged).toEqual([
+      { operation: "insert", block_id: "a", text: "" },
+      { operation: "update", block_id: "a", text: "hi", type: "paragraph" },
+      { operation: "update", block_id: "b", text: "x" },
+      { operation: "update", block_id: "a", text: "hi!" },
+    ]);
   });
 });

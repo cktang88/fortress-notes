@@ -1,18 +1,198 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { blockApi, notesApi, workspaceApi } from "./api";
-import type { BlockSearchFilters, NoteStatus, ReviewKind, SavedSearch, SearchMode } from "./types";
+import { ApiError, blockApi, notesApi, workspaceApi } from "./api";
+import { invalidateDocumentLists, queryKeys } from "./queryKeys";
+import type {
+  BlockDocument,
+  BlockReviewContext,
+  BlockSearchFilters,
+  NoteStatus,
+  ReviewKind,
+  SavedSearch,
+  SearchMode,
+} from "./types";
 
-export function useNotes(status?: NoteStatus) {
-  return useQuery({ queryKey: ["notes", status], queryFn: () => notesApi.list(status) });
+// --- Reads ---------------------------------------------------------------------
+
+export function useNotes() {
+  return useQuery({ queryKey: queryKeys.notes, queryFn: () => notesApi.list() });
 }
 
 export function useNavigation() {
   return useQuery({
-    queryKey: ["navigation"],
+    queryKey: queryKeys.navigation,
     queryFn: () => blockApi.navigation(),
     retry: false,
   });
 }
+
+export function useBlockDocument(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.document(id),
+    queryFn: () => blockApi.get(id!),
+    enabled: !!id,
+    // A missing note is a real answer, not something to retry.
+    retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
+  });
+}
+
+export function useBlockSearch(q: string, filters: BlockSearchFilters = {}, enabled = true) {
+  return useQuery({
+    queryKey: [...queryKeys.blockSearch, q, filters],
+    queryFn: () => blockApi.search(q, filters),
+    enabled: enabled && q.trim().length > 0,
+    retry: false,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useSearch(q: string, mode: SearchMode, enabled = true) {
+  return useQuery({
+    queryKey: [...queryKeys.search, mode, q],
+    queryFn: () => notesApi.search(q, mode),
+    enabled: enabled && q.trim().length > 0,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useBacklinks(id: string | null) {
+  return useQuery({
+    queryKey: [...queryKeys.backlinks, id],
+    queryFn: () => blockApi.backlinks(id!),
+    enabled: !!id,
+  });
+}
+
+export function useRelated(id: string | null, blockId: string | null = null) {
+  return useQuery({
+    queryKey: [...queryKeys.related, id, blockId],
+    queryFn: () => notesApi.related(id!, 5, blockId),
+    enabled: !!id,
+    // Keep showing the last results while the focused block changes.
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useBlockReference(blockId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.blockReference(blockId),
+    queryFn: async () =>
+      (await blockApi.linkTargets(blockId!, 1)).find((target) => target.block_id === blockId) ??
+      null,
+    enabled: !!blockId,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useLinkChecks(documentId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.linkChecks(documentId),
+    queryFn: () => blockApi.checkLinks(documentId!),
+    enabled: !!documentId,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** The value after it has stopped changing for `delay` ms (for search-as-you-type). */
+export function useDebouncedValue<T>(value: T, delay = 250): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSettled(value), delay);
+    return () => window.clearTimeout(timer);
+  }, [value, delay]);
+  return settled;
+}
+
+// --- Documents -----------------------------------------------------------------
+
+export function useCreateDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ folderId = null, title = "" }: { folderId?: string | null; title?: string }) =>
+      blockApi.create(folderId, title),
+    onSuccess: (document) => {
+      qc.setQueryData(queryKeys.document(document.id), document);
+      invalidateDocumentLists(qc);
+    },
+  });
+}
+
+/**
+ * Change a document's title or status. Updates are applied optimistically and
+ * run one at a time per document, so fast edits can't land out of order.
+ */
+export function useUpdateDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    // One queue for all metadata edits: a later title can never be overwritten
+    // by an earlier request that happened to finish last.
+    scope: { id: "document-metadata" },
+    mutationFn: ({ id, ...patch }: { id: string; title?: string; status?: NoteStatus }) =>
+      blockApi.update(id, patch),
+    onMutate: ({ id, ...patch }) => {
+      const previous = qc.getQueryData<BlockDocument>(queryKeys.document(id));
+      if (previous) qc.setQueryData(queryKeys.document(id), { ...previous, ...patch });
+      return { previous };
+    },
+    onError: (_error, { id }, context) => {
+      if (context?.previous) qc.setQueryData(queryKeys.document(id), context.previous);
+    },
+    onSuccess: (saved) => {
+      // Merge metadata only: the editor owns the blocks, and its saves may be newer.
+      qc.setQueryData<BlockDocument>(queryKeys.document(saved.id), (current) =>
+        current
+          ? {
+              ...current,
+              title: saved.title,
+              status: saved.status,
+              updated_at: saved.updated_at,
+            }
+          : saved,
+      );
+      invalidateDocumentLists(qc);
+    },
+  });
+}
+
+export function useTrashDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => blockApi.remove(id),
+    onSuccess: (_result, id) => {
+      qc.removeQueries({ queryKey: queryKeys.document(id) });
+      invalidateDocumentLists(qc);
+    },
+  });
+}
+
+export function useRestoreDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => workspaceApi.restore(id),
+    onSuccess: (_result, id) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.document(id) });
+      invalidateDocumentLists(qc);
+    },
+  });
+}
+
+export function useDocumentReview() {
+  return useMutation({
+    mutationFn: ({
+      id,
+      kind,
+      context = "document",
+    }: {
+      id: string;
+      kind: ReviewKind;
+      context?: BlockReviewContext;
+    }) => blockApi.reviewContext(id, context, [], kind),
+  });
+}
+
+// --- Folders -------------------------------------------------------------------
 
 function useNavigationMutation<TVariables, TResult>(
   mutationFn: (variables: TVariables) => Promise<TResult>,
@@ -20,9 +200,7 @@ function useNavigationMutation<TVariables, TResult>(
   const qc = useQueryClient();
   return useMutation({
     mutationFn,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["navigation"] });
-    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.navigation }),
   });
 }
 
@@ -54,184 +232,36 @@ export function useMoveDocument() {
   );
 }
 
-export function useNote(id: string | null) {
-  return useQuery({
-    queryKey: ["note", id],
-    queryFn: () => notesApi.get(id!),
-    enabled: !!id,
-  });
-}
-
-export function useBlockDocument(id: string | null) {
-  return useQuery({
-    queryKey: ["block-document", id],
-    queryFn: () => blockApi.get(id!),
-    enabled: !!id,
-  });
-}
-
-export function useBlockSearch(q: string, filters: BlockSearchFilters = {}, enabled = true) {
-  return useQuery({
-    queryKey: ["block-search", q, filters],
-    queryFn: () => blockApi.search(q, filters),
-    enabled: enabled && q.trim().length > 0,
-    retry: false,
-  });
-}
-
-export function useBacklinks(id: string | null) {
-  return useQuery({
-    queryKey: ["backlinks", id],
-    queryFn: () => blockApi.backlinks(id!),
-    enabled: !!id,
-  });
-}
-
-export function useBlockReference(blockId: string | null) {
-  return useQuery({
-    queryKey: ["block-reference", blockId],
-    queryFn: async () =>
-      (await blockApi.linkTargets(blockId!, 1)).find((target) => target.block_id === blockId) ??
-      null,
-    enabled: !!blockId,
-    staleTime: 30_000,
-    retry: false,
-  });
-}
-
-export function useLinkChecks(documentId: string | null) {
-  return useQuery({
-    queryKey: ["link-checks", documentId],
-    queryFn: () => blockApi.checkLinks(documentId!),
-    enabled: !!documentId,
-    retry: false,
-    refetchOnWindowFocus: false,
-  });
-}
-
-export function useSearch(q: string, mode: SearchMode, enabled = true) {
-  return useQuery({
-    queryKey: ["search", mode, q],
-    queryFn: () => notesApi.search(q, mode),
-    enabled: enabled && q.trim().length > 0,
-  });
-}
-
-export function useRelated(id: string | null, blockId: string | null = null) {
-  return useQuery({
-    queryKey: ["related", id, blockId],
-    queryFn: () => notesApi.related(id!, 5, blockId),
-    enabled: !!id,
-  });
-}
-
-export function useCreateNote() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (folderId: string | null = null) => notesApi.create("", folderId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["notes"] });
-      qc.invalidateQueries({ queryKey: ["navigation"] });
-      qc.invalidateQueries({ queryKey: ["block-search"] });
-    },
-  });
-}
-
-export function useUpdateNote() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, ...patch }: { id: string } & Parameters<typeof notesApi.update>[1]) =>
-      notesApi.update(id, patch),
-    onSuccess: (note) => {
-      qc.invalidateQueries({ queryKey: ["notes"] });
-      qc.invalidateQueries({ queryKey: ["navigation"] });
-      qc.invalidateQueries({ queryKey: ["block-search"] });
-      qc.setQueryData(["note", note.id], note);
-      qc.invalidateQueries({ queryKey: ["block-document", note.id] });
-    },
-  });
-}
-
-export function useDeleteNote() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => notesApi.remove(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["trash"] });
-      qc.invalidateQueries({ queryKey: ["notes"] });
-      qc.invalidateQueries({ queryKey: ["navigation"] });
-      qc.invalidateQueries({ queryKey: ["block-search"] });
-    },
-  });
-}
-
-export function usePromoteNote() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => notesApi.promote(id),
-    onSuccess: (note) => {
-      qc.invalidateQueries({ queryKey: ["notes"] });
-      qc.setQueryData(["note", note.id], note);
-      qc.invalidateQueries({ queryKey: ["block-search"] });
-    },
-  });
-}
-
-export function useReview() {
-  return useMutation({
-    mutationFn: ({ id, kind }: { id: string; kind: ReviewKind }) => notesApi.review(id, kind),
-  });
-}
-
-/** Every query that lists or shows documents; refreshed after workspace-wide changes. */
-const documentQueryKeys = [
-  ["notes"],
-  ["navigation"],
-  ["block-search"],
-  ["search"],
-  ["trash"],
-] as const;
-
-function useInvalidateDocuments() {
-  const qc = useQueryClient();
-  return () => {
-    for (const queryKey of documentQueryKeys) qc.invalidateQueries({ queryKey });
-  };
-}
+// --- Workspace -----------------------------------------------------------------
 
 export function useTrash(enabled = true) {
-  return useQuery({ queryKey: ["trash"], queryFn: workspaceApi.trash, enabled, retry: false });
-}
-
-export function useRestoreDocument() {
-  const invalidate = useInvalidateDocuments();
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => workspaceApi.restore(id),
-    onSuccess: (_result, id) => {
-      invalidate();
-      qc.invalidateQueries({ queryKey: ["note", id] });
-      qc.invalidateQueries({ queryKey: ["block-document", id] });
-    },
+  return useQuery({
+    queryKey: queryKeys.trash,
+    queryFn: workspaceApi.trash,
+    enabled,
+    retry: false,
   });
 }
 
 export function useDeleteForever() {
-  const invalidate = useInvalidateDocuments();
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => workspaceApi.deleteForever(id),
-    onSuccess: invalidate,
+    onSuccess: () => invalidateDocumentLists(qc),
   });
 }
 
 export function useEmptyTrash() {
-  const invalidate = useInvalidateDocuments();
-  return useMutation({ mutationFn: () => workspaceApi.emptyTrash(), onSuccess: invalidate });
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => workspaceApi.emptyTrash(),
+    onSuccess: () => invalidateDocumentLists(qc),
+  });
 }
 
 export function useSavedSearches() {
   return useQuery({
-    queryKey: ["saved-searches"],
+    queryKey: queryKeys.savedSearches,
     queryFn: workspaceApi.savedSearches,
     retry: false,
   });
@@ -242,7 +272,7 @@ export function useSaveSearch() {
   return useMutation({
     mutationFn: (search: Pick<SavedSearch, "name" | "query" | "mode" | "filters">) =>
       workspaceApi.saveSearch(search),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["saved-searches"] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.savedSearches }),
   });
 }
 
@@ -250,19 +280,24 @@ export function useDeleteSavedSearch() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => workspaceApi.deleteSavedSearch(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["saved-searches"] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.savedSearches }),
   });
 }
 
 export function useBackups(enabled = true) {
-  return useQuery({ queryKey: ["backups"], queryFn: workspaceApi.backups, enabled, retry: false });
+  return useQuery({
+    queryKey: queryKeys.backups,
+    queryFn: workspaceApi.backups,
+    enabled,
+    retry: false,
+  });
 }
 
 export function useCreateBackup() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => workspaceApi.createBackup(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["backups"] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.backups }),
   });
 }
 
@@ -271,15 +306,15 @@ export function useRestoreBackup() {
   return useMutation({
     mutationFn: (name: string) => workspaceApi.restoreBackup(name),
     // A restore can change any document, so refresh everything.
-    onSuccess: () => qc.invalidateQueries(),
+    onSuccess: () => void qc.invalidateQueries(),
   });
 }
 
 export function useImportMarkdown() {
-  const invalidate = useInvalidateDocuments();
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ files, folderId }: { files: File[]; folderId?: string | null }) =>
       workspaceApi.importMarkdown(files, folderId ?? null),
-    onSuccess: invalidate,
+    onSuccess: () => invalidateDocumentLists(qc),
   });
 }

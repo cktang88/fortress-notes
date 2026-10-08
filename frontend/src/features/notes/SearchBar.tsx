@@ -177,7 +177,7 @@ export function SearchBar({
           ))}
         </div>
       )}
-      {mode === "text" && (
+      {mode === "text" && (searching || Object.values(filters).some(Boolean)) && (
         <fieldset className="flex flex-wrap gap-1.5" aria-label="Block search filters">
           <select
             aria-label="Block type"

@@ -148,7 +148,7 @@ describe("App trash and shortcuts", () => {
             recent: [],
           });
         }
-        if (path === "/api/notes/first" && method === "DELETE") {
+        if (path === "/api/block-documents/first" && method === "DELETE") {
           deleted = true;
           return new Response(null, { status: 204 });
         }
@@ -195,7 +195,7 @@ describe("App trash and shortcuts", () => {
     await act(async () => findButton(container!, "Undo")?.click());
     await waitFor(() => expect(window.location.search).toContain("note=first"));
     expect(calls.filter((call) => !call.endsWith("/link-checks"))).toEqual([
-      "DELETE /api/notes/first",
+      "DELETE /api/block-documents/first",
       "POST /api/trash/first/restore",
     ]);
   });

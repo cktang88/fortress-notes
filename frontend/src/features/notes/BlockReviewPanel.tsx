@@ -49,21 +49,45 @@ export function BlockReviewPanel({ documentId, selectedBlockIds }: Props) {
           {error}
         </p>
       )}
-      {review && (
-        <div className="mt-2 space-y-2">
-          <p>{review.summary}</p>
-          {review.items.length === 0 && <p className="text-zinc-500">No findings.</p>}
-          {review.items.map((item, index) => (
-            <article key={`${item.block_id}-${index}`} className="rounded bg-zinc-50 p-2">
-              <div className="text-xs text-zinc-500">
-                {item.label || item.severity} · block {item.block_id}
-              </div>
-              <blockquote className="my-1 border-l-2 pl-2">{item.quote}</blockquote>
-              <p>{item.detail}</p>
-            </article>
-          ))}
-        </div>
-      )}
+      {review && <ReviewFindings review={review} />}
     </section>
+  );
+}
+
+/** Review summary plus each finding, with an optional jump to its block. */
+export function ReviewFindings({
+  review,
+  onFocusBlock,
+}: {
+  review: Pick<BlockReviewContextResponse, "summary" | "items">;
+  onFocusBlock?: (blockId: string) => void;
+}) {
+  return (
+    <div className="mt-2 space-y-2">
+      <p>{review.summary}</p>
+      {review.items.length === 0 && <p className="text-zinc-500">No findings.</p>}
+      {review.items.map((item, index) => (
+        <article key={`${item.block_id}-${index}`} className="rounded bg-zinc-50 p-2">
+          <div className="text-xs text-zinc-500">{item.label || item.severity}</div>
+          {item.quote && (
+            <blockquote className="my-1 border-l-2 pl-2">
+              {onFocusBlock ? (
+                <button
+                  type="button"
+                  title="Show in note"
+                  onClick={() => onFocusBlock(item.block_id)}
+                  className="text-left hover:underline"
+                >
+                  {item.quote}
+                </button>
+              ) : (
+                item.quote
+              )}
+            </blockquote>
+          )}
+          <p>{item.detail}</p>
+        </article>
+      ))}
+    </div>
   );
 }

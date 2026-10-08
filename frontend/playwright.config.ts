@@ -29,6 +29,8 @@ const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
+  // Every spec shares one backend and database, so run them one at a time.
+  workers: 1,
   retries: 0,
   reporter: "list",
   use: {
