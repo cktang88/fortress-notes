@@ -22,6 +22,9 @@ you're reading.
   - **Full-text** — fast substring/keyword search across all notes.
   - **Embedding search** — late-interaction (ColBERT / `lightonai/Agent-ModernColBERT`)
     multi-vector retrieval via [PyLate](https://github.com/lightonai/pylate).
+- **"You wrote about this before"** — pause while writing a paragraph and up to three
+  related paragraphs from other notes appear in a small card; **Link** adds a link (and a
+  backlink) to that paragraph. Toggle with "Suggestions on/off" above the editor.
 - **Related notes** — the bottom-left pane auto-refreshes whenever you open a note,
   showing the most semantically related notes (late-interaction similarity).
 - **Rough vs. polished notes** — a `status` flag distinguishes braindump/brainstorm

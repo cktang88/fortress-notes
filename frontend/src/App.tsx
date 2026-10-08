@@ -250,6 +250,7 @@ export function App() {
               linkTargets={allNotes.data ?? []}
               linkChecks={linkChecks.data?.links ?? []}
               onFocusedBlockChange={selection.setActiveBlockId}
+              onOpenNote={(documentId, blockId) => selectNote(documentId, blockId)}
             />
           </>
         ) : document.isError ? (

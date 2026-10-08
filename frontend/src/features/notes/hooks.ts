@@ -302,3 +302,22 @@ export function useImportMarkdown() {
     onSuccess: () => invalidateDocumentLists(qc),
   });
 }
+
+/**
+ * Related paragraphs for the block being written. `version` changes with the block's
+ * text so suggestions refresh as it grows; nothing is shown from a previous block.
+ */
+export function useWritingSuggestions(
+  documentId: string,
+  blockId: string | null,
+  version: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: [...queryKeys.related, "writing", documentId, blockId, version],
+    queryFn: () => notesApi.related(documentId, 3, blockId),
+    enabled: enabled && !!blockId,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
