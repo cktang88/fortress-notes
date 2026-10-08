@@ -7,12 +7,13 @@ test.beforeEach(async ({ page }, testInfo) => proxyToBackend(page, testInfo));
 
 test("suggests a related paragraph after a pause and links it", async ({ page }, testInfo) => {
   const backendUrl = String(testInfo.config.metadata.backendUrl);
-  await page.request.post(`${backendUrl}/api/notes`, {
+  const source = await page.request.post(`${backendUrl}/api/notes`, {
     data: {
       title: "Sourdough notes",
       body: "Feed the sourdough starter twice a day with rye flour and water.",
     },
   });
+  const sourceId = (await source.json()).id as string;
   await page.goto("/");
   await page.evaluate(() => localStorage.removeItem("fortress-notes:writing-suggestions"));
   await page.getByRole("button", { name: "+ New", exact: true }).click();
@@ -22,21 +23,28 @@ test("suggests a related paragraph after a pause and links it", async ({ page },
 
   const card = page.getByRole("complementary", { name: "You wrote about this before" });
   await expect(card).toContainText("Sourdough notes");
-  await card.getByRole("button", { name: "Link" }).click();
+  const linkSaved = page.waitForResponse(
+    (response) => response.url().endsWith("/transactions") && response.ok(),
+  );
+  await card
+    .getByRole("listitem")
+    .filter({ hasText: "Sourdough notes" })
+    .getByRole("button", { name: "Link" })
+    .click();
+  await linkSaved;
   await expect(editor.locator("a")).toHaveText("Sourdough notes");
   await expect(card).toHaveCount(0);
   // The link is saved as a reference, so the other note now lists this one as a backlink.
   await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
-  const sourceTitle = page.getByRole("textbox", { name: "Note title" });
-  await page
-    .getByRole("navigation", { name: "Documents" })
-    .locator("[data-document-id]")
-    .filter({ hasText: "Sourdough notes" })
-    .last()
-    .click();
-  await expect(sourceTitle).toHaveValue("Sourdough notes");
-  await expect(page.getByText("Backlinks", { exact: true }).locator("..")).toContainText("Untitled");
-  await page.goBack();
+  const draftUrl = page.url();
+  await page.goto(`/?note=${sourceId}`);
+  await expect(page.getByRole("textbox", { name: "Note title" })).toHaveValue("Sourdough notes");
+  await expect(page.getByText("Backlinks", { exact: true }).locator("..")).toContainText(
+    "Untitled",
+  );
+  await page.goto(draftUrl);
+  await editor.click();
+  await page.keyboard.press("Control+End");
 
   // Turning suggestions off sticks.
   await page.getByRole("button", { name: "Suggestions on" }).click();
