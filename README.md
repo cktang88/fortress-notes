@@ -22,6 +22,12 @@ you're reading.
   ColBERT / `lightonai/Agent-ModernColBERT` via [PyLate](https://github.com/lightonai/pylate))
   and note titles using reciprocal rank fusion. Each result shows the matching passage with
   your words highlighted and says why it matched; Enter jumps to that paragraph.
+- **Ask your notes** — type a question and press ✦ Ask (or ⌘/Ctrl+Enter). It greps your
+  notes for the question's names, dates and key words and runs meaning-based search
+  (locally, in milliseconds), then one model call answers — or greps a pattern / reads a
+  whole note if it needs to, within a 3-second budget. Every sentence links to the
+  paragraph it came from; claims whose quotes aren't really in your notes are dropped.
+  Only passages are sent to the model (needs `OPENROUTER_API_KEY`).
 - **Related notes** — the bottom-left pane auto-refreshes whenever you open a note,
   showing the most semantically related notes (late-interaction similarity).
 - **Rough vs. polished notes** — a `status` flag distinguishes braindump/brainstorm

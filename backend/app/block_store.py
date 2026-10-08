@@ -1103,7 +1103,40 @@ def rebuild_fts(path: Path) -> None:
         )
 
 
+_corpus_cache: dict[Path, tuple[tuple, list[tuple[str, str, str, str]]]] = {}
+
+
+def _corpus_fingerprint(connection: sqlite3.Connection) -> tuple:
+    """Changes whenever any block, document or asset text changes (a few ms)."""
+
+    return tuple(
+        connection.execute(
+            """SELECT (SELECT COUNT(*) FROM blocks),
+                      (SELECT MAX(updated_at) FROM blocks),
+                      (SELECT COUNT(*) FROM documents WHERE deleted_at IS NULL),
+                      (SELECT MAX(updated_at) FROM documents),
+                      (SELECT MAX(text_updated_at) FROM assets),
+                      (SELECT COUNT(*) FROM block_assets)"""
+        ).fetchone()
+    )
+
+
 def embedding_documents(path: Path) -> list[tuple[str, str, str, str]]:
+    """Active blocks as (block_id, document_id, version, text), cached until notes change."""
+
+    initialize(path)
+    key = path.resolve()
+    with connection_scope(path) as connection:
+        fingerprint = _corpus_fingerprint(connection)
+    cached = _corpus_cache.get(key)
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+    corpus = _load_embedding_documents(path)
+    _corpus_cache[key] = (fingerprint, corpus)
+    return corpus
+
+
+def _load_embedding_documents(path: Path) -> list[tuple[str, str, str, str]]:
     """Return active canonical blocks as embedding inputs.
 
     The final document ID keeps the compatibility search layer able to fold

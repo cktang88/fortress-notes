@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
 
 from . import (
+    ask as ask_notes,
     assets,
     backups,
     block_query,
@@ -58,6 +59,7 @@ from .models import (
     FolderCreate,
     FolderMove,
     FolderRename,
+    AskRequest,
     SavedSearchCreate,
 )
 
@@ -547,6 +549,13 @@ def unified_search(
         ),
         limit=limit,
     )
+
+
+@app.post("/api/ask")
+async def ask(data: AskRequest):
+    """Answer a question from the notes, citing the paragraph behind each sentence."""
+
+    return await ask_notes.ask(data.question)
 
 
 @app.post("/api/block-search/rebuild")
