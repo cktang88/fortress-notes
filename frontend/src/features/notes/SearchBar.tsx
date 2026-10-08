@@ -17,7 +17,6 @@ interface Props {
   filters: BlockSearchFilters;
   onFilters: (filters: BlockSearchFilters) => void;
   documents?: readonly NoteSummary[];
-  tags?: readonly string[];
   savedSearches?: readonly SavedSearch[];
   onSaveSearch?: () => void;
   onApplySavedSearch?: (search: SavedSearch) => void;
@@ -49,7 +48,6 @@ export function SearchBar({
   filters,
   onFilters,
   documents = [],
-  tags = [],
   savedSearches = [],
   onSaveSearch,
   onApplySavedSearch,
@@ -213,21 +211,6 @@ export function SearchBar({
               </option>
             ))}
           </select>
-          {tags.length > 0 && (
-            <select
-              aria-label="Tag"
-              value={filters.tag ?? ""}
-              onChange={(event) => updateFilters({ tag: event.target.value || undefined })}
-              className="max-w-32 rounded border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700"
-            >
-              <option value="">All tags</option>
-              {tags.map((tag) => (
-                <option key={tag} value={tag}>
-                  #{tag}
-                </option>
-              ))}
-            </select>
-          )}
           <select
             aria-label="Document"
             value={filters.documentId ?? ""}
@@ -300,10 +283,7 @@ export function SearchBar({
             editor.
           </li>
           <li>Related notes follow the block you last focused in the editor.</li>
-          <li>
-            Right-click a note and choose “Edit tags…”; browse tags at the bottom of the sidebar.
-          </li>
-          <li>Deleted notes go to Trash. Import, export, Trash and backups live in the ⋯ menu.</li>
+          <li>Deleted notes go to Trash. Import, Trash and backups live in the ⋯ menu.</li>
         </ul>
         <h3 className="mt-4 mb-2 text-sm font-semibold text-zinc-900">Keyboard shortcuts</h3>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm text-zinc-700">

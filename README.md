@@ -46,10 +46,8 @@ you're reading.
   restore it later from **⋯ → Trash**.
 - **Automatic backups** — a SQLite snapshot is saved daily; **⋯ → Backups** downloads a
   fresh one or restores any snapshot (your current notes are saved first).
-- **Import & export** — import `.md` files from **⋯**; export one note from its header,
-  or everything as a zip that keeps your folders and images.
-- **Tags & saved searches** — right-click a note → *Edit tags…*, browse tags in the
-  sidebar, filter search by tag, and save searches as one-click chips.
+- **Import & export** — import `.md` files from **⋯**; export a note from its header.
+- **Saved searches** — save a search and re-run it from a one-click chip.
 - **Keyboard first** — ⌘/Ctrl+K or `/` to search, Alt+N for a new note, arrow keys and
   Enter through results, Esc to clear, `?` for tips.
 

@@ -214,11 +214,6 @@ export interface TrashedDocument {
   snippet: string;
 }
 
-export interface TagCount {
-  tag: string;
-  count: number;
-}
-
 export interface SavedSearch {
   id: string;
   name: string;

@@ -10,9 +10,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   });
 });
 
-test("tags, trash with undo, saved searches, backups and export work together", async ({
-  page,
-}) => {
+test("trash with undo, saved searches and backups work together", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   await page.goto("/");
   await expect(page.getByText("Select a note or create a new one.")).toBeVisible();
@@ -25,21 +23,6 @@ test("tags, trash with undo, saved searches, backups and export work together", 
   const sidebar = page.getByRole("navigation", { name: "Documents" });
   const row = sidebar.locator("[data-document-id]").filter({ hasText: "Packing list" }).first();
   await expect(row).toBeVisible();
-
-  // Tag it from the right-click menu, then browse by tag.
-  await row.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Edit tags…" }).click();
-  const tagInput = page.getByRole("combobox", { name: "Add a tag" });
-  await expect(tagInput).toBeFocused();
-  await tagInput.fill("travel");
-  await tagInput.press("Enter");
-  await expect(page.getByRole("button", { name: "Remove tag travel" })).toBeVisible();
-  await page.getByRole("button", { name: "Close" }).click();
-  await page.getByText(/^Tags/).click();
-  await page.getByRole("button", { name: /#travel/ }).click();
-  const tagged = page.getByRole("region", { name: "Notes tagged travel" });
-  await expect(tagged.getByText("Packing list")).toBeVisible();
-  await tagged.getByRole("button", { name: "Show all notes" }).click();
 
   // Delete moves it to Trash, and Undo brings it straight back.
   await page.getByRole("button", { name: "Delete", exact: true }).click();
@@ -83,10 +66,4 @@ test("tags, trash with undo, saved searches, backups and export work together", 
   await expect(backups.getByText(/Manual ·/)).toBeVisible();
   await page.screenshot({ path: "test-results/workspace-backups.png" });
   await backups.getByRole("button", { name: "Close" }).click();
-
-  // Export the whole workspace as a zip.
-  await page.getByRole("button", { name: "Workspace menu" }).click();
-  const zip = page.waitForEvent("download");
-  await page.getByRole("menuitem", { name: "Export all notes (.zip)" }).click();
-  expect((await zip).suggestedFilename()).toMatch(/^Fortress Notes .*\.zip$/);
 });

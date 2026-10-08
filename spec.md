@@ -77,15 +77,12 @@ them.
 | `GET` | `/api/trash` | — | trashed documents, newest first |
 | `POST` | `/api/trash/{id}/restore` | — | `{id, folder_id, position}` (also rewrites the Markdown mirror) |
 | `DELETE` | `/api/trash/{id}` · `/api/trash` | — | delete one forever · empty the trash |
-| `GET` | `/api/tags` | — | `[{tag, count}]` over active documents |
-| `POST` | `/api/tags/rename` · `/api/tags/delete` | `{tag, name}` · `{tag}` | `{documents}` changed |
 | `GET` · `POST` | `/api/saved-searches` | `{name, query, mode, filters}` | saved searches |
 | `DELETE` | `/api/saved-searches/{id}` | — | `204` |
 | `GET` · `POST` | `/api/backups` | — | list snapshots · take a manual snapshot |
 | `GET` | `/api/backups/{name}/download` | — | SQLite snapshot file |
 | `POST` | `/api/backups/{name}/restore` | — | `{restored, safety_backup}` |
 | `GET` | `/api/block-documents/{id}/markdown` | `?download=true` | one note as Markdown |
-| `GET` | `/api/markdown-export.zip` | — | every note, folder tree preserved, media bundled |
 | `POST` | `/api/markdown-import/files` | multipart `files[]`, `folder_id?` | `{imported, errors}` |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
 
@@ -182,10 +179,8 @@ associations.
   verifies the snapshot, saves the current state as `pre-restore` first, and moves
   Markdown mirrors of documents that are not in the snapshot aside rather than
   deleting them. Set `AUTO_BACKUP_ENABLED=false` to turn off daily snapshots.
-- **Import/export**: the ⋯ menu imports `.md` files as new notes and exports the
-  workspace as a zip; each note exports from its header or right-click menu.
-- **Tags**: edited from a note's right-click menu, browsed in the sidebar's Tags
-  section, renamed/merged/removed across all notes, and usable as a search filter.
+- **Import/export**: the ⋯ menu imports `.md` files as new notes; each note exports
+  from its header or right-click menu.
 - **Saved searches**: saved from the search box and re-run from chips beneath it.
 - **Keyboard**: ⌘/Ctrl+K or `/` search, Alt+N new note, ↑/↓/Enter through results,
   Esc clears search, `?` shows tips.

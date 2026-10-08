@@ -21,7 +21,6 @@ import type {
   RelatedResult,
   LinkCheckResponse,
   TrashedDocument,
-  TagCount,
   SavedSearch,
   Backup,
   MarkdownUploadResult,
@@ -174,7 +173,7 @@ export function blockSearchParams(q: string, filters: BlockSearchFilters = {}, l
   return params.toString();
 }
 
-/** Workspace-level actions: trash, tags, saved searches, backups, import/export. */
+/** Workspace-level actions: trash, saved searches, backups, import/export. */
 export const workspaceApi = {
   trash: () => request<TrashedDocument[]>("/trash"),
   restore: (id: string) =>
@@ -182,18 +181,6 @@ export const workspaceApi = {
   deleteForever: (id: string) =>
     request<void>(`/trash/${encodeURIComponent(id)}`, { method: "DELETE" }),
   emptyTrash: () => request<{ deleted: number }>("/trash", { method: "DELETE" }),
-
-  tags: () => request<TagCount[]>("/tags"),
-  renameTag: (tag: string, name: string) =>
-    request<{ documents: string[] }>("/tags/rename", {
-      method: "POST",
-      body: JSON.stringify({ tag, name }),
-    }),
-  deleteTag: (tag: string) =>
-    request<{ documents: string[] }>("/tags/delete", {
-      method: "POST",
-      body: JSON.stringify({ tag }),
-    }),
 
   savedSearches: () => request<SavedSearch[]>("/saved-searches"),
   saveSearch: (search: Pick<SavedSearch, "name" | "query" | "mode" | "filters">) =>
@@ -221,7 +208,6 @@ export const workspaceApi = {
     if (!res.ok) throw await failure(res);
     return (await res.json()) as MarkdownUploadResult;
   },
-  exportAllUrl: `${API}/markdown-export.zip`,
   documentMarkdownUrl: (id: string) =>
     `${API}/block-documents/${encodeURIComponent(id)}/markdown?download=true`,
 };

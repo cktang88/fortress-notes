@@ -148,7 +148,6 @@ export function useUpdateNote() {
       qc.invalidateQueries({ queryKey: ["block-search"] });
       qc.setQueryData(["note", note.id], note);
       qc.invalidateQueries({ queryKey: ["block-document", note.id] });
-      qc.invalidateQueries({ queryKey: ["tags"] });
     },
   });
 }
@@ -159,7 +158,6 @@ export function useDeleteNote() {
     mutationFn: (id: string) => notesApi.remove(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["trash"] });
-      qc.invalidateQueries({ queryKey: ["tags"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["navigation"] });
       qc.invalidateQueries({ queryKey: ["block-search"] });
@@ -191,7 +189,6 @@ const documentQueryKeys = [
   ["navigation"],
   ["block-search"],
   ["search"],
-  ["tags"],
   ["trash"],
 ] as const;
 
@@ -230,34 +227,6 @@ export function useDeleteForever() {
 export function useEmptyTrash() {
   const invalidate = useInvalidateDocuments();
   return useMutation({ mutationFn: () => workspaceApi.emptyTrash(), onSuccess: invalidate });
-}
-
-export function useTags() {
-  return useQuery({ queryKey: ["tags"], queryFn: workspaceApi.tags, retry: false });
-}
-
-function useTagMutation<TVariables>(
-  mutationFn: (variables: TVariables) => Promise<{ documents: string[] }>,
-) {
-  const invalidate = useInvalidateDocuments();
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn,
-    onSuccess: ({ documents }) => {
-      invalidate();
-      for (const id of documents) qc.invalidateQueries({ queryKey: ["note", id] });
-    },
-  });
-}
-
-export function useRenameTag() {
-  return useTagMutation(({ tag, name }: { tag: string; name: string }) =>
-    workspaceApi.renameTag(tag, name),
-  );
-}
-
-export function useDeleteTag() {
-  return useTagMutation((tag: string) => workspaceApi.deleteTag(tag));
 }
 
 export function useSavedSearches() {

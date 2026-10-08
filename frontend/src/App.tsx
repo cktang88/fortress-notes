@@ -9,9 +9,6 @@ import { OutlinePanel } from "./features/notes/OutlinePanel";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteEditor } from "./features/notes/NoteEditor";
 import { BlockNoteEditor } from "./features/notes/BlockNoteEditor";
-import { TagsPanel } from "./features/notes/TagsPanel";
-import { TaggedNotes } from "./features/notes/TaggedNotes";
-import { TagEditorDialog } from "./features/notes/TagEditorDialog";
 import { WorkspaceMenu } from "./features/notes/WorkspaceMenu";
 import { Toast, type Notice } from "./features/notes/Toast";
 import { workspaceApi } from "./features/notes/api";
@@ -36,7 +33,6 @@ import {
   useSavedSearches,
   useSaveSearch,
   useDeleteSavedSearch,
-  useTags,
   useSearch,
   useUpdateNote,
 } from "./features/notes/hooks";
@@ -59,8 +55,6 @@ export function App() {
   const [mode, setMode] = useState<SearchMode>("text");
   const [blockSearchFilters, setBlockSearchFilters] = useState<BlockSearchFilters>({});
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  const [activeTag, setActiveTag] = useState<string | null>(null);
-  const [tagEditorId, setTagEditorId] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   const searching = query.trim().length > 0;
@@ -87,12 +81,9 @@ export function App() {
   const review = useReview();
   const linkChecks = useLinkChecks(selectedId);
   const restoreDocument = useRestoreDocument();
-  const tags = useTags();
   const savedSearches = useSavedSearches();
   const saveSearch = useSaveSearch();
   const deleteSavedSearch = useDeleteSavedSearch();
-  const tagNames = (tags.data ?? []).map((item) => item.tag);
-  const tagEditorNote = (allNotes.data ?? []).find((item) => item.id === tagEditorId) ?? null;
 
   const listNotes = searching
     ? (searchResults.data ?? []).map((r) => r.note)
@@ -183,7 +174,6 @@ export function App() {
   const dismiss = (id: string) => setDismissed((prev) => new Set(prev).add(id));
 
   const applySavedSearch = (saved: SavedSearch) => {
-    setActiveTag(null);
     setMode(saved.mode);
     setBlockSearchFilters(saved.filters ?? {});
     setQuery(saved.query);
@@ -237,21 +227,12 @@ export function App() {
           filters={blockSearchFilters}
           onFilters={setBlockSearchFilters}
           documents={allNotes.data ?? []}
-          tags={tagNames}
           savedSearches={savedSearches.data ?? []}
           onSaveSearch={handleSaveSearch}
           onApplySavedSearch={applySavedSearch}
           onDeleteSavedSearch={(id) => deleteSavedSearch.mutate(id)}
           onNew={handleNew}
-          actions={
-            <WorkspaceMenu
-              onNotice={showNotice}
-              onOpenNote={(id) => {
-                setActiveTag(null);
-                selectNote(id);
-              }}
-            />
-          }
+          actions={<WorkspaceMenu onNotice={showNotice} onOpenNote={(id) => selectNote(id)} />}
         />
         {searching && mode === "text" ? (
           blockSearch.isError && !hasBlockSearchFilters ? (
@@ -270,14 +251,6 @@ export function App() {
               onSelect={(documentId, blockId) => selectNote(documentId, blockId)}
             />
           )
-        ) : activeTag ? (
-          <TaggedNotes
-            tag={activeTag}
-            notes={allNotes.data ?? []}
-            selectedId={selectedId}
-            onSelect={selectNote}
-            onTagChange={setActiveTag}
-          />
         ) : navigation.isError ? (
           <NoteList
             notes={listNotes}
@@ -301,10 +274,8 @@ export function App() {
             onDeleteDocument={async (id) => handleDelete(id)}
             onMoveDocument={(id, folderId) => moveDocument.mutateAsync({ id, folderId })}
             onMoveFolder={(id, parentId) => moveFolder.mutateAsync({ id, parentId })}
-            onEditTags={setTagEditorId}
           />
         )}
-        <TagsPanel activeTag={activeTag} onSelectTag={setActiveTag} />
         <OutlinePanel
           document={blockDocument.data ?? null}
           onFocus={(blockId) => selectedId && selectNote(selectedId, blockId)}
@@ -363,20 +334,6 @@ export function App() {
           </>
         )}
       </main>
-      <TagEditorDialog
-        open={tagEditorNote !== null}
-        title={tagEditorNote?.title ?? ""}
-        tags={tagEditorNote?.tags ?? []}
-        suggestions={tagNames}
-        onChange={(next) => {
-          if (tagEditorNote)
-            updateNote.mutate(
-              { id: tagEditorNote.id, tags: next },
-              { onError: (error) => showNotice({ tone: "error", message: error.message }) },
-            );
-        }}
-        onClose={() => setTagEditorId(null)}
-      />
       <Toast notice={notice} onDismiss={() => setNotice(null)} />
     </div>
   );

@@ -1,8 +1,6 @@
 """Everyday workspace actions over the canonical SQLite store.
 
-Trash keeps deleted documents recoverable until someone empties it. Tags live on
-documents, so renaming or removing a tag rewrites every document that carries it.
-Saved searches are small named queries the sidebar can re-run in one click.
+Trash keeps deleted documents recoverable until someone empties it. Saved searches are small named queries the sidebar can re-run in one click.
 """
 
 from __future__ import annotations
@@ -104,62 +102,6 @@ def _purge(connection, document_ids: list[str]) -> None:
         # Children reference parents with ON DELETE CASCADE, so removing the
         # document cascades through blocks, refs, history, and receipts.
         connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
-
-
-# --- Tags --------------------------------------------------------------------
-
-
-def list_tags(path: Path) -> list[dict[str, object]]:
-    initialize(path)
-    with connection_scope(path) as connection:
-        rows = connection.execute(
-            """SELECT tags.value AS tag, COUNT(*) AS count
-                 FROM documents,
-                      json_each(CASE WHEN json_valid(documents.tags_json)
-                                     THEN documents.tags_json ELSE '[]' END) AS tags
-                WHERE documents.deleted_at IS NULL AND trim(tags.value) <> ''
-                GROUP BY tags.value
-                ORDER BY lower(tags.value), tags.value"""
-        ).fetchall()
-    return [{"tag": row["tag"], "count": row["count"]} for row in rows]
-
-
-def rename_tag(path: Path, old: str, new: str) -> list[str]:
-    """Rename (or merge) a tag on every active document; returns changed IDs."""
-
-    new = new.strip()
-    if not new:
-        raise ValueError("tag name cannot be empty")
-    return _rewrite_tag(path, old, new)
-
-
-def delete_tag(path: Path, tag: str) -> list[str]:
-    return _rewrite_tag(path, tag, None)
-
-
-def _rewrite_tag(path: Path, old: str, new: str | None) -> list[str]:
-    initialize(path)
-    changed: list[str] = []
-    now = _now()
-    with connection_scope(path) as connection:
-        rows = connection.execute(
-            "SELECT id, tags_json FROM documents WHERE deleted_at IS NULL"
-        ).fetchall()
-        for row in rows:
-            tags = _tags(row["tags_json"])
-            if old not in tags:
-                continue
-            updated: list[str] = []
-            for tag in tags:
-                replacement = new if tag == old else tag
-                if replacement is not None and replacement not in updated:
-                    updated.append(replacement)
-            connection.execute(
-                "UPDATE documents SET tags_json = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(updated), now, row["id"]),
-            )
-            changed.append(row["id"])
-    return changed
 
 
 def _tags(raw: str) -> list[str]:

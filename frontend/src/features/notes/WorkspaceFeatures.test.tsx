@@ -3,7 +3,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { SearchBar } from "./SearchBar";
-import { TagEditorDialog } from "./TagEditorDialog";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { SEARCH_INPUT_ID } from "./listKeyboard";
 import type { SavedSearch } from "./types";
@@ -106,57 +105,14 @@ describe("saved searches", () => {
     expect(button("★ Saved").disabled).toBe(true);
   });
 
-  it("clears the search with Escape and filters by tag", () => {
+  it("clears the search with Escape", () => {
     const onQuery = vi.fn();
-    const onFilters = vi.fn();
-    render(
-      <SearchBar
-        {...baseProps}
-        query="something"
-        onQuery={onQuery}
-        onFilters={onFilters}
-        tags={["work", "home"]}
-      />,
-    );
+    render(<SearchBar {...baseProps} query="something" onQuery={onQuery} />);
     const input = document.getElementById(SEARCH_INPUT_ID)!;
     act(() => {
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(onQuery).toHaveBeenCalledWith("");
-
-    const tag = container!.querySelector<HTMLSelectElement>('[aria-label="Tag"]')!;
-    act(() => {
-      tag.value = "work";
-      tag.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    expect(onFilters).toHaveBeenCalledWith({ tag: "work" });
-  });
-});
-
-describe("TagEditorDialog", () => {
-  it("adds comma-separated tags without duplicates and removes tags", () => {
-    const onChange = vi.fn();
-    render(
-      <TagEditorDialog
-        open
-        title="Trip"
-        tags={["travel"]}
-        suggestions={["travel", "family"]}
-        onChange={onChange}
-        onClose={vi.fn()}
-      />,
-    );
-    const input = container!.querySelector<HTMLInputElement>("input")!;
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-      setter.call(input, "#family, travel, food");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    act(() => input.form!.requestSubmit());
-    expect(onChange).toHaveBeenLastCalledWith(["travel", "family", "food"]);
-
-    act(() => button("Remove tag travel").click());
-    expect(onChange).toHaveBeenLastCalledWith([]);
   });
 });
 
@@ -201,7 +157,7 @@ describe("WorkspaceMenu", () => {
     act(() => button("Workspace menu").click());
     expect(
       [...document.querySelectorAll("[role='menuitem']")].map((item) => item.textContent),
-    ).toEqual(["Import Markdown files…", "Export all notes (.zip)", "Trash", "Backups…"]);
+    ).toEqual(["Import Markdown files…", "Trash", "Backups…"]);
     act(() => button("Trash").click());
     await waitFor(() => expect(document.body.textContent).toContain("Old idea"));
 

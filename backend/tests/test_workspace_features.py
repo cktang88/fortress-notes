@@ -1,7 +1,5 @@
-import io
 import tempfile
 import unittest
-import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,25 +79,6 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.assertEqual(self.client.delete("/api/trash").json(), {"deleted": 2})
         self.assertEqual(self.client.get("/api/trash").json(), [])
 
-    def test_tags_list_rename_merge_and_delete(self) -> None:
-        a = self.create("A", tags=["idea", "work"])
-        b = self.create("B", tags=["ideas"])
-        self.assertEqual(
-            self.client.get("/api/tags").json(),
-            [{"tag": "idea", "count": 1}, {"tag": "ideas", "count": 1}, {"tag": "work", "count": 1}],
-        )
-
-        merged = self.client.post("/api/tags/rename", json={"tag": "ideas", "name": "idea"})
-        self.assertEqual(merged.json()["documents"], [b["id"]])
-        self.assertEqual(self.client.get("/api/tags").json()[0], {"tag": "idea", "count": 2})
-        self.assertEqual(self.client.get(f"/api/notes/{b['id']}").json()["tags"], ["idea"])
-
-        self.client.post("/api/tags/delete", json={"tag": "idea"})
-        self.assertEqual(self.client.get("/api/tags").json(), [{"tag": "work", "count": 1}])
-        self.assertEqual(self.client.get(f"/api/notes/{a['id']}").json()["tags"], ["work"])
-        empty = self.client.post("/api/tags/rename", json={"tag": "work", "name": "  "})
-        self.assertEqual(empty.status_code, 422)
-
     def test_saved_searches(self) -> None:
         created = self.client.post(
             "/api/saved-searches",
@@ -172,7 +151,6 @@ class WorkspaceFeatureTests(unittest.TestCase):
 
     def test_upload_import_and_downloads(self) -> None:
         folder = self.client.post("/api/folders", json={"name": "Imported / Stuff"}).json()
-        (self.settings.assets_path / "01J00000000000000000000000.png").write_bytes(b"png")
         response = self.client.post(
             "/api/markdown-import/files",
             data={"folder_id": folder["id"]},
@@ -200,18 +178,6 @@ class WorkspaceFeatureTests(unittest.TestCase):
 
         single = self.client.get(f"/api/block-documents/{trip_id}/markdown?download=true")
         self.assertIn('filename="trip.md"', single.headers["content-disposition"])
-
-        self.create("trip")  # same title at the top level must not clash in the zip
-        archive = self.client.get("/api/markdown-export.zip")
-        self.assertEqual(archive.headers["content-type"], "application/zip")
-        with zipfile.ZipFile(io.BytesIO(archive.content)) as bundle:
-            names = set(bundle.namelist())
-            self.assertIn("Imported Stuff/trip.md", names)
-            self.assertIn("Imported Stuff/plain.md", names)
-            self.assertIn("trip.md", names)
-            self.assertIn("media/01J00000000000000000000000.png", names)
-            body = bundle.read("Imported Stuff/trip.md").decode()
-            self.assertIn("../media/01J00000000000000000000000.png", body)
 
     def test_upload_import_rejects_unknown_folder(self) -> None:
         response = self.client.post(

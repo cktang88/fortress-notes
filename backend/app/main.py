@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -28,7 +27,6 @@ from . import (
 from .portability import (
     export_all_markdown,
     export_document_markdown,
-    export_workspace_zip,
     parse_uploaded_markdown,
     safe_filename,
     import_markdown_directory,
@@ -62,8 +60,6 @@ from .models import (
     FolderMove,
     FolderRename,
     SavedSearchCreate,
-    TagDelete,
-    TagRename,
 )
 
 settings = get_settings()
@@ -355,19 +351,6 @@ def export_block_document_markdown(document_id: str, download: bool = False):
     return Response(content=markdown, media_type="text/markdown", headers=headers)
 
 
-@app.get("/api/markdown-export.zip")
-def export_workspace_markdown_zip():
-    if not settings.block_db_enabled:
-        raise HTTPException(404, "Block store is disabled")
-    data = export_workspace_zip(settings.block_db_path, settings.assets_path)
-    stamp = datetime.now().strftime("%Y-%m-%d")
-    return Response(
-        content=data,
-        media_type="application/zip",
-        headers={"Content-Disposition": _attachment(f"Fortress Notes {stamp}.zip")},
-    )
-
-
 MAX_IMPORT_BYTES = 5 * 1024 * 1024
 
 
@@ -453,39 +436,6 @@ def delete_forever(document_id: str):
 def empty_trash():
     _require_block_db()
     return {"deleted": workspace.empty_trash(settings.block_db_path)}
-
-
-# --- Tags ----------------------------------------------------------------------
-
-
-@app.get("/api/tags")
-def list_tags():
-    _require_block_db()
-    return workspace.list_tags(settings.block_db_path)
-
-
-@app.post("/api/tags/rename")
-def rename_tag(data: TagRename):
-    _require_block_db()
-    try:
-        changed = workspace.rename_tag(settings.block_db_path, data.tag, data.name)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    _sync_mirrors(changed)
-    return {"documents": changed}
-
-
-@app.post("/api/tags/delete")
-def delete_tag(data: TagDelete):
-    _require_block_db()
-    changed = workspace.delete_tag(settings.block_db_path, data.tag)
-    _sync_mirrors(changed)
-    return {"documents": changed}
-
-
-def _sync_mirrors(document_ids: list[str]) -> None:
-    for document_id in document_ids:
-        block_store.sync_markdown(settings.notes_path, settings.block_db_path, document_id)
 
 
 # --- Saved searches ------------------------------------------------------------

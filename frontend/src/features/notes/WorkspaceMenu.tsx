@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { workspaceApi } from "./api";
 import { BackupsDialog } from "./BackupsDialog";
-import { triggerDownload } from "./download";
 import { useImportMarkdown } from "./hooks";
 import { TrashDialog } from "./TrashDialog";
 import type { Notice } from "./Toast";
@@ -13,7 +11,7 @@ interface Props {
 
 type DialogName = "trash" | "backups" | null;
 
-/** Import, export, trash and backups: the things you do to the whole workspace. */
+/** Import, trash and backups: the things you do to the whole workspace. */
 export function WorkspaceMenu({ onNotice, onOpenNote }: Props) {
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<DialogName>(null);
@@ -76,7 +74,7 @@ export function WorkspaceMenu({ onNotice, onOpenNote }: Props) {
         ref={buttonRef}
         type="button"
         aria-label="Workspace menu"
-        title="Import, export, trash and backups"
+        title="Import, trash and backups"
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -103,9 +101,7 @@ export function WorkspaceMenu({ onNotice, onOpenNote }: Props) {
           className="absolute right-0 z-40 mt-1 w-56 rounded-md border border-zinc-200 bg-white py-1 shadow-lg"
         >
           <Item onClick={() => choose(() => fileRef.current?.click())}>Import Markdown files…</Item>
-          <Item onClick={() => choose(() => triggerDownload(workspaceApi.exportAllUrl))}>
-            Export all notes (.zip)
-          </Item>
+
           <div className="my-1 border-t border-zinc-100" />
           <Item onClick={() => choose(() => setDialog("trash"))}>Trash</Item>
           <Item onClick={() => choose(() => setDialog("backups"))}>Backups…</Item>

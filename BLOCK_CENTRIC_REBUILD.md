@@ -241,14 +241,10 @@ plugin-driven publishing editor.
   Every restore first saves a `pre-restore` snapshot, verifies the chosen snapshot's
   integrity and schema version, rebuilds FTS, and moves stray Markdown mirrors aside
   instead of deleting them.
-- [x] Add user-visible Markdown export: one note from the header or right-click
-  menu, or the whole workspace as a `.zip` that mirrors the folder tree and bundles
-  referenced media with relative links.
+- [x] Add user-visible Markdown export of one note from the header or right-click
+  menu.
 - [x] Add user-visible Markdown import: pick `.md` files to create new notes, with
   front-matter titles, tags, and status preserved and unreadable files reported.
-- [x] Add tag management: edit a note's tags from the right-click menu, browse
-  tags in the sidebar, show the notes for a tag, rename/merge or remove a tag across
-  every note, and filter block search by tag.
 - [x] Add saved searches stored in SQLite (migration 11) and shown as one-click
   chips under the search box.
 - [x] Add keyboard navigation: ⌘/Ctrl+K or `/` to search, Alt+N for a new note,
@@ -284,6 +280,5 @@ and undo/redo. Clipboard output embeds loaded local image bytes; paste into Word
 Docs was not checked at the user's request. Markdown remains a compatibility and
 storage format; people can use the editor as a rich-text editor without seeing or
 editing it. Deleted notes go to a recoverable Trash, the workspace is snapshotted
-daily with one-click restore, notes import from and export to Markdown (single
-files or a folder-preserving zip), tags and saved searches organize notes, and the
-main flows are reachable from the keyboard.
+daily with one-click restore, notes import from and export to Markdown, saved
+searches re-run in one click, and the main flows are reachable from the keyboard.
