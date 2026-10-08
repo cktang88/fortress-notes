@@ -119,7 +119,7 @@ export const blockApi = {
       body: JSON.stringify(patch),
     }),
   capture: (text: string) =>
-    request<{ document_id: string; title: string; added: number }>("/capture", {
+    request<{ document_id: string; title: string; folder: string }>("/capture", {
       method: "POST",
       body: JSON.stringify({ text }),
     }),

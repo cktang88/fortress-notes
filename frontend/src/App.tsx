@@ -187,7 +187,7 @@ export function App() {
             capture.mutateAsync(text).then(
               (result) =>
                 showNotice({
-                  message: `Added to ${result.title}`,
+                  message: `Saved “${result.title}” to ${result.folder}`,
                   action: { label: "Open", run: () => selectNote(result.document_id) },
                 }),
               (error: unknown) => {

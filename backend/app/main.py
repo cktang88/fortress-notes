@@ -362,15 +362,12 @@ def _attachment(filename: str) -> str:
 
 @app.post("/api/capture", status_code=201)
 def capture(data: CaptureRequest):
-    """Append a quick thought to the Inbox note without opening it."""
+    """Save a quick thought as its own note in the Uncategorized folder."""
 
     try:
         return documents.capture(data.text)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    except block_store.DocumentRevisionConflict:
-        # The Inbox changed under us (e.g. it's open and saving); try once more.
-        return documents.capture(data.text)
 
 
 # --- Trash ---------------------------------------------------------------------

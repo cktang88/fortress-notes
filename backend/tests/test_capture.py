@@ -35,33 +35,42 @@ class QuickCaptureTests(unittest.TestCase):
         self.addCleanup(self.client.__exit__, None, None, None)
         self.addCleanup(self._directory.cleanup)
 
-    def texts(self, document_id: str) -> list[str]:
-        tree = self.client.get(f"/api/block-documents/{document_id}").json()
-        return [block["text"] for block in tree["children"]]
+    def folder(self) -> dict:
+        items = self.client.get("/api/navigation").json()["items"]
+        [folder] = [item for item in items if item["kind"] == "folder"]
+        return folder
 
-    def test_first_capture_creates_the_inbox_and_later_ones_append(self) -> None:
+    def test_each_capture_is_its_own_note_in_uncategorized_newest_first(self) -> None:
+        self.client.post("/api/notes", json={"title": "Existing", "body": "x"})
         first = self.client.post("/api/capture", json={"text": "Call the plumber"})
         self.assertEqual(first.status_code, 201, first.text)
-        inbox = first.json()["document_id"]
-        self.assertEqual(self.texts(inbox), ["Call the plumber"])
+        second = self.client.post(
+            "/api/capture", json={"text": "Idea: shared calendar\nwith the whole family"}
+        ).json()
+        self.assertEqual(second["title"], "Idea: shared calendar")
+        self.assertEqual(second["folder"], "Uncategorized")
 
-        second = self.client.post("/api/capture", json={"text": "Idea: shared calendar\n\nBuy bulbs"})
-        self.assertEqual(second.json()["document_id"], inbox)
+        folder = self.folder()
+        self.assertEqual(folder["name"], "Uncategorized")
+        self.assertEqual(folder["position"], 0)  # sits at the top of the sidebar
         self.assertEqual(
-            self.texts(inbox), ["Call the plumber", "Idea: shared calendar", "Buy bulbs"]
+            [child["title"] for child in folder["children"]],
+            ["Idea: shared calendar", "Call the plumber"],
         )
-        titles = [item["title"] for item in self.client.get("/api/navigation").json()["items"]]
-        self.assertEqual(titles, ["Inbox"])
-        self.assertIn("Buy bulbs", (self.notes / f"{inbox}.md").read_text())
+        note = self.client.get(f"/api/notes/{second['document_id']}").json()
+        self.assertIn("with the whole family", note["body"])
+        self.assertTrue((self.notes / f"{second['document_id']}.md").exists())
         hits = self.client.get("/api/block-search", params={"q": "plumber"}).json()
-        self.assertEqual([hit["document_id"] for hit in hits], [inbox])
+        self.assertEqual([hit["document_id"] for hit in hits], [first.json()["document_id"]])
 
-    def test_a_trashed_inbox_is_replaced_and_blank_text_is_refused(self) -> None:
-        inbox = self.client.post("/api/capture", json={"text": "one"}).json()["document_id"]
-        self.client.delete(f"/api/notes/{inbox}")
-        fresh = self.client.post("/api/capture", json={"text": "two"}).json()["document_id"]
-        self.assertNotEqual(fresh, inbox)
-        self.assertEqual(self.texts(fresh), ["two"])
+    def test_a_deleted_folder_is_recreated_and_blank_text_is_refused(self) -> None:
+        note = self.client.post("/api/capture", json={"text": "one"}).json()
+        self.client.post(
+            f"/api/block-documents/{note['document_id']}/move", json={"folder_id": None}
+        )
+        self.client.delete(f"/api/folders/{self.folder()['id']}")
+        self.client.post("/api/capture", json={"text": "two"})
+        self.assertEqual([c["title"] for c in self.folder()["children"]], ["two"])
         self.assertEqual(self.client.post("/api/capture", json={"text": " \n "}).status_code, 422)
 
 
