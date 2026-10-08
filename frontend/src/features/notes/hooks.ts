@@ -302,3 +302,15 @@ export function useImportMarkdown() {
     onSuccess: () => invalidateDocumentLists(qc),
   });
 }
+
+export function useCapture() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (text: string) => blockApi.capture(text),
+    onSuccess: ({ document_id }) => {
+      // If the Inbox is open, the editor picks up the new paragraphs.
+      void qc.invalidateQueries({ queryKey: queryKeys.document(document_id) });
+      invalidateDocumentLists(qc);
+    },
+  });
+}

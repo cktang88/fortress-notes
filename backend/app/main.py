@@ -58,6 +58,7 @@ from .models import (
     FolderCreate,
     FolderMove,
     FolderRename,
+    CaptureRequest,
     SavedSearchCreate,
 )
 
@@ -357,6 +358,19 @@ async def import_uploaded_markdown(
 def _attachment(filename: str) -> str:
     ascii_name = filename.encode("ascii", "ignore").decode() or "download"
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+@app.post("/api/capture", status_code=201)
+def capture(data: CaptureRequest):
+    """Append a quick thought to the Inbox note without opening it."""
+
+    try:
+        return documents.capture(data.text)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except block_store.DocumentRevisionConflict:
+        # The Inbox changed under us (e.g. it's open and saving); try once more.
+        return documents.capture(data.text)
 
 
 # --- Trash ---------------------------------------------------------------------

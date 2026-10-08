@@ -290,6 +290,7 @@ export function SearchBar({
           <Shortcut keys={["⌘/Ctrl", "K"]}>Search notes</Shortcut>
           <Shortcut keys={["/"]}>Search (when not typing)</Shortcut>
           <Shortcut keys={["Alt", "N"]}>New note</Shortcut>
+          <Shortcut keys={["⌘/Ctrl", "Shift", "Space"]}>Jot something into Inbox</Shortcut>
           <Shortcut keys={["↓", "↑"]}>Move through search results</Shortcut>
           <Shortcut keys={["Enter"]}>Open the highlighted result</Shortcut>
           <Shortcut keys={["Esc"]}>Clear the search</Shortcut>

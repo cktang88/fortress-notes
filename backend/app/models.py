@@ -218,3 +218,7 @@ class SavedSearchCreate(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     mode: Literal["text", "embedding"] = "text"
     filters: dict[str, str] = {}
+
+
+class CaptureRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=20_000)

@@ -16,7 +16,7 @@ import frontmatter
 
 from . import block_store, images, workspace
 from .config import get_settings
-from .models import Note, NoteCreate, NoteStatus, NoteSummary, NoteUpdate
+from .models import BlockOperation, Note, NoteCreate, NoteStatus, NoteSummary, NoteUpdate
 
 
 def _paths() -> tuple[Path, Path]:
@@ -128,6 +128,58 @@ def empty_trash() -> int:
     for document_id in purged:
         remove_mirror(document_id)
     return len(purged)
+
+
+# --- Quick capture -----------------------------------------------------------
+
+INBOX_TITLE = "Inbox"
+
+
+def capture(text: str) -> dict[str, object]:
+    """Append each non-empty line of ``text`` as a paragraph at the end of the Inbox.
+
+    The Inbox is the top-level note titled "Inbox" (created on first use), so
+    capturing never needs a decision about where something belongs.
+    """
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("nothing to capture")
+    db_path, _ = _paths()
+    inbox = _find_inbox(db_path)
+    if inbox is None:
+        inbox = block_store.create_block_document(db_path, INBOX_TITLE, "rough", [], "")
+    children = inbox["children"]
+    operations: list[BlockOperation] = []
+    # A brand-new note starts with one empty paragraph; fill it instead of leaving a gap.
+    if len(children) == 1 and not children[0]["text"].strip() and not children[0]["children"]:
+        operations.append(_paragraph("update", lines.pop(0), block_id=children[0]["id"]))
+        position = 1
+    else:
+        position = len(children)
+    for offset, line in enumerate(lines):
+        operations.append(_paragraph("insert", line, position=position + offset))
+    tree = block_store.apply_transaction(db_path, inbox["id"], operations, inbox["revision"])
+    write_mirror(tree["id"])
+    return {"document_id": tree["id"], "title": tree["title"], "added": len(operations)}
+
+
+def _find_inbox(db_path: Path) -> dict | None:
+    for item in block_store.navigation(db_path)["items"]:
+        if item.get("kind") == "document" and item.get("title") == INBOX_TITLE:
+            return block_store.document_tree(db_path, str(item["id"]))
+    return None
+
+
+def _paragraph(operation: str, text: str, **fields: object) -> BlockOperation:
+    return BlockOperation(
+        operation=operation,
+        type="paragraph",
+        text=text,
+        content={"markdown": text},
+        parent_id=None,
+        **fields,
+    )
 
 
 # --- Mirrors -----------------------------------------------------------------
