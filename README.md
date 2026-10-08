@@ -22,9 +22,6 @@ you're reading.
   - **Full-text** — fast substring/keyword search across all notes.
   - **Embedding search** — late-interaction (ColBERT / `lightonai/Agent-ModernColBERT`)
     multi-vector retrieval via [PyLate](https://github.com/lightonai/pylate).
-- **"You wrote about this before"** — pause while writing a paragraph and up to three
-  related paragraphs from other notes appear in a small card; **Link** adds a link (and a
-  backlink) to that paragraph. Toggle with "Suggestions on/off" above the editor.
 - **Related notes** — the bottom-left pane auto-refreshes whenever you open a note,
   showing the most semantically related notes (late-interaction similarity).
 - **Rough vs. polished notes** — a `status` flag distinguishes braindump/brainstorm
@@ -45,9 +42,12 @@ you're reading.
   The small VLM adds local captions, and content-hash caching reuses OCR and captions
   for duplicate image bytes.
 
-- **Duplicate check** — when a note repeats most of another one, a banner says so and
-  offers to move this note's paragraphs to the end of the existing note (links to them keep
-  working; the emptied note goes to Trash), or to remember it's not a duplicate.
+- **Seen before** — a quiet chip on the editor's status line. After you pause writing it
+  shows `↗ 2 related` (paragraphs from other notes like the one you're writing); if the
+  whole note repeats another it turns amber: `Looks like “Kitchen reno”`. It never pops up
+  by itself — click it to **Link** a related paragraph, or **Move** this note into the one
+  it repeats (links keep working; the emptied note goes to Trash), or mark it
+  **Not a duplicate**.
 - **Trash with Undo** — deleting moves a note to Trash; undo it from the toast or
   restore it later from **⋯ → Trash**.
 - **Automatic backups** — a SQLite snapshot is saved daily; **⋯ → Backups** downloads a

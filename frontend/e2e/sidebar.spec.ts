@@ -1,7 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { proxyToBackend } from "./backend";
+import { proxyToBackend, resetWorkspace } from "./backend";
 
-test.beforeEach(async ({ page }, testInfo) => proxyToBackend(page, testInfo));
+test.beforeEach(async ({ page }, testInfo) => {
+  await proxyToBackend(page, testInfo);
+  // Drag gestures depend on the sidebar's layout, so start from an empty workspace.
+  await resetWorkspace(page, testInfo);
+});
 
 interface NavigationNode {
   kind: "folder" | "document";

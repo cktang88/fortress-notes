@@ -317,6 +317,11 @@ export function useWritingSuggestions(
     queryKey: [...queryKeys.related, "writing", documentId, blockId, version],
     queryFn: () => notesApi.related(documentId, 3, blockId),
     enabled: enabled && !!blockId,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 export function useSimilarDocuments(documentId: string, revision: number) {
   return useQuery({
     queryKey: ["similar", documentId, revision],

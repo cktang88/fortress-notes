@@ -4,7 +4,6 @@ import { BacklinksPanel } from "./features/notes/BacklinksPanel";
 import { BlockNoteEditor } from "./features/notes/BlockNoteEditor";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
 import { DocumentSidebar } from "./features/notes/DocumentSidebar";
-import { DuplicateBanner } from "./features/notes/DuplicateBanner";
 import { isEditableTarget, SEARCH_INPUT_ID } from "./features/notes/listKeyboard";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteList } from "./features/notes/NoteList";
@@ -245,12 +244,16 @@ export function App() {
               onDelete={() => void handleDelete(document.data!.id)}
               exportUrl={workspaceApi.documentMarkdownUrl(document.data.id)}
             />
-            <DuplicateBanner
-              key={`duplicate:${document.data.id}`}
-              documentId={document.data.id}
-              revision={document.data.revision}
+            <BlockNoteEditor
+              key={document.data.id}
+              document={document.data}
+              focusBlockId={selection.focus?.blockId ?? null}
+              focusNonce={selection.focus?.nonce ?? 0}
+              linkTargets={allNotes.data ?? []}
+              linkChecks={linkChecks.data?.links ?? []}
+              onFocusedBlockChange={selection.setActiveBlockId}
+              onOpenNote={(documentId, blockId) => selectNote(documentId, blockId)}
               moving={moveInto.isPending}
-              onOpen={(id) => selectNote(id)}
               onMoveInto={(target) =>
                 moveInto.mutate(
                   { id: document.data!.id, targetId: target.document_id },
@@ -263,16 +266,6 @@ export function App() {
                   },
                 )
               }
-            />
-            <BlockNoteEditor
-              key={document.data.id}
-              document={document.data}
-              focusBlockId={selection.focus?.blockId ?? null}
-              focusNonce={selection.focus?.nonce ?? 0}
-              linkTargets={allNotes.data ?? []}
-              linkChecks={linkChecks.data?.links ?? []}
-              onFocusedBlockChange={selection.setActiveBlockId}
-              onOpenNote={(documentId, blockId) => selectNote(documentId, blockId)}
             />
           </>
         ) : document.isError ? (

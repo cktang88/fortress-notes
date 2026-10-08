@@ -50,8 +50,13 @@ import {
   matchingLinkTargets,
   parseBlockReference,
 } from "./linkSuggestions";
-import { useBlockReference, useDebouncedValue, useWritingSuggestions } from "./hooks";
-import { WritingSuggestions } from "./WritingSuggestions";
+import {
+  useBlockReference,
+  useDebouncedValue,
+  useSimilarDocuments,
+  useWritingSuggestions,
+} from "./hooks";
+import { SeenBefore } from "./SeenBefore";
 import type {
   BlockDocument,
   BlockLinkTarget,
@@ -59,6 +64,7 @@ import type {
   BlockOperation,
   LinkCheck,
   NoteSummary,
+  SimilarDocument,
 } from "./types";
 
 interface Props {
@@ -71,6 +77,9 @@ interface Props {
   onFocusedBlockChange: (blockId: string | null) => void;
   /** Open another note (used by writing suggestions). */
   onOpenNote?: (documentId: string, blockId: string | null) => void;
+  /** Fold this note into another (offered when it largely repeats that note). */
+  onMoveInto?: (target: SimilarDocument) => void;
+  moving?: boolean;
 }
 
 type Location = {
@@ -228,6 +237,8 @@ export function BlockNoteEditor({
   linkChecks,
   onFocusedBlockChange,
   onOpenNote,
+  onMoveInto,
+  moving = false,
 }: Props) {
   const queryClient = useQueryClient();
   const initialContent = useMemo(
@@ -289,6 +300,14 @@ export function BlockNoteEditor({
   const settledWriting = useDebouncedValue(writing, SUGGESTION_PAUSE_MS);
   const [suggestionsOn, setSuggestionsOn] = useState(readSuggestionsPreference);
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
+  // Near-copies of this whole note, checked once edits settle.
+  const settledRevision = useDebouncedValue(initialDocument.revision, DUPLICATE_PAUSE_MS);
+  const similar = useSimilarDocuments(initialDocument.id, settledRevision);
+  const [notDuplicates, setNotDuplicates] = useState(readNotDuplicates);
+  const duplicate =
+    (Array.isArray(similar.data) ? similar.data : []).find(
+      (item) => !notDuplicates.has(pairKey(initialDocument.id, item.document_id)),
+    ) ?? null;
   const suggestionTarget =
     settledWriting &&
     settledWriting === writing &&
@@ -703,19 +722,42 @@ export function BlockNoteEditor({
             "Saving…"
           ) : null}
         </span>
-        <span className="ml-auto flex gap-1">
-          <button
-            type="button"
-            aria-pressed={suggestionsOn}
-            title="Show related paragraphs from other notes while you write"
-            onClick={() => {
-              setSuggestionsOn(!suggestionsOn);
-              writeSuggestionsPreference(!suggestionsOn);
+        <span className="ml-auto flex items-center gap-1">
+          <SeenBefore
+            related={visibleSuggestions}
+            duplicate={duplicate}
+            suggestionsOn={suggestionsOn}
+            onToggleSuggestions={(on) => {
+              setSuggestionsOn(on);
+              writeSuggestionsPreference(on);
             }}
-            className="rounded border px-2 py-1"
-          >
-            Suggestions {suggestionsOn ? "on" : "off"}
-          </button>
+            onLink={(item) => {
+              if (!suggestionTarget || !item.matched_block_id) return;
+              editor.setTextCursorPosition(suggestionTarget.id, "end");
+              // A real link: shows the other note's title, previews the paragraph on
+              // hover, and records a backlink (the href is a plain block reference).
+              editor.insertInlineContent([
+                " ",
+                {
+                  type: "link",
+                  href: blockLink({ block_id: item.matched_block_id, text: "" }),
+                  content: item.note.title || "related note",
+                },
+              ]);
+              editor.focus();
+              setDismissedFor(suggestionTarget.id);
+            }}
+            onOpen={(documentId, blockId) => onOpenNote?.(documentId, blockId)}
+            onMoveInto={(target) => onMoveInto?.(target)}
+            onNotDuplicate={(target) => {
+              const next = new Set(notDuplicates).add(
+                pairKey(initialDocument.id, target.document_id),
+              );
+              setNotDuplicates(next);
+              writeNotDuplicates(next);
+            }}
+            moving={moving}
+          />
           <button
             type="button"
             className="rounded border px-2 py-1 disabled:opacity-40"
@@ -792,31 +834,6 @@ export function BlockNoteEditor({
           minQueryLength={1}
         />
       </BlockNoteView>
-      <WritingSuggestions
-        suggestions={visibleSuggestions}
-        onLink={(item) => {
-          if (!suggestionTarget || !item.matched_block_id) return;
-          editor.setTextCursorPosition(suggestionTarget.id, "end");
-          // A real link: shows the other note's title, previews the paragraph on hover,
-          // and records a backlink (the href is a plain block reference).
-          editor.insertInlineContent([
-            " ",
-            {
-              type: "link",
-              href: blockLink({ block_id: item.matched_block_id, text: "" }),
-              content: item.note.title || "related note",
-            },
-          ]);
-          editor.focus();
-          setDismissedFor(suggestionTarget.id);
-        }}
-        onOpen={(documentId, blockId) => onOpenNote?.(documentId, blockId)}
-        onDismiss={() => suggestionTarget && setDismissedFor(suggestionTarget.id)}
-        onTurnOff={() => {
-          setSuggestionsOn(false);
-          writeSuggestionsPreference(false);
-        }}
-      />
       {selectionActions && (
         <div
           role="group"
@@ -1420,5 +1437,30 @@ function writeSuggestionsPreference(on: boolean) {
     window.localStorage.setItem(SUGGESTIONS_KEY, on ? "on" : "off");
   } catch {
     // Without storage the choice simply lasts for this visit.
+  }
+}
+
+const DUPLICATE_PAUSE_MS = 1500;
+const NOT_DUPLICATES_KEY = "fortress-notes:not-duplicates";
+
+function pairKey(a: string, b: string) {
+  return [a, b].sort().join("|");
+}
+
+function readNotDuplicates(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(NOT_DUPLICATES_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeNotDuplicates(pairs: Set<string>) {
+  try {
+    window.localStorage.setItem(NOT_DUPLICATES_KEY, JSON.stringify([...pairs]));
+  } catch {
+    // Without storage the choice lasts for this visit.
   }
 }
