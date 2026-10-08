@@ -4,10 +4,8 @@ import { ApiError, blockApi, notesApi, workspaceApi } from "./api";
 import { invalidateDocumentLists, queryKeys } from "./queryKeys";
 import type {
   BlockDocument,
-  BlockReviewContext,
   BlockSearchFilters,
   NoteStatus,
-  ReviewKind,
   SavedSearch,
   SearchMode,
 } from "./types";
@@ -175,20 +173,6 @@ export function useRestoreDocument() {
       void qc.invalidateQueries({ queryKey: queryKeys.document(id) });
       invalidateDocumentLists(qc);
     },
-  });
-}
-
-export function useDocumentReview() {
-  return useMutation({
-    mutationFn: ({
-      id,
-      kind,
-      context = "document",
-    }: {
-      id: string;
-      kind: ReviewKind;
-      context?: BlockReviewContext;
-    }) => blockApi.reviewContext(id, context, [], kind),
   });
 }
 

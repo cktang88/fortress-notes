@@ -167,7 +167,6 @@ export function blockSearchParams(q: string, filters: BlockSearchFilters = {}, l
     document_id: filters.documentId,
     block_type: filters.blockType,
     status: filters.status,
-    tag: filters.tag?.trim() || undefined,
     updated_after: filters.updatedAfter,
     updated_before: filters.updatedBefore,
   };
