@@ -45,6 +45,9 @@ you're reading.
   The small VLM adds local captions, and content-hash caching reuses OCR and captions
   for duplicate image bytes.
 
+- **Duplicate check** — when a note repeats most of another one, a banner says so and
+  offers to move this note's paragraphs to the end of the existing note (links to them keep
+  working; the emptied note goes to Trash), or to remember it's not a duplicate.
 - **Trash with Undo** — deleting moves a note to Trash; undo it from the toast or
   restore it later from **⋯ → Trash**.
 - **Automatic backups** — a SQLite snapshot is saved daily; **⋯ → Backups** downloads a

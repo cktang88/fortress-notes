@@ -141,6 +141,14 @@ export interface BlockSearchResult {
   score: number;
 }
 
+export interface SimilarDocument {
+  document_id: string;
+  title: string;
+  updated_at: string;
+  /** Share (0-1) of this note's distinctive words also found in the other note. */
+  overlap: number;
+}
+
 export interface BlockLinkTarget {
   block_id: string;
   document_id: string;

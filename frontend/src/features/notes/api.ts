@@ -18,6 +18,7 @@ import type {
   SearchResult,
   RelatedResult,
   LinkCheckResponse,
+  SimilarDocument,
   TrashedDocument,
   SavedSearch,
   Backup,
@@ -118,6 +119,13 @@ export const blockApi = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+  similar: (id: string) =>
+    request<SimilarDocument[]>(`/block-documents/${encodeURIComponent(id)}/similar`),
+  moveInto: (id: string, targetId: string) =>
+    request<{ moved: number; document_id: string }>(
+      `/block-documents/${encodeURIComponent(id)}/move-into/${encodeURIComponent(targetId)}`,
+      { method: "POST" },
+    ),
   /** Moves the document to the trash. */
   remove: (id: string) =>
     request<void>(`/block-documents/${encodeURIComponent(id)}`, { method: "DELETE" }),
