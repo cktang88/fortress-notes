@@ -26,14 +26,7 @@ function renderHeader(onTitle = vi.fn()) {
   root = createRoot(container);
   act(() => {
     root?.render(
-      <NoteHeader
-        note={note}
-        onTitle={onTitle}
-        onDelete={vi.fn()}
-        onSetStatus={vi.fn()}
-        onClarify={vi.fn()}
-        checking={false}
-      />,
+      <NoteHeader note={note} onTitle={onTitle} onDelete={vi.fn()} onSetStatus={vi.fn()} />,
     );
   });
   return container.querySelector<HTMLInputElement>('input[aria-label="Note title"]')!;
@@ -50,8 +43,7 @@ function type(input: HTMLInputElement, value: string) {
 describe("NoteHeader", () => {
   it("keeps note metadata editing out of the header", () => {
     renderHeader();
-    expect(container!.textContent).not.toMatch(/tags|fact-check|lint/i);
-    expect(container!.textContent).toContain("Clarify");
+    expect(container!.textContent).not.toMatch(/tags|fact-check|lint|clarify/i);
   });
 
   it("shows every keystroke immediately and saves the title once typing pauses", () => {

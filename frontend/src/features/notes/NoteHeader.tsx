@@ -15,8 +15,6 @@ interface Props {
   onTitle: (title: string) => void;
   onDelete: () => void;
   onSetStatus: (status: NoteStatus) => void;
-  onClarify: () => void;
-  checking: boolean;
   /** URL that downloads this note as Markdown. */
   exportUrl?: string;
   /** Focus and select the title, e.g. right after creating the note. */
@@ -40,8 +38,6 @@ export function NoteHeader({
   onTitle,
   onDelete,
   onSetStatus,
-  onClarify,
-  checking,
   exportUrl,
   autoFocusTitle = false,
 }: Props) {
@@ -100,14 +96,6 @@ export function NoteHeader({
           className="flex-1 text-2xl font-bold text-zinc-900 focus:outline-none"
           placeholder="Untitled"
         />
-        <button
-          onClick={onClarify}
-          disabled={checking}
-          title="Ask questions about gaps and ambiguity in this note"
-          className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
-        >
-          {checking ? "Reading…" : "Clarify"}
-        </button>
       </div>
 
       <div className="text-xs text-zinc-400">

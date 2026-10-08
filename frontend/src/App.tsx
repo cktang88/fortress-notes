@@ -2,7 +2,6 @@ import { useEffect, useEffectEvent, useState } from "react";
 import { ApiError, workspaceApi } from "./features/notes/api";
 import { BacklinksPanel } from "./features/notes/BacklinksPanel";
 import { BlockNoteEditor } from "./features/notes/BlockNoteEditor";
-import { ReviewFindings } from "./features/notes/BlockReviewPanel";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
 import { DocumentSidebar } from "./features/notes/DocumentSidebar";
 import { isEditableTarget, SEARCH_INPUT_ID } from "./features/notes/listKeyboard";
@@ -22,7 +21,6 @@ import {
   useDebouncedValue,
   useDeleteFolder,
   useDeleteSavedSearch,
-  useDocumentReview,
   useLinkChecks,
   useMoveDocument,
   useMoveFolder,
@@ -68,7 +66,6 @@ export function App() {
   const deleteFolder = useDeleteFolder();
   const moveDocument = useMoveDocument();
   const moveFolder = useMoveFolder();
-  const review = useDocumentReview();
   const savedSearches = useSavedSearches();
   const saveSearch = useSaveSearch();
   const deleteSavedSearch = useDeleteSavedSearch();
@@ -78,7 +75,6 @@ export function App() {
     showNotice({ tone: "error", message: error instanceof Error ? error.message : String(error) });
 
   const selectNote = (id: string, blockId: string | null = null) => {
-    if (id !== selectedId) review.reset();
     selection.select(id, blockId);
   };
 
@@ -244,34 +240,8 @@ export function App() {
                 updateDocument.mutate({ id: document.data!.id, status }, { onError: showError })
               }
               onDelete={() => void handleDelete(document.data!.id)}
-              onClarify={() =>
-                review.mutate({ id: document.data!.id, kind: "clarify" }, { onError: showError })
-              }
-              checking={review.isPending}
               exportUrl={workspaceApi.documentMarkdownUrl(document.data.id)}
             />
-            {review.data && review.variables?.id === document.data.id && (
-              <section
-                aria-label="Questions to clarify"
-                className="mx-8 mt-3 rounded-md border border-indigo-200 bg-indigo-50/40 p-3 text-sm"
-              >
-                <div className="flex items-center justify-between">
-                  <strong className="text-indigo-900">Questions to clarify</strong>
-                  <button
-                    type="button"
-                    aria-label="Dismiss questions"
-                    onClick={() => review.reset()}
-                    className="rounded px-1.5 text-zinc-400 hover:bg-white hover:text-zinc-700"
-                  >
-                    ×
-                  </button>
-                </div>
-                <ReviewFindings
-                  review={review.data}
-                  onFocusBlock={(blockId) => selectNote(document.data!.id, blockId)}
-                />
-              </section>
-            )}
             <BlockNoteEditor
               key={document.data.id}
               document={document.data}
