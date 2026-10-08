@@ -99,19 +99,11 @@ def warm_index() -> int:
     model = _get_model()
     if model is None:
         return 0
-    from . import block_store, images, notes_store  # local import to avoid an import cycle
+    from . import block_store  # local import to avoid an import cycle
 
     encoded = 0
     live_ids: set[str] = set()
-    settings = get_settings()
-    if settings.block_db_enabled:
-        documents = block_store.embedding_documents(settings.block_db_path)
-    else:
-        documents = [
-            (note.id, note.id, note.updated_at.isoformat(), images.note_search_text(note.title, note.body))
-            for summary in notes_store.list_notes()
-            if (note := notes_store.get_note(summary.id)) is not None
-        ]
+    documents = block_store.embedding_documents(get_settings().block_db_path)
     for block_id, _document_id, iso, text in documents:
         live_ids.add(block_id)
         cached = _cache.docs.get(block_id)

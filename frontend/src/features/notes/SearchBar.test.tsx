@@ -13,9 +13,9 @@ describe("SearchBar", () => {
     rendered = undefined;
   });
 
-  it("updates compact block filters in full-text mode", () => {
+  it("updates compact filters while searching", () => {
     const onFilters = vi.fn();
-    rendered = renderSearchBar({ onFilters });
+    rendered = renderSearchBar({ onFilters, query: "budget" });
     const type = rendered.container.querySelector<HTMLSelectElement>('[aria-label="Block type"]');
     const status = rendered.container.querySelector<HTMLSelectElement>(
       '[aria-label="Document status"]',
@@ -34,10 +34,16 @@ describe("SearchBar", () => {
     expect(rendered.container.querySelector('[aria-label="Tag"]')).toBeNull();
   });
 
-  it("keeps block filters out of embedding search", () => {
-    rendered = renderSearchBar({ mode: "embedding" });
-
+  it("shows block filters only once there is something to filter", () => {
+    rendered = renderSearchBar();
     expect(rendered.container.querySelector('[aria-label="Block search filters"]')).toBeNull();
+  });
+
+  it("has a single search box with no mode toggle", () => {
+    rendered = renderSearchBar({ query: "budget" });
+    const labels = [...rendered.container.querySelectorAll("button")].map((b) => b.textContent);
+    expect(labels).not.toContain("Embedding");
+    expect(labels).not.toContain("Full-text");
   });
 
   it("starts a new note without passing the click event to its callback", () => {
@@ -79,11 +85,10 @@ describe("blockSearchParams", () => {
       blockSearchParams("road map", {
         blockType: "heading",
         status: "polished",
-        tag: "  work  ",
         updatedAfter: "2026-01-01T00:00:00Z",
       }),
     ).toBe(
-      "q=road+map&limit=50&block_type=heading&status=polished&tag=work&updated_after=2026-01-01T00%3A00%3A00Z",
+      "q=road+map&limit=50&block_type=heading&status=polished&updated_after=2026-01-01T00%3A00%3A00Z",
     );
   });
 });
@@ -100,8 +105,6 @@ function renderSearchBar(overrides: Partial<React.ComponentProps<typeof SearchBa
       <SearchBar
         query=""
         onQuery={vi.fn()}
-        mode="text"
-        onMode={vi.fn()}
         filters={{}}
         onFilters={vi.fn()}
         onNew={vi.fn()}

@@ -211,3 +211,10 @@ class BlockReviewContextResponse(BaseModel):
     context: BlockReviewContextKind
     summary: str
     items: list[BlockReviewItem] = []
+
+
+class SavedSearchCreate(BaseModel):
+    name: str = Field(default="", max_length=100)
+    query: str = Field(min_length=1, max_length=500)
+    mode: Literal["text", "embedding"] = "text"
+    filters: dict[str, str] = {}

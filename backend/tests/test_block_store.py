@@ -37,7 +37,6 @@ from app.block_store import (
     register_asset,
     search_blocks,
     store_asset_text,
-    sync_markdown,
     undo_transaction,
 )
 from app.models import BlockOperation, BlockTransaction
@@ -59,7 +58,7 @@ class BlockStoreTests(unittest.TestCase):
                     "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
                 ).fetchone()["version"]
             self.assertIsNotNone(table)
-            self.assertEqual(version, 10)
+            self.assertEqual(version, 11)
 
     def test_empty_document_starts_with_a_persisted_paragraph(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -957,11 +956,12 @@ class BlockStoreTests(unittest.TestCase):
             self.assertTrue(ensure_fts_integrity(database))
             self.assertEqual(len(search_blocks(database, "Indexed")), 1)
 
+            # Trashing drops the document from the index straight away.
             delete_document(database, "one")
-            self.assertFalse(fts_is_consistent(database))
-            rebuild_fts(database)
             self.assertTrue(fts_is_consistent(database))
             self.assertEqual(search_blocks(database, "Indexed"), [])
+            rebuild_fts(database)
+            self.assertTrue(fts_is_consistent(database))
 
     def test_lists_stable_block_targets_for_reference_autocomplete(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1070,7 +1070,7 @@ class BlockStoreTests(unittest.TestCase):
                     "SELECT version FROM schema_migrations ORDER BY version"
                 ).fetchall()
                 self.assertEqual(
-                    [row["version"] for row in versions], [2, 3, 4, 5, 6, 7, 8, 9, 10]
+                    [row["version"] for row in versions], [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
                 )
                 self.assertIsNotNone(
                     connection.execute(
@@ -1275,7 +1275,9 @@ class BlockStoreTests(unittest.TestCase):
                 ],
                 tree["revision"],
             )
-            sync_markdown(root, database, "one")
+            from app.documents import mirror_document
+
+            mirror_document(database, root, "one")
 
             mirrored = note_path.read_text(encoding="utf-8")
             self.assertIn("custom: keep", mirrored)

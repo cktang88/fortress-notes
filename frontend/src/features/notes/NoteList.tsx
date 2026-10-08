@@ -1,3 +1,4 @@
+import { moveListFocus } from "./listKeyboard";
 import { StatusBadge } from "./StatusBadge";
 import type { NoteSummary } from "./types";
 
@@ -14,12 +15,13 @@ export function NoteList({ notes, selectedId, onSelect, scores, loading }: Props
   if (notes.length === 0) return <div className="p-4 text-sm text-zinc-400">No notes.</div>;
 
   return (
-    <ul className="flex-1 overflow-y-auto">
+    <ul data-results className="flex-1 overflow-y-auto" onKeyDown={moveListFocus}>
       {notes.map((note) => (
         <li key={note.id}>
           <button
+            data-list-item
             onClick={() => onSelect(note.id)}
-            className={`flex w-full flex-col gap-1 border-b border-zinc-100 px-3 py-2.5 text-left hover:bg-zinc-50 ${
+            className={`flex w-full flex-col gap-1 border-b border-zinc-100 px-3 py-2.5 text-left hover:bg-zinc-50 focus-visible:bg-indigo-50 focus-visible:outline-none ${
               selectedId === note.id ? "bg-zinc-100" : ""
             }`}
           >

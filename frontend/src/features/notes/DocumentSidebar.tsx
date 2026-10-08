@@ -6,6 +6,8 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/react";
 import { FormEvent, KeyboardEvent, MouseEvent, useEffect, useRef, useState } from "react";
+import { workspaceApi } from "./api";
+import { triggerDownload } from "./download";
 import { StatusBadge } from "./StatusBadge";
 import type { NavigationDocument, NavigationFolder, NavigationNode } from "./types";
 
@@ -405,6 +407,15 @@ export function DocumentSidebar({
                 </MenuButton>
                 <MenuButton
                   onClick={() => {
+                    const id = menuTargetId(menu.target);
+                    closeMenu();
+                    triggerDownload(workspaceApi.documentMarkdownUrl(id));
+                  }}
+                >
+                  Download as Markdown
+                </MenuButton>
+                <MenuButton
+                  onClick={() => {
                     const node = findDocument(nodes, menuTargetId(menu.target));
                     closeMenu();
                     if (node && node.folder_id !== null)
@@ -420,7 +431,7 @@ export function DocumentSidebar({
                     void runAction(() => onDeleteDocument(id)).catch(() => undefined);
                   }}
                 >
-                  Delete note
+                  Move to Trash
                 </MenuButton>
               </>
             )}

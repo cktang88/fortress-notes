@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { proxyToBackend } from "./backend";
 
 const embeddedImage =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/nXcAAAAASUVORK5CYII=";
@@ -22,18 +23,7 @@ async function readClipboardHtml(page: Page) {
   });
 }
 
-test.beforeEach(async ({ page }, testInfo) => {
-  const backendUrl = String(testInfo.config.metadata.backendUrl);
-  await page.route("**/api/**", (route) => {
-    const url = new URL(route.request().url());
-    return route.continue({ url: `${backendUrl}${url.pathname}${url.search}` });
-  });
-  await page.route("**/media/**", async (route) => {
-    const url = new URL(route.request().url());
-    const response = await route.fetch({ url: `${backendUrl}${url.pathname}${url.search}` });
-    return route.fulfill({ response });
-  });
-});
+test.beforeEach(async ({ page }, testInfo) => proxyToBackend(page, testInfo));
 
 test("edits a blank note with bold and italic shortcuts and copies rich HTML", async ({ page }) => {
   const browserErrors: string[] = [];
@@ -82,7 +72,9 @@ test("pastes rich HTML with a data URL image and restores it through reload, und
     await navigator.clipboard.write([
       new ClipboardItem({
         "text/html": new Blob(
-          [`<p><strong>Rich clipboard text</strong></p><img src="${imageUrl}" alt="tiny test image">`],
+          [
+            `<p><strong>Rich clipboard text</strong></p><img src="${imageUrl}" alt="tiny test image">`,
+          ],
           { type: "text/html" },
         ),
         "text/plain": new Blob(["Rich clipboard text"], { type: "text/plain" }),
@@ -93,7 +85,8 @@ test("pastes rich HTML with a data URL image and restores it through reload, und
 
   await expect(editor.locator("strong")).toContainText("Rich clipboard text");
   await expect(editor.locator(`img[src="${embeddedImage}"]`)).toHaveCount(1);
-  await editor.click();
+  // Click the text (the editor's centre can land on the image and select only it).
+  await editor.locator("strong").click();
   await page.keyboard.press(`${shortcut}+a`);
   await page.keyboard.press(`${shortcut}+c`);
   const copiedHtml = await readClipboardHtml(page);
@@ -143,7 +136,9 @@ test("copies a loaded local image as embedded clipboard bytes", async ({ page })
 
   const image = editor.locator("img");
   await expect(image).toHaveCount(1);
-  await expect.poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toBe(1);
+  await expect
+    .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+    .toBe(1);
   const renderedImageUrl = await image.getAttribute("src");
   expect(new URL(renderedImageUrl!, page.url()).origin).toBe(new URL(page.url()).origin);
   expect(new URL(renderedImageUrl!, page.url()).pathname).toContain("/media/");

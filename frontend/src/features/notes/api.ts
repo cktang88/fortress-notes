@@ -1,5 +1,4 @@
 import type {
-  Note,
   NoteStatus,
   NoteSummary,
   NavigationResponse,
@@ -7,36 +6,50 @@ import type {
   DocumentOrganization,
   BlockDocument,
   BlockSearchFilters,
-  BlockSearchResult,
+  UnifiedSearchResult,
   BlockLinkTarget,
   Backlink,
   BlockTransaction,
   ReviewKind,
-  ReviewResponse,
   BlockReviewResponse,
   BlockReviewContext,
   BlockReviewContextResponse,
-  SearchMode,
-  SearchResult,
   RelatedResult,
   LinkCheckResponse,
+  TrashedDocument,
+  SavedSearch,
+  Backup,
+  MarkdownUploadResult,
 } from "./types";
 
 const API = "/api";
+
+/** An HTTP error from the API; `status` lets callers tell conflicts from outages. */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function failure(res: Response): Promise<ApiError> {
+  const body = await res.json().catch(() => null);
+  const detail =
+    body && typeof body === "object" && "detail" in body && typeof body.detail === "string"
+      ? body.detail
+      : null;
+  return new ApiError(res.status, `${res.status} ${detail ?? res.statusText}`);
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    const detail =
-      body && typeof body === "object" && "detail" in body && typeof body.detail === "string"
-        ? body.detail
-        : null;
-    throw new Error(`${res.status} ${detail ?? res.statusText}`);
-  }
+  if (!res.ok) throw await failure(res);
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -45,32 +58,11 @@ export const notesApi = {
   list: (status?: NoteStatus) =>
     request<NoteSummary[]>(`/notes${status ? `?status=${status}` : ""}`),
 
-  get: (id: string) => request<Note>(`/notes/${id}`),
-
-  create: (body = "", folderId: string | null = null) =>
-    request<Note>("/notes", {
-      method: "POST",
-      body: JSON.stringify({ body, folder_id: folderId }),
-    }),
-
-  update: (id: string, patch: Partial<Pick<Note, "title" | "body" | "status" | "tags">>) =>
-    request<Note>(`/notes/${id}`, { method: "PUT", body: JSON.stringify(patch) }),
-
-  remove: (id: string) => request<void>(`/notes/${id}`, { method: "DELETE" }),
-
-  promote: (id: string) => request<Note>(`/notes/${id}/promote`, { method: "POST" }),
-
-  search: (q: string, mode: SearchMode) =>
-    request<SearchResult[]>(`/search?q=${encodeURIComponent(q)}&mode=${mode}`),
-
   related: (id: string, k = 5, blockId?: string | null) => {
     const params = new URLSearchParams({ k: String(k) });
     if (blockId) params.set("block_id", blockId);
     return request<RelatedResult[]>(`/notes/${id}/related?${params.toString()}`);
   },
-
-  review: (id: string, kind: ReviewKind) =>
-    request<ReviewResponse>(`/notes/${id}/review?kind=${kind}`, { method: "POST" }),
 
   uploadImage: async (file: File): Promise<{ url: string; text: string }> => {
     const form = new FormData();
@@ -111,6 +103,19 @@ export const blockApi = {
       body: JSON.stringify({ folder_id, position }),
     }),
   get: (id: string) => request<BlockDocument>(`/block-documents/${id}`),
+  create: (folderId: string | null = null, title = "") =>
+    request<BlockDocument>("/block-documents", {
+      method: "POST",
+      body: JSON.stringify({ title, folder_id: folderId }),
+    }),
+  update: (id: string, patch: { title?: string; status?: NoteStatus }) =>
+    request<BlockDocument>(`/block-documents/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  /** Moves the document to the trash. */
+  remove: (id: string) =>
+    request<void>(`/block-documents/${encodeURIComponent(id)}`, { method: "DELETE" }),
   checkLinks: (id: string) =>
     request<LinkCheckResponse>(`/block-documents/${id}/link-checks`, { method: "POST" }),
   review: (documentId: string, blockId: string, kind: ReviewKind = "factcheck") =>
@@ -130,8 +135,8 @@ export const blockApi = {
     ),
   backlinks: (id: string, limit = 100) =>
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),
-  search: (q: string, filters: BlockSearchFilters = {}, limit = 50) =>
-    request<BlockSearchResult[]>(`/block-search?${blockSearchParams(q, filters, limit)}`),
+  search: (q: string, filters: BlockSearchFilters = {}, limit = 30) =>
+    request<UnifiedSearchResult[]>(`/unified-search?${blockSearchParams(q, filters, limit)}`),
   linkTargets: (q: string, limit = 50) =>
     request<BlockLinkTarget[]>(`/block-link-targets?q=${encodeURIComponent(q)}&limit=${limit}`),
   transaction: (id: string, transaction: BlockTransaction) =>
@@ -157,7 +162,6 @@ export function blockSearchParams(q: string, filters: BlockSearchFilters = {}, l
     document_id: filters.documentId,
     block_type: filters.blockType,
     status: filters.status,
-    tag: filters.tag?.trim() || undefined,
     updated_after: filters.updatedAfter,
     updated_before: filters.updatedBefore,
   };
@@ -165,4 +169,49 @@ export function blockSearchParams(q: string, filters: BlockSearchFilters = {}, l
     if (value) params.set(name, value);
   }
   return params.toString();
+}
+
+/** Workspace-level actions: trash, saved searches, backups, import/export. */
+export const workspaceApi = {
+  trash: () => request<TrashedDocument[]>("/trash"),
+  restore: (id: string) =>
+    request<DocumentOrganization>(`/trash/${encodeURIComponent(id)}/restore`, { method: "POST" }),
+  deleteForever: (id: string) =>
+    request<void>(`/trash/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  emptyTrash: () => request<{ deleted: number }>("/trash", { method: "DELETE" }),
+
+  savedSearches: () => request<SavedSearch[]>("/saved-searches"),
+  saveSearch: (search: Pick<SavedSearch, "name" | "query" | "mode" | "filters">) =>
+    request<SavedSearch>("/saved-searches", {
+      method: "POST",
+      body: JSON.stringify({ ...search, filters: savedSearchFilters(search.filters) }),
+    }),
+  deleteSavedSearch: (id: string) =>
+    request<void>(`/saved-searches/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  backups: () => request<Backup[]>("/backups"),
+  createBackup: () => request<Backup>("/backups", { method: "POST" }),
+  restoreBackup: (name: string) =>
+    request<{ restored: string; safety_backup: string }>(
+      `/backups/${encodeURIComponent(name)}/restore`,
+      { method: "POST" },
+    ),
+  backupUrl: (name: string) => `${API}/backups/${encodeURIComponent(name)}/download`,
+
+  importMarkdown: async (files: File[], folderId: string | null = null) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    if (folderId) form.append("folder_id", folderId);
+    const res = await fetch(`${API}/markdown-import/files`, { method: "POST", body: form });
+    if (!res.ok) throw await failure(res);
+    return (await res.json()) as MarkdownUploadResult;
+  },
+  documentMarkdownUrl: (id: string) =>
+    `${API}/block-documents/${encodeURIComponent(id)}/markdown?download=true`,
+};
+
+function savedSearchFilters(filters: BlockSearchFilters): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(filters).filter((entry): entry is [string, string] => !!entry[1]),
+  );
 }

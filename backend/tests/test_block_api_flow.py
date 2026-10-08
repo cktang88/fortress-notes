@@ -28,7 +28,11 @@ class BlockApiFlowTests(unittest.TestCase):
                 reindex_interval_s=5.0,
             )
 
-            with patch.object(main, "settings", settings):
+            from app import documents
+
+            with patch.object(main, "settings", settings), patch.object(
+                documents, "get_settings", return_value=settings
+            ):
                 with TestClient(main.app) as client:
                     migrated = client.get("/api/block-documents/target")
                     self.assertEqual(migrated.status_code, 200)

@@ -15,13 +15,13 @@ you're reading.
 - **SQLite block store** — documents contain stable, nested blocks with atomic
   transactions, references, backlinks, and an FTS5 search index.
 - **Markdown portability** — existing Markdown notes are imported without deleting the
-  originals; compatibility mirrors and export keep the data easy to inspect.
+  originals; every note is also mirrored to a readable `.md` file.
 - **Two-pane UI** — left: search + document tree + related/backlink panes; right: a
   BlockNote rich-text editor for the selected document.
-- **Two search modes** (toggle in the search bar):
-  - **Full-text** — fast substring/keyword search across all notes.
-  - **Embedding search** — late-interaction (ColBERT / `lightonai/Agent-ModernColBERT`)
-    multi-vector retrieval via [PyLate](https://github.com/lightonai/pylate).
+- **One search box** — results combine exact words (SQLite FTS5), meaning (late-interaction
+  ColBERT / `lightonai/Agent-ModernColBERT` via [PyLate](https://github.com/lightonai/pylate))
+  and note titles using reciprocal rank fusion. Each result shows the matching passage with
+  your words highlighted and says why it matched; Enter jumps to that paragraph.
 - **Related notes** — the bottom-left pane auto-refreshes whenever you open a note,
   showing the most semantically related notes (late-interaction similarity).
 - **Rough vs. polished notes** — a `status` flag distinguishes braindump/brainstorm
@@ -42,6 +42,15 @@ you're reading.
   The small VLM adds local captions, and content-hash caching reuses OCR and captions
   for duplicate image bytes.
 
+- **Trash with Undo** — deleting moves a note to Trash; undo it from the toast or
+  restore it later from **⋯ → Trash**.
+- **Automatic backups** — a SQLite snapshot is saved daily; **⋯ → Backups** downloads a
+  fresh one or restores any snapshot (your current notes are saved first).
+- **Import & export** — import `.md` files from **⋯**; export a note from its header.
+- **Saved searches** — save a search and re-run it from a one-click chip.
+- **Keyboard first** — ⌘/Ctrl+K or `/` to search, Alt+N for a new note, arrow keys and
+  Enter through results, Esc to clear, `?` for tips.
+
 See [`spec.md`](./spec.md) for the full design, data model, API, and roadmap.
 
 ## Architecture
@@ -52,15 +61,16 @@ frontend (Vite + React + TanStack Query + Tailwind + BlockNote)
         ▼
 backend  (FastAPI, Python)
         ├── block_store   SQLite documents, blocks, references, FTS5, migrations
-        ├── notes_store   compatibility Markdown API and export mirror
+        ├── documents     note lifecycle + read-only Markdown mirrors
         ├── search        full-text + ColBERT late-interaction (PyLate)
         ├── vision        SmolVLM-256M caption + RapidOCR for pasted images
         └── llm           OpenRouter review
         │
         ▼
    ./notes/.fortress.sqlite3 ← the canonical local store
-   ./notes/*.md            ← imported/compatibility Markdown files
+   ./notes/*.md            ← read-only Markdown mirrors (one per note)
    ./notes/assets/*.{png,…}  ← pasted images (+ <id>.txt caption/OCR cache)
+   ./notes/.fortress-backups ← daily / manual / pre-restore SQLite snapshots
 ```
 
 The embedding model needs Python, so the backend is Python-only (FastAPI). If the
@@ -113,7 +123,7 @@ Backend `.env` (see `backend/.env.example`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `NOTES_DIR` | `../notes` | Workspace containing the SQLite store and Markdown compatibility files |
+| `NOTES_DIR` | `../notes` | Workspace containing the SQLite store and Markdown mirrors |
 | `OPENROUTER_API_KEY` | — | Required for AI review |
 | `OPENROUTER_MODEL` | `z-ai/glm-5.3-flash` | OpenRouter model id; `deepseek/deepseek-v4.1-flash` is also supported |
 | `EMBEDDINGS_ENABLED` | `true` | Turn off to skip the ColBERT model |
@@ -122,6 +132,7 @@ Backend `.env` (see `backend/.env.example`):
 | `VISION_ENABLED` | `true` | Image OCR (fast, ~1s/image) — makes image text searchable |
 | `VLM_CAPTION_ENABLED` | `true` | Run local image captioning with OCR |
 | `VLM_MODEL` | `HuggingFaceTB/SmolVLM-256M-Instruct` | Small local VLM used for captions |
+| `AUTO_BACKUP_ENABLED` | `true` | Keep a daily SQLite snapshot in `NOTES_DIR/.fortress-backups` |
 
 ## Frontend toolchain
 

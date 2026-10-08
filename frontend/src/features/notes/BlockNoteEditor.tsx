@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Flex } from "@mantine/core";
 import { mergeRefs, useFocusTrap, useFocusWithin } from "@mantine/hooks";
@@ -36,7 +36,8 @@ import "@blocknote/mantine/style.css";
 import { BlockPropertiesEditor } from "./BlockPropertiesEditor";
 import { BlockReviewPanel } from "./BlockReviewPanel";
 import { embedLoadedSameOriginImages } from "./clipboardImages";
-import { blockApi, notesApi } from "./api";
+import { ApiError, blockApi, notesApi } from "./api";
+import { invalidateDocumentLists, queryKeys } from "./queryKeys";
 import {
   asBlockTransaction,
   makePendingTransaction,
@@ -62,6 +63,8 @@ import type {
 interface Props {
   document: BlockDocument;
   focusBlockId?: string | null;
+  /** Bumped for every focus request, so re-requesting the same block refocuses it. */
+  focusNonce?: number;
   linkTargets: readonly NoteSummary[];
   linkChecks: readonly LinkCheck[];
   onFocusedBlockChange: (blockId: string | null) => void;
@@ -217,6 +220,7 @@ type AppPartialBlock = PartialBlock<
 export function BlockNoteEditor({
   document: initialDocument,
   focusBlockId,
+  focusNonce = 0,
   linkTargets,
   linkChecks,
   onFocusedBlockChange,
@@ -263,11 +267,18 @@ export function BlockNoteEditor({
   const saveQueue = useRef(Promise.resolve());
   const blockUpdatedAt = useRef(blockUpdatedAtById(initialDocument.children));
   const documentRevision = useRef(initialDocument.revision);
-  const saveFailed = useRef(false);
   const recoveryStarted = useRef(false);
   const hydrating = useRef(true);
+  /** The pending transaction still collecting keystrokes (not yet sent). */
+  const openBatchId = useRef<string | null>(null);
+  /** The pending transaction currently on the wire. */
+  const inFlightId = useRef<string | null>(null);
+  const flushTimer = useRef<number | undefined>(undefined);
+  const retryDelay = useRef(0);
+  const flushWaiters = useRef<(() => void)[]>([]);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveProblem, setSaveProblem] = useState<SaveProblem | null>(null);
+  const conflicted = saveProblem?.kind === "conflict";
   const [hasBlockSelection, setHasBlockSelection] = useState(false);
   const [reviewBlockIds, setReviewBlockIds] = useState<string[]>([]);
   const [preview, setPreview] = useState<{ blockId: string; left: number; top: number } | null>(
@@ -280,26 +291,75 @@ export function BlockNoteEditor({
     [editor, linkChecks],
   );
 
-  const enqueueOperations = (operations: BlockOperation[]) => {
+  /**
+   * Queue edits durably (localStorage) at once, then send them in one batch after
+   * typing pauses. Consecutive edits to the same block collapse into one update.
+   */
+  const enqueueOperations = (operations: BlockOperation[], immediate = false) => {
     try {
       const pending = readPendingTransactions(initialDocument.id);
-      pending.push(makePendingTransaction(operations));
+      const open = pending.at(-1);
+      if (
+        open &&
+        open.transaction_id === openBatchId.current &&
+        open.transaction_id !== inFlightId.current &&
+        open.base_revision === undefined
+      ) {
+        open.operations = mergeOperations(open.operations, operations);
+      } else {
+        const created = makePendingTransaction(operations);
+        pending.push(created);
+        openBatchId.current = created.transaction_id;
+      }
       writePendingTransactions(initialDocument.id, pending);
     } catch (error) {
-      saveFailed.current = true;
-      setSaveError(error instanceof Error ? error.message : "Could not save edits locally");
+      setSaveProblem({
+        kind: "conflict",
+        message: error instanceof Error ? error.message : "Could not keep edits on this device",
+      });
       return Promise.resolve();
     }
+    return scheduleFlush(immediate ? 0 : SAVE_DELAY_MS);
+  };
+
+  const scheduleFlush = (delay: number) =>
+    new Promise<void>((resolve) => {
+      flushWaiters.current.push(resolve);
+      window.clearTimeout(flushTimer.current);
+      flushTimer.current = window.setTimeout(() => void flush(), delay);
+    });
+
+  const flush = () => {
+    window.clearTimeout(flushTimer.current);
+    openBatchId.current = null;
+    const waiters = flushWaiters.current.splice(0);
     saveQueue.current = saveQueue.current.then(async () => {
-      if (saveFailed.current) return;
+      if (readPendingTransactions(initialDocument.id).length === 0) return;
       setSaving(true);
       try {
         await drainPendingTransactions();
+        retryDelay.current = 0;
+        setSaveProblem((problem) => (problem?.kind === "offline" ? null : problem));
+        invalidateDocumentLists(queryClient);
       } catch (error) {
-        saveFailed.current = true;
-        setSaveError(error instanceof Error ? error.message : "Could not save changes");
+        if (isRejectedEdit(error)) {
+          setSaveProblem({
+            kind: "conflict",
+            message: "This note changed somewhere else, so your latest edits couldn't be saved.",
+          });
+        } else {
+          // Offline or a server hiccup: keep editing, keep the edits, try again soon.
+          retryDelay.current = Math.min(30_000, Math.max(2_000, retryDelay.current * 2));
+          setSaveProblem({
+            kind: "offline",
+            message: "Can't reach the server. Edits are kept on this device and will sync.",
+          });
+          window.clearTimeout(flushTimer.current);
+          flushTimer.current = window.setTimeout(() => void flush(), retryDelay.current);
+        }
       } finally {
         setSaving(false);
+        for (const resolve of waiters) resolve();
       }
     });
     return saveQueue.current;
@@ -314,10 +374,16 @@ export function BlockNoteEditor({
         head.operations = withExpectedUpdatedAt(head.operations, blockUpdatedAt.current);
         writePendingTransactions(initialDocument.id, pending);
       }
-      const document = await blockApi.transaction(
-        initialDocument.id,
-        asBlockTransaction(head, documentRevision.current),
-      );
+      inFlightId.current = head.transaction_id;
+      let document: BlockDocument;
+      try {
+        document = await blockApi.transaction(
+          initialDocument.id,
+          asBlockTransaction(head, documentRevision.current),
+        );
+      } finally {
+        inFlightId.current = null;
+      }
       pending = readPendingTransactions(initialDocument.id);
       const completedIndex = pending.findIndex(
         (transaction) => transaction.transaction_id === head.transaction_id,
@@ -326,40 +392,48 @@ export function BlockNoteEditor({
       writePendingTransactions(initialDocument.id, pending);
       blockUpdatedAt.current = blockUpdatedAtById(document.children);
       documentRevision.current = document.revision;
-      queryClient.setQueryData(["block-document", initialDocument.id], document);
-      void queryClient.invalidateQueries({ queryKey: ["navigation"] });
-      void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
-      void queryClient.invalidateQueries({ queryKey: ["notes"] });
-      void queryClient.invalidateQueries({ queryKey: ["backlinks", initialDocument.id] });
-      void queryClient.invalidateQueries({ queryKey: ["related", initialDocument.id] });
-      void queryClient.invalidateQueries({ queryKey: ["block-search"] });
-      setSaveError(null);
+      queryClient.setQueryData(queryKeys.document(initialDocument.id), document);
+    }
+  };
+
+  /** Show the server's version of the note in the editor without saving anything. */
+  const showServerVersion = (document: BlockDocument) => {
+    hydrating.current = true;
+    editor.replaceBlocks(editor.document, document.children.map(toPartialBlock));
+    hydrateLegacyBlocks(editor, document.children);
+    hydrating.current = false;
+    blockUpdatedAt.current = blockUpdatedAtById(document.children);
+    documentRevision.current = document.revision;
+    queryClient.setQueryData(queryKeys.document(initialDocument.id), document);
+  };
+
+  const loadLatestVersion = async () => {
+    window.clearTimeout(flushTimer.current);
+    openBatchId.current = null;
+    writePendingTransactions(initialDocument.id, []);
+    try {
+      showServerVersion(await blockApi.get(initialDocument.id));
+      setSaveProblem(null);
+    } catch (error) {
+      setSaveProblem({
+        kind: "conflict",
+        message: error instanceof Error ? error.message : "Could not load the latest version",
+      });
     }
   };
 
   const changeHistory = (action: "undo" | "redo") => {
+    // Send any edits still waiting for a pause first, so undo applies to them.
+    void flush();
     saveQueue.current = saveQueue.current.then(async () => {
       setSaving(true);
       try {
-        const document = await blockApi[action](initialDocument.id, documentRevision.current);
-        hydrating.current = true;
-        editor.replaceBlocks(editor.document, document.children.map(toPartialBlock));
-        hydrating.current = false;
-        blockUpdatedAt.current = blockUpdatedAtById(document.children);
-        documentRevision.current = document.revision;
-        saveFailed.current = false;
-        queryClient.setQueryData(["block-document", initialDocument.id], document);
-        void queryClient.invalidateQueries({ queryKey: ["navigation"] });
-        void queryClient.invalidateQueries({ queryKey: ["note", initialDocument.id] });
-        void queryClient.invalidateQueries({ queryKey: ["notes"] });
-        void queryClient.invalidateQueries({ queryKey: ["backlinks", initialDocument.id] });
-        void queryClient.invalidateQueries({ queryKey: ["related", initialDocument.id] });
-        void queryClient.invalidateQueries({ queryKey: ["block-search"] });
-        setSaveError(null);
+        showServerVersion(await blockApi[action](initialDocument.id, documentRevision.current));
+        setSaveProblem(null);
+        invalidateDocumentLists(queryClient);
       } catch (error) {
         hydrating.current = false;
-        saveFailed.current = true;
-        setSaveError(error instanceof Error ? error.message : `Could not ${action} changes`);
+        setEditorActionError(error instanceof Error ? error.message : `Could not ${action}`);
       } finally {
         setSaving(false);
       }
@@ -387,45 +461,35 @@ export function BlockNoteEditor({
     void enqueueOperations(operations);
   };
 
-  useEffect(() => {
-    blockUpdatedAt.current = blockUpdatedAtById(initialDocument.children);
-    documentRevision.current = initialDocument.revision;
-    saveFailed.current = false;
-    setSaveError(null);
-  }, [initialDocument.id, initialDocument.revision]);
-
-  useEffect(() => {
-    editor.transact(() => {
-      for (const node of flattenNodes(initialDocument.children)) {
-        if (node.content.blocknote !== undefined) continue;
-        const block = editor.getBlock(node.id);
-        if (!block || block.type === "divider") continue;
-        const parsed = editor.tryParseMarkdownToBlocks(markdownText(node));
-        if (parsed[0]?.content !== undefined) {
-          editor.updateBlock(block.id, { content: parsed[0].content } as PartialBlock);
-        }
-      }
-    });
+  // Notes imported from Markdown carry no editor content yet; parse it once per mount.
+  const hydrateOnMount = useEffectEvent(() => {
+    hydrateLegacyBlocks(editor, initialDocument.children);
     hydrating.current = false;
-  }, [editor, initialDocument]);
+  });
+  useEffect(() => hydrateOnMount(), [editor]);
 
-  useEffect(() => {
-    if (recoveryStarted.current) return;
-    recoveryStarted.current = true;
-    saveQueue.current = saveQueue.current.then(async () => {
-      try {
-        const pending = readPendingTransactions(initialDocument.id);
-        if (pending.length === 0) return;
-        setSaving(true);
-        await drainPendingTransactions();
-      } catch (error) {
-        saveFailed.current = true;
-        setSaveError(error instanceof Error ? error.message : "Could not recover saved edits");
-      } finally {
-        setSaving(false);
-      }
-    });
-  }, [initialDocument.id]);
+  // A newer revision that didn't come from this editor (another tab, a backup restore):
+  // show it, unless local edits are waiting — then the next save reports the conflict.
+  const adoptOutsideChange = useEffectEvent(() => {
+    if (initialDocument.revision === documentRevision.current) return;
+    const waiting =
+      inFlightId.current !== null || readPendingTransactions(initialDocument.id).length > 0;
+    if (!waiting) showServerVersion(initialDocument);
+  });
+  useEffect(() => adoptOutsideChange(), [initialDocument.revision]);
+
+  // Replay edits left over from a previous session, and send any waiting edits
+  // when the note is closed so they aren't stranded on this device.
+  const recoverAndFlushOnClose = useEffectEvent(() => {
+    if (!recoveryStarted.current) {
+      recoveryStarted.current = true;
+      void flush();
+    }
+    return () => {
+      if (readPendingTransactions(initialDocument.id).length > 0) void flush();
+    };
+  });
+  useEffect(() => recoverAndFlushOnClose(), []);
 
   useEffect(() => {
     if (!focusBlockId || !editor.getBlock(focusBlockId)) return;
@@ -438,7 +502,7 @@ export function BlockNoteEditor({
       target?.scrollIntoView({ block: "center" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [editor, focusBlockId]);
+  }, [editor, focusBlockId, focusNonce]);
 
   const getDocumentLinkItems = async (query: string): Promise<DefaultReactSuggestionItem[]> =>
     matchingLinkTargets(linkTargets, query).map((target) => ({
@@ -590,17 +654,28 @@ export function BlockNoteEditor({
         <span className="font-medium uppercase tracking-wide text-zinc-500">
           {editor.document.length} blocks
         </span>
-        {(saving || saveError) && (
-          <span role="status" aria-live="polite" className={saveError ? "text-red-600" : undefined}>
-            {saveError ?? "Saving…"}
-          </span>
-        )}
+        <span role="status" aria-live="polite" className="flex items-center gap-2">
+          {saveProblem?.kind === "offline" ? (
+            <>
+              <span className="text-amber-700">{saveProblem.message}</span>
+              <button
+                type="button"
+                onClick={() => void flush()}
+                className="rounded border border-amber-300 px-1.5 text-amber-800 hover:bg-amber-50"
+              >
+                Retry now
+              </button>
+            </>
+          ) : saving ? (
+            "Saving…"
+          ) : null}
+        </span>
         <span className="ml-auto flex gap-1">
           <button
             type="button"
             className="rounded border px-2 py-1 disabled:opacity-40"
             aria-label="Undo saved change"
-            disabled={saving || !!saveError || !initialDocument.can_undo}
+            disabled={saving || conflicted || !initialDocument.can_undo}
             onClick={() => void changeHistory("undo")}
           >
             Undo
@@ -609,13 +684,28 @@ export function BlockNoteEditor({
             type="button"
             className="rounded border px-2 py-1 disabled:opacity-40"
             aria-label="Redo saved change"
-            disabled={saving || !!saveError || !initialDocument.can_redo}
+            disabled={saving || conflicted || !initialDocument.can_redo}
             onClick={() => void changeHistory("redo")}
           >
             Redo
           </button>
         </span>
       </div>
+      {conflicted && (
+        <div
+          role="alert"
+          className="mx-8 mt-2 flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+        >
+          <span className="flex-1">{saveProblem?.message}</span>
+          <button
+            type="button"
+            onClick={() => void loadLatestVersion()}
+            className="rounded-md bg-red-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600"
+          >
+            Load latest version
+          </button>
+        </div>
+      )}
       {editorActionError && (
         <div role="alert" className="px-8 pt-2 text-xs text-red-600">
           {editorActionError}
@@ -626,7 +716,7 @@ export function BlockNoteEditor({
         slashMenu={false}
         formattingToolbar={false}
         sideMenu={false}
-        editable={!saveError}
+        editable={!conflicted}
         onChange={onChange}
         onSelectionChange={() => {
           const selection = editor.prosemirrorState.selection;
@@ -763,9 +853,10 @@ export function BlockNoteEditor({
           values={selectedBlock.user_attrs}
           saving={saving}
           onSave={(user_attrs) =>
-            enqueueOperations([
-              { operation: "set_user_attrs", block_id: selectedBlock.id, user_attrs },
-            ])
+            enqueueOperations(
+              [{ operation: "set_user_attrs", block_id: selectedBlock.id, user_attrs }],
+              true,
+            )
           }
         />
       )}
@@ -1189,4 +1280,55 @@ export function transactionPayload(baseRevision: number, operations: BlockOperat
 
 function blockUpdatedAtById(nodes: readonly BlockNode[]): Map<string, string> {
   return new Map(flattenNodes(nodes).map((node) => [node.id, node.updated_at]));
+}
+
+const SAVE_DELAY_MS = 400;
+
+type SaveProblem = { kind: "offline" | "conflict"; message: string };
+
+/** A 4xx (other than timeouts/rate limits) means the server refused the edit for good. */
+function isRejectedEdit(error: unknown) {
+  return (
+    error instanceof ApiError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429
+  );
+}
+
+/**
+ * Append operations to a batch, collapsing a run of updates to one block into the
+ * latest update (fields from later edits win).
+ */
+export function mergeOperations(batch: BlockOperation[], next: BlockOperation[]): BlockOperation[] {
+  const merged = [...batch];
+  for (const operation of next) {
+    const last = merged.at(-1);
+    if (
+      operation.operation === "update" &&
+      last?.operation === "update" &&
+      last.block_id === operation.block_id
+    ) {
+      merged[merged.length - 1] = { ...last, ...operation };
+    } else {
+      merged.push(operation);
+    }
+  }
+  return merged;
+}
+
+/** Parse Markdown-only blocks (imported notes) into rich editor content. */
+function hydrateLegacyBlocks(editor: AppEditor, nodes: readonly BlockNode[]) {
+  editor.transact(() => {
+    for (const node of flattenNodes(nodes)) {
+      if (node.content.blocknote !== undefined) continue;
+      const block = editor.getBlock(node.id);
+      if (!block || block.type === "divider") continue;
+      const parsed = editor.tryParseMarkdownToBlocks(markdownText(node));
+      if (parsed[0]?.content !== undefined) {
+        editor.updateBlock(block.id, { content: parsed[0].content } as PartialBlock);
+      }
+    }
+  });
 }

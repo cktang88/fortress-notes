@@ -1,17 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { proxyToBackend } from "./backend";
 
-test.beforeEach(async ({ page }, testInfo) => {
-  const backendUrl = String(testInfo.config.metadata.backendUrl);
-  await page.route("**/api/**", (route) => {
-    const url = new URL(route.request().url());
-    return route.continue({ url: `${backendUrl}${url.pathname}${url.search}` });
-  });
-  await page.route("**/media/**", async (route) => {
-    const url = new URL(route.request().url());
-    const response = await route.fetch({ url: `${backendUrl}${url.pathname}${url.search}` });
-    return route.fulfill({ response });
-  });
-});
+test.beforeEach(async ({ page }, testInfo) => proxyToBackend(page, testInfo));
 
 test("keeps editor controls aligned and limits review to highlighted blocks", async ({ page }) => {
   await page.goto("/");

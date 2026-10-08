@@ -58,7 +58,7 @@ class ImageTextCacheTests(unittest.TestCase):
             image.with_suffix(".txt").write_text("Text in image: old OCR")
             settings = SimpleNamespace(
                 assets_path=root,
-                block_db_enabled=False,
+                block_db_path=root / ".fortress.sqlite3",
                 vlm_caption_enabled=True,
             )
             with patch("app.images.get_settings", return_value=settings), patch(
@@ -79,7 +79,7 @@ class ImageTextCacheTests(unittest.TestCase):
             image.write_bytes(b"image")
             settings = SimpleNamespace(
                 assets_path=root,
-                block_db_enabled=False,
+                block_db_path=root / ".fortress.sqlite3",
                 vlm_caption_enabled=False,
             )
             with patch("app.images.get_settings", return_value=settings), patch(
@@ -100,7 +100,7 @@ class ImageTextCacheTests(unittest.TestCase):
             duplicate.write_bytes(b"same image")
             settings = SimpleNamespace(
                 assets_path=root,
-                block_db_enabled=False,
+                block_db_path=root / ".fortress.sqlite3",
                 vlm_caption_enabled=False,
             )
             start = threading.Barrier(3)

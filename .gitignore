@@ -16,3 +16,7 @@ notes/.fortress.sqlite3*
 
 # OS
 .DS_Store
+
+# Playwright output
+frontend/test-results/
+frontend/playwright-report/

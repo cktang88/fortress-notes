@@ -23,7 +23,7 @@ from ulid import ULID
 
 from .models import BlockOperation, BlockReviewContextKind
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 DB_FILENAME = ".fortress.sqlite3"
 
 _TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
@@ -191,6 +191,15 @@ CREATE TABLE IF NOT EXISTS link_check_cache (
     checked_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    query TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'text',
+    filters_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
     block_id UNINDEXED,
     document_id UNINDEXED,
@@ -273,6 +282,16 @@ _MIGRATIONS = {
         url TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         checked_at TEXT NOT NULL
+    );
+    """,
+    11: """
+    CREATE TABLE IF NOT EXISTS saved_searches (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        query TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'text',
+        filters_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
     );
     """,
 }
@@ -541,7 +560,7 @@ def bootstrap_markdown(notes_path: Path, path: Path) -> int:
             now = _now()
             created_at = _iso(post.metadata.get("created_at", now))
             updated_at = _iso(post.metadata.get("updated_at", now))
-            title = str(post.metadata.get("title") or _derive_title(post.content))
+            title = str(post.metadata.get("title") or derive_title(post.content))
             status = post.metadata.get("status", "rough")
             if status not in {"rough", "polished"}:
                 status = "rough"
@@ -618,11 +637,13 @@ def list_documents(path: Path) -> list[dict[str, object]]:
 def create_block_document(
     path: Path, title: str, status: str, tags: list[str], body: str,
     folder_id: str | None = None,
+    created_at: object | None = None,
 ) -> dict:
     document_id = _new_ulid()
     now = _now()
     create_document(
-        path, document_id, title, status, tags, body, now, now,
+        path, document_id, title, status, tags, body,
+        _iso(created_at) if created_at is not None else now, now,
         ensure_empty_paragraph=True,
         folder_id=folder_id,
     )
@@ -681,8 +702,10 @@ def replace_document_from_markdown(
     initialize(path)
     with connection_scope(path) as connection:
         existing = connection.execute(
-            "SELECT created_at FROM documents WHERE id = ?", (document_id,)
+            "SELECT created_at, deleted_at FROM documents WHERE id = ?", (document_id,)
         ).fetchone()
+        if existing is not None and existing["deleted_at"] is not None:
+            raise KeyError("document not found")
         if existing is None:
             _insert_document(
                 connection,
@@ -714,15 +737,23 @@ def replace_document_from_markdown(
 
 
 def delete_document(path: Path, document_id: str) -> None:
+    """Move a document to the trash: hidden everywhere, recoverable until purged."""
+
     initialize(path)
     now = _now()
     with connection_scope(path) as connection:
-        cursor = connection.execute(
+        row = connection.execute(
+            "SELECT folder_id, position FROM documents WHERE id = ? AND deleted_at IS NULL",
+            (document_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError("document not found")
+        connection.execute(
             "UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?",
             (now, now, document_id),
         )
-        if cursor.rowcount == 0:
-            raise KeyError("document not found")
+        connection.execute("DELETE FROM blocks_fts WHERE document_id = ?", (document_id,))
+        _shift_document_positions(connection, row["folder_id"], row["position"] + 1, -1)
 
 
 def create_folder(
@@ -909,6 +940,15 @@ def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
         "items": children(None),
         "recent": [_navigation_document(row) for row in recent],
     }
+
+
+def folder_exists(path: Path, folder_id: str) -> bool:
+    initialize(path)
+    with connection_scope(path) as connection:
+        return (
+            connection.execute("SELECT 1 FROM folders WHERE id = ?", (folder_id,)).fetchone()
+            is not None
+        )
 
 
 def _folder_row(connection: sqlite3.Connection, folder_id: str) -> sqlite3.Row:
@@ -1253,29 +1293,6 @@ def document_backlinks(path: Path, document_id: str, limit: int = 100) -> list[d
     ]
 
 
-def sync_markdown(notes_path: Path, path: Path, document_id: str) -> None:
-    """Refresh the old Markdown file as a compatibility mirror of SQLite."""
-
-    tree = document_tree(path, document_id)
-    if tree is None:
-        raise KeyError("document not found")
-    note_path = notes_path / f"{document_id}.md"
-    if not note_path.exists():
-        return
-    post = frontmatter.load(note_path)
-    post.content = _render_markdown(tree["children"])
-    post.metadata.update(
-        {
-            "title": tree["title"],
-            "status": tree["status"],
-            "tags": tree["tags"],
-            "created_at": tree["created_at"],
-            "updated_at": tree["updated_at"],
-        }
-    )
-    note_path.write_text(frontmatter.dumps(post), encoding="utf-8")
-
-
 def _insert_document(
     connection: sqlite3.Connection,
     document_id: str,
@@ -1375,6 +1392,9 @@ def _rebuild_document_assets(connection: sqlite3.Connection, document_id: str) -
         "SELECT id, attrs_json, content_json, text FROM blocks WHERE document_id = ?",
         (document_id,),
     ).fetchall()
+    # blocks_fts.block_id is UNINDEXED, so one document-wide delete is far cheaper
+    # than a table scan per block.
+    connection.execute("DELETE FROM blocks_fts WHERE document_id = ?", (document_id,))
     for row in rows:
         serialized = f"{row['attrs_json']}\n{row['content_json']}"
         media_names = set(_MEDIA_REF_RE.findall(serialized))
@@ -1384,7 +1404,7 @@ def _rebuild_document_assets(connection: sqlite3.Connection, document_id: str) -
                    SELECT ?, content_hash, media_name FROM assets WHERE media_name = ?""",
                 (row["id"], media_name),
             )
-        _refresh_fts(connection, row["id"], document_id, row["text"])
+        _refresh_fts(connection, row["id"], document_id, row["text"], replace=False)
 
 
 def _rebuild_document_references(connection: sqlite3.Connection, document_id: str) -> None:
@@ -1449,7 +1469,9 @@ def _replace_references(
             )
 
 
-def _render_markdown(nodes: list[dict], depth: int = 0) -> str:
+def render_markdown(nodes: list[dict], depth: int = 0) -> str:
+    """Render a block tree as portable Markdown (block IDs are not included)."""
+
     fragments: list[str] = []
     for node in nodes:
         source = _node_markdown(node)
@@ -1464,7 +1486,7 @@ def _render_markdown(nodes: list[dict], depth: int = 0) -> str:
             fragments.append(source)
         children = node.get("children", [])
         if children:
-            rendered_children = _render_markdown(children, depth + 1)
+            rendered_children = render_markdown(children, depth + 1)
             if rendered_children:
                 fragments.append(rendered_children)
     return "\n\n".join(fragments)
@@ -1479,7 +1501,8 @@ def _node_markdown(node: dict) -> str:
         native = content.get("blocknote")
         if isinstance(native, str):
             return native
-        return _inline_text(native)
+        if isinstance(native, list):
+            return _inline_text(native)
     return str(node.get("text", ""))
 
 
@@ -2421,7 +2444,11 @@ def _replace_user_attrs(
 
 
 def _refresh_fts(
-    connection: sqlite3.Connection, block_id: str, document_id: str, text: str
+    connection: sqlite3.Connection,
+    block_id: str,
+    document_id: str,
+    text: str,
+    replace: bool = True,
 ) -> None:
     asset_texts = connection.execute(
         """SELECT assets.text FROM block_assets
@@ -2431,7 +2458,8 @@ def _refresh_fts(
         (block_id,),
     ).fetchall()
     indexed_text = "\n\n".join([text, *(row["text"] for row in asset_texts)])
-    connection.execute("DELETE FROM blocks_fts WHERE block_id = ?", (block_id,))
+    if replace:
+        connection.execute("DELETE FROM blocks_fts WHERE block_id = ?", (block_id,))
     connection.execute(
         "INSERT INTO blocks_fts(block_id, document_id, text) VALUES (?, ?, ?)",
         (block_id, document_id, indexed_text),
@@ -2577,7 +2605,7 @@ def _token_source(lines: list[str], token: Token) -> str:
     return "\n".join(lines[start:end]).strip()
 
 
-def _derive_title(body: str) -> str:
+def derive_title(body: str) -> str:
     for line in body.splitlines():
         text = line.strip().lstrip("#").strip()
         if text:

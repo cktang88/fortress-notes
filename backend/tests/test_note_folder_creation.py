@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 class NoteFolderCreationTests(unittest.TestCase):
     def test_nested_note_creation_persists_and_missing_folder_leaves_no_note(self) -> None:
-        from app import main, notes_store
+        from app import documents, main
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)
@@ -28,7 +28,7 @@ class NoteFolderCreationTests(unittest.TestCase):
 
             with (
                 patch.object(main, "settings", settings),
-                patch.object(notes_store, "get_settings", return_value=settings),
+                patch.object(documents, "get_settings", return_value=settings),
                 TestClient(main.app) as client,
             ):
                 parent = client.post("/api/folders", json={"name": "Projects"}).json()

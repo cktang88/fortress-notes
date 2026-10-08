@@ -13,8 +13,13 @@ nested folders.
 
 ## 2. Data model
 
-Each note is one Markdown file in `NOTES_DIR` (default `./notes`), named `<id>.md`.
-YAML frontmatter holds metadata; the body is the note content (Markdown).
+SQLite (`NOTES_DIR/.fortress.sqlite3`) is the only source of truth: documents,
+folders, nested blocks with stable IDs, references, history, assets, and the FTS
+index. Every write goes to SQLite first. Each active note also gets a read-only
+Markdown mirror, `NOTES_DIR/<id>.md`, rewritten atomically after every change and
+removed when the note is trashed, so notes stay readable outside the app. The app
+never reads the mirrors back; only the explicit Markdown importer reads `.md` files.
+A mirror looks like this (extra front-matter keys added by hand are preserved):
 
 ```markdown
 ---
@@ -41,9 +46,8 @@ resized width survives the round-trip).
 - **title**: if empty, derived from the first heading/line of the body.
 - Timestamps are UTC ISO-8601. `updated_at` is set on every save.
 
-SQLite is authoritative for the active block workspace. Markdown files are preserved
-as migration inputs and compatibility mirrors; import/export must never silently delete
-them.
+On first start an empty database imports any existing `NOTES_DIR/*.md` files once,
+copying the originals to a timestamped backup folder first.
 
 ## 3. Backend (FastAPI, Python / uv)
 
@@ -51,7 +55,8 @@ them.
 - `config.py` — settings from env (`pydantic-settings`).
 - `models.py` — Pydantic schemas (`Note`, `NoteSummary`, `NoteCreate`, `NoteUpdate`,
   `SearchResult`, `ReviewResponse`).
-- `notes_store.py` — CRUD over Markdown files (frontmatter parse via `python-frontmatter`).
+- `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS, rendering.
+- `documents.py` — note lifecycle (create/update/trash/restore/purge) and Markdown mirrors.
 - `embeddings.py` — ColBERT late-interaction via PyLate; encode + MaxSim scoring,
   with a keyword fallback when disabled/unavailable.
 - `search.py` — full-text search + orchestration of embedding search & related notes.
@@ -74,6 +79,16 @@ them.
 | `POST` | `/api/block-documents/{id}/link-checks` | — | `{links: [{url, status, checked_at, block_ids}]}` |
 | `POST` | `/api/images` | multipart `file` | `{url, text}` (saves image, runs caption+OCR) |
 | `GET` | `/media/{file}` | — | image bytes (StaticFiles) |
+| `GET` | `/api/trash` | — | trashed documents, newest first |
+| `POST` | `/api/trash/{id}/restore` | — | `{id, folder_id, position}` (also rewrites the Markdown mirror) |
+| `DELETE` | `/api/trash/{id}` · `/api/trash` | — | delete one forever · empty the trash |
+| `GET` · `POST` | `/api/saved-searches` | `{name, query, mode, filters}` | saved searches |
+| `DELETE` | `/api/saved-searches/{id}` | — | `204` |
+| `GET` · `POST` | `/api/backups` | — | list snapshots · take a manual snapshot |
+| `GET` | `/api/backups/{name}/download` | — | SQLite snapshot file |
+| `POST` | `/api/backups/{name}/restore` | — | `{restored, safety_backup}` |
+| `GET` | `/api/block-documents/{id}/markdown` | `?download=true` | one note as Markdown |
+| `POST` | `/api/markdown-import/files` | multipart `files[]`, `folder_id?` | `{imported, errors}` |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
 
 ### Late-interaction search (PyLate)
@@ -112,7 +127,7 @@ them.
 │ ▸ Document tree (scroll) │                                     │
 │   • note A    rough      │   ┌───────────────────────────────┐ │
 │   • note B    polished   │   │  BlockNote rich-text editor  │ │
-│   • ...                  │   │  (Markdown-backed)            │ │
+│   • ...                  │   │  (SQLite-backed)              │ │
 │                          │   │                               │ │
 ├──────────────────────────┤   └───────────────────────────────┘ │
 │ Related notes (auto)     │   [AI review panel, when open]      │
@@ -160,14 +175,28 @@ associations.
   enabled by default and use the small **SmolVLM-256M** model; OCR and captioning run
   locally. Models lazy-load + pre-warm in the background at startup.
 
-## 7. Roadmap / potential features
+## 7. Workspace safety and organization
 
-- **Backlinks & wiki-links** (`[[note]]`), graph view.
+- **Trash**: deleting a note soft-deletes it in SQLite. The app shows an Undo toast;
+  the Trash dialog (⋯ menu) restores notes or deletes them forever.
+- **Backups**: a background task keeps one automatic snapshot per day in
+  `NOTES_DIR/.fortress-backups` (last 7 daily, 10 manual, 5 pre-restore). Restoring
+  verifies the snapshot, saves the current state as `pre-restore` first, and moves
+  Markdown mirrors of documents that are not in the snapshot aside rather than
+  deleting them. Set `AUTO_BACKUP_ENABLED=false` to turn off daily snapshots.
+- **Import/export**: the ⋯ menu imports `.md` files as new notes; each note exports
+  from its header or right-click menu.
+- **Saved searches**: saved from the search box and re-run from chips beneath it.
+- **Keyboard**: ⌘/Ctrl+K or `/` search, Alt+N new note, ↑/↓/Enter through results,
+  Esc clears search, `?` shows tips.
+
+## 8. Roadmap / potential features
+
 - **PLAID/Voyager index** for embedding search at larger scale.
-- **Tag management**, saved searches, keyboard navigation.
-- Export; larger leaderboard-class OCR/VLM (e.g. PaddleOCR-VL) as an opt-in.
+- Larger leaderboard-class OCR/VLM (e.g. PaddleOCR-VL) as an opt-in.
+- Graph view stays deferred (outside the single-user product boundary).
 
-## 8. Open questions
+## 9. Open questions
 - Chunking strategy for very long notes (per-paragraph vs whole-note vectors).
 - Whether to persist the embedding cache to disk between runs (v1: in-memory).
 - Debounce window + conflict handling if a file changes on disk while editing.
