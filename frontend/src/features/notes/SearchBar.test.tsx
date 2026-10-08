@@ -13,7 +13,7 @@ describe("SearchBar", () => {
     rendered = undefined;
   });
 
-  it("updates compact block filters in full-text mode", () => {
+  it("updates compact filters while searching", () => {
     const onFilters = vi.fn();
     rendered = renderSearchBar({ onFilters, query: "budget" });
     const type = rendered.container.querySelector<HTMLSelectElement>('[aria-label="Block type"]');
@@ -39,10 +39,11 @@ describe("SearchBar", () => {
     expect(rendered.container.querySelector('[aria-label="Block search filters"]')).toBeNull();
   });
 
-  it("keeps block filters out of embedding search", () => {
-    rendered = renderSearchBar({ mode: "embedding" });
-
-    expect(rendered.container.querySelector('[aria-label="Block search filters"]')).toBeNull();
+  it("has a single search box with no mode toggle", () => {
+    rendered = renderSearchBar({ query: "budget" });
+    const labels = [...rendered.container.querySelectorAll("button")].map((b) => b.textContent);
+    expect(labels).not.toContain("Embedding");
+    expect(labels).not.toContain("Full-text");
   });
 
   it("starts a new note without passing the click event to its callback", () => {
@@ -104,8 +105,6 @@ function renderSearchBar(overrides: Partial<React.ComponentProps<typeof SearchBa
       <SearchBar
         query=""
         onQuery={vi.fn()}
-        mode="text"
-        onMode={vi.fn()}
         filters={{}}
         onFilters={vi.fn()}
         onNew={vi.fn()}

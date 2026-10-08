@@ -6,7 +6,7 @@ import type {
   DocumentOrganization,
   BlockDocument,
   BlockSearchFilters,
-  BlockSearchResult,
+  UnifiedSearchResult,
   BlockLinkTarget,
   Backlink,
   BlockTransaction,
@@ -14,8 +14,6 @@ import type {
   BlockReviewResponse,
   BlockReviewContext,
   BlockReviewContextResponse,
-  SearchMode,
-  SearchResult,
   RelatedResult,
   LinkCheckResponse,
   TrashedDocument,
@@ -59,9 +57,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const notesApi = {
   list: (status?: NoteStatus) =>
     request<NoteSummary[]>(`/notes${status ? `?status=${status}` : ""}`),
-
-  search: (q: string, mode: SearchMode) =>
-    request<SearchResult[]>(`/search?q=${encodeURIComponent(q)}&mode=${mode}`),
 
   related: (id: string, k = 5, blockId?: string | null) => {
     const params = new URLSearchParams({ k: String(k) });
@@ -140,8 +135,8 @@ export const blockApi = {
     ),
   backlinks: (id: string, limit = 100) =>
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),
-  search: (q: string, filters: BlockSearchFilters = {}, limit = 50) =>
-    request<BlockSearchResult[]>(`/block-search?${blockSearchParams(q, filters, limit)}`),
+  search: (q: string, filters: BlockSearchFilters = {}, limit = 30) =>
+    request<UnifiedSearchResult[]>(`/unified-search?${blockSearchParams(q, filters, limit)}`),
   linkTargets: (q: string, limit = 50) =>
     request<BlockLinkTarget[]>(`/block-link-targets?q=${encodeURIComponent(q)}&limit=${limit}`),
   transaction: (id: string, transaction: BlockTransaction) =>

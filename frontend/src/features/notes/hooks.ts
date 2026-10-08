@@ -2,13 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, blockApi, notesApi, workspaceApi } from "./api";
 import { invalidateDocumentLists, queryKeys } from "./queryKeys";
-import type {
-  BlockDocument,
-  BlockSearchFilters,
-  NoteStatus,
-  SavedSearch,
-  SearchMode,
-} from "./types";
+import type { BlockDocument, BlockSearchFilters, NoteStatus, SavedSearch } from "./types";
 
 // --- Reads ---------------------------------------------------------------------
 
@@ -40,15 +34,6 @@ export function useBlockSearch(q: string, filters: BlockSearchFilters = {}, enab
     queryFn: () => blockApi.search(q, filters),
     enabled: enabled && q.trim().length > 0,
     retry: false,
-    placeholderData: (previous) => previous,
-  });
-}
-
-export function useSearch(q: string, mode: SearchMode, enabled = true) {
-  return useQuery({
-    queryKey: [...queryKeys.search, mode, q],
-    queryFn: () => notesApi.search(q, mode),
-    enabled: enabled && q.trim().length > 0,
     placeholderData: (previous) => previous,
   });
 }

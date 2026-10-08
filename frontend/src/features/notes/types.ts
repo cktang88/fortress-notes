@@ -141,6 +141,19 @@ export interface BlockSearchResult {
   score: number;
 }
 
+export interface UnifiedSearchResult {
+  block_id: string;
+  document_id: string;
+  document_title: string;
+  block_type: string;
+  /** A passage around the first match (may start or end with "…"). */
+  text: string;
+  /** [start, end) character ranges of query words inside `text`. */
+  highlights: number[][];
+  matched: ("words" | "meaning" | "title")[];
+  score: number;
+}
+
 export interface BlockLinkTarget {
   block_id: string;
   document_id: string;

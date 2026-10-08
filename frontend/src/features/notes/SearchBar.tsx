@@ -1,19 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { focusFirstResult, isEditableTarget, SEARCH_INPUT_ID } from "./listKeyboard";
-import type {
-  BlockSearchFilters,
-  BlockType,
-  NoteStatus,
-  NoteSummary,
-  SavedSearch,
-  SearchMode,
-} from "./types";
+import type { BlockSearchFilters, BlockType, NoteStatus, NoteSummary, SavedSearch } from "./types";
 
 interface Props {
   query: string;
   onQuery: (q: string) => void;
-  mode: SearchMode;
-  onMode: (m: SearchMode) => void;
   filters: BlockSearchFilters;
   onFilters: (filters: BlockSearchFilters) => void;
   documents?: readonly NoteSummary[];
@@ -43,8 +34,6 @@ const statuses: { value: NoteStatus; label: string }[] = [
 export function SearchBar({
   query,
   onQuery,
-  mode,
-  onMode,
   filters,
   onFilters,
   documents = [],
@@ -57,10 +46,7 @@ export function SearchBar({
 }: Props) {
   const searching = query.trim().length > 0;
   const alreadySaved = savedSearches.some(
-    (saved) =>
-      saved.query === query.trim() &&
-      saved.mode === mode &&
-      sameFilters(saved.filters, mode === "text" ? filters : {}),
+    (saved) => saved.query === query.trim() && sameFilters(saved.filters, filters),
   );
   const [helpOpen, setHelpOpen] = useState(false);
   const helpDialogRef = useRef<HTMLDialogElement>(null);
@@ -132,14 +118,8 @@ export function SearchBar({
           ?
         </button>
       </div>
-      <div className="flex gap-1 text-xs">
-        <ModeButton active={mode === "text"} onClick={() => onMode("text")}>
-          Full-text
-        </ModeButton>
-        <ModeButton active={mode === "embedding"} onClick={() => onMode("embedding")}>
-          Embedding
-        </ModeButton>
-        {searching && onSaveSearch && (
+      {searching && onSaveSearch && (
+        <div className="flex gap-1 text-xs">
           <button
             type="button"
             disabled={alreadySaved}
@@ -148,8 +128,8 @@ export function SearchBar({
           >
             {alreadySaved ? "★ Saved" : "☆ Save search"}
           </button>
-        )}
-      </div>
+        </div>
+      )}
       {!searching && savedSearches.length > 0 && (
         <div aria-label="Saved searches" role="group" className="flex flex-wrap gap-1.5">
           {savedSearches.map((saved) => (
@@ -177,7 +157,7 @@ export function SearchBar({
           ))}
         </div>
       )}
-      {mode === "text" && (searching || Object.values(filters).some(Boolean)) && (
+      {(searching || Object.values(filters).some(Boolean)) && (
         <fieldset className="flex flex-wrap gap-1.5" aria-label="Block search filters">
           <select
             aria-label="Block type"
@@ -322,25 +302,4 @@ function Shortcut({ keys, children }: { keys: string[]; children: React.ReactNod
 function sameFilters(a: BlockSearchFilters, b: BlockSearchFilters) {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof BlockSearchFilters>;
   return [...keys].every((key) => (a[key] || undefined) === (b[key] || undefined));
-}
-
-function ModeButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-full px-3 py-1 ${
-        active ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
-      }`}
-    >
-      {children}
-    </button>
-  );
 }
