@@ -23,7 +23,7 @@ from ulid import ULID
 
 from .models import BlockOperation, BlockReviewContextKind
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 DB_FILENAME = ".fortress.sqlite3"
 
 _TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS documents (
     deleted_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    revision INTEGER NOT NULL DEFAULT 0
+    revision INTEGER NOT NULL DEFAULT 0,
+    title_auto INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS folders_parent_position ON folders(parent_id, position);
@@ -284,6 +285,7 @@ _MIGRATIONS = {
         checked_at TEXT NOT NULL
     );
     """,
+    12: "",
     11: """
     CREATE TABLE IF NOT EXISTS saved_searches (
         id TEXT PRIMARY KEY,
@@ -533,6 +535,15 @@ def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
             "UPDATE assets SET text_updated_at = created_at "
             "WHERE text <> '' AND text_updated_at IS NULL"
         )
+    if version == 12:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(documents)").fetchall()
+        }
+        if "title_auto" not in columns:
+            connection.execute(
+                "ALTER TABLE documents ADD COLUMN title_auto INTEGER NOT NULL DEFAULT 0"
+            )
     connection.executescript(_MIGRATIONS[version])
 
 
@@ -638,7 +649,10 @@ def create_block_document(
     path: Path, title: str, status: str, tags: list[str], body: str,
     folder_id: str | None = None,
     created_at: object | None = None,
+    title_auto: bool = False,
 ) -> dict:
+    """Create a document; with ``title_auto`` its title follows its first line."""
+
     document_id = _new_ulid()
     now = _now()
     create_document(
@@ -647,6 +661,12 @@ def create_block_document(
         ensure_empty_paragraph=True,
         folder_id=folder_id,
     )
+    if title_auto:
+        with connection_scope(path) as connection:
+            connection.execute(
+                "UPDATE documents SET title_auto = 1 WHERE id = ?", (document_id,)
+            )
+            _refresh_auto_title(connection, document_id)
     tree = document_tree(path, document_id)
     assert tree is not None
     return tree
@@ -656,7 +676,7 @@ def rename_document(path: Path, document_id: str, title: str) -> dict:
     initialize(path)
     with connection_scope(path) as connection:
         cursor = connection.execute(
-            """UPDATE documents SET title = ?, updated_at = ?
+            """UPDATE documents SET title = ?, title_auto = 0, updated_at = ?
                  WHERE id = ? AND deleted_at IS NULL""",
             (title, _now(), document_id),
         )
@@ -674,14 +694,18 @@ def update_document_metadata(
     status: str,
     tags: list[str],
     updated_at: object,
+    title_chosen: bool = False,
 ) -> None:
+    """Update metadata; ``title_chosen`` means a person named it (auto titles stop)."""
+
     initialize(path)
     with connection_scope(path) as connection:
         cursor = connection.execute(
             """UPDATE documents
-               SET title = ?, status = ?, tags_json = ?, updated_at = ?
+               SET title = ?, status = ?, tags_json = ?, updated_at = ?,
+                   title_auto = CASE WHEN ? THEN 0 ELSE title_auto END
                WHERE id = ? AND deleted_at IS NULL""",
-            (title, status, json.dumps(tags), _iso(updated_at), document_id),
+            (title, status, json.dumps(tags), _iso(updated_at), title_chosen, document_id),
         )
         if cursor.rowcount == 0:
             raise KeyError("document not found")
@@ -1589,6 +1613,7 @@ def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | N
         "created_at": document["created_at"],
         "updated_at": document["updated_at"],
         "revision": document["revision"],
+        "title_auto": bool(document["title_auto"]),
         "can_undo": bool(history_state["can_undo"]),
         "can_redo": bool(history_state["can_redo"]),
         "children": roots,
@@ -1818,6 +1843,7 @@ def apply_transaction(
             "UPDATE documents SET updated_at = ?, revision = revision + 1 WHERE id = ?",
             (now, document_id),
         )
+        _refresh_auto_title(connection, document_id)
         connection.execute(
             """INSERT INTO document_history(document_id, revision, patches_json, created_at)
                VALUES (?, ?, ?, ?)""",
@@ -2060,6 +2086,7 @@ def _change_history(
             "UPDATE documents SET updated_at = ?, revision = revision + 1 WHERE id = ?",
             (now, document_id),
         )
+        _refresh_auto_title(connection, document_id)
         connection.execute(
             """INSERT INTO revisions(document_id, block_id, operation_json, created_at)
                VALUES (?, NULL, ?, ?)""",
@@ -2603,6 +2630,64 @@ def _token_source(lines: list[str], token: Token) -> str:
         return ""
     start, end = token.map
     return "\n".join(lines[start:end]).strip()
+
+
+_TITLE_LIMIT = 80
+_LINE_MARKER_RE = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)")
+
+
+def _refresh_auto_title(connection: sqlite3.Connection, document_id: str) -> None:
+    """While a note has no chosen title, keep its title in step with its first line."""
+
+    row = connection.execute(
+        "SELECT title, title_auto FROM documents WHERE id = ?", (document_id,)
+    ).fetchone()
+    if row is None or not row["title_auto"]:
+        return
+    title = first_line_title(
+        text
+        for (text,) in connection.execute(
+            """WITH RECURSIVE ordered(id, sort_key) AS (
+                   SELECT id, printf('%08d', position) FROM blocks
+                    WHERE document_id = ? AND parent_id IS NULL
+                   UNION ALL
+                   SELECT blocks.id, ordered.sort_key || '.' || printf('%08d', blocks.position)
+                     FROM blocks JOIN ordered ON blocks.parent_id = ordered.id
+               )
+               SELECT blocks.text FROM ordered JOIN blocks ON blocks.id = ordered.id
+                ORDER BY ordered.sort_key""",
+            (document_id,),
+        )
+    )
+    if title != row["title"]:
+        connection.execute("UPDATE documents SET title = ? WHERE id = ?", (title, document_id))
+
+
+def use_auto_title(path: Path, document_id: str) -> None:
+    """Let the title follow the first line again (after someone clears it)."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        connection.execute(
+            "UPDATE documents SET title_auto = 1 WHERE id = ? AND deleted_at IS NULL",
+            (document_id,),
+        )
+        _refresh_auto_title(connection, document_id)
+
+
+def first_line_title(texts) -> str:
+    """The first non-empty line of the first block with text, trimmed for a title."""
+
+    for text in texts:
+        for line in str(text or "").splitlines():
+            line = _LINE_MARKER_RE.sub("", line).strip()
+            if not line:
+                continue
+            if len(line) <= _TITLE_LIMIT:
+                return line
+            cut = line[:_TITLE_LIMIT].rsplit(" ", 1)[0] or line[:_TITLE_LIMIT]
+            return cut.rstrip(" ,;:") + "…"
+    return "Untitled"
 
 
 def derive_title(body: str) -> str:

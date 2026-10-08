@@ -42,6 +42,8 @@ you're reading.
   The small VLM adds local captions, and content-hash caching reuses OCR and captions
   for duplicate image bytes.
 
+- **Titles that write themselves** — a new note opens ready for typing and its title
+  follows the first line until you choose one; clear the title to hand it back.
 - **Trash with Undo** — deleting moves a note to Trash; undo it from the toast or
   restore it later from **⋯ → Trash**.
 - **Automatic backups** — a SQLite snapshot is saved daily; **⋯ → Backups** downloads a

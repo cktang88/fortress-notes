@@ -73,6 +73,8 @@ def create(data: NoteCreate, created_at: object | None = None) -> Note:
         data.body,
         folder_id=data.folder_id,
         created_at=created_at,
+        # An unnamed note takes its title from its first line until someone names it.
+        title_auto=not data.title,
     )
     write_mirror(tree["id"])
     note = get_note(tree["id"])
@@ -87,6 +89,10 @@ def update(document_id: str, data: NoteUpdate) -> Note:
     current = block_store.document_tree(db_path, document_id)
     if current is None:
         raise KeyError("document not found")
+    # Clearing the title hands it back to the first line of the note.
+    clearing_title = data.title is not None and data.title.strip() in ("", "Untitled")
+    if clearing_title:
+        data = data.model_copy(update={"title": None})
     title = data.title if data.title is not None else current["title"]
     status = data.status if data.status is not None else current["status"]
     tags = data.tags if data.tags is not None else current["tags"]
@@ -96,7 +102,11 @@ def update(document_id: str, data: NoteUpdate) -> Note:
             db_path, document_id, title, status, tags, data.body, current["created_at"], now
         )
     else:
-        block_store.update_document_metadata(db_path, document_id, title, status, tags, now)
+        block_store.update_document_metadata(
+            db_path, document_id, title, status, tags, now, title_chosen=data.title is not None
+        )
+    if clearing_title:
+        block_store.use_auto_title(db_path, document_id)
     write_mirror(document_id)
     note = get_note(document_id)
     assert note is not None
