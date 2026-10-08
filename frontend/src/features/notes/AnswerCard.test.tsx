@@ -64,3 +64,34 @@ describe("AnswerCard", () => {
     act(() => root.unmount());
   });
 });
+
+describe("AnswerCard trace", () => {
+  it("shows what extra looking it did and how long it took", () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    act(() =>
+      root.render(
+        <AnswerCard
+          question="x"
+          loading={false}
+          error={null}
+          onOpen={vi.fn()}
+          onDismiss={vi.fn()}
+          response={{
+            status: "timeout",
+            answer: [],
+            sources: [],
+            steps: [
+              { action: "grep", detail: "Miguel" },
+              { action: "read", detail: "Kitchen reno" },
+            ],
+            elapsed_ms: 2950,
+          }}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain("That took too long to answer.");
+    expect(container.textContent).toContain("Searched for “Miguel” · Read “Kitchen reno” · 3.0 s");
+    act(() => root.unmount());
+  });
+});

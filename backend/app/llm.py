@@ -59,7 +59,9 @@ class LLMNotConfigured(Exception):
     """Raised when OPENROUTER_API_KEY is missing."""
 
 
-async def chat_json(system: str, user: str, *, web: bool = False) -> dict:
+async def chat_json(
+    system: str, user: str, *, web: bool = False, timeout: float = 180
+) -> dict:
     """Call OpenRouter and parse the JSON object response.
 
     Set web=True to enable OpenRouter's web search plugin (for fact-freshness).
@@ -86,7 +88,7 @@ async def chat_json(system: str, user: str, *, web: bool = False) -> dict:
         "X-Title": "Fortress Notes",
     }
 
-    async with httpx.AsyncClient(timeout=180) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(OPENROUTER_URL, json=payload, headers=headers)
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]

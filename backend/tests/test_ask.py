@@ -43,10 +43,12 @@ class AskYourNotesTests(unittest.TestCase):
         ).json()["id"]
         self.client.post("/api/notes", json={"title": "Groceries", "body": "Milk and eggs"})
 
-    def ask(self, question: str, reply: dict) -> tuple[dict, AsyncMock]:
+    def ask(self, question: str, reply, ) -> tuple[dict, AsyncMock]:
         from app import llm
 
-        fake = AsyncMock(return_value=reply)
+        fake = AsyncMock(side_effect=reply) if isinstance(reply, list) else AsyncMock(
+            return_value=reply
+        )
         with patch.object(llm, "chat_json", fake):
             response = self.client.post("/api/ask", json={"question": question})
         self.assertEqual(response.status_code, 200, response.text)
@@ -100,6 +102,85 @@ class AskYourNotesTests(unittest.TestCase):
         result, fake = self.ask("zebracorn quantum", {"found": False, "sentences": []})
         self.assertEqual(result["status"], "not_found")
         fake.assert_not_called()
+
+    def test_prefetch_greps_exact_names_before_any_model_call(self) -> None:
+        miguel = self.client.post(
+            "/api/notes", json={"title": "Contractors", "body": "Miguel quoted 12k for the deck."}
+        ).json()["id"]
+        result, fake = self.ask(
+            "What did Miguel quote?",
+            {
+                "action": "answer",
+                "found": True,
+                "sentences": [
+                    {"text": "Miguel quoted 12k.", "citations": [{"id": "S1", "quote": "Miguel quoted 12k"}]}
+                ],
+            },
+        )
+        self.assertEqual(fake.call_count, 1)  # answered in one model call
+        self.assertEqual(result["answer"][0]["citations"][0]["document_id"], miguel)
+        self.assertEqual(result["steps"], [])
+        self.assertIn("elapsed_ms", result)
+
+    def test_model_can_grep_then_answer_from_the_new_passages(self) -> None:
+        self.client.post(
+            "/api/notes", json={"title": "Dentist", "body": "Appointment moved to 14 March."}
+        )
+        result, fake = self.ask(
+            "Which hotel did we pick?",
+            [
+                {"action": "grep", "pattern": r"appointment|\d+ March"},
+                {
+                    "action": "answer",
+                    "found": True,
+                    "sentences": [
+                        {
+                            "text": "The appointment is on 14 March.",
+                            "citations": [{"id": "S2", "quote": "moved to 14 March"}],
+                        }
+                    ],
+                },
+            ],
+        )
+        self.assertEqual(fake.call_count, 2)
+        self.assertEqual(result["steps"], [{"action": "grep", "detail": r"appointment|\d+ March"}])
+        self.assertIn("New sources", fake.call_args_list[1].args[1])
+        self.assertEqual(result["status"], "answered")
+
+    def test_running_out_of_time_forces_an_answer_and_never_hangs(self) -> None:
+        from app import ask
+
+        ticks = iter([0.0, 0.0, 2.5, 2.5, 2.6, 2.6, 2.6])
+        with patch.object(ask, "_clock", lambda: next(ticks, 2.6)):
+            result, fake = self.ask(
+                "Which hotel did we pick?",
+                [
+                    {"action": "read", "note": "Lisbon trip"},
+                    {"action": "grep", "pattern": "hotel"},
+                ],
+            )
+        # The second call was told to answer now; a non-answer means "not found".
+        self.assertIn("out of time", fake.call_args_list[1].args[1])
+        self.assertEqual(fake.call_count, 2)
+        self.assertEqual(result["status"], "not_found")
+
+        from app import llm
+
+        async def slow(*_args, **_kwargs):
+            raise TimeoutError
+
+        with patch.object(llm, "chat_json", slow):
+            timed_out = self.client.post("/api/ask", json={"question": "hotel?"}).json()
+        self.assertEqual(timed_out["status"], "timeout")
+        self.assertTrue(timed_out["sources"])
+
+    def test_read_tool_returns_a_whole_note(self) -> None:
+        from app import ask
+
+        rows = ask.read_note("lisbon")
+        self.assertEqual([row["document_title"] for row in rows], ["Lisbon trip"])
+        self.assertEqual(ask.read_note("no such note"), [])
+        self.assertEqual(ask.key_terms("What did Miguel say on 14 March?"), ["miguel", "march", "say", "14"])
 
 
 if __name__ == "__main__":

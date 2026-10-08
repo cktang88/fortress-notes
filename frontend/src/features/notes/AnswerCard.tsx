@@ -45,6 +45,11 @@ export function AnswerCard({ question, loading, error, response, onOpen, onDismi
           Answers need an AI key: set <code>OPENROUTER_API_KEY</code> in <code>backend/.env</code>.
         </p>
       )}
+      {response?.status === "timeout" && (
+        <p className="text-zinc-600">
+          That took too long to answer. The closest passages are listed below.
+        </p>
+      )}
       {response?.status === "not_found" && (
         <p className="text-zinc-600">
           Your notes don't seem to answer that. The closest passages are listed below.
@@ -84,6 +89,20 @@ export function AnswerCard({ question, loading, error, response, onOpen, onDismi
             ))}
           </ol>
         </>
+      )}
+      {response && response.status !== "not_configured" && (
+        <p className="mt-2 text-[11px] text-zinc-400">
+          {[
+            ...(response.steps ?? []).map((step) =>
+              step.action === "grep" ? `Searched for “${step.detail}”` : `Read “${step.detail}”`,
+            ),
+            response.elapsed_ms !== undefined
+              ? `${(response.elapsed_ms / 1000).toFixed(1)} s`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
       )}
     </section>
   );
