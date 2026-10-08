@@ -154,6 +154,19 @@ export interface UnifiedSearchResult {
   score: number;
 }
 
+export interface AskCitation {
+  block_id: string;
+  document_id: string;
+  document_title: string;
+  quote: string;
+}
+
+export interface AskResponse {
+  status: "answered" | "not_found" | "not_configured";
+  answer: { text: string; citations: AskCitation[] }[];
+  sources: { block_id: string; document_id: string; document_title: string; text: string }[];
+}
+
 export interface BlockLinkTarget {
   block_id: string;
   document_id: string;

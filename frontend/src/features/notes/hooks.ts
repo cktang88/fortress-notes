@@ -287,3 +287,7 @@ export function useImportMarkdown() {
     onSuccess: () => invalidateDocumentLists(qc),
   });
 }
+
+export function useAsk() {
+  return useMutation({ mutationFn: (question: string) => blockApi.ask(question) });
+}
