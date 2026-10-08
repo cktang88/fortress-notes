@@ -62,8 +62,11 @@ _SYSTEM = (
     "is cut off or the answer needs its surrounding context.\n"
     "Prefer answering immediately: only search or read when the sources clearly cannot "
     "answer. Answers are 1-5 short sentences; every sentence cites at least one source "
-    "with an exact quote. If the notes don't contain the answer, return found=false "
-    "with no sentences."
+    "with an exact quote. If the sources don't contain the answer, return found=false "
+    'with no sentences AND a "try" field: a case-insensitive regex of other wording the '
+    "person may have used for it (synonyms, names, translations), e.g. "
+    '{"action": "answer", "found": false, "sentences": [], '
+    '"try": "custard tart|pastel de nata|nata"}.'
 )
 
 
@@ -214,6 +217,7 @@ def prefetch(question: str, sources: _Sources) -> list[str]:
 
 async def ask(question: str) -> dict[str, object]:
     started = _clock()
+    model = get_settings().ask_model
     question = question.strip()
     sources = _Sources()
     steps: list[dict[str, str]] = []
@@ -231,7 +235,13 @@ async def ask(question: str) -> dict[str, object]:
         )
         try:
             data = await asyncio.wait_for(
-                llm.chat_json(_SYSTEM, prompt, timeout=max(remaining, 0.5)),
+                llm.chat_json(
+                    _SYSTEM,
+                    prompt,
+                    timeout=max(remaining, 0.5),
+                    model=model,
+                    fast=True,
+                ),
                 timeout=max(remaining, 0.5),
             )
         except llm.LLMNotConfigured:
@@ -245,6 +255,25 @@ async def ask(question: str) -> dict[str, object]:
         if not isinstance(data, dict):
             break
         action = data.get("action", "answer")
+        retry = data.get("try")
+        if (
+            action == "answer"
+            and not must_answer
+            and not data.get("sentences")
+            and isinstance(retry, str)
+            and retry.strip()
+            and not steps
+        ):
+            # "Not found" with other wording to try: grep it locally (milliseconds) and,
+            # only if that turns up new passages, give the model one last look.
+            added = sources.add(grep_blocks(retry))
+            steps.append({"action": "grep", "detail": retry})
+            if added:
+                transcript += (
+                    f"\n\nYou searched for /{retry}/. New sources:\n{sources.payload(added)}"
+                )
+                continue
+            return _answer(data, sources, steps, started)
         if action == "answer" or must_answer:
             return _answer(data, sources, steps, started)
         if action == "grep" and isinstance(data.get("pattern"), str):

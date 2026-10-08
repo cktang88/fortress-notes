@@ -22,6 +22,7 @@ class AskYourNotesTests(unittest.TestCase):
             vision_enabled=False,
             auto_backup_enabled=False,
             reindex_interval_s=5.0,
+            ask_model="test/fast-model",
         )
         settings.assets_path.mkdir()
         for item in (
@@ -118,6 +119,8 @@ class AskYourNotesTests(unittest.TestCase):
             },
         )
         self.assertEqual(fake.call_count, 1)  # answered in one model call
+        self.assertEqual(fake.call_args.kwargs["model"], "test/fast-model")
+        self.assertTrue(fake.call_args.kwargs["fast"])
         self.assertEqual(result["answer"][0]["citations"][0]["document_id"], miguel)
         self.assertEqual(result["steps"], [])
         self.assertIn("elapsed_ms", result)
@@ -146,6 +149,36 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertEqual(result["steps"], [{"action": "grep", "detail": r"appointment|\d+ March"}])
         self.assertIn("New sources", fake.call_args_list[1].args[1])
         self.assertEqual(result["status"], "answered")
+
+    def test_not_found_retries_once_with_the_models_alternative_wording(self) -> None:
+        self.client.post(
+            "/api/notes", json={"title": "Bakery", "body": "Try pastel de nata at Manteigaria."}
+        )
+        not_found = {"action": "answer", "found": False, "sentences": [], "try": "pastel de nata"}
+        result, fake = self.ask(
+            "Where should I get custard tarts?",
+            [
+                not_found,
+                {
+                    "action": "answer",
+                    "found": True,
+                    "sentences": [
+                        {
+                            "text": "Get pastel de nata at Manteigaria.",
+                            "citations": [{"id": "S3", "quote": "pastel de nata at Manteigaria"}],
+                        }
+                    ],
+                },
+            ],
+        )
+        self.assertEqual(fake.call_count, 2)
+        self.assertEqual(result["steps"], [{"action": "grep", "detail": "pastel de nata"}])
+        self.assertEqual(result["status"], "answered")
+
+        # Alternative wording that matches nothing new answers "not found" without a second call.
+        result, fake = self.ask("Any pizza near the hotel?", {**not_found, "try": "pizzeria"})
+        self.assertEqual(fake.call_count, 1)
+        self.assertEqual(result["status"], "not_found")
 
     def test_running_out_of_time_forces_an_answer_and_never_hangs(self) -> None:
         from app import ask

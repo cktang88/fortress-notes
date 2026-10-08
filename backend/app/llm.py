@@ -60,7 +60,13 @@ class LLMNotConfigured(Exception):
 
 
 async def chat_json(
-    system: str, user: str, *, web: bool = False, timeout: float = 180
+    system: str,
+    user: str,
+    *,
+    web: bool = False,
+    timeout: float = 180,
+    model: str | None = None,
+    fast: bool = False,
 ) -> dict:
     """Call OpenRouter and parse the JSON object response.
 
@@ -72,7 +78,7 @@ async def chat_json(
         raise LLMNotConfigured
 
     payload: dict = {
-        "model": settings.openrouter_model,
+        "model": model or settings.openrouter_model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -81,6 +87,10 @@ async def chat_json(
     }
     if web:
         payload["plugins"] = [{"id": "web"}]
+    if fast:
+        # Route to the quickest provider and keep answers short.
+        payload["provider"] = {"sort": "latency"}
+        payload["max_tokens"] = 600
 
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
