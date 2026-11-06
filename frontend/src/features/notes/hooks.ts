@@ -129,6 +129,8 @@ export function useUpdateDocument() {
           ? {
               ...current,
               title: saved.title,
+              // Naming a note stops its title following the first line; clearing it resumes.
+              title_auto: saved.title_auto,
               status: saved.status,
               updated_at: saved.updated_at,
             }

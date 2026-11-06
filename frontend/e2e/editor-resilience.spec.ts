@@ -117,3 +117,30 @@ test("a new note is ready for typing and takes its title from the first line", a
   await page.reload();
   await expect(page.getByRole("textbox", { name: "Note title" })).toHaveValue("Garden plan");
 });
+
+test("clearing a chosen title hands it back to the first line", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "+ New", exact: true }).click();
+  const editor = page.locator(editorSelector);
+  await expect(editor).toBeFocused();
+  await page.keyboard.type("Notes on bread");
+  const title = page.getByRole("textbox", { name: "Note title" });
+  await expect(title).toHaveValue("Notes on bread");
+  await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
+
+  const renamed = () =>
+    page.waitForResponse((response) => response.request().method() === "PATCH" && response.ok());
+  const named = renamed();
+  await title.fill("Sourdough");
+  await title.press("Enter");
+  await named;
+
+  // Without touching the note's text, clearing the title gives it back to the first line.
+  const cleared = renamed();
+  await title.fill("");
+  await title.press("Enter");
+  await cleared;
+  await expect(title).toHaveValue("Notes on bread");
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "Note title" })).toHaveValue("Notes on bread");
+});
