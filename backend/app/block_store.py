@@ -2224,7 +2224,8 @@ def _insert_block(
     parent_id = operation.parent_id
     _validate_parent(connection, document_id, parent_id)
     position = _next_position(connection, document_id, parent_id)
-    if operation.position is not None:
+    if operation.position is not None and operation.position < position:
+        # Positions past the end append; a gap would break "next sibling" lookups.
         position = operation.position
         _shift_positions(connection, document_id, parent_id, position, 1)
     attrs = operation.attrs or {}
@@ -2272,24 +2273,19 @@ def _move_block(
         raise ValueError("cannot move a block into itself or its descendant")
     old_parent = row["parent_id"]
     old_position = row["position"]
-    if old_parent == parent_id:
-        # Vacate the unique sibling slot before shifting rows in the same list.
-        connection.execute("UPDATE blocks SET position = -1 WHERE id = ?", (row["id"],))
-        _shift_positions(
-            connection, document_id, old_parent, old_position + 1, -1,
-            exclude_block_id=row["id"],
-        )
-        position = operation.position
-        if position is None:
-            position = _next_position(connection, document_id, parent_id)
-        _shift_positions(connection, document_id, parent_id, position, 1)
-    else:
-        _shift_positions(connection, document_id, old_parent, old_position + 1, -1)
-        position = operation.position
-        if position is None:
-            position = _next_position(connection, document_id, parent_id)
-        else:
-            _shift_positions(connection, document_id, parent_id, position, 1)
+    # Vacate the unique sibling slot before closing the gap in the old list;
+    # otherwise the next sibling would collide with the block being moved.
+    connection.execute("UPDATE blocks SET position = -1 WHERE id = ?", (row["id"],))
+    _shift_positions(
+        connection, document_id, old_parent, old_position + 1, -1,
+        exclude_block_id=row["id"],
+    )
+    # The moved block sits at -1, so it never raises the end of its own list.
+    end = _next_position(connection, document_id, parent_id)
+    position = operation.position
+    if position is None or position > end:
+        position = end
+    _shift_positions(connection, document_id, parent_id, position, 1)
     connection.execute(
         "UPDATE blocks SET parent_id = ?, position = ?, updated_at = ? WHERE id = ?",
         (parent_id, position, now, row["id"]),
@@ -2331,6 +2327,7 @@ def _duplicate_block(connection: sqlite3.Connection, document_id: str, row: sqli
                      operation: BlockOperation, now: str) -> str:
     parent_id = row["parent_id"]
     position = row["position"] + 1 if operation.position is None else operation.position
+    position = min(position, _next_position(connection, document_id, parent_id))
     _shift_positions(connection, document_id, parent_id, position, 1)
     id_map: dict[str, str] = {}
     for source in _subtree_rows(connection, row["id"]):
