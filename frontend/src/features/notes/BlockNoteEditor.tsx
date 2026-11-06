@@ -477,10 +477,15 @@ export function BlockNoteEditor({
     }
   };
 
-  /** Once edits from an earlier visit are saved, show the note as it now is. */
+  /**
+   * Once edits from an earlier visit are saved, show the note as it now is — unless
+   * something was typed here meanwhile: replacing the content then could drop keystrokes
+   * not yet queued, and the editor already shows those edits on top of the saved ones.
+   */
   const finishRecovery = () => {
     if (!recoveredIds.current?.size) return;
     recoveredIds.current.clear();
+    if (editedHere.current) return;
     const latest = queryClient.getQueryData<BlockDocument>(queryKeys.document(initialDocument.id));
     if (latest) showServerVersion(latest);
   };
@@ -591,22 +596,9 @@ export function BlockNoteEditor({
   const recoverAndFlushOnClose = useEffectEvent(() => {
     if (!recoveryStarted.current) {
       recoveryStarted.current = true;
-      // Edits still waiting from an earlier visit (or from this note's previous editor,
-      // closed mid-save) aren't in the content this editor started from: once they're
-      // saved, show the saved note rather than the older copy.
-      const recovering = readPendingTransactions(initialDocument.id).length > 0;
-      void flush().then(() => {
-        const saved = queryClient.getQueryData<BlockDocument>(
-          queryKeys.document(initialDocument.id),
-        );
-        if (
-          recovering &&
-          saved &&
-          !editedHere.current &&
-          readPendingTransactions(initialDocument.id).length === 0
-        )
-          showServerVersion(saved);
-      });
+      // Send edits still waiting from an earlier visit (or from this note's previous
+      // editor, closed mid-save); `finishRecovery` shows the saved note once they land.
+      void flush();
     }
     return () => {
       if (readPendingTransactions(initialDocument.id).length > 0) void flush();

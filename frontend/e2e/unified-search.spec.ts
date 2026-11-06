@@ -51,11 +51,7 @@ test("Enter never opens a result left over from the previous query", async ({ pa
     await route.fallback();
   });
   await search.fill("persimmon");
-  await search.press("Enter");
-  await expect(first).toContainText("Persimmon tart");
-  // Opening a note puts it in the URL straight away; nothing was opened.
-  expect(new URL(page.url()).searchParams.get("note")).toBeNull();
-
+  // Enter before the new results arrive waits for them and opens the best one.
   await search.press("Enter");
   await expect(page.getByRole("textbox", { name: "Note title" })).toHaveValue("Persimmon tart");
 });
