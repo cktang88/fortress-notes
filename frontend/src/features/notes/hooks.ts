@@ -312,32 +312,27 @@ export function useImportMarkdown() {
 
 /**
  * Ask your notes. While the answer streams, `data` holds the sentences checked so
- * far (with `isPending` still true); asking again cancels the previous question.
+ * far (with `isPending` still true).
  */
 export function useAsk() {
   const [partial, setPartial] = useState<AskResponse | undefined>();
-  const current = useRef<AbortController | null>(null);
+  // The question being shown: sentences streaming in for an older one are ignored
+  // (its final result is too, as the mutation only reports its latest call).
+  const current = useRef<object | null>(null);
   const mutation = useMutation({
     mutationFn: (question: string) => {
-      current.current?.abort();
-      const controller = new AbortController();
-      current.current = controller;
+      const asked = {};
+      current.current = asked;
       setPartial(undefined);
-      return blockApi.ask(
-        question,
-        (update) => {
-          if (current.current === controller) setPartial(update);
-        },
-        controller.signal,
-      );
+      return blockApi.ask(question, (update) => {
+        if (current.current === asked) setPartial(update);
+      });
     },
   });
-  useEffect(() => () => current.current?.abort(), []);
   return {
     ...mutation,
     data: mutation.data ?? (mutation.isPending ? partial : undefined),
     reset: () => {
-      current.current?.abort();
       current.current = null;
       setPartial(undefined);
       mutation.reset();
