@@ -1194,6 +1194,22 @@ export function toPartialBlock(node: BlockNode): AppPartialBlock {
   const content = storedContent === undefined ? markdownText(node) : storedContent;
   const children = node.children.map(toPartialBlock);
 
+  // Saved by the editor: restore its own type, props and rich content as they were.
+  // (Imported Markdown blocks carry no editor content and are converted below.)
+  const spec = Object.hasOwn(editorSchema.blockSchema, node.type)
+    ? editorSchema.blockSchema[node.type as keyof typeof editorSchema.blockSchema]
+    : undefined;
+  if (spec && (spec.content === "none" || storedContent !== undefined)) {
+    const props = Object.fromEntries(Object.entries(node.attrs).filter(([key]) => key !== "id"));
+    return {
+      id: node.id,
+      type: node.type,
+      ...(Object.keys(props).length > 0 ? { props } : {}),
+      ...(spec.content === "none" ? {} : { content: storedContent }),
+      children,
+    } as unknown as AppPartialBlock;
+  }
+
   if (node.type === "heading") {
     const match = markdownText(node).match(/^\s*(#{1,6})\s+/);
     return {
@@ -1438,7 +1454,9 @@ function hydrateLegacyBlocks(editor: AppEditor, nodes: readonly BlockNode[]) {
     for (const node of flattenNodes(nodes)) {
       if (node.content.blocknote !== undefined) continue;
       const block = editor.getBlock(node.id);
-      if (!block || block.type === "divider") continue;
+      // Only blocks with inline text take parsed Markdown (giving content to a math
+      // placeholder, image or divider throws and takes the whole editor down).
+      if (!block || editorSchema.blockSchema[block.type].content !== "inline") continue;
       const parsed = editor.tryParseMarkdownToBlocks(markdownText(node));
       if (parsed[0]?.content !== undefined) {
         editor.updateBlock(block.id, { content: parsed[0].content } as PartialBlock);

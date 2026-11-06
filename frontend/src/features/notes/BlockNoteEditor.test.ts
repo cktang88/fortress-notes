@@ -17,8 +17,9 @@ import type { BlockNode, BlockOperation } from "./types";
 
 describe("buildBlockPermalink", () => {
   it("preserves the app URL and includes document and block IDs", () => {
-    expect(buildBlockPermalink("http://localhost:5173/?mode=edit", "doc 1", "block/2"))
-      .toBe("http://localhost:5173/?mode=edit&note=doc+1#block=block%2F2");
+    expect(buildBlockPermalink("http://localhost:5173/?mode=edit", "doc 1", "block/2")).toBe(
+      "http://localhost:5173/?mode=edit&note=doc+1#block=block%2F2",
+    );
   });
 });
 
@@ -100,6 +101,67 @@ describe("toPartialBlock", () => {
       id: "image-id",
       type: "image",
       props: { url: "/api/images/image-id", caption: "Map" },
+      children: [],
+    });
+  });
+
+  it("restores blocks saved by the editor with their own type, props and rich content", () => {
+    const saved = (
+      type: string,
+      attrs: Record<string, unknown>,
+      blocknote: unknown,
+      markdown: string,
+    ): BlockNode => ({
+      id: `${type}-id`,
+      document_id: "document-id",
+      type,
+      parent_id: null,
+      position: 0,
+      attrs,
+      user_attrs: {},
+      content: { blocknote, markdown },
+      text: "",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      children: [],
+    });
+    const rich = [{ type: "text", text: "Item", styles: { bold: true } }];
+
+    expect(
+      toPartialBlock(saved("bulletListItem", { textAlignment: "left" }, rich, "* **Item**")),
+    ).toEqual({
+      id: "bulletListItem-id",
+      type: "bulletListItem",
+      props: { textAlignment: "left" },
+      content: rich,
+      children: [],
+    });
+    expect(
+      toPartialBlock(saved("checkListItem", { checked: true }, rich, "[x] **Item**")),
+    ).toMatchObject({
+      type: "checkListItem",
+      props: { checked: true },
+      content: rich,
+    });
+    expect(toPartialBlock(saved("numberedListItem", {}, rich, "1. **Item**"))).toMatchObject({
+      type: "numberedListItem",
+      content: rich,
+    });
+    expect(
+      toPartialBlock(saved("codeBlock", { language: "ts" }, rich, "```ts\nItem\n```")),
+    ).toMatchObject({
+      type: "codeBlock",
+      props: { language: "ts" },
+      content: rich,
+    });
+    expect(toPartialBlock(saved("heading", { level: 2 }, rich, "## **Item**"))).toMatchObject({
+      type: "heading",
+      props: { level: 2 },
+      content: rich,
+    });
+    expect(toPartialBlock(saved("divider", {}, undefined, "***"))).toEqual({
+      id: "divider-id",
+      type: "divider",
       children: [],
     });
   });
