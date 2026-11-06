@@ -54,7 +54,14 @@ test("the palette is driven by arrow keys, and Escape or a click outside closes 
   await expect(palette(page)).toHaveCount(0);
   await page.keyboard.press("Control+KeyK");
   await expect(palette(page)).toHaveValue("");
-  // Ctrl+K again toggles it closed.
+  // Ctrl+K again toggles it closed, and that starts fresh next time too.
+  await page.keyboard.type("gard");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Control+KeyK");
+  await expect(palette(page)).toHaveCount(0);
+  await page.keyboard.press("Control+KeyK");
+  await expect(palette(page)).toHaveValue("");
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Control+KeyK");
   await expect(palette(page)).toHaveCount(0);
 

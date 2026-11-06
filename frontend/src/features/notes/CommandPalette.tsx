@@ -36,6 +36,16 @@ export function CommandPalette(props: Props) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
+  // Every opening starts fresh, however the last one was closed (⌘K closes it from
+  // App, without going through close() below).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setQuery("");
+      setActive(0);
+    }
+  }
 
   useEffect(() => {
     const dialog = dialogRef.current;
