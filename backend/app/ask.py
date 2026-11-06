@@ -199,12 +199,16 @@ def grep_blocks(pattern: str, limit: int = TOOL_HITS) -> list[dict[str, object]]
     db_path = get_settings().block_db_path
     deadline = time.monotonic() + GREP_SECONDS
     hits = []
-    for block_id, _document_id, _version, text in block_store.embedding_documents(db_path):
+    for block_id, title, text, _lowered in _titled_corpus(db_path):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         try:
-            matched = any(match.group() for match in compiled.finditer(text, timeout=remaining))
+            # The note's title counts as part of each paragraph: "kyoto" should find
+            # "ryokan in Gion" in the note called "Kyoto trip".
+            matched = any(
+                match.group() for match in compiled.finditer(f"{title}\n{text}", timeout=remaining)
+            )
         except TimeoutError:
             break
         if matched:
@@ -215,18 +219,28 @@ def grep_blocks(pattern: str, limit: int = TOOL_HITS) -> list[dict[str, object]]
     return [details[block_id] for block_id in hits if block_id in details]
 
 
-# The corpus lower-cased once per change, so a term grep is one pass of `in` checks.
-_lowered: tuple[object, list[tuple[str, str]]] | None = None
+# Each paragraph with its note's title, and both lower-cased, built once per change of
+# the corpus so a term grep is one pass of `in` checks.
+_titled: tuple[object, list[tuple[str, str, str, str]]] | None = None
 
 
-def _lowered_corpus(corpus) -> list[tuple[str, str]]:
-    global _lowered
-    cached = _lowered
+def _titled_corpus(db_path) -> list[tuple[str, str, str, str]]:
+    """(block_id, note title, text, lower-cased "title\ntext") for every active paragraph."""
+
+    global _titled
+    corpus = block_store.embedding_documents(db_path)
+    cached = _titled
     if cached is not None and cached[0] is corpus:
         return cached[1]
-    lowered = [(block_id, text.lower()) for block_id, _document_id, _version, text in corpus]
-    _lowered = (corpus, lowered)
-    return lowered
+    titles = {
+        str(doc["id"]): str(doc["title"] or "") for doc in block_store.list_documents(db_path)
+    }
+    rows = []
+    for block_id, document_id, _version, text in corpus:
+        title = titles.get(str(document_id), "")
+        rows.append((block_id, title, text, f"{title}\n{text}".lower()))
+    _titled = (corpus, rows)
+    return rows
 
 
 def grep_terms(terms: list[str], limit: int = PREFETCH_GREP) -> list[dict[str, object]]:
@@ -235,17 +249,18 @@ def grep_terms(terms: list[str], limit: int = PREFETCH_GREP) -> list[dict[str, o
     if not terms:
         return []
     db_path = get_settings().block_db_path
-    corpus = _lowered_corpus(block_store.embedding_documents(db_path))
     scored = []
-    for block_id, lowered in corpus:
+    for block_id, _title, text, lowered in _titled_corpus(db_path):
         hits = 0
         for term in terms:
             if term in lowered:
                 hits += 1
         if hits:
-            scored.append((hits, block_id))
-    scored.sort(key=lambda item: -item[0])
-    ids = [block_id for _hits, block_id in scored[:limit]]
+            # Words in the paragraph itself beat words only in its note's title.
+            in_text = sum(1 for term in terms if term in text.lower())
+            scored.append((hits, in_text, block_id))
+    scored.sort(key=lambda item: (-item[0], -item[1]))
+    ids = [block_id for _hits, _in_text, block_id in scored[:limit]]
     details = block_query.block_details(db_path, ids)
     return [details[block_id] for block_id in ids if block_id in details]
 

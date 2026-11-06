@@ -151,6 +151,24 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertEqual(result["status"], "not_found")
         fake.assert_not_called()
 
+    def test_grep_finds_paragraphs_whose_note_title_holds_the_word(self) -> None:
+        # "Where are we staying in Kyoto?": only the note's title says Kyoto.
+        from app import ask
+
+        kyoto = self.client.post(
+            "/api/notes",
+            json={"title": "Kyoto trip", "body": "We booked a ryokan in Gion for four nights."},
+        ).json()["id"]
+        terms = ask.key_terms("Where are we staying in Kyoto?")
+        texts = [str(row["text"]) for row in ask.grep_terms(terms)]
+        self.assertIn("We booked a ryokan in Gion for four nights.", texts)
+        texts = [str(row["text"]) for row in ask.grep_blocks("kyoto")]
+        self.assertIn("We booked a ryokan in Gion for four nights.", texts)
+        # Renaming the note is seen straight away (titles are cached with the corpus).
+        self.client.patch(f"/api/block-documents/{kyoto}", json={"title": "Osaka trip"})
+        self.assertEqual(ask.grep_blocks("kyoto"), [])
+        self.assertTrue(ask.grep_blocks("osaka"))
+
     def test_prefetch_greps_exact_names_before_any_model_call(self) -> None:
         miguel = self.client.post(
             "/api/notes", json={"title": "Contractors", "body": "Miguel quoted 12k for the deck."}

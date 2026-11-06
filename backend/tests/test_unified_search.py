@@ -117,7 +117,8 @@ class UnifiedSearchTests(unittest.TestCase):
         # text; the packing note (edited later) only shares "zqmarl".
         packing = self.create("Packing zqmarl", "Packing zqmarl\n\nPassport and charger.")
         budget = self.create("Budget zqmarl", "Hotel 120 a night.")
-        self.client.patch(f"/api/notes/{packing}", json={"status": "rough"})
+        touched = self.client.patch(f"/api/block-documents/{packing}", json={"status": "polished"})
+        self.assertEqual(touched.status_code, 200, touched.text)
         results = self.find("hotel zqmarl")
         self.assertEqual(results[0]["document_id"], budget)
 
