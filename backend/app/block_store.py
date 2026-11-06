@@ -1303,7 +1303,8 @@ def block_link_targets(path: Path, query: str = "", limit: int = 50) -> list[dic
                  JOIN documents ON documents.id = blocks.document_id
                 WHERE documents.deleted_at IS NULL
                   AND (
-                    blocks.text LIKE ? COLLATE NOCASE ESCAPE '\\'
+                    blocks.id = ?
+                   OR blocks.text LIKE ? COLLATE NOCASE ESCAPE '\\'
                    OR (
                         (documents.title LIKE ? COLLATE NOCASE ESCAPE '\\'
                          OR documents.id LIKE ? COLLATE NOCASE ESCAPE '\\')
@@ -1317,10 +1318,18 @@ def block_link_targets(path: Path, query: str = "", limit: int = 50) -> list[dic
                         )
                    )
                   )
-                ORDER BY documents.updated_at DESC, blocks.updated_at DESC,
+                -- An exact block ID (a reference preview looks one up) comes first.
+                ORDER BY blocks.id = ? DESC, documents.updated_at DESC, blocks.updated_at DESC,
                          blocks.position ASC, documents.id ASC, blocks.id ASC
                 LIMIT ?""",
-            (needle, needle, needle, max(1, min(limit, 200))),
+            (
+                normalized_query,
+                needle,
+                needle,
+                needle,
+                normalized_query,
+                max(1, min(limit, 200)),
+            ),
         ).fetchall()
     return [
         {

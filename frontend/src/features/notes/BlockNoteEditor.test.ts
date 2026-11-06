@@ -17,8 +17,9 @@ import type { BlockNode, BlockOperation } from "./types";
 
 describe("buildBlockPermalink", () => {
   it("preserves the app URL and includes document and block IDs", () => {
-    expect(buildBlockPermalink("http://localhost:5173/?mode=edit", "doc 1", "block/2"))
-      .toBe("http://localhost:5173/?mode=edit&note=doc+1#block=block%2F2");
+    expect(buildBlockPermalink("http://localhost:5173/?mode=edit", "doc 1", "block/2")).toBe(
+      "http://localhost:5173/?mode=edit&note=doc+1#block=block%2F2",
+    );
   });
 });
 
@@ -78,6 +79,38 @@ describe("toPartialBlock", () => {
       type: "mathPlaceholder",
       children: [],
     });
+  });
+
+  it("restores lists, tasks and code saved by the editor with their own type", () => {
+    const content = [{ type: "text", text: "Renew passport", styles: {} }];
+    const task: BlockNode = {
+      id: "task-id",
+      document_id: "document-id",
+      type: "checkListItem",
+      parent_id: null,
+      position: 0,
+      attrs: { checked: true, textColor: "default", id: "stray" },
+      user_attrs: {},
+      content: { blocknote: content, markdown: "- [x] Renew passport\n" },
+      text: "Renew passport",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      children: [],
+    };
+
+    expect(toPartialBlock(task)).toEqual({
+      id: "task-id",
+      type: "checkListItem",
+      props: { checked: true, textColor: "default" },
+      content,
+      children: [],
+    });
+    expect(toPartialBlock({ ...task, type: "bulletListItem", attrs: {} }).type).toBe(
+      "bulletListItem",
+    );
+    expect(toPartialBlock({ ...task, type: "codeBlock", attrs: { language: "ts" } })).toMatchObject(
+      { type: "codeBlock", props: { language: "ts" } },
+    );
   });
 
   it("restores saved image blocks and their props", () => {
