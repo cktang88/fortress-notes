@@ -7,10 +7,10 @@ Scoring is brute-force MaxSim, which is fast enough for a personal note collecti
 
 from __future__ import annotations
 
-import re
 import threading
 from dataclasses import dataclass, field
 
+from . import block_query
 from .config import get_settings
 
 
@@ -78,11 +78,9 @@ def available() -> bool:
 
 # ---- keyword fallback ---------------------------------------------------------
 
-_word_re = re.compile(r"[a-z0-9]+")
-
-
 def _tokens(text: str) -> set[str]:
-    return set(_word_re.findall(text.lower()))
+    # Same words as the full-text search: any script, case and accents ignored.
+    return set(block_query.query_tokens(text))
 
 
 def _keyword_score(query: str, text: str) -> float:

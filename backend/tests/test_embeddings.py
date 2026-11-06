@@ -73,6 +73,19 @@ class BlockEmbeddingTests(unittest.TestCase):
         self.assertEqual(len(loads), 1)
         self.assertEqual(len({id(model) for model in results}), 1)
 
+    def test_keyword_fallback_understands_words_beyond_ascii(self) -> None:
+        with patch.object(embeddings, "_get_model", return_value=None):
+            scores = embeddings.score_documents(
+                "Μύκονος hotel",
+                [("greek", "v1", "Μύκονος in June"), ("email", "v1", "Send the e-mail")],
+            )
+            self.assertEqual(scores["greek"], 0.5)
+            # "brûlée" is one word, not the letters "br", "l" and "e".
+            scores = embeddings.score_documents(
+                "brûlée", [("dessert", "v1", "crème brulee"), ("email", "v1", "Send the e-mail")]
+            )
+        self.assertEqual(scores, {"dessert": 1.0, "email": 0.0})
+
 
 if __name__ == "__main__":
     unittest.main()
