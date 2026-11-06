@@ -25,7 +25,9 @@ test("search jumps to the matching passage, and words, titles and meaning are la
 
   // Exact words: the passage is shown with the word highlighted.
   await searchBox(page).fill(`${word} paddle`);
-  const hit = results(page).filter({ hasText: "boathouse" });
+  // Earlier runs leave similar notes behind; look at this note's passage.
+  const passage = `${word} paddle at the boathouse`;
+  const hit = results(page).filter({ hasText: passage });
   await expect(hit).toHaveCount(1);
   await expect(hit).toContainText("exact words");
   await expect(hit.locator("mark")).toHaveText([word, "paddle"]);
@@ -38,13 +40,16 @@ test("search jumps to the matching passage, and words, titles and meaning are la
 
   // A word that isn't in the passage still finds it by meaning (some words overlap).
   await searchBox(page).fill(`${word} canoe`);
-  const loose = results(page).filter({ hasText: "boathouse" });
+  const loose = results(page).filter({ hasText: passage });
   await expect(loose).toContainText("similar meaning");
   await expect(loose).not.toContainText("exact words");
 
   // Only the title matches.
   await searchBox(page).fill(`lake trip ${word}`);
-  await expect(results(page).filter({ hasText: "in title" }).first()).toContainText(note.title);
+  // (Other notes with "trip" in their title may rank alongside it, so look at this one's.)
+  const titleHit = results(page).filter({ hasText: note.title }).first();
+  await expect(titleHit).toContainText("in title");
+  await expect(titleHit).not.toContainText("exact words");
 });
 
 test("punctuation, quotes, operators and other scripts never break search", async ({
@@ -85,10 +90,11 @@ test("punctuation, quotes, operators and other scripts never break search", asyn
   await search.fill(`brûlée ${word}`);
   await expect(results(page).first().locator("mark").first()).toHaveText(/brûlée/i);
   await search.fill(`東京 ${word}`);
-  await expect(results(page).filter({ hasText: "東京" }).locator("mark")).toHaveText([
-    "東京",
-    word,
-  ]);
+  await expect(
+    results(page)
+      .filter({ hasText: `東京 ${word}` })
+      .locator("mark"),
+  ).toHaveText(["東京", word]);
 
   // Nothing but punctuation is a calm "Nothing matches", not an error.
   for (const query of [`"`, "'''", "***", "()", "-", "“”", "\\"]) {

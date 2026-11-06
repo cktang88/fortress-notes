@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { proxyToBackend } from "./backend";
+import { openNoteRow } from "./notes";
 
 const editorSelector = '[contenteditable="true"][aria-label="Document content"]';
 
@@ -276,8 +277,7 @@ test("a new note is ready for typing and takes its title from the first line", a
 
   const title = page.getByRole("textbox", { name: "Note title" });
   await expect(title).toHaveValue("Ideas for the garden");
-  const sidebar = page.getByRole("navigation", { name: "Documents" });
-  await expect(sidebar.getByText("Ideas for the garden").first()).toBeVisible();
+  await expect(openNoteRow(page)).toHaveAccessibleName("Ideas for the garden");
 
   // Choosing a title stops it following the first line.
   await title.fill("Garden plan");

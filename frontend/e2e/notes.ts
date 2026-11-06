@@ -87,6 +87,15 @@ export function treeRow(page: Page, title: string) {
   return sidebar(page).locator(`button[data-document-id][aria-label="${title}"]`);
 }
 
+/**
+ * The open note's row in the folder tree, found by its id rather than its title (notes
+ * from other specs, or an earlier run, may share the title).
+ */
+export function openNoteRow(page: Page) {
+  const id = new URL(page.url()).searchParams.get("note");
+  return sidebar(page).locator(`button[data-document-id="${id}"]:not([data-recent-document-id])`);
+}
+
 /** Open the app and wait until it has rendered (and its keyboard shortcuts are live). */
 export async function openApp(page: Page, path = "/") {
   await page.goto(path);
