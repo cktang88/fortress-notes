@@ -655,17 +655,21 @@ def create_document(
             )
 
 
-def list_documents(path: Path) -> list[dict[str, object]]:
+def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, object]]:
+    """Active documents, newest first; only ``ids`` when given (one query either way)."""
+
     initialize(path)
+    only = "" if ids is None else f"AND id IN ({','.join('?' for _ in ids)})"
     with connection_scope(path) as connection:
         rows = connection.execute(
-            """SELECT id, title, status, tags_json, folder_id, position,
+            f"""SELECT id, title, status, tags_json, folder_id, position,
                       created_at, updated_at,
                       COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
                                 ORDER BY parent_id, position, id LIMIT 1), '') AS snippet
                  FROM documents
-                WHERE deleted_at IS NULL
-                ORDER BY updated_at DESC, id ASC"""
+                WHERE deleted_at IS NULL {only}
+                ORDER BY updated_at DESC, id ASC""",
+            [] if ids is None else list(ids),
         ).fetchall()
     return [_navigation_document(row) for row in rows]
 

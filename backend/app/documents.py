@@ -37,8 +37,16 @@ def list_notes(status: NoteStatus | None = None) -> list[NoteSummary]:
     ]
 
 
-def summaries() -> dict[str, NoteSummary]:
-    return {summary.id: summary for summary in list_notes()}
+def summaries(ids: list[str] | None = None) -> dict[str, NoteSummary]:
+    """Summaries of every active note, or just of ``ids`` (much cheaper for a few)."""
+
+    if ids is None:
+        return {summary.id: summary for summary in list_notes()}
+    db_path, _ = _paths()
+    return {
+        str(item["id"]): NoteSummary(**{key: item[key] for key in NoteSummary.model_fields})
+        for item in block_store.list_documents(db_path, list(ids))
+    }
 
 
 def get_note(document_id: str) -> Note | None:

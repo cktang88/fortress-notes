@@ -1,7 +1,9 @@
 """Full-text search + embedding search + related notes, all over SQLite blocks."""
 
+import heapq
 import math
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from . import block_query, block_store, documents, embeddings
@@ -76,7 +78,13 @@ def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list
         current = note_matches.get(document_id)
         if current is None or score > current[0]:
             note_matches[document_id] = (score, bid, block_texts[bid])
-    summaries = documents.summaries()
+    ranked = sorted(
+        ((nid, match) for nid, match in note_matches.items() if match[0] > 0),
+        key=lambda item: item[1][0],
+        reverse=True,
+    )
+    # Summaries only for the notes that can make the list (every one is active).
+    summaries = documents.summaries([nid for nid, _match in ranked[: k * 2]])
     results = [
         RelatedResult(
             note=summaries[nid],
@@ -84,15 +92,15 @@ def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list
             matched_block_id=match[1] or None,
             matched_block_text=match[2][:_RELATED_EXCERPT_LENGTH],
         )
-        for nid, match in note_matches.items()
-        if nid in summaries and match[0] > 0
+        for nid, match in ranked[: k * 2]
+        if nid in summaries
     ]
-    results.sort(key=lambda r: r.score, reverse=True)
     return results[:k]
 
 
 # --- Unified search ------------------------------------------------------------
 
+_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="meaning")
 _RRF_K = 60
 _MEANING_CANDIDATES = 25
 _PER_DOCUMENT = 3
@@ -114,26 +122,28 @@ def unified_search(
     db_path = get_settings().block_db_path
     allowed = block_query.allowed_block_ids(db_path, filters)
 
+    def meaning() -> list[str]:
+        blocks = block_store.embedding_documents(db_path)
+        if allowed is not None:
+            blocks = [block for block in blocks if block[0] in allowed]
+        scores = embeddings.score_documents(
+            q, [(block_id, version, text) for block_id, _, version, text in blocks]
+        )
+        best = heapq.nlargest(_MEANING_CANDIDATES, scores.items(), key=lambda item: item[1])
+        return [block_id for block_id, score in best if score > 0]
+
+    # Meaning (ColBERT, releases the GIL) runs alongside the SQLite word and title
+    # lookups instead of after them.
+    meaning_future = _pool.submit(meaning)
     words = block_query.search_blocks(db_path, q, filters, limit=100)
     word_ranking = [str(hit["block_id"]) for hit in words]
-
-    blocks = block_store.embedding_documents(db_path)
-    if allowed is not None:
-        blocks = [block for block in blocks if block[0] in allowed]
-    meaning_scores = embeddings.score_documents(
-        q, [(block_id, version, text) for block_id, _, version, text in blocks]
-    )
-    meaning_ranking = [
-        block_id
-        for block_id, score in sorted(meaning_scores.items(), key=lambda item: -item[1])
-        if score > 0
-    ][:_MEANING_CANDIDATES]
 
     title_ranking = [
         str(match["block_id"])
         for match in block_query.title_matches(db_path, q)
         if allowed is None or match["block_id"] in allowed
     ]
+    meaning_ranking = meaning_future.result()
 
     fused: dict[str, float] = {}
     reasons: dict[str, list[str]] = {}

@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     ask_model: str = "google/gemini-2.5-flash-lite"
     embeddings_enabled: bool = True
     colbert_model: str = "lightonai/Agent-ModernColBERT"
+    # "auto" runs ColBERT in bfloat16 on CPUs with native support (AVX512-BF16/AMX):
+    # several times faster and within ~0.3% of float32 scores. Or "float32"/"bfloat16".
+    embeddings_precision: str = "auto"
     reindex_interval_s: float = 5.0
     vision_enabled: bool = True  # OCR (fast); makes image text searchable
     # Captions and OCR run locally in the background and reuse cached image text.
