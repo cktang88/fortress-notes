@@ -94,6 +94,38 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertEqual(result["answer"], [])
         self.assertTrue(result["sources"])  # the closest passages are still offered
 
+    def test_quotes_match_despite_typographic_and_markdown_differences(self) -> None:
+        self.client.post(
+            "/api/notes",
+            json={"title": "Ferry", "body": "We didn’t book the “fast” ferry — too pricey."},
+        )
+
+        def cite(quote: str) -> dict:
+            return {
+                "found": True,
+                "sentences": [
+                    {"text": "You skipped the ferry.", "citations": [{"id": "S1", "quote": quote}]}
+                ],
+            }
+
+        for quote in (
+            "didn't book the \"fast\" ferry - too pricey",  # straight quotes and hyphen
+            '"We didn’t book the “fast” ferry"',  # wrapped in quote marks
+            "We *didn’t* **book** the",  # markdown emphasis
+        ):
+            result, _ = self.ask("Did we book the ferry?", cite(quote))
+            self.assertEqual(result["status"], "answered", quote)
+
+    def test_a_quote_without_any_words_cites_nothing(self) -> None:
+        result, _ = self.ask(
+            "Which hotel did we pick?",
+            {
+                "found": True,
+                "sentences": [{"text": "It was the Ritz.", "citations": [{"id": "S1", "quote": ", "}]}],
+            },
+        )
+        self.assertEqual(result["status"], "not_found")
+
     def test_reports_missing_key_and_empty_matches_without_calling_the_model(self) -> None:
         from app import llm
 

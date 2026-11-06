@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 
 import httpx
 import regex
@@ -73,8 +74,22 @@ _SYSTEM = (
 )
 
 
+_TYPOGRAPHY = str.maketrans(
+    {
+        **dict.fromkeys("‘’‚‛′", "'"),
+        **dict.fromkeys("“”„‟″", '"'),
+        **dict.fromkeys("‐‑‒–—―−", "-"),
+    }
+)
+
+
 def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip().lower()
+    """Text as compared for quotes: ignores case, spacing, typographic quotes and
+    dashes, Markdown emphasis, and quote marks wrapped around the whole quote."""
+
+    text = unicodedata.normalize("NFKC", text).translate(_TYPOGRAPHY)
+    text = re.sub(r"[*_`]+", "", text)
+    return re.sub(r"\s+", " ", text).strip().strip("\"'").strip().lower()
 
 
 def key_terms(question: str) -> list[str]:
@@ -330,8 +345,10 @@ def _answer(data: dict, sources: _Sources, steps: list, started: float) -> dict[
                 continue
             source = sources.by_id.get(str(citation.get("id")))
             quote = citation.get("quote")
-            if source is None or not isinstance(quote, str) or not quote.strip():
+            if source is None or not isinstance(quote, str):
                 continue
+            if not any(character.isalnum() for character in quote):
+                continue  # Punctuation alone "matches" almost any passage.
             if _normalize(quote) not in _normalize(str(source["text"])):
                 continue  # The model "quoted" something the note doesn't say.
             citations.append(
