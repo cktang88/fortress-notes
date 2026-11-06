@@ -220,6 +220,7 @@ export function App() {
             results={blockSearch.data ?? []}
             loading={blockSearch.isLoading || (searchSettling && !blockSearch.data)}
             error={blockSearch.isError}
+            stale={searchSettling || blockSearch.isPlaceholderData}
             onSelect={(documentId, blockId) => selectNote(documentId, blockId)}
           />
         ) : navigation.isError ? (

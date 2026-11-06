@@ -5,6 +5,8 @@ interface Props {
   results: UnifiedSearchResult[];
   loading: boolean;
   error?: boolean;
+  /** The results are for an earlier query (the new one is still on its way). */
+  stale?: boolean;
   onSelect: (documentId: string, blockId: string) => void;
 }
 
@@ -15,7 +17,13 @@ const reasonLabels: Record<UnifiedSearchResult["matched"][number], string> = {
 };
 
 /** Search results: the matching passage with your words highlighted, and why it matched. */
-export function BlockSearchResults({ results, loading, error = false, onSelect }: Props) {
+export function BlockSearchResults({
+  results,
+  loading,
+  error = false,
+  stale = false,
+  onSelect,
+}: Props) {
   if (loading) return <div className="p-4 text-sm text-zinc-400">Searching…</div>;
   if (error) {
     return <div className="p-4 text-sm text-red-600">Search is unavailable right now.</div>;
@@ -25,7 +33,14 @@ export function BlockSearchResults({ results, loading, error = false, onSelect }
   }
 
   return (
-    <ul data-results className="flex-1 overflow-y-auto" onKeyDown={moveListFocus}>
+    // Old results stay visible (dimmed) while the new query runs, but without the
+    // data-results marker, so Enter/↓ in the search box can't open one of them.
+    <ul
+      data-results={stale ? undefined : ""}
+      aria-busy={stale || undefined}
+      className={`flex-1 overflow-y-auto ${stale ? "opacity-60" : ""}`}
+      onKeyDown={moveListFocus}
+    >
       {results.map((result) => (
         <li key={result.block_id}>
           <button
