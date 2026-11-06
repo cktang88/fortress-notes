@@ -72,14 +72,16 @@ def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list
     scores = relevance.related_scores(
         query, [(bid, updated_at, text) for bid, _, updated_at, text in block_docs]
     )
-    document_ids = {bid: document_id for bid, document_id, _, _ in block_docs}
-    block_texts = {bid: text for bid, _, _, text in block_docs}
+    # Few paragraphs clear the cutoff: look up only theirs (in corpus order, so ties
+    # resolve as before).
     note_matches: dict[str, tuple[float, str, str]] = {}
-    for bid, score in scores.items():
-        document_id = document_ids[bid]
+    for bid, document_id, _, text in block_docs:
+        score = scores.get(bid)
+        if score is None:
+            continue
         current = note_matches.get(document_id)
         if current is None or score > current[0]:
-            note_matches[document_id] = (score, bid, block_texts[bid])
+            note_matches[document_id] = (score, bid, text)
     ranked = sorted(
         ((nid, match) for nid, match in note_matches.items() if match[0] > 0),
         key=lambda item: item[1][0],

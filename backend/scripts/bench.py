@@ -92,7 +92,16 @@ def main() -> None:
         help="old in-memory cache: time warm_index on 100 paragraphs, prefill the rest fast",
     )
     parser.add_argument("--out", type=Path, default=None, help="append JSON results here")
+    parser.add_argument(
+        "--key-from", type=Path, default=None, help="read OPENROUTER_API_KEY from this .env"
+    )
     args = parser.parse_args()
+    if args.key_from:
+        # Only the key, only into this process's environment; never printed.
+        for line in args.key_from.read_text(encoding="utf-8").splitlines():
+            name, _, value = line.partition("=")
+            if name.strip() == "OPENROUTER_API_KEY":
+                os.environ["OPENROUTER_API_KEY"] = value.strip().strip("'\"")
 
     os.environ["NOTES_DIR"] = str(args.dir)
     os.environ.setdefault("VISION_ENABLED", "false")
@@ -127,9 +136,17 @@ def main() -> None:
     # Cold start the first time; a restart (embeddings reused from disk if the code
     # persists them) on later runs.
     started = time.perf_counter()
-    encoded = embeddings.warm_index()
+    try:
+        encoded = embeddings.warm_index(queries=False)
+    except TypeError:  # the pre-optimisation code
+        encoded = embeddings.warm_index()
     results["index_s"] = round(time.perf_counter() - started, 1)
     results["index_encoded"] = encoded
+    if hasattr(embeddings, "_warm_queries"):
+        # Precomputed query encodings for every paragraph (background, after indexing).
+        started = time.perf_counter()
+        embeddings.warm_index()
+        results["query_index_s"] = round(time.perf_counter() - started, 1)
     results["rss_indexed_mb"] = round(_rss_mb())
     print(json.dumps(results), flush=True)
 

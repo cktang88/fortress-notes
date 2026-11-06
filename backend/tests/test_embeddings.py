@@ -123,6 +123,36 @@ class BlockEmbeddingTests(unittest.TestCase):
                 self.assertEqual(len(embeddings._cache.index), 0)
             self.assertEqual(model.documents, ["Alpha beta", "Gamma delta", "Alpha epsilon"])
 
+    def test_paragraph_queries_use_precomputed_encodings(self) -> None:
+        from app import block_store
+
+        class CountingModel(_WordModel):
+            queries = 0
+
+            def encode(self, texts, *, is_query, **kwargs):
+                if is_query:
+                    CountingModel.queries += len(texts)
+                return super().encode(texts, is_query=is_query, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            block_store.create_document(
+                database, "doc", "Doc", "rough", [], "Alpha beta\n\nGamma delta", "2025-01-01", "2025-01-01"
+            )
+            settings = type("Settings", (), {"block_db_path": database})()
+            model = CountingModel()
+            with patch.object(embeddings, "_get_model", return_value=model), patch.object(
+                embeddings, "get_settings", return_value=settings
+            ), patch.object(embeddings, "_cache", embeddings._Cache()):
+                embeddings.warm_index()  # paragraphs
+                fresh = embeddings.score_documents("alpha beta", _docs(database))
+                embeddings._cache.queries.clear()
+                embeddings.warm_index()  # then their query encodings
+                before = CountingModel.queries
+                saved = embeddings.score_documents("Alpha beta", _docs(database))
+                self.assertEqual(CountingModel.queries, before)  # no model pass
+            self.assertEqual(saved, fresh)
+
     def test_vectorised_maxsim_matches_brute_force(self) -> None:
         import numpy as np
 

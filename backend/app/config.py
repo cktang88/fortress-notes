@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # "auto" runs ColBERT in bfloat16 on CPUs with native support (AVX512-BF16/AMX):
     # several times faster and within ~0.3% of float32 scores. Or "float32"/"bfloat16".
     embeddings_precision: str = "auto"
+    # Also precompute each paragraph's query encoding (after indexing, in the
+    # background) so "related to this paragraph" skips the model entirely.
+    precompute_query_embeddings: bool = True
     reindex_interval_s: float = 5.0
     vision_enabled: bool = True  # OCR (fast); makes image text searchable
     # Captions and OCR run locally in the background and reuse cached image text.
