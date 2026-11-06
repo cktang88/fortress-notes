@@ -53,7 +53,7 @@ def restore_document(path: Path, document_id: str) -> dict[str, object]:
 
     initialize(path)
     now = _now()
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         row = connection.execute(
             "SELECT folder_id FROM documents WHERE id = ? AND deleted_at IS NOT NULL",
             (document_id,),

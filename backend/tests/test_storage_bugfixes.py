@@ -13,7 +13,10 @@ from app.block_store import (
     connection_scope,
     create_block_document,
     create_document,
+    create_folder,
     delete_document,
+    move_document,
+    navigation,
     document_backlinks,
     document_tree,
     embedding_documents,
@@ -210,6 +213,60 @@ class MarkdownImportTests(unittest.TestCase):
                 [child["text"] for child in created["children"]],
                 ["a\u2028b", "second", "x\x0cy", "third", "fourth"],
             )
+
+
+def _run_together(count: int, work) -> list[BaseException]:
+    barrier = threading.Barrier(count)
+    errors: list[BaseException] = []
+
+    def run(index: int) -> None:
+        barrier.wait()
+        try:
+            work(index)
+        except BaseException as error:  # noqa: BLE001 - collected for the assertion
+            errors.append(error)
+
+    threads = [threading.Thread(target=run, args=(index,)) for index in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return errors
+
+
+class ConcurrentOrganizationTests(unittest.TestCase):
+    def test_simultaneous_creates_and_moves_get_distinct_positions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            folder = create_folder(database, "F")
+            ids = [
+                create_block_document(database, f"N{i}", "rough", [], "x")["id"]
+                for i in range(8)
+            ]
+
+            errors = _run_together(
+                16,
+                lambda i: create_block_document(database, f"New{i}", "rough", [], "x")
+                if i % 2
+                else move_document(database, ids[i // 2], folder["id"], 0),
+            )
+            errors += _run_together(8, lambda i: create_folder(database, f"G{i}"))
+
+            self.assertEqual(errors, [])
+            items = navigation(database)["items"]
+
+            def positions(nodes: list[dict], kind: str) -> list[int]:
+                return [node["position"] for node in nodes if node["kind"] == kind]
+
+            root_docs = positions(items, "document")
+            root_folders = positions(items, "folder")
+            folder_docs = positions(
+                next(node for node in items if node["id"] == folder["id"])["children"],
+                "document",
+            )
+            self.assertEqual(root_docs, list(range(8)))
+            self.assertEqual(root_folders, list(range(9)))
+            self.assertEqual(sorted(folder_docs), list(range(8)))
 
 
 class InitializeTests(unittest.TestCase):

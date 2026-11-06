@@ -329,10 +329,18 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 @contextmanager
-def connection_scope(path: Path):
+def connection_scope(path: Path, immediate: bool = False):
+    """One connection and transaction; ``immediate`` takes the write lock up front.
+
+    Writes that read sibling positions before shifting them need ``immediate``:
+    otherwise two requests can read the same positions before either writes.
+    """
+
     connection = connect(path)
     try:
         with connection:
+            if immediate:
+                connection.execute("BEGIN IMMEDIATE")
             yield connection
     finally:
         connection.close()
@@ -622,7 +630,7 @@ def create_document(
     """Create the block representation for a newly created compatibility note."""
 
     initialize(path)
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         _validate_folder_parent(connection, folder_id)
         if connection.execute(
             "SELECT 1 FROM documents WHERE id = ?", (document_id,)
@@ -741,7 +749,7 @@ def replace_document_from_markdown(
     """Re-import the explicit raw/compatibility edit into the block store."""
 
     initialize(path)
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         existing = connection.execute(
             "SELECT created_at, deleted_at FROM documents WHERE id = ?", (document_id,)
         ).fetchone()
@@ -782,7 +790,7 @@ def delete_document(path: Path, document_id: str) -> None:
 
     initialize(path)
     now = _now()
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         row = connection.execute(
             "SELECT folder_id, position FROM documents WHERE id = ? AND deleted_at IS NULL",
             (document_id,),
@@ -802,7 +810,7 @@ def create_folder(
 ) -> dict[str, object]:
     initialize(path)
     now = _now()
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         _validate_folder_parent(connection, parent_id)
         target_position = _folder_insert_position(connection, parent_id, position)
         folder_id = _new_ulid()
@@ -837,7 +845,7 @@ def move_folder(
 ) -> dict[str, object]:
     initialize(path)
     now = _now()
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         folder = _folder_row(connection, folder_id)
         target_parent = folder["parent_id"] if parent_id is UNSET else parent_id
         _validate_folder_parent(connection, target_parent)
@@ -859,7 +867,7 @@ def move_folder(
 
 def delete_folder(path: Path, folder_id: str) -> None:
     initialize(path)
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         _folder_row(connection, folder_id)
         if connection.execute(
             "SELECT 1 FROM folders WHERE parent_id = ? LIMIT 1", (folder_id,)
@@ -885,7 +893,7 @@ def move_document(
 ) -> dict[str, object]:
     initialize(path)
     now = _now()
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         document = connection.execute(
             """SELECT id, folder_id, position FROM documents
                  WHERE id = ? AND deleted_at IS NULL""",
