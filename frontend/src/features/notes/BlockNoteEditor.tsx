@@ -544,6 +544,24 @@ export function BlockNoteEditor({
     return saveQueue.current;
   };
 
+  // Folding this note into another moves what the server has: send the edits still
+  // waiting first, or the last words typed would stay behind in the trashed note.
+  const [savingBeforeMove, setSavingBeforeMove] = useState(false);
+  const moveIntoAfterSaving = async (target: SimilarDocument) => {
+    if (!onMoveInto || savingBeforeMove) return;
+    setSavingBeforeMove(true);
+    try {
+      await flush();
+    } finally {
+      setSavingBeforeMove(false);
+    }
+    if (readPendingTransactions(initialDocument.id).length > 0) {
+      setEditorActionError("Your latest edits aren't saved yet, so the note wasn't moved.");
+      return;
+    }
+    onMoveInto(target);
+  };
+
   const selectAllStart = useRef<{ from: number; to: number } | null>(null);
   const showPreview = (event: React.MouseEvent<HTMLElement>) => {
     const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a");
@@ -833,7 +851,7 @@ export function BlockNoteEditor({
               setDismissedFor(suggestionTarget.id);
             }}
             onOpen={(documentId, blockId) => onOpenNote?.(documentId, blockId)}
-            onMoveInto={(target) => onMoveInto?.(target)}
+            onMoveInto={(target) => void moveIntoAfterSaving(target)}
             onNotDuplicate={(target) => {
               const next = new Set(notDuplicates).add(
                 pairKey(initialDocument.id, target.document_id),
@@ -841,7 +859,7 @@ export function BlockNoteEditor({
               setNotDuplicates(next);
               writeNotDuplicates(next);
             }}
-            moving={moving}
+            moving={moving || savingBeforeMove}
           />
           <button
             type="button"
