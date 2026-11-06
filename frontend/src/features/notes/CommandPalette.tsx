@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { fuzzyFilter } from "./fuzzy";
+import { isComposing } from "./listKeyboard";
 import type { NoteSummary } from "./types";
 import type { WorkspaceAction } from "./WorkspaceMenu";
 
@@ -103,6 +104,8 @@ export function CommandPalette(props: Props) {
               setActive(0);
             }}
             onKeyDown={(event) => {
+              // Enter and the arrows belong to the input method while it composes.
+              if (isComposing(event)) return;
               if (event.key === "ArrowDown") {
                 event.preventDefault();
                 setActive((current + 1) % Math.max(items.length, 1));

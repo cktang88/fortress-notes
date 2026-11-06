@@ -11,6 +11,7 @@ import { pointerIntersection } from "@dnd-kit/collision";
 import { FormEvent, KeyboardEvent, MouseEvent, useEffect, useRef, useState } from "react";
 import { workspaceApi } from "./api";
 import { triggerDownload } from "./download";
+import { isComposing } from "./listKeyboard";
 import { StatusBadge } from "./StatusBadge";
 import type { NavigationDocument, NavigationFolder, NavigationNode } from "./types";
 
@@ -777,6 +778,10 @@ function FolderCreateForm({
         autoFocus
         value={name}
         onChange={(event) => onNameChange(event.target.value)}
+        onKeyDown={(event) => {
+          // Enter confirms the input method's text; it mustn't submit the form too.
+          if (isComposing(event) && event.key === "Enter") event.preventDefault();
+        }}
         className="min-w-0 flex-1 rounded border border-zinc-300 px-2 py-1 text-sm"
         placeholder={`New folder ${destination}`}
       />
@@ -872,7 +877,10 @@ function InlineRenameForm({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Escape") {
+          if (isComposing(event)) {
+            // Enter confirms the input method's text; it mustn't submit the form too.
+            if (event.key === "Enter") event.preventDefault();
+          } else if (event.key === "Escape") {
             event.preventDefault();
             onCancel();
           }

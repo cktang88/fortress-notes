@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   focusFirstResult,
+  isComposing,
   isEditableTarget,
   SEARCH_INPUT_ID,
   topModalDialog,
@@ -97,6 +98,8 @@ export function SearchBar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(event) => {
+            // Enter, Escape and the arrows belong to the input method while it composes.
+            if (isComposing(event)) return;
             if (event.key === "Escape") {
               event.preventDefault();
               onQuery("");

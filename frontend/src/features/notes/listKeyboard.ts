@@ -34,6 +34,16 @@ export function isEditableTarget(target: EventTarget | null) {
   );
 }
 
+/**
+ * True while an input method (Japanese, Chinese, …) is composing: Enter then confirms
+ * the composition and must not submit or run anything. Safari reports the confirming
+ * Enter with keyCode 229 instead of isComposing.
+ */
+export function isComposing(event: KeyboardEvent) {
+  const native = event.nativeEvent;
+  return native.isComposing || native.keyCode === 229;
+}
+
 /** The open modal dialog shown last (the one on top), or null. */
 export function topModalDialog(): HTMLDialogElement | null {
   const open = Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]"));
