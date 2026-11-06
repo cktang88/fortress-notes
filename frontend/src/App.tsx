@@ -6,7 +6,7 @@ import { AnswerCard } from "./features/notes/AnswerCard";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
 import { CaptureBox, CAPTURE_INPUT_ID } from "./features/notes/CaptureBox";
 import { DocumentSidebar } from "./features/notes/DocumentSidebar";
-import { isEditableTarget, SEARCH_INPUT_ID } from "./features/notes/listKeyboard";
+import { isEditableTarget, SEARCH_INPUT_ID, topModalDialog } from "./features/notes/listKeyboard";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteList } from "./features/notes/NoteList";
 import { OutlinePanel } from "./features/notes/OutlinePanel";
@@ -15,7 +15,7 @@ import { SearchBar } from "./features/notes/SearchBar";
 import { Toast, type Notice } from "./features/notes/Toast";
 import { useNoteSelection } from "./features/notes/useNoteSelection";
 import { WorkspaceMenu, type WorkspaceAction } from "./features/notes/WorkspaceMenu";
-import { CommandPalette } from "./features/notes/CommandPalette";
+import { COMMAND_PALETTE_ATTRIBUTE, CommandPalette } from "./features/notes/CommandPalette";
 import {
   useAsk,
   useBlockDocument,
@@ -143,11 +143,23 @@ export function App() {
   // types accents such as ñ.
   const onShortcut = useEffectEvent((event: KeyboardEvent) => {
     const mod = event.metaKey || event.ctrlKey;
-    if (mod && event.shiftKey && event.code === "Space") {
+    const capture = mod && event.shiftKey && event.code === "Space";
+    const togglePalette =
+      mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k";
+    // Behind a dialog (Trash, Backups, help) shortcuts would act on the page out of
+    // sight; only ⌘K still closes the palette itself.
+    const modal = topModalDialog();
+    if (modal && !(togglePalette && modal.hasAttribute(COMMAND_PALETTE_ATTRIBUTE))) {
+      // Still swallow the app's chords, so e.g. the Space of ⌘⇧Space doesn't press the
+      // dialog's focused button.
+      if (capture || togglePalette) event.preventDefault();
+      return;
+    }
+    if (capture) {
       // Quick capture works from anywhere, even mid-sentence in a note.
       event.preventDefault();
       window.document.getElementById(CAPTURE_INPUT_ID)?.focus();
-    } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+    } else if (togglePalette) {
       event.preventDefault();
       setPaletteOpen((open) => !open);
     } else if (event.key === "/" && !mod && !isEditableTarget(event.target)) {

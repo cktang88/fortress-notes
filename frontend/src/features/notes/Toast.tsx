@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { topModalDialog } from "./listKeyboard";
 
 export interface Notice {
   id: number;
@@ -70,19 +71,4 @@ function subscribeToDialogs(onChange: () => void) {
   const observer = new MutationObserver(onChange);
   observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["open"] });
   return () => observer.disconnect();
-}
-
-/** The open modal dialog shown last (the one on top), or null. */
-function topModalDialog(): HTMLDialogElement | null {
-  const open = Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]"));
-  return open.filter(isModal).at(-1) ?? null;
-}
-
-function isModal(dialog: HTMLDialogElement) {
-  try {
-    return dialog.matches(":modal");
-  } catch {
-    // Engines without :modal (such as jsdom): every dialog here is shown modally.
-    return true;
-  }
 }

@@ -24,6 +24,9 @@ type Item = {
 
 const NOTE_LIMIT = 8;
 
+/** Marks the palette's dialog, so global shortcuts can tell it from the others. */
+export const COMMAND_PALETTE_ATTRIBUTE = "data-command-palette";
+
 /** ⌘K: jump to a note by title, create one, search everywhere, or run a command. */
 export function CommandPalette(props: Props) {
   const { open, onClose } = props;
@@ -73,6 +76,7 @@ export function CommandPalette(props: Props) {
   return (
     <dialog
       ref={dialogRef}
+      data-command-palette=""
       aria-label="Go to a note or run a command"
       onCancel={(event) => {
         event.preventDefault();

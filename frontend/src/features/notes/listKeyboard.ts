@@ -33,3 +33,18 @@ export function isEditableTarget(target: EventTarget | null) {
     target.closest("input, textarea, select, [contenteditable='true']") !== null
   );
 }
+
+/** The open modal dialog shown last (the one on top), or null. */
+export function topModalDialog(): HTMLDialogElement | null {
+  const open = Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]"));
+  return open.filter(isModalDialog).at(-1) ?? null;
+}
+
+function isModalDialog(dialog: HTMLDialogElement) {
+  try {
+    return dialog.matches(":modal");
+  } catch {
+    // Engines without :modal (such as jsdom): every dialog here is shown modally.
+    return true;
+  }
+}

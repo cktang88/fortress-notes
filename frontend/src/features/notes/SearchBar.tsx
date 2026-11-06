@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { focusFirstResult, isEditableTarget, SEARCH_INPUT_ID } from "./listKeyboard";
+import {
+  focusFirstResult,
+  isEditableTarget,
+  SEARCH_INPUT_ID,
+  topModalDialog,
+} from "./listKeyboard";
 import type { BlockSearchFilters, BlockType, NoteStatus, NoteSummary, SavedSearch } from "./types";
 
 interface Props {
@@ -70,6 +75,7 @@ export function SearchBar({
       if (
         event.key === "?" &&
         !isEditableTarget(event.target) &&
+        !topModalDialog() &&
         !event.metaKey &&
         !event.ctrlKey
       ) {
