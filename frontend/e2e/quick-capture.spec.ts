@@ -27,8 +27,10 @@ test("captures each thought as its own note in Uncategorized without leaving the
   await expect(capture).toHaveValue("");
   await expect(title).toHaveValue("Essay draft");
 
-  await capture.fill("Book idea: a history of maps");
-  await capture.press("Enter");
+  // The box keeps focus, so the next thought can be typed straight away.
+  await expect(capture).toBeFocused();
+  await page.keyboard.type("Book idea: a history of maps");
+  await page.keyboard.press("Enter");
   const folder = page.getByRole("button", { name: "Folder: Uncategorized" });
   await expect(folder).toBeVisible();
   const sidebar = page.getByRole("navigation", { name: "Documents" });
