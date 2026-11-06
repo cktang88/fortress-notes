@@ -1557,7 +1557,7 @@ def render_markdown(nodes: list[dict], depth: int = 0) -> str:
         if depth and source:
             prefix = "  " * depth
             source = "\n".join(
-                f"{prefix}{line}" if line else line for line in source.splitlines()
+                f"{prefix}{line}" if line else line for line in source.split("\n")
             )
         if source:
             fragments.append(source)
@@ -2544,7 +2544,10 @@ def _refresh_fts(
 
 
 def _parse_blocks(body: str) -> list[ImportedBlock]:
-    lines = body.splitlines()
+    # Split exactly where Markdown does: str.splitlines() also breaks on U+2028,
+    # form feeds and other separators, which would shift every token's line map.
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
+    lines = body.split("\n")
     tokens = MarkdownIt("commonmark").parse(body)
     blocks, _ = _parse_sequence(tokens, lines, 0)
     return blocks

@@ -205,6 +205,18 @@ class MarkdownImportTests(unittest.TestCase):
                 render_markdown(again["children"]), rendered
             )
 
+    def test_unicode_line_separators_do_not_shift_block_text(self) -> None:
+        # str.splitlines() also splits on U+2028, form feed, etc.; Markdown does not.
+        body = "a\u2028b\n\nsecond\n\nx\x0cy\n\nthird\r\n\r\nfourth\n"
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            created = create_block_document(database, "T", "rough", [], body)
+
+            self.assertEqual(
+                [child["text"] for child in created["children"]],
+                ["a\u2028b", "second", "x\x0cy", "third", "fourth"],
+            )
+
 
 class InitializeTests(unittest.TestCase):
     def test_concurrent_first_use_of_a_new_database_does_not_fail(self) -> None:
