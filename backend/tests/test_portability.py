@@ -219,6 +219,46 @@ class PortabilityTests(unittest.TestCase):
             self.assertIsNone(document_tree(database, "broken-frontmatter"))
 
 
+class NestedBlockRoundTripTests(unittest.TestCase):
+    def test_blocks_inside_list_items_keep_their_indentation_across_round_trips(self) -> None:
+        body = (
+            "- Install\n\n"
+            "  ```bash\n  pip install x\n      indented arg\n  ```\n\n"
+            "  A second paragraph\n  over two lines\n\n"
+            "  - Nested item\n\n"
+            "    ```\n    deep code\n    ```"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_document(
+                root / "0.sqlite3", "doc", "Doc", "rough", [], body,
+                "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
+            )
+            first_tree = document_tree(root / "0.sqlite3", "doc")
+            first = export_document_markdown(root / "0.sqlite3", "doc")
+            markdown = first
+            for round_trip in range(1, 4):
+                source = root / f"source{round_trip}"
+                source.mkdir()
+                (source / "doc.md").write_text(markdown, encoding="utf-8")
+                database = root / f"{round_trip}.sqlite3"
+                import_markdown_directory(database, source)
+                markdown = export_document_markdown(database, "doc")
+                self.assertEqual(markdown, first, f"round trip {round_trip}")
+            tree = document_tree(database, "doc")
+            assert tree is not None and first_tree is not None
+            self.assertEqual(_block_shape(tree["children"]), _block_shape(first_tree["children"]))
+            item = first_tree["children"][0]
+            self.assertEqual(
+                [child["text"] for child in item["children"][:2]],
+                [
+                    "```bash\npip install x\n    indented arg\n```",
+                    "A second paragraph\nover two lines",
+                ],
+            )
+            self.assertEqual(item["children"][2]["children"][0]["text"], "```\ndeep code\n```")
+
+
 def _block_shape(blocks: list[dict]) -> list[tuple[str, str, list]]:
     return [
         (block["type"], block["text"], _block_shape(block["children"]))
