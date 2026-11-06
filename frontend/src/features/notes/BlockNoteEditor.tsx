@@ -41,6 +41,7 @@ import {
   asBlockTransaction,
   makePendingTransaction,
   readPendingTransactions,
+  withPendingOperations,
   writePendingTransactions,
 } from "./pendingBlockTransactions";
 import {
@@ -239,10 +240,19 @@ export function BlockNoteEditor({
   moving = false,
 }: Props) {
   const queryClient = useQueryClient();
-  const initialContent = useMemo(
-    () => initialDocument.children.map(toPartialBlock),
-    [initialDocument.children],
-  );
+  // The note as saved plus any edits still waiting on this device (made before a reload
+  // or the last time it was open), so the editor shows them and new edits build on them.
+  const [startingNodes] = useState(() => {
+    try {
+      return withPendingOperations(
+        initialDocument.children,
+        readPendingTransactions(initialDocument.id),
+      );
+    } catch {
+      return initialDocument.children;
+    }
+  });
+  const initialContent = useMemo(() => startingNodes.map(toPartialBlock), [startingNodes]);
   const [editorActionError, setEditorActionError] = useState<string | null>(null);
   const editorRef = useRef<AppEditor | null>(null);
   const editor = useCreateBlockNote(
@@ -518,7 +528,7 @@ export function BlockNoteEditor({
 
   // Notes imported from Markdown carry no editor content yet; parse it once per mount.
   const hydrateOnMount = useEffectEvent(() => {
-    hydrateLegacyBlocks(editor, initialDocument.children);
+    hydrateLegacyBlocks(editor, startingNodes);
     hydrating.current = false;
   });
   useEffect(() => hydrateOnMount(), [editor]);

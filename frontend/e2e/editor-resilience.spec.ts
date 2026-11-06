@@ -57,6 +57,32 @@ test("keeps editing while offline and syncs when the server is back", async ({ p
   );
 });
 
+test("edits still waiting to sync stay visible after reopening the note", async ({ page }) => {
+  const editor = await newNote(page, "Offline reopen");
+  await page.keyboard.type("first part");
+  await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
+
+  await page.route("**/transactions", (route) => route.abort("internetdisconnected"));
+  await editor.press("End");
+  await page.keyboard.type(" and second part");
+  await expect(page.getByText("Can't reach the server")).toBeVisible();
+
+  // Reopen the note while its last edits exist only on this device.
+  await page.reload();
+  const reopened = page.locator(editorSelector);
+  await expect(reopened).toContainText("first part and second part");
+  await reopened.click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.type(" and more");
+
+  await page.unroute("**/transactions");
+  await page.getByRole("button", { name: "Retry now" }).click();
+  await expect(page.getByText("Can't reach the server")).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(editorSelector)).toContainText("first part and second part and more");
+});
+
 test("a change made in another tab shows a clear way forward", async ({
   page,
   context,
