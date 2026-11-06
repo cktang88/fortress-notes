@@ -13,6 +13,8 @@ interface Props {
   /** Ask a question of your notes (shown while there's a query). */
   onAsk?: () => void;
   onApplySavedSearch?: (search: SavedSearch) => void;
+  /** Enter in the box: open the best result for the query as typed (once it's in). */
+  onOpenFirst?: () => void;
   onDeleteSavedSearch?: (id: string) => void;
   /** Extra controls shown beside the New button (the workspace menu). */
   actions?: React.ReactNode;
@@ -44,6 +46,7 @@ export function SearchBar({
   onAsk,
   onApplySavedSearch,
   onDeleteSavedSearch,
+  onOpenFirst,
   actions,
   onNew,
 }: Props) {
@@ -100,7 +103,8 @@ export function SearchBar({
               onAsk();
             } else if (event.key === "Enter") {
               event.preventDefault();
-              focusFirstResult()?.click();
+              if (onOpenFirst) onOpenFirst();
+              else focusFirstResult()?.click();
             }
           }}
           placeholder="Search text… (/)"

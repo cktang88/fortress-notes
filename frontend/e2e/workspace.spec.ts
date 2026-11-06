@@ -57,7 +57,8 @@ test("trash with undo, saved searches and backups work together", async ({ page 
   const backupDownload = page.waitForEvent("download");
   await backups.getByRole("button", { name: "Back up now & download" }).click();
   expect((await backupDownload).suggestedFilename()).toMatch(/^fortress-.*-manual\.sqlite3$/);
-  await expect(backups.getByText(/Manual ·/)).toBeVisible();
+  // Other specs may have made manual backups too.
+  await expect(backups.getByText(/Manual ·/).first()).toBeVisible();
   await page.screenshot({ path: "test-results/workspace-backups.png" });
   await backups.getByRole("button", { name: "Close" }).click();
 });

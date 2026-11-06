@@ -166,6 +166,21 @@ export function App() {
   }, []);
 
   const searchSettling = settledQuery !== query.trim();
+  // Results on screen can still be for an earlier query while typing; Enter waits for
+  // the results of what was typed instead of opening a stale one.
+  const freshResults =
+    searching && !searchSettling && !blockSearch.isPlaceholderData ? blockSearch.data : undefined;
+  const [openFirstFor, setOpenFirstFor] = useState<string | null>(null);
+  const openFirstResult = useEffectEvent(() => {
+    if (openFirstFor === null) return;
+    if (openFirstFor !== query.trim()) return setOpenFirstFor(null);
+    if (blockSearch.isError) return setOpenFirstFor(null);
+    if (!freshResults) return;
+    setOpenFirstFor(null);
+    const first = freshResults[0];
+    if (first) selectNote(first.document_id, first.block_id);
+  });
+  useEffect(() => openFirstResult(), [openFirstFor, query, freshResults, blockSearch.isError]);
 
   return (
     // On a phone the sidebar sits above the note (and scrolls on its own) instead of
@@ -182,6 +197,7 @@ export function App() {
           onSaveSearch={handleSaveSearch}
           onAsk={() => ask.mutate(query.trim())}
           onApplySavedSearch={applySavedSearch}
+          onOpenFirst={() => setOpenFirstFor(query.trim())}
           onDeleteSavedSearch={(id) => deleteSavedSearch.mutate(id, { onError: showError })}
           onNew={() => void handleNew()}
           actions={
@@ -281,7 +297,9 @@ export function App() {
               focusNonce={selection.focus?.nonce ?? 0}
               linkTargets={allNotes.data ?? []}
               linkChecks={linkChecks.data?.links ?? []}
-              onFocusedBlockChange={selection.setActiveBlockId}
+              // Related notes follow the block last focused, so leaving the editor (to
+              // click the outline, say) doesn't reshuffle the panels under the pointer.
+              onFocusedBlockChange={(blockId) => blockId && selection.setActiveBlockId(blockId)}
               onOpenNote={(documentId, blockId) => selectNote(documentId, blockId)}
               moving={moveInto.isPending}
               onMoveInto={(target) =>
