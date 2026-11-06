@@ -30,7 +30,7 @@ class BlockReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unconfigured_llm_returns_block_scoped_empty_response(self) -> None:
         with patch.object(llm, "chat_json", new=AsyncMock(side_effect=llm.LLMNotConfigured)):
-            result = await llm.review_block("clarify", "b-1", "text", {})
+            result = await llm.review_block("object", "b-1", "text", {})
 
         self.assertEqual(result.block_id, "b-1")
         self.assertEqual(result.items, [])
@@ -70,7 +70,7 @@ class BlockReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_context_review_without_api_key_returns_empty_context_response(self) -> None:
         with patch.object(llm, "chat_json", new=AsyncMock(side_effect=llm.LLMNotConfigured)):
-            result = await llm.review_blocks("clarify", "document", [], [])
+            result = await llm.review_blocks("object", "document", [], [])
 
         self.assertEqual(result.context, "document")
         self.assertEqual(result.items, [])

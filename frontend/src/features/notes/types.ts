@@ -1,5 +1,5 @@
 export type NoteStatus = "rough" | "polished";
-export type ReviewKind = "factcheck" | "clarify" | "object";
+export type ReviewKind = "factcheck" | "object";
 export type SearchMode = "text" | "embedding";
 export type BlockType = "paragraph" | "heading" | "list" | "quote" | "code" | "thematic_break";
 
@@ -120,6 +120,7 @@ export interface BlockOperation {
   user_attrs?: Record<string, unknown>;
   content?: Record<string, unknown>;
   text?: string;
+  /** Split offset into `text` as a JavaScript string index (UTF-16 units). */
   split_at?: number;
   expected_updated_at?: string;
 }

@@ -218,5 +218,15 @@ export function buildItems(props: Props, query: string): Item[] {
     action.label.toLowerCase().includes(trimmed.toLowerCase()),
   );
   const loose = matching.filter((action) => !named.includes(action));
-  return [...notes.map(noteItem), ...named, ...extras, ...loose];
+  // ...and beats notes that only match letter by letter ("trash" ~ "Trip ask…h").
+  const lowered = trimmed.toLowerCase();
+  const namedNotes = notes.filter((note) => note.title.toLowerCase().includes(lowered));
+  const scattered = notes.filter((note) => !namedNotes.includes(note));
+  return [
+    ...(named.length > 0 ? namedNotes : notes).map(noteItem),
+    ...named,
+    ...(named.length > 0 ? scattered.map(noteItem) : []),
+    ...extras,
+    ...loose,
+  ];
 }

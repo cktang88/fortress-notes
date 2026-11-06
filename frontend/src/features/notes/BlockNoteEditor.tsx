@@ -1,4 +1,14 @@
-import { forwardRef, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import {
+  Component,
+  forwardRef,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Flex } from "@mantine/core";
 import { BlockNoteSchema, defaultBlockSpecs } from "@blocknote/core";
@@ -46,9 +56,12 @@ import {
 } from "./pendingBlockTransactions";
 import {
   blockLink,
-  documentLink,
+  documentLinkContent,
+  documentLinksAsWikiText,
+  linkifyDocumentLinks,
   matchingLinkTargets,
   parseBlockReference,
+  parseDocumentLink,
 } from "./linkSuggestions";
 import {
   useBlockReference,
@@ -228,7 +241,80 @@ type AppPartialBlock = PartialBlock<
   typeof editorSchema.styleSchema
 >;
 
-export function BlockNoteEditor({
+/**
+ * The note's editor, behind an error boundary: if it can't render (a malformed block, a
+ * bug), only this area shows a problem and the rest of the app stays usable. Edits still
+ * waiting to be sent stay in localStorage, and "Reload note" starts the editor again from
+ * the server's copy (with those edits on top, as on any reopen).
+ */
+export function BlockNoteEditor(props: Props) {
+  const queryClient = useQueryClient();
+  const [attempt, setAttempt] = useState(0);
+  const [reloaded, setReloaded] = useState<BlockDocument | null>(null);
+  const [reloading, setReloading] = useState(false);
+  const shown =
+    reloaded && reloaded.id === props.document.id && reloaded.revision >= props.document.revision
+      ? reloaded
+      : props.document;
+
+  const reload = async () => {
+    setReloading(true);
+    try {
+      const latest = await blockApi.get(props.document.id);
+      queryClient.setQueryData(queryKeys.document(latest.id), latest);
+      setReloaded(latest);
+    } catch {
+      // Unreachable: try again with the copy already here.
+    } finally {
+      setReloading(false);
+      setAttempt((count) => count + 1);
+    }
+  };
+
+  return (
+    <EditorErrorBoundary key={attempt} reloading={reloading} onReload={() => void reload()}>
+      <EditorBody {...props} document={shown} />
+    </EditorErrorBoundary>
+  );
+}
+
+class EditorErrorBoundary extends Component<
+  { children: ReactNode; reloading: boolean; onReload: () => void },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    console.error("The note editor crashed", error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div
+        role="alert"
+        className="mx-8 mt-6 flex flex-col items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+      >
+        <p className="font-medium">This note couldn't be displayed.</p>
+        <p>Edits that weren't saved yet are kept on this device.</p>
+        <button
+          type="button"
+          disabled={this.props.reloading}
+          onClick={this.props.onReload}
+          className="rounded-md bg-red-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50"
+        >
+          {this.props.reloading ? "Reloading…" : "Reload note"}
+        </button>
+      </div>
+    );
+  }
+}
+
+function EditorBody({
   document: initialDocument,
   focusBlockId,
   focusNonce = 0,
@@ -255,12 +341,34 @@ export function BlockNoteEditor({
   const initialContent = useMemo(() => startingNodes.map(toPartialBlock), [startingNodes]);
   const [editorActionError, setEditorActionError] = useState<string | null>(null);
   const editorRef = useRef<AppEditor | null>(null);
+  const openNoteRef = useRef(onOpenNote);
+  useEffect(() => {
+    openNoteRef.current = onOpenNote;
+  });
   const editor = useCreateBlockNote(
     {
       schema: editorSchema,
       domAttributes: { editor: { "aria-label": "Document content" } },
       initialContent: initialContent.length > 0 ? initialContent : undefined,
       extensions: [slashMenuShortcut],
+      links: {
+        // Note links open that note; block references show their preview (the section's
+        // click handler); other links open in a new window, as BlockNote does by default.
+        onClick: (event) => {
+          const anchor = (event.target as HTMLElement | null)?.closest("a");
+          if (!anchor) return false;
+          const href = anchor.getAttribute("href") ?? "";
+          if (parseBlockReference(href)) return true;
+          const note = parseDocumentLink(href);
+          if (note) {
+            event.preventDefault();
+            openNoteRef.current?.(note.documentId, null);
+            return true;
+          }
+          if (anchor.href) window.open(anchor.href, anchor.target);
+          return true;
+        },
+      },
       uploadFile: async (file, blockId) => {
         setEditorActionError(null);
         try {
@@ -544,6 +652,24 @@ export function BlockNoteEditor({
     return saveQueue.current;
   };
 
+  // Folding this note into another moves what the server has: send the edits still
+  // waiting first, or the last words typed would stay behind in the trashed note.
+  const [savingBeforeMove, setSavingBeforeMove] = useState(false);
+  const moveIntoAfterSaving = async (target: SimilarDocument) => {
+    if (!onMoveInto || savingBeforeMove) return;
+    setSavingBeforeMove(true);
+    try {
+      await flush();
+    } finally {
+      setSavingBeforeMove(false);
+    }
+    if (readPendingTransactions(initialDocument.id).length > 0) {
+      setEditorActionError("Your latest edits aren't saved yet, so the note wasn't moved.");
+      return;
+    }
+    onMoveInto(target);
+  };
+
   const selectAllStart = useRef<{ from: number; to: number } | null>(null);
   const showPreview = (event: React.MouseEvent<HTMLElement>) => {
     const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a");
@@ -606,6 +732,28 @@ export function BlockNoteEditor({
   });
   useEffect(() => recoverAndFlushOnClose(), []);
 
+  // Closing the tab or navigating away doesn't unmount the editor, so the edits still
+  // waiting for the typing pause would only be sent the next time this note is opened.
+  // Send them as the page is hidden (its request is keepalive, so it outlives the page);
+  // they stay in localStorage until the server answers, and if the answer never arrives
+  // the resend on reopen carries the same transaction ID, which the server recognises.
+  const flushOnHide = useEffectEvent(() => {
+    if (inFlightId.current !== null) return;
+    if (readPendingTransactions(initialDocument.id).length > 0) void flush();
+  });
+  useEffect(() => {
+    const onVisibility = () => {
+      if (window.document.visibilityState === "hidden") flushOnHide();
+    };
+    const onPageHide = () => flushOnHide();
+    window.document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, []);
+
   useEffect(() => {
     if (!focusBlockId || !editor.getBlock(focusBlockId)) return;
     const frame = requestAnimationFrame(() => {
@@ -626,7 +774,7 @@ export function BlockNoteEditor({
       subtext: `Document · ${target.id}`,
       group: "Link to document",
       onItemClick: () => {
-        editor.insertInlineContent(documentLink(target));
+        editor.insertInlineContent([documentLinkContent(target)]);
         editor.getExtension(SuggestionMenu)?.closeMenu();
       },
     }));
@@ -833,7 +981,7 @@ export function BlockNoteEditor({
               setDismissedFor(suggestionTarget.id);
             }}
             onOpen={(documentId, blockId) => onOpenNote?.(documentId, blockId)}
-            onMoveInto={(target) => onMoveInto?.(target)}
+            onMoveInto={(target) => void moveIntoAfterSaving(target)}
             onNotDuplicate={(target) => {
               const next = new Set(notDuplicates).add(
                 pairKey(initialDocument.id, target.document_id),
@@ -841,7 +989,7 @@ export function BlockNoteEditor({
               setNotDuplicates(next);
               writeNotDuplicates(next);
             }}
-            moving={moving}
+            moving={moving || savingBeforeMove}
           />
           <button
             type="button"
@@ -1286,7 +1434,12 @@ export function toPartialBlock(node: BlockNode): AppPartialBlock {
       id: node.id,
       type: node.type,
       ...(Object.keys(props).length > 0 ? { props } : {}),
-      ...(spec.content === "none" ? {} : { content: storedContent }),
+      ...(spec.content === "none"
+        ? {}
+        : {
+            content:
+              node.type === "codeBlock" ? storedContent : linkifyDocumentLinks(storedContent),
+          }),
       children,
     } as unknown as AppPartialBlock;
   }
@@ -1417,7 +1570,7 @@ function toOperation(
       markdown:
         block.type === "mathPlaceholder"
           ? "Math placeholder"
-          : editor.blocksToMarkdownLossy([block]),
+          : documentLinksAsWikiText(editor.blocksToMarkdownLossy([block])),
     },
     text: block.type === "mathPlaceholder" ? "Math placeholder" : inlineText(block.content),
   };
@@ -1540,7 +1693,9 @@ function hydrateLegacyBlocks(editor: AppEditor, nodes: readonly BlockNode[]) {
       if (!block || editorSchema.blockSchema[block.type].content !== "inline") continue;
       const parsed = editor.tryParseMarkdownToBlocks(markdownText(node));
       if (parsed[0]?.content !== undefined) {
-        editor.updateBlock(block.id, { content: parsed[0].content } as PartialBlock);
+        const content =
+          block.type === "codeBlock" ? parsed[0].content : linkifyDocumentLinks(parsed[0].content);
+        editor.updateBlock(block.id, { content } as PartialBlock);
       }
     }
   });

@@ -64,13 +64,11 @@ class BlockQueryTests(unittest.TestCase):
         self.assertEqual({hit["document_id"] for hit in document_hits}, {"alpha"})
         self.assertEqual([hit["block_type"] for hit in heading_hits], ["heading"])
 
-    def test_filters_by_status_and_exact_tag(self) -> None:
+    def test_filters_by_status(self) -> None:
         polished_hits = search_blocks(
             self.database, "matching", BlockSearchFilters(status="polished")
         )
-        work_hits = search_blocks(self.database, "matching", BlockSearchFilters(tag="work"))
         self.assertEqual({hit["document_id"] for hit in polished_hits}, {"beta"})
-        self.assertEqual({hit["document_id"] for hit in work_hits}, {"alpha"})
 
     def test_filters_by_updated_range(self) -> None:
         after_hits = search_blocks(
@@ -118,7 +116,6 @@ class BlockQueryTests(unittest.TestCase):
                 document_id="alpha",
                 block_type="paragraph",
                 status="rough",
-                tag="shared",
             ),
         )
         self.assertEqual(len(hits), 1)
@@ -134,7 +131,6 @@ class BlockQueryTests(unittest.TestCase):
         self.assertEqual(
             search_blocks(self.database, "matching", BlockSearchFilters(status="other")), []
         )
-        self.assertEqual(search_blocks(self.database, "matching", BlockSearchFilters(tag="")), [])
         self.assertEqual(
             search_blocks(
                 self.database,

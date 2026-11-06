@@ -58,7 +58,7 @@ class BlockReviewContextApiTests(unittest.TestCase):
                 selected = client.post(
                     f"/api/block-documents/{document['id']}/review-context",
                     json={
-                        "kind": "clarify",
+                        "kind": "object",
                         "context": "selected",
                         "block_ids": [first_id, second_id],
                     },
