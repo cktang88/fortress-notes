@@ -507,7 +507,11 @@ export function BlockNoteEditor({
   const showPreview = (event: React.MouseEvent<HTMLElement>) => {
     const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a");
     const reference = anchor && parseBlockReference(anchor.getAttribute("href") ?? "");
-    if (!anchor || !reference) return;
+    // Off a block reference: close the preview rather than leave it over the text.
+    if (!anchor || !reference) {
+      setPreview(null);
+      return;
+    }
     const surface = event.currentTarget.getBoundingClientRect();
     const bounds = anchor.getBoundingClientRect();
     setPreview({
