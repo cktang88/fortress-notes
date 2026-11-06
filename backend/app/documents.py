@@ -203,7 +203,17 @@ def write_mirror(document_id: str) -> None:
     mirror_document(db_path, notes_path, document_id)
 
 
+# Read-then-write: without this, a writer that read an older tree could replace
+# the mirror after a newer one was written, leaving it stale.
+_mirror_lock = threading.Lock()
+
+
 def mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
+    with _mirror_lock:
+        _mirror_document(db_path, notes_path, document_id)
+
+
+def _mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
     tree = block_store.document_tree(db_path, document_id)
     target = notes_path / f"{document_id}.md"
     if tree is None:

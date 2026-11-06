@@ -3,10 +3,12 @@
 import hashlib
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from app import workspace
+from app import block_store, documents, workspace
 from app.block_store import (
     apply_transaction,
     block_link_targets,
@@ -267,6 +269,52 @@ class ConcurrentOrganizationTests(unittest.TestCase):
             self.assertEqual(root_docs, list(range(8)))
             self.assertEqual(root_folders, list(range(9)))
             self.assertEqual(sorted(folder_docs), list(range(8)))
+
+
+class MirrorRaceTests(unittest.TestCase):
+    def test_a_slow_mirror_write_cannot_overwrite_a_newer_one(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            notes = Path(directory)
+            database = notes / ".fortress.sqlite3"
+            created = create_block_document(database, "T", "rough", [], "old text")
+            real_tree = block_store.document_tree
+            slow_read_done = threading.Event()
+            release = threading.Event()
+            calls = {"count": 0}
+
+            def tree(path, document_id):
+                result = real_tree(path, document_id)
+                calls["count"] += 1
+                if calls["count"] == 1:  # the first writer stalls after reading
+                    slow_read_done.set()
+                    release.wait(5)
+                return result
+
+            with patch.object(block_store, "document_tree", tree):
+                slow = threading.Thread(
+                    target=documents.mirror_document, args=(database, notes, created["id"])
+                )
+                slow.start()
+                slow_read_done.wait(5)
+                apply_transaction(
+                    database,
+                    created["id"],
+                    [BlockOperation(
+                        operation="update", block_id=created["children"][0]["id"],
+                        text="new text",
+                    )],
+                    created["revision"],
+                )
+                fast = threading.Thread(
+                    target=documents.mirror_document, args=(database, notes, created["id"])
+                )
+                fast.start()
+                time.sleep(0.2)
+                release.set()
+                slow.join()
+                fast.join()
+
+            self.assertIn("new text", (notes / f"{created['id']}.md").read_text(encoding="utf-8"))
 
 
 class InitializeTests(unittest.TestCase):
