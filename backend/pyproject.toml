@@ -17,6 +17,7 @@ dependencies = [
     "pillow>=13.0.0",
     "transformers>=5.22.1",
     "rapidocr-onnxruntime>=1.4.4",
+    "regex>=2026.9.29",
 ]
 
 [tool.uv]

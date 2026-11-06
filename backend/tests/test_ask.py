@@ -215,6 +215,33 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertEqual(down["status"], "unavailable")
         self.assertTrue(down["sources"])
 
+    def test_grep_survives_catastrophic_backtracking_patterns(self) -> None:
+        import time
+
+        from app import ask
+
+        self.client.post("/api/notes", json={"title": "Scream", "body": "a" * 34 + "!"})
+        started = time.monotonic()
+        rows = ask.grep_blocks(r"(a|aa)+$")
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(rows, [])
+        # Ordinary patterns still work afterwards.
+        self.assertEqual([r["document_title"] for r in ask.grep_blocks("alfama")], ["Lisbon trip"])
+
+    def test_grep_alternatives_that_match_nothing_do_not_match_every_note(self) -> None:
+        from app import ask
+
+        # A stray "|" makes the pattern match the empty string, i.e. every paragraph.
+        self.assertEqual([r["document_title"] for r in ask.grep_blocks("alfama|")], ["Lisbon trip"])
+        self.assertEqual(ask.grep_blocks("zebracorn|"), [])
+
+    def test_invalid_grep_regex_still_searches_each_alternative_literally(self) -> None:
+        from app import ask
+
+        self.client.post("/api/notes", json={"title": "Servers", "body": "Runs on any *nix box"})
+        rows = ask.grep_blocks("*nix|unix")  # "nothing to repeat": not a valid regex
+        self.assertEqual([r["document_title"] for r in rows], ["Servers"])
+
     def test_read_tool_returns_a_whole_note(self) -> None:
         from app import ask
 

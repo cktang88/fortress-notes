@@ -24,6 +24,7 @@ import re
 import time
 
 import httpx
+import regex
 
 from . import block_query, block_store, llm, search
 from .config import get_settings
@@ -37,6 +38,8 @@ PREFETCH_GREP = 8
 TOOL_HITS = 8
 SOURCE_CHARS = 1200
 NOTE_BLOCKS = 40
+# Total time one grep over every note may take (the model's regex can backtrack badly).
+GREP_SECONDS = 0.3
 
 _clock = time.monotonic
 
@@ -128,20 +131,43 @@ class _Sources:
         )
 
 
+def _compile_grep(pattern: str):
+    """The model's case-insensitive regex, or its ``|`` alternatives as plain text."""
+
+    try:
+        return regex.compile(pattern, regex.IGNORECASE)
+    except regex.error:
+        alternatives = [part.strip() for part in pattern.split("|") if part.strip()]
+        if not alternatives:
+            return None
+        return regex.compile("|".join(map(regex.escape, alternatives)), regex.IGNORECASE)
+
+
 def grep_blocks(pattern: str, limit: int = TOOL_HITS) -> list[dict[str, object]]:
-    """Active paragraphs matching a case-insensitive regex (or plain text if invalid)."""
+    """Active paragraphs matching a case-insensitive regex (or plain text if invalid).
+
+    Runs under a time limit so a pathological pattern can't stall Ask, and only a
+    non-empty match counts, so a stray ``|`` doesn't match every paragraph.
+    """
 
     pattern = pattern.strip()[:200]
     if not pattern:
         return []
-    try:
-        regex = re.compile(pattern, re.IGNORECASE)
-    except re.error:
-        regex = re.compile(re.escape(pattern), re.IGNORECASE)
+    compiled = _compile_grep(pattern)
+    if compiled is None:
+        return []
     db_path = get_settings().block_db_path
+    deadline = time.monotonic() + GREP_SECONDS
     hits = []
     for block_id, _document_id, _version, text in block_store.embedding_documents(db_path):
-        if regex.search(text):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            matched = any(match.group() for match in compiled.finditer(text, timeout=remaining))
+        except TimeoutError:
+            break
+        if matched:
             hits.append(block_id)
             if len(hits) >= limit:
                 break
