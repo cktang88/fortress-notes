@@ -17,13 +17,13 @@ from app.block_store import (
     create_document,
     create_folder,
     delete_document,
-    move_document,
-    navigation,
     document_backlinks,
     document_tree,
     embedding_documents,
     fts_is_consistent,
     initialize,
+    move_document,
+    navigation,
     register_asset,
     render_markdown,
     store_asset_text,
@@ -322,21 +322,8 @@ class InitializeTests(unittest.TestCase):
         for _ in range(10):
             with tempfile.TemporaryDirectory() as directory:
                 database = Path(directory) / ".fortress.sqlite3"
-                barrier = threading.Barrier(8)
-                errors: list[BaseException] = []
 
-                def first_use() -> None:
-                    barrier.wait()
-                    try:
-                        initialize(database)
-                    except BaseException as error:  # noqa: BLE001 - collected for the assertion
-                        errors.append(error)
-
-                threads = [threading.Thread(target=first_use) for _ in range(8)]
-                for thread in threads:
-                    thread.start()
-                for thread in threads:
-                    thread.join()
+                errors = _run_together(8, lambda _index, path=database: initialize(path))
 
                 self.assertEqual(errors, [])
                 with connection_scope(database) as connection:
