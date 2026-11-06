@@ -4,12 +4,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app import workspace
 from app.block_store import (
     apply_transaction,
     create_block_document,
+    create_document,
+    delete_document,
+    document_backlinks,
+    document_tree,
     undo_transaction,
 )
 from app.models import BlockOperation
+
+_T = "2026-01-01T00:00:00+00:00"
 
 
 def _shape(nodes: list[dict]) -> list[tuple[str, int, list]]:
@@ -84,6 +91,29 @@ class BlockMoveTests(unittest.TestCase):
                 duplicated["revision"],
             )
             self.assertEqual([n["text"] for n in merged["children"]], ["two", "threeone", "one"])
+
+
+class TrashRestoreTests(unittest.TestCase):
+    def test_restore_recovers_links_written_while_the_document_was_in_the_trash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            create_document(database, "target", "Target", "rough", [], "Target block", _T, _T)
+            target = document_tree(database, "target")
+            assert target is not None
+            block_id = target["children"][0]["id"]
+            delete_document(database, "target")
+            create_document(
+                database, "source", "Source", "rough", [],
+                f"See [[target]] and (({block_id}))", _T, _T,
+            )
+
+            workspace.restore_document(database, "target")
+
+            self.assertEqual(
+                {(link["source_document_id"], link["target_block_id"])
+                 for link in document_backlinks(database, "target")},
+                {("source", None), ("source", block_id)},
+            )
 
 
 if __name__ == "__main__":

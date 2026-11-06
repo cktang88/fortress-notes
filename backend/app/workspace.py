@@ -12,6 +12,8 @@ from .block_store import (
     _new_ulid,
     _now,
     _rebuild_document_assets,
+    _rebuild_document_references,
+    _replace_references,
     connection_scope,
     initialize,
 )
@@ -76,7 +78,32 @@ def restore_document(path: Path, document_id: str) -> dict[str, object]:
         )
         # Trashing removed the document from search; put it back.
         _rebuild_document_assets(connection, document_id)
+        # Links are only recorded to live targets, so links written while this
+        # document sat in the trash (to it or from it) must be picked up now.
+        _rebuild_document_references(connection, document_id)
+        _rebuild_inbound_references(connection, document_id)
     return {"id": document_id, "folder_id": folder_id, "position": position}
+
+
+def _rebuild_inbound_references(connection, document_id: str) -> None:
+    targets = {document_id} | {
+        row["id"]
+        for row in connection.execute(
+            "SELECT id FROM blocks WHERE document_id = ?", (document_id,)
+        )
+    }
+    # One pass over blocks that contain any link syntax at all.
+    candidates = connection.execute(
+        """SELECT id, document_id, text, content_json FROM blocks
+            WHERE document_id <> ?
+              AND (instr(text, '((') > 0 OR instr(text, '[[') > 0
+                   OR instr(content_json, '((') > 0 OR instr(content_json, '[[') > 0)""",
+        (document_id,),
+    ).fetchall()
+    for row in candidates:
+        haystack = f"{row['text']}\n{row['content_json']}"
+        if any(target in haystack for target in targets):
+            _replace_references(connection, row["id"], row["document_id"])
 
 
 def purge_document(path: Path, document_id: str) -> None:
