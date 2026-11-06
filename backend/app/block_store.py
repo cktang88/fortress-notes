@@ -113,6 +113,10 @@ CREATE TABLE IF NOT EXISTS blocks (
 CREATE INDEX IF NOT EXISTS blocks_document_position
     ON blocks(document_id, parent_id, position);
 
+-- The search corpus fingerprint reads MAX(updated_at) on every search: an index
+-- makes that a lookup instead of a scan of every block.
+CREATE INDEX IF NOT EXISTS blocks_updated_at ON blocks(updated_at);
+
 CREATE TABLE IF NOT EXISTS block_attrs (
     block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
     name TEXT NOT NULL,

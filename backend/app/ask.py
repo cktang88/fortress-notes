@@ -412,10 +412,12 @@ async def _call(prompt: str, timeout: float, sources: _Sources, emit: Emit, show
     """One streamed model call; checked sentences are emitted as they complete."""
 
     stream = _SentenceStream()
+    settings = get_settings()
+    options: dict = {"model": settings.ask_model, "fast": True}
+    if getattr(settings, "ask_reasoning_effort", ""):
+        options["reasoning_effort"] = settings.ask_reasoning_effort
     async with asyncio.timeout(timeout):
-        async for delta in llm.chat_json_stream(
-            _SYSTEM, prompt, timeout=timeout, model=get_settings().ask_model, fast=True
-        ):
+        async for delta in llm.chat_json_stream(_SYSTEM, prompt, timeout=timeout, **options):
             for sentence in stream.feed(delta):
                 checked = _checked(sentence, sources)
                 if checked is not None:

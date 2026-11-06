@@ -84,6 +84,7 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=40)
     parser.add_argument("--ask", type=int, default=0, help="end-to-end Ask rounds (real model)")
     parser.add_argument("--ask-model", default=None)
+    parser.add_argument("--reasoning", default=None, help="ASK_REASONING_EFFORT, e.g. none")
     parser.add_argument("--questions", type=int, default=None, help="only the first N questions")
     parser.add_argument("--skip-search", action="store_true")
     parser.add_argument(
@@ -108,6 +109,8 @@ def main() -> None:
     os.environ.setdefault("VLM_CAPTION_ENABLED", "false")
     if args.ask_model:
         os.environ["ASK_MODEL"] = args.ask_model
+    if args.reasoning:
+        os.environ["ASK_REASONING_EFFORT"] = args.reasoning
     results: dict[str, object] = {"label": os.environ.get("BENCH_LABEL", "")}
 
     import bench_workspace

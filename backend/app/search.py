@@ -62,26 +62,29 @@ def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list
             raise KeyError("Block document not found")
         query = source["subtree"]["text"]
     all_blocks = block_store.embedding_documents(settings.block_db_path)
-    if block_id is not None:
-        query = next((text for bid, _, _, text in all_blocks if bid == block_id), query)
-        if not query.strip():
-            return []
-    block_docs = [d for d in all_blocks if d[1] != note_id]
+    # One pass: the focused paragraph's indexed text, and every other note's paragraphs.
+    candidates = []
+    for bid, document_id, updated_at, text in all_blocks:
+        if document_id != note_id:
+            candidates.append((bid, updated_at, text))
+        elif bid == block_id:
+            query = text
+    if block_id is not None and not query.strip():
+        return []
     # Only paragraphs that clear the relevance cutoff, so every consumer (the
     # related panel, the "↗ N related" chip) shows real relations, not just the top k.
-    scores = relevance.related_scores(
-        query, [(bid, updated_at, text) for bid, _, updated_at, text in block_docs]
-    )
+    scores = relevance.related_scores(query, candidates)
     # Few paragraphs clear the cutoff: look up only theirs (in corpus order, so ties
     # resolve as before).
     note_matches: dict[str, tuple[float, str, str]] = {}
-    for bid, document_id, _, text in block_docs:
-        score = scores.get(bid)
-        if score is None:
-            continue
-        current = note_matches.get(document_id)
-        if current is None or score > current[0]:
-            note_matches[document_id] = (score, bid, text)
+    if scores:
+        for bid, document_id, _, text in all_blocks:
+            score = scores.get(bid)
+            if score is None or document_id == note_id:
+                continue
+            current = note_matches.get(document_id)
+            if current is None or score > current[0]:
+                note_matches[document_id] = (score, bid, text)
     ranked = sorted(
         ((nid, match) for nid, match in note_matches.items() if match[0] > 0),
         key=lambda item: item[1][0],

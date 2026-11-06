@@ -157,6 +157,7 @@ async def chat_json_stream(
     timeout: float = 30,
     model: str | None = None,
     fast: bool = False,
+    reasoning_effort: str = "",
 ):
     """Stream a JSON-object reply from OpenRouter, yielding text deltas as they arrive.
 
@@ -180,6 +181,8 @@ async def chat_json_stream(
         payload["provider"] = {"sort": "latency"}
         payload["max_tokens"] = 600
         payload["temperature"] = 0
+    if reasoning_effort:
+        payload["reasoning"] = {"effort": reasoning_effort, "exclude": True}
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",

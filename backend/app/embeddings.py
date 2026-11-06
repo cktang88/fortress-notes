@@ -158,6 +158,7 @@ class _Index:
             used = len(bucket.ids)
             if not used:
                 continue
+            # One multiply per bucket (chunking it into cache-sized blocks measured slower).
             rows = bucket.rows[:used]
             sims = (rows.reshape(-1, rows.shape[-1]) @ query_t).view(used, bucket.length, -1)
             parts.append(sims.amax(dim=1).sum(dim=1, dtype=torch.float32))
@@ -363,7 +364,7 @@ def _saved_query(query: str):
     if text_hash not in _cache.query_hashes:
         return None
     try:
-        with closing(_connect(path)) as connection:
+        with closing(sqlite3.connect(path, timeout=5)) as connection:
             row = connection.execute(
                 "SELECT tokens, dim, vectors FROM query_embeddings WHERE text_hash = ?",
                 (text_hash,),
