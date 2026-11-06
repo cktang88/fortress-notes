@@ -624,6 +624,28 @@ export function BlockNoteEditor({
   });
   useEffect(() => recoverAndFlushOnClose(), []);
 
+  // Closing the tab or navigating away doesn't unmount the editor, so the edits still
+  // waiting for the typing pause would only be sent the next time this note is opened.
+  // Send them as the page is hidden (its request is keepalive, so it outlives the page);
+  // they stay in localStorage until the server answers, and if the answer never arrives
+  // the resend on reopen carries the same transaction ID, which the server recognises.
+  const flushOnHide = useEffectEvent(() => {
+    if (inFlightId.current !== null) return;
+    if (readPendingTransactions(initialDocument.id).length > 0) void flush();
+  });
+  useEffect(() => {
+    const onVisibility = () => {
+      if (window.document.visibilityState === "hidden") flushOnHide();
+    };
+    const onPageHide = () => flushOnHide();
+    window.document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, []);
+
   useEffect(() => {
     if (!focusBlockId || !editor.getBlock(focusBlockId)) return;
     const frame = requestAnimationFrame(() => {

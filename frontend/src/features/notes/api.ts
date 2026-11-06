@@ -155,11 +155,17 @@ export const blockApi = {
     request<AskResponse>("/ask", { method: "POST", body: JSON.stringify({ question }) }),
   linkTargets: (q: string, limit = 50) =>
     request<BlockLinkTarget[]>(`/block-link-targets?q=${encodeURIComponent(q)}&limit=${limit}`),
-  transaction: (id: string, transaction: BlockTransaction) =>
-    request<BlockDocument>(`/block-documents/${id}/transactions`, {
+  transaction: (id: string, transaction: BlockTransaction) => {
+    const body = JSON.stringify(transaction);
+    // keepalive lets a save started as the page goes away (tab closed, navigated off)
+    // still reach the server. The browser refuses keepalive bodies over 64 KB; those go
+    // as a normal request and, if cut off, stay queued on this device for next time.
+    return request<BlockDocument>(`/block-documents/${id}/transactions`, {
       method: "POST",
-      body: JSON.stringify(transaction),
-    }),
+      body,
+      keepalive: fitsKeepalive(body),
+    });
+  },
   undo: (id: string, base_revision: number) =>
     request<BlockDocument>(`/block-documents/${id}/undo`, {
       method: "POST",
@@ -171,6 +177,13 @@ export const blockApi = {
       body: JSON.stringify({ base_revision }),
     }),
 };
+
+/** The browser's limit on a keepalive request's body (all in flight together). */
+export const KEEPALIVE_BODY_LIMIT = 64 * 1024;
+
+export function fitsKeepalive(body: string) {
+  return new TextEncoder().encode(body).length <= KEEPALIVE_BODY_LIMIT;
+}
 
 export function blockSearchParams(q: string, filters: BlockSearchFilters = {}, limit = 50) {
   const params = new URLSearchParams({ q, limit: String(limit) });

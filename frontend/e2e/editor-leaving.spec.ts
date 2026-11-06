@@ -1,10 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { proxyToBackend } from "./backend";
-import { apiUrl, createNote, noteTitle, openApp, treeRow, uniqueWord } from "./notes";
+import { apiUrl, createNote, noteTitle, openApp, readBlocks, treeRow, uniqueWord } from "./notes";
 
 const editorSelector = '[contenteditable="true"][aria-label="Document content"]';
 
-async function serverTitle(page: import("@playwright/test").Page, api: string, id: string) {
+async function serverTitle(page: Page, api: string, id: string) {
   const response = await page.request.get(`${api}/block-documents/${id}`);
   return ((await response.json()) as { title: string }).title;
 }
@@ -75,4 +75,81 @@ test.describe("leaving a note mid-edit", () => {
       })
       .toContain(`Last minute ${word}.`);
   });
+});
+
+// No page.route here: requests go through the dev server's proxy, as in real use, so a
+// request still on its way when the page goes away isn't cut off by the test's routing.
+test.describe("closing the page mid-edit", () => {
+  async function serverText(page: Page, testInfo: TestInfo, id: string) {
+    return (await readBlocks(page, testInfo, id)).map((block) => block.text).join("\n");
+  }
+
+  for (const how of ["navigating away", "closing the tab"] as const) {
+    test(`words typed just before ${how} reach the server without reopening the note`, async ({
+      page,
+      context,
+    }, testInfo) => {
+      const word = uniqueWord("bye");
+      const note = await createNote(page, testInfo, {
+        title: `Leaving ${word}`,
+        body: `Opening line ${word}.`,
+      });
+      await openApp(page, `/?note=${note.id}`);
+      const editor = page.locator(editorSelector);
+      await expect(editor).toContainText(`Opening line ${word}.`);
+      await editor.locator("p").first().click();
+      await page.keyboard.press("End");
+      await page.keyboard.type(` Closing words ${word}.`);
+      // Gone well inside the save pause.
+      if (how === "navigating away") await page.goto("about:blank");
+      else await page.close({ runBeforeUnload: true });
+
+      const checker = how === "navigating away" ? page : await context.newPage();
+      await expect
+        .poll(() => serverText(checker, testInfo, note.id))
+        .toContain(`Closing words ${word}.`);
+      // Search has it too, before the note is ever opened again.
+      await expect
+        .poll(async () => {
+          const response = await checker.request.get(
+            `${apiUrl(testInfo)}/unified-search?q=${encodeURIComponent(`Closing words ${word}`)}`,
+          );
+          return JSON.stringify(await response.json());
+        })
+        .toContain(note.id);
+
+      // Reopening sends the copy kept on this device again; the server knows it already.
+      const revision = async () =>
+        (
+          (await (
+            await checker.request.get(`${apiUrl(testInfo)}/block-documents/${note.id}`)
+          ).json()) as { revision: number }
+        ).revision;
+      const savedRevision = await revision();
+      await checker.addInitScript((id) => {
+        (window as unknown as { keptAtStart: string | null }).keptAtStart = localStorage.getItem(
+          `fortress-notes:pending-block-transactions:${id}`,
+        );
+      }, note.id);
+      await openApp(checker, `/?note=${note.id}`);
+      const keptAtStart = await checker.evaluate(
+        () => (window as unknown as { keptAtStart: string | null }).keptAtStart,
+      );
+      expect(keptAtStart).toContain(`Closing words ${word}.`);
+      const reopened = checker.locator(editorSelector);
+      await expect(reopened).toContainText(`Opening line ${word}. Closing words ${word}.`);
+      await expect
+        .poll(() =>
+          checker.evaluate(
+            (id) => localStorage.getItem(`fortress-notes:pending-block-transactions:${id}`),
+            note.id,
+          ),
+        )
+        .toBeNull();
+      await expect(checker.getByRole("alert")).toHaveCount(0);
+      expect((await serverText(checker, testInfo, note.id)).split("Closing words").length).toBe(2);
+      expect(await revision()).toBe(savedRevision);
+      await expect(reopened).toHaveAttribute("contenteditable", "true");
+    });
+  }
 });
