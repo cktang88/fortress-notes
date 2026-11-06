@@ -257,7 +257,7 @@ export function DocumentSidebar({
     >
       <nav
         aria-label="Documents"
-        className="relative flex flex-1 flex-col overflow-y-auto"
+        className="relative flex min-h-40 flex-1 flex-col overflow-y-auto md:min-h-0"
         onContextMenu={(event) => {
           if (!(event.target as HTMLElement).closest("[data-folder-id], [data-document-id]"))
             openContextMenu(event, { kind: "root" });

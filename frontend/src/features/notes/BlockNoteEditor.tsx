@@ -290,6 +290,23 @@ export function BlockNoteEditor({
   const retryDelay = useRef(0);
   const flushWaiters = useRef<(() => void)[]>([]);
   const [saving, setSaving] = useState(false);
+  /**
+   * Edits left on this device by an earlier visit (a reload mid-save, or a note closed
+   * before its save finished). The editor shows the server's copy, which doesn't have
+   * them yet, so it stays read-only until they are sent and then shows the result;
+   * typing on the stale copy would overwrite them.
+   */
+  const recoveredIds = useRef<Set<string> | null>(null);
+  if (recoveredIds.current === null) {
+    try {
+      recoveredIds.current = new Set(
+        readPendingTransactions(initialDocument.id).map((item) => item.transaction_id),
+      );
+    } catch {
+      recoveredIds.current = new Set();
+    }
+  }
+  const [recovering, setRecovering] = useState(() => recoveredIds.current!.size > 0);
   const [saveProblem, setSaveProblem] = useState<SaveProblem | null>(null);
   const conflicted = saveProblem?.kind === "conflict";
   const [hasBlockSelection, setHasBlockSelection] = useState(false);
@@ -382,10 +399,14 @@ export function BlockNoteEditor({
     openBatchId.current = null;
     const waiters = flushWaiters.current.splice(0);
     saveQueue.current = saveQueue.current.then(async () => {
-      if (readPendingTransactions(initialDocument.id).length === 0) return;
+      if (readPendingTransactions(initialDocument.id).length === 0) {
+        finishRecovery();
+        return;
+      }
       setSaving(true);
       try {
         await drainPendingTransactions();
+        finishRecovery();
         retryDelay.current = 0;
         setSaveProblem((problem) => (problem?.kind === "offline" ? null : problem));
         invalidateDocumentLists(queryClient);
@@ -444,6 +465,15 @@ export function BlockNoteEditor({
     }
   };
 
+  /** Once edits from an earlier visit are saved, show the note as it now is. */
+  const finishRecovery = () => {
+    if (!recoveredIds.current?.size) return;
+    recoveredIds.current.clear();
+    const latest = queryClient.getQueryData<BlockDocument>(queryKeys.document(initialDocument.id));
+    if (latest) showServerVersion(latest);
+    setRecovering(false);
+  };
+
   /** Show the server's version of the note in the editor without saving anything. */
   const showServerVersion = (document: BlockDocument) => {
     hydrating.current = true;
@@ -461,6 +491,8 @@ export function BlockNoteEditor({
     writePendingTransactions(initialDocument.id, []);
     try {
       showServerVersion(await blockApi.get(initialDocument.id));
+      recoveredIds.current?.clear();
+      setRecovering(false);
       setSaveProblem(null);
     } catch (error) {
       setSaveProblem({
@@ -575,7 +607,7 @@ export function BlockNoteEditor({
       subtext: `${target.document_title} · ${target.block_id}`,
       group: "Link to block",
       onItemClick: () => {
-        editor.insertInlineContent(blockLink(target));
+        editor.insertInlineContent(blockReferenceLink(target));
         editor.getExtension(SuggestionMenu)?.closeMenu();
       },
     }));
@@ -615,7 +647,7 @@ export function BlockNoteEditor({
       subtext: `${target.document_title} · ${target.block_id}`,
       group: "Embeds",
       onItemClick: () => {
-        editor.insertInlineContent(blockLink(target));
+        editor.insertInlineContent(blockReferenceLink(target));
         editor.getExtension(SuggestionMenu)?.closeMenu();
       },
     }));
@@ -824,7 +856,7 @@ export function BlockNoteEditor({
         slashMenu={false}
         formattingToolbar={false}
         sideMenu={false}
-        editable={!conflicted}
+        editable={!conflicted && !recovering}
         onChange={onChange}
         onSelectionChange={() => {
           const selection = editor.prosemirrorState.selection;
@@ -1094,6 +1126,23 @@ function blockSelectionActions(editor: BlockSelectionEditor, documentId?: string
   };
 }
 
+/**
+ * A block reference as a real link (like the "Seen before" Link button makes): it reads as
+ * the block's text, previews the block on hover, and its plain `(( id ))` href records a
+ * backlink. Inserted as bare `(( … ))` text it would do neither of the first two.
+ */
+export function blockReferenceLink(target: BlockLinkTarget) {
+  const text = target.text.replace(/\s+/g, " ").trim();
+  const label = text.length > 80 ? `${text.slice(0, 79).trimEnd()}…` : text;
+  return [
+    {
+      type: "link" as const,
+      href: blockLink({ block_id: target.block_id, text: "" }),
+      content: label || target.document_title || `${target.block_type} block`,
+    },
+  ];
+}
+
 export function buildBlockPermalink(baseUrl: string, documentId: string, blockId: string): string {
   const url = new URL(baseUrl);
   url.searchParams.set("note", documentId);
@@ -1185,10 +1234,40 @@ function applyLinkCheckMarkers(
   return () => observer.disconnect();
 }
 
+const EDITOR_TEXT_BLOCK_TYPES = new Set([
+  "paragraph",
+  "heading",
+  "quote",
+  "bulletListItem",
+  "numberedListItem",
+  "checkListItem",
+  "toggleListItem",
+  "codeBlock",
+  "table",
+]);
+
 export function toPartialBlock(node: BlockNode): AppPartialBlock {
   const storedContent = node.content.blocknote;
   const content = storedContent === undefined ? markdownText(node) : storedContent;
   const children = node.children.map(toPartialBlock);
+
+  // Blocks saved by this editor keep their own type and props (list kind, checked,
+  // code language, heading level, colours); only Markdown-only blocks are reparsed.
+  if (storedContent !== undefined && EDITOR_TEXT_BLOCK_TYPES.has(node.type)) {
+    const propNames = Object.keys(
+      editorSchema.blockSchema[node.type as keyof typeof editorSchema.blockSchema].propSchema,
+    );
+    const props = Object.fromEntries(
+      Object.entries(node.attrs).filter(([key]) => propNames.includes(key)),
+    );
+    return {
+      id: node.id,
+      type: node.type,
+      props,
+      content: storedContent,
+      children,
+    } as PartialBlock;
+  }
 
   if (node.type === "heading") {
     const match = markdownText(node).match(/^\s*(#{1,6})\s+/);
@@ -1432,7 +1511,9 @@ function hydrateLegacyBlocks(editor: AppEditor, nodes: readonly BlockNode[]) {
     for (const node of flattenNodes(nodes)) {
       if (node.content.blocknote !== undefined) continue;
       const block = editor.getBlock(node.id);
-      if (!block || block.type === "divider") continue;
+      // Only blocks with inline text can take parsed Markdown (not dividers, math
+      // placeholders, images or tables); giving them inline content crashes the editor.
+      if (!block || !Array.isArray(block.content)) continue;
       const parsed = editor.tryParseMarkdownToBlocks(markdownText(node));
       if (parsed[0]?.content !== undefined) {
         editor.updateBlock(block.id, { content: parsed[0].content } as PartialBlock);

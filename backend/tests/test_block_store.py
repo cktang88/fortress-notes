@@ -983,6 +983,10 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(block_link_targets(database, "missing"), [])
             self.assertEqual(block_link_targets(database, "%"), [])
             self.assertEqual(block_link_targets(database), [])
+            # A reference preview looks a block up by its ID.
+            second = block_link_targets(database, "second")[0]
+            by_id = block_link_targets(database, str(second["block_id"]), limit=1)
+            self.assertEqual([target["text"] for target in by_id], ["Second block"])
 
     def test_rebuilds_block_and_document_backlinks_in_the_same_store(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

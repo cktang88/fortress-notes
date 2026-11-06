@@ -168,8 +168,10 @@ export function App() {
   const searchSettling = settledQuery !== query.trim();
 
   return (
-    <div className="flex h-screen text-zinc-900">
-      <aside className="flex w-80 flex-col border-r border-zinc-200">
+    // On a phone the sidebar sits above the note (and scrolls on its own) instead of
+    // squeezing the writing area to a sliver beside it.
+    <div className="flex h-screen flex-col text-zinc-900 md:flex-row">
+      <aside className="flex max-h-[40vh] w-full shrink-0 flex-col overflow-y-auto border-b border-zinc-200 md:max-h-none md:w-80 md:overflow-visible md:border-r md:border-b-0">
         <SearchBar
           query={query}
           onQuery={setQuery}
@@ -254,7 +256,7 @@ export function App() {
         <BacklinksPanel documentId={selectedId} onSelect={selectNote} />
       </aside>
 
-      <main className="flex flex-1 flex-col overflow-y-auto">
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {!selectedId ? (
           <EmptyState />
         ) : document.data ? (
