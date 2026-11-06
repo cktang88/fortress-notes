@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -143,6 +144,9 @@ def empty_trash() -> int:
 # --- Quick capture -----------------------------------------------------------
 
 UNCATEGORIZED = "Uncategorized"
+# Find-or-create must not run twice at once, or simultaneous first captures
+# would each create their own Uncategorized folder.
+_uncategorized_lock = threading.Lock()
 
 
 def capture(text: str) -> dict[str, object]:
@@ -172,10 +176,11 @@ def capture(text: str) -> dict[str, object]:
 
 
 def _uncategorized_folder(db_path: Path) -> str:
-    for item in block_store.navigation(db_path)["items"]:
-        if item.get("kind") == "folder" and item.get("name") == UNCATEGORIZED:
-            return str(item["id"])
-    return str(block_store.create_folder(db_path, UNCATEGORIZED, None, position=0)["id"])
+    with _uncategorized_lock:
+        for item in block_store.navigation(db_path)["items"]:
+            if item.get("kind") == "folder" and item.get("name") == UNCATEGORIZED:
+                return str(item["id"])
+        return str(block_store.create_folder(db_path, UNCATEGORIZED, None, position=0)["id"])
 
 
 def move_into(source_id: str, target_id: str) -> int:
@@ -198,7 +203,17 @@ def write_mirror(document_id: str) -> None:
     mirror_document(db_path, notes_path, document_id)
 
 
+# Read-then-write: without this, a writer that read an older tree could replace
+# the mirror after a newer one was written, leaving it stale.
+_mirror_lock = threading.Lock()
+
+
 def mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
+    with _mirror_lock:
+        _mirror_document(db_path, notes_path, document_id)
+
+
+def _mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
     tree = block_store.document_tree(db_path, document_id)
     target = notes_path / f"{document_id}.md"
     if tree is None:

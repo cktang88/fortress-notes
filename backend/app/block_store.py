@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -299,6 +300,9 @@ _MIGRATIONS = {
 }
 
 _ready_paths: set[Path] = set()
+# Creating or migrating a database is check-then-write; concurrent first use from
+# several threads would otherwise race (duplicate version rows, lock errors).
+_initialize_lock = threading.Lock()
 UNSET = object()
 
 
@@ -309,25 +313,46 @@ def database_path(notes_path: Path) -> Path:
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=5.0)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA busy_timeout = 5000")
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA synchronous = FULL")
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
+        # Switching modes needs an exclusive lock and fails at once ("database is
+        # locked") while another connection is open, so only switch when needed.
+        if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+            connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = FULL")
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 
 @contextmanager
-def connection_scope(path: Path):
+def connection_scope(path: Path, immediate: bool = False):
+    """One connection and transaction; ``immediate`` takes the write lock up front.
+
+    Writes that read sibling positions before shifting them need ``immediate``:
+    otherwise two requests can read the same positions before either writes.
+    """
+
     connection = connect(path)
     try:
         with connection:
+            if immediate:
+                connection.execute("BEGIN IMMEDIATE")
             yield connection
     finally:
         connection.close()
 
 
 def initialize(path: Path) -> None:
+    with _initialize_lock:
+        _initialize(path)
+    _ready_paths.add(path.resolve())
+
+
+def _initialize(path: Path) -> None:
     with connection_scope(path) as connection:
         connection.executescript(_SCHEMA)
         row = connection.execute(
@@ -351,7 +376,6 @@ def initialize(path: Path) -> None:
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (current, _now()),
                 )
-    _ready_paths.add(path.resolve())
 
 
 def register_asset(db_path: Path, asset_path: Path, content_hash: str, mime_type: str) -> None:
@@ -380,7 +404,8 @@ def store_asset_text(path: Path, content_hash: str, text: str) -> None:
         rows = connection.execute(
             """SELECT DISTINCT blocks.id, blocks.document_id, blocks.text
                  FROM blocks JOIN block_assets ON block_assets.block_id = blocks.id
-                WHERE block_assets.content_hash = ?""",
+                 JOIN documents ON documents.id = blocks.document_id
+                WHERE block_assets.content_hash = ? AND documents.deleted_at IS NULL""",
             (content_hash,),
         ).fetchall()
         for row in rows:
@@ -605,7 +630,7 @@ def create_document(
     """Create the block representation for a newly created compatibility note."""
 
     initialize(path)
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         _validate_folder_parent(connection, folder_id)
         if connection.execute(
             "SELECT 1 FROM documents WHERE id = ?", (document_id,)
@@ -724,7 +749,7 @@ def replace_document_from_markdown(
     """Re-import the explicit raw/compatibility edit into the block store."""
 
     initialize(path)
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         existing = connection.execute(
             "SELECT created_at, deleted_at FROM documents WHERE id = ?", (document_id,)
         ).fetchone()
@@ -765,7 +790,7 @@ def delete_document(path: Path, document_id: str) -> None:
 
     initialize(path)
     now = _now()
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         row = connection.execute(
             "SELECT folder_id, position FROM documents WHERE id = ? AND deleted_at IS NULL",
             (document_id,),
@@ -785,7 +810,7 @@ def create_folder(
 ) -> dict[str, object]:
     initialize(path)
     now = _now()
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         _validate_folder_parent(connection, parent_id)
         target_position = _folder_insert_position(connection, parent_id, position)
         folder_id = _new_ulid()
@@ -820,7 +845,7 @@ def move_folder(
 ) -> dict[str, object]:
     initialize(path)
     now = _now()
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         folder = _folder_row(connection, folder_id)
         target_parent = folder["parent_id"] if parent_id is UNSET else parent_id
         _validate_folder_parent(connection, target_parent)
@@ -842,7 +867,7 @@ def move_folder(
 
 def delete_folder(path: Path, folder_id: str) -> None:
     initialize(path)
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         _folder_row(connection, folder_id)
         if connection.execute(
             "SELECT 1 FROM folders WHERE parent_id = ? LIMIT 1", (folder_id,)
@@ -868,7 +893,7 @@ def move_document(
 ) -> dict[str, object]:
     initialize(path)
     now = _now()
-    with connection_scope(path) as connection:
+    with connection_scope(path, immediate=True) as connection:
         document = connection.execute(
             """SELECT id, folder_id, position FROM documents
                  WHERE id = ? AND deleted_at IS NULL""",
@@ -1143,6 +1168,8 @@ def _corpus_fingerprint(connection: sqlite3.Connection) -> tuple:
                       (SELECT MAX(updated_at) FROM blocks),
                       (SELECT COUNT(*) FROM documents WHERE deleted_at IS NULL),
                       (SELECT MAX(updated_at) FROM documents),
+                      -- Every block edit bumps a revision; timestamps alone miss
+                      -- edits when an imported note carries a later timestamp.
                       (SELECT TOTAL(revision) FROM documents),
                       (SELECT MAX(text_updated_at) FROM assets),
                       (SELECT COUNT(*) FROM block_assets)"""
@@ -1284,6 +1311,7 @@ def block_link_targets(path: Path, query: str = "", limit: int = 50) -> list[dic
                             SELECT first_block.id
                               FROM blocks AS first_block
                              WHERE first_block.document_id = documents.id
+                               AND first_block.parent_id IS NULL
                              ORDER BY first_block.position ASC, first_block.id ASC
                              LIMIT 1
                         )
@@ -1542,7 +1570,7 @@ def render_markdown(nodes: list[dict], depth: int = 0) -> str:
         if depth and source:
             prefix = "  " * depth
             source = "\n".join(
-                f"{prefix}{line}" if line else line for line in source.splitlines()
+                f"{prefix}{line}" if line else line for line in source.split("\n")
             )
         if source:
             fragments.append(source)
@@ -2226,6 +2254,8 @@ def _insert_block(
     now: str,
 ) -> str:
     block_id = operation.block_id or _new_ulid()
+    if connection.execute("SELECT 1 FROM blocks WHERE id = ?", (block_id,)).fetchone():
+        raise ValueError(f"block already exists: {block_id}")
     parent_id = operation.parent_id
     _validate_parent(connection, document_id, parent_id)
     position = _next_position(connection, document_id, parent_id)
@@ -2277,24 +2307,18 @@ def _move_block(
         raise ValueError("cannot move a block into itself or its descendant")
     old_parent = row["parent_id"]
     old_position = row["position"]
-    if old_parent == parent_id:
-        # Vacate the unique sibling slot before shifting rows in the same list.
-        connection.execute("UPDATE blocks SET position = -1 WHERE id = ?", (row["id"],))
-        _shift_positions(
-            connection, document_id, old_parent, old_position + 1, -1,
-            exclude_block_id=row["id"],
-        )
-        position = operation.position
-        if position is None:
-            position = _next_position(connection, document_id, parent_id)
-        _shift_positions(connection, document_id, parent_id, position, 1)
-    else:
-        _shift_positions(connection, document_id, old_parent, old_position + 1, -1)
-        position = operation.position
-        if position is None:
-            position = _next_position(connection, document_id, parent_id)
-        else:
-            _shift_positions(connection, document_id, parent_id, position, 1)
+    # Vacate the unique sibling slot before closing the gap in the old list;
+    # otherwise the next sibling would collide with the block being moved.
+    connection.execute("UPDATE blocks SET position = -1 WHERE id = ?", (row["id"],))
+    _shift_positions(
+        connection, document_id, old_parent, old_position + 1, -1,
+        exclude_block_id=row["id"],
+    )
+    position = operation.position
+    if position is None:
+        # The moved block sits at -1, so it never raises the end of its own list.
+        position = _next_position(connection, document_id, parent_id)
+    _shift_positions(connection, document_id, parent_id, position, 1)
     connection.execute(
         "UPDATE blocks SET parent_id = ?, position = ?, updated_at = ? WHERE id = ?",
         (parent_id, position, now, row["id"]),
@@ -2532,7 +2556,10 @@ def _refresh_fts(
 
 
 def _parse_blocks(body: str) -> list[ImportedBlock]:
-    lines = body.splitlines()
+    # Split exactly where Markdown does: str.splitlines() also breaks on U+2028,
+    # form feeds and other separators, which would shift every token's line map.
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
+    lines = body.split("\n")
     tokens = MarkdownIt("commonmark").parse(body)
     blocks, _ = _parse_sequence(tokens, lines, 0)
     return blocks
@@ -2597,40 +2624,33 @@ def _parse_list_item(
     tokens: list[Token], lines: list[str], index: int, ordered: bool
 ) -> tuple[ImportedBlock, int]:
     open_token = tokens[index]
-    index += 1
-    source = ""
     attrs: dict[str, object] = {}
     if ordered:
         attrs["ordered"] = True
-    children: list[ImportedBlock] = []
-    while index < len(tokens) and tokens[index].type != "list_item_close":
-        token = tokens[index]
-        if token.type == "paragraph_open":
-            paragraph = tokens[index]
-            source = _token_source(lines, paragraph)
+    first_token = tokens[index + 1] if index + 1 < len(tokens) else None
+    # Parse everything inside the item like a document, so a second paragraph, a
+    # heading or raw HTML inside an item is kept as a child instead of dropped.
+    children, index = _parse_sequence(tokens, lines, index + 1, stop="list_item_close")
+    source = ""
+    if (
+        children
+        and first_token is not None
+        and first_token.type not in {"bullet_list_open", "ordered_list_open"}
+        and first_token.map
+        and open_token.map
+        and first_token.map[0] == open_token.map[0]
+    ):
+        # The block on the marker line is the item's own text.
+        first = children.pop(0)
+        source = first.source
+        if first.type == "paragraph":
             task = _TASK_RE.match(source)
             if task:
                 attrs["checked"] = task.group(1).lower() == "x"
-            index += 1
-            while index < len(tokens) and tokens[index].type != "paragraph_close":
-                index += 1
-            index += 1
-            continue
-        if token.type in {"bullet_list_open", "ordered_list_open"}:
-            nested, index = _parse_list(tokens, lines, index)
-            children.extend(nested)
-            continue
-        if token.type == "blockquote_open":
-            child, index = _parse_container_block(tokens, lines, index, "blockquote_close", "quote")
-            children.append(child)
-            continue
-        if token.type in {"fence", "code_block"}:
-            child = ImportedBlock(_new_ulid(), "code", _token_source(lines, token))
-            children.append(child)
-        index += 1
     if not source:
-        source = _token_source(lines, open_token)
-    return ImportedBlock(_new_ulid(), "list", source, attrs, children), min(index + 1, len(tokens))
+        # Only the marker: the item's content is all in its children.
+        source = f"{open_token.info}{open_token.markup}" if ordered else open_token.markup
+    return ImportedBlock(_new_ulid(), "list", source, attrs, children), index
 
 
 def _parse_inline_block(

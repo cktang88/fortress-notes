@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,7 +56,7 @@ class NoteFolderCreationTests(unittest.TestCase):
 
             self.assertEqual(missing.status_code, 404)
             self.assertEqual({path.stem for path in notes.glob("*.md")}, {note_id})
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 stored_ids = {
                     row[0] for row in connection.execute("SELECT id FROM documents")
                 }

@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +19,7 @@ class CorruptBlockRecordTests(unittest.TestCase):
             database = notes / ".fortress.sqlite3"
             document = create_block_document(database, "Damaged", "rough", [], "Readable")
             block_id = document["children"][0]["id"]
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute(
                     "UPDATE blocks SET content_json = ? WHERE id = ?",
                     ("{not valid json", block_id),
@@ -39,7 +40,7 @@ class CorruptBlockRecordTests(unittest.TestCase):
                     response = client.get(f"/api/block-documents/{document['id']}")
 
             self.assertEqual(response.status_code, 500)
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 stored = connection.execute(
                     "SELECT content_json FROM blocks WHERE id = ?", (block_id,)
                 ).fetchone()[0]
