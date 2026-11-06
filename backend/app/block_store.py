@@ -1156,6 +1156,9 @@ def _corpus_fingerprint(connection: sqlite3.Connection) -> tuple:
                       (SELECT MAX(updated_at) FROM blocks),
                       (SELECT COUNT(*) FROM documents WHERE deleted_at IS NULL),
                       (SELECT MAX(updated_at) FROM documents),
+                      -- Every block edit bumps a revision; timestamps alone miss
+                      -- edits when an imported note carries a later timestamp.
+                      (SELECT SUM(revision) FROM documents),
                       (SELECT MAX(text_updated_at) FROM assets),
                       (SELECT COUNT(*) FROM block_assets)"""
         ).fetchone()

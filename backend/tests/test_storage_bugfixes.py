@@ -15,6 +15,7 @@ from app.block_store import (
     delete_document,
     document_backlinks,
     document_tree,
+    embedding_documents,
     fts_is_consistent,
     initialize,
     register_asset,
@@ -138,6 +139,29 @@ class TrashRestoreTests(unittest.TestCase):
             store_asset_text(database, image_hash, "late OCR text")
 
             self.assertTrue(fts_is_consistent(database))
+
+
+class EmbeddingCorpusTests(unittest.TestCase):
+    def test_corpus_cache_sees_edits_to_notes_with_future_timestamps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            future = "2999-01-01T00:00:00+00:00"
+            create_document(database, "imported", "Imported", "rough", [], "old words\n\nother", future, future)
+            create_document(database, "second", "Second", "rough", [], "second", future, future)
+            tree = document_tree(database, "imported")
+            assert tree is not None
+            self.assertEqual([item[3] for item in embedding_documents(database)], ["old words", "other", "second"])
+
+            apply_transaction(
+                database,
+                "imported",
+                [BlockOperation(
+                    operation="update", block_id=tree["children"][0]["id"], text="new words"
+                )],
+                tree["revision"],
+            )
+
+            self.assertEqual([item[3] for item in embedding_documents(database)], ["new words", "other", "second"])
 
 
 class InitializeTests(unittest.TestCase):
