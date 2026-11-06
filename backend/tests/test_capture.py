@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,6 +40,23 @@ class QuickCaptureTests(unittest.TestCase):
         items = self.client.get("/api/navigation").json()["items"]
         [folder] = [item for item in items if item["kind"] == "folder"]
         return folder
+
+    def test_simultaneous_first_captures_share_one_uncategorized_folder(self) -> None:
+        from app import documents
+
+        barrier = threading.Barrier(6)
+
+        def capture(index: int) -> None:
+            barrier.wait()
+            documents.capture(f"Thought {index}")
+
+        threads = [threading.Thread(target=capture, args=(i,)) for i in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(len(self.folder()["children"]), 6)
 
     def test_each_capture_is_its_own_note_in_uncategorized_newest_first(self) -> None:
         self.client.post("/api/notes", json={"title": "Existing", "body": "x"})
