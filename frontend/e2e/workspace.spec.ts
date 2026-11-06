@@ -39,12 +39,11 @@ test("trash with undo, saved searches and backups work together", async ({ page 
   await expect(sidebar.getByText("Packing list").first()).toBeVisible();
 
   // Search, save it, and re-run it from the chip.
-  await page.keyboard.press("Control+KeyK");
+  await page.getByRole("searchbox", { name: "Search notes" }).click();
   await page.keyboard.type("Packing");
   await page.getByRole("button", { name: "☆ Save search" }).click();
   await expect(page.getByRole("button", { name: "★ Saved" })).toBeDisabled();
-  await page.keyboard.press("Control+KeyK");
-  await page.keyboard.press("Escape");
+  await page.getByRole("searchbox", { name: "Search notes" }).press("Escape");
   await page.getByRole("group", { name: "Saved searches" }).getByText("★ Packing").click();
   await expect(page.getByRole("searchbox", { name: "Search notes" })).toHaveValue("Packing");
   await page.getByRole("searchbox", { name: "Search notes" }).press("Escape");
