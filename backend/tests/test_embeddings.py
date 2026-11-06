@@ -41,6 +41,38 @@ class BlockEmbeddingTests(unittest.TestCase):
             self.assertEqual(model.documents, ["First block", "Second block"])
             self.assertEqual(len(embeddings._cache.docs), 2)
 
+    def test_concurrent_first_use_loads_the_model_once(self) -> None:
+        # The background reindexer and a search can both ask for the model at startup.
+        import sys
+        import threading
+        import time
+        import types
+
+        loads = []
+
+        class SlowColBERT:
+            def __init__(self, **_kwargs) -> None:
+                loads.append(1)
+                time.sleep(0.2)
+
+        fake_pylate = types.ModuleType("pylate")
+        fake_pylate.models = types.SimpleNamespace(ColBERT=SlowColBERT)
+        settings = type("Settings", (), {"embeddings_enabled": True, "colbert_model": "fake"})()
+        with patch.dict(sys.modules, {"pylate": fake_pylate}), patch.object(
+            embeddings, "_cache", embeddings._Cache()
+        ), patch.object(embeddings, "get_settings", return_value=settings):
+            results = []
+            threads = [
+                threading.Thread(target=lambda: results.append(embeddings._get_model()))
+                for _ in range(3)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(len(loads), 1)
+        self.assertEqual(len({id(model) for model in results}), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

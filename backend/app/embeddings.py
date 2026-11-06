@@ -8,6 +8,7 @@ Scoring is brute-force MaxSim, which is fast enough for a personal note collecti
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field
 
 from .config import get_settings
@@ -23,6 +24,8 @@ class _Cache:
 
 
 _cache = _Cache()
+# The background reindexer and request threads can all reach for the model first.
+_model_lock = threading.Lock()
 
 
 def model_loaded() -> bool:
@@ -36,15 +39,18 @@ def _get_model():
         return None
     if _cache.model is not None:
         return _cache.model
-    try:
-        from pylate import models  # heavy import; do it lazily
+    with _model_lock:
+        if _cache.model is not None or _cache.failed:
+            return _cache.model
+        try:
+            from pylate import models  # heavy import; do it lazily
 
-        _cache.model = models.ColBERT(model_name_or_path=settings.colbert_model)
-        _cache.loaded = True
-        return _cache.model
-    except Exception:
-        _cache.failed = True
-        return None
+            _cache.model = models.ColBERT(model_name_or_path=settings.colbert_model)
+            _cache.loaded = True
+            return _cache.model
+        except Exception:
+            _cache.failed = True
+            return None
 
 
 def _encode_doc(model, note_id: str, updated_at_iso: str, text: str):
