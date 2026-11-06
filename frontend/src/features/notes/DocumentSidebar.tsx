@@ -125,7 +125,8 @@ export function DocumentSidebar({
   }
 
   function toggleFolder(id: string) {
-    setExpandedFolders((current) => ({ ...current, [id]: !current[id] }));
+    // Folders start expanded, including ones that arrive after the first render.
+    setExpandedFolders((current) => ({ ...current, [id]: !(current[id] ?? true) }));
   }
 
   function startCreateFolder(parentId: string | null) {
@@ -347,6 +348,7 @@ export function DocumentSidebar({
             ref={menuRef}
             role="menu"
             aria-label="Document actions"
+            onKeyDown={moveMenuFocus}
             className="fixed z-50 min-w-44 rounded-md border border-zinc-200 bg-white py-1 shadow-lg"
             style={{ left: menu.x, top: menu.y }}
           >
@@ -701,6 +703,19 @@ function FolderRow(props: NavigationRowProps & { node: NavigationFolder }) {
       )}
     </li>
   );
+}
+
+/** Up and Down move between the menu's enabled items, wrapping around. */
+function moveMenuFocus(event: KeyboardEvent<HTMLElement>) {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const items = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>("[role='menuitem']:not(:disabled)"),
+  );
+  if (items.length === 0) return;
+  const index = items.indexOf(document.activeElement as HTMLElement);
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  items[(index + step + items.length) % items.length]?.focus();
 }
 
 function MenuButton({

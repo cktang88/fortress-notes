@@ -282,6 +282,8 @@ export function BlockNoteEditor({
   const documentRevision = useRef(initialDocument.revision);
   const recoveryStarted = useRef(false);
   const hydrating = useRef(true);
+  /** Whether anything was typed in this editor (as opposed to loaded into it). */
+  const editedHere = useRef(false);
   /** The pending transaction still collecting keystrokes (not yet sent). */
   const openBatchId = useRef<string | null>(null);
   /** The pending transaction currently on the wire. */
@@ -507,6 +509,7 @@ export function BlockNoteEditor({
     if (hydrating.current) return;
     const operations = changesToOperations(changedEditor, context.getChanges());
     if (operations.length === 0) return;
+    editedHere.current = true;
     void enqueueOperations(operations);
     const block = changedEditor.getTextCursorPosition().block;
     setWriting({ id: block.id, text: inlineText(block.content) });
@@ -534,7 +537,22 @@ export function BlockNoteEditor({
   const recoverAndFlushOnClose = useEffectEvent(() => {
     if (!recoveryStarted.current) {
       recoveryStarted.current = true;
-      void flush();
+      // Edits still waiting from an earlier visit (or from this note's previous editor,
+      // closed mid-save) aren't in the content this editor started from: once they're
+      // saved, show the saved note rather than the older copy.
+      const recovering = readPendingTransactions(initialDocument.id).length > 0;
+      void flush().then(() => {
+        const saved = queryClient.getQueryData<BlockDocument>(
+          queryKeys.document(initialDocument.id),
+        );
+        if (
+          recovering &&
+          saved &&
+          !editedHere.current &&
+          readPendingTransactions(initialDocument.id).length === 0
+        )
+          showServerVersion(saved);
+      });
     }
     return () => {
       if (readPendingTransactions(initialDocument.id).length > 0) void flush();

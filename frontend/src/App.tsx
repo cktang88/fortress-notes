@@ -166,6 +166,21 @@ export function App() {
   }, []);
 
   const searchSettling = settledQuery !== query.trim();
+  // Results on screen can still be for an earlier query while typing; Enter waits for
+  // the results of what was typed instead of opening a stale one.
+  const freshResults =
+    searching && !searchSettling && !blockSearch.isPlaceholderData ? blockSearch.data : undefined;
+  const [openFirstFor, setOpenFirstFor] = useState<string | null>(null);
+  const openFirstResult = useEffectEvent(() => {
+    if (openFirstFor === null) return;
+    if (openFirstFor !== query.trim()) return setOpenFirstFor(null);
+    if (blockSearch.isError) return setOpenFirstFor(null);
+    if (!freshResults) return;
+    setOpenFirstFor(null);
+    const first = freshResults[0];
+    if (first) selectNote(first.document_id, first.block_id);
+  });
+  useEffect(() => openFirstResult(), [openFirstFor, query, freshResults, blockSearch.isError]);
 
   return (
     <div className="flex h-screen text-zinc-900">
@@ -180,6 +195,7 @@ export function App() {
           onSaveSearch={handleSaveSearch}
           onAsk={() => ask.mutate(query.trim())}
           onApplySavedSearch={applySavedSearch}
+          onOpenFirst={() => setOpenFirstFor(query.trim())}
           onDeleteSavedSearch={(id) => deleteSavedSearch.mutate(id, { onError: showError })}
           onNew={() => void handleNew()}
           actions={
