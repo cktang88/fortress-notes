@@ -59,6 +59,8 @@ export default defineConfig({
         VISION_ENABLED: "false",
         VLM_CAPTION_ENABLED: "false",
         BLOCK_DB_IMPORT_ON_STARTUP: "false",
+        // Never call the real AI service from tests, even if backend/.env has a key.
+        OPENROUTER_API_KEY: "",
       },
       reuseExistingServer: false,
       timeout: 60_000,

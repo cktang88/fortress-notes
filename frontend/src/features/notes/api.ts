@@ -7,6 +7,7 @@ import type {
   BlockDocument,
   BlockSearchFilters,
   UnifiedSearchResult,
+  AskResponse,
   BlockLinkTarget,
   Backlink,
   BlockTransaction,
@@ -137,6 +138,8 @@ export const blockApi = {
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),
   search: (q: string, filters: BlockSearchFilters = {}, limit = 30) =>
     request<UnifiedSearchResult[]>(`/unified-search?${blockSearchParams(q, filters, limit)}`),
+  ask: (question: string) =>
+    request<AskResponse>("/ask", { method: "POST", body: JSON.stringify({ question }) }),
   linkTargets: (q: string, limit = 50) =>
     request<BlockLinkTarget[]>(`/block-link-targets?q=${encodeURIComponent(q)}&limit=${limit}`),
   transaction: (id: string, transaction: BlockTransaction) =>

@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useState } from "react";
 import { ApiError, workspaceApi } from "./features/notes/api";
 import { BacklinksPanel } from "./features/notes/BacklinksPanel";
 import { BlockNoteEditor } from "./features/notes/BlockNoteEditor";
+import { AnswerCard } from "./features/notes/AnswerCard";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
 import { DocumentSidebar } from "./features/notes/DocumentSidebar";
 import { isEditableTarget, SEARCH_INPUT_ID } from "./features/notes/listKeyboard";
@@ -14,6 +15,7 @@ import { Toast, type Notice } from "./features/notes/Toast";
 import { useNoteSelection } from "./features/notes/useNoteSelection";
 import { WorkspaceMenu } from "./features/notes/WorkspaceMenu";
 import {
+  useAsk,
   useBlockDocument,
   useBlockSearch,
   useCreateDocument,
@@ -60,6 +62,7 @@ export function App() {
   const deleteFolder = useDeleteFolder();
   const moveDocument = useMoveDocument();
   const moveFolder = useMoveFolder();
+  const ask = useAsk();
   const savedSearches = useSavedSearches();
   const saveSearch = useSaveSearch();
   const deleteSavedSearch = useDeleteSavedSearch();
@@ -160,11 +163,22 @@ export function App() {
           documents={allNotes.data ?? []}
           savedSearches={savedSearches.data ?? []}
           onSaveSearch={handleSaveSearch}
+          onAsk={() => ask.mutate(query.trim())}
           onApplySavedSearch={applySavedSearch}
           onDeleteSavedSearch={(id) => deleteSavedSearch.mutate(id, { onError: showError })}
           onNew={() => void handleNew()}
           actions={<WorkspaceMenu onNotice={showNotice} onOpenNote={(id) => selectNote(id)} />}
         />
+        {searching && ask.variables === query.trim() && (
+          <AnswerCard
+            question={ask.variables}
+            loading={ask.isPending}
+            error={ask.error?.message ?? null}
+            response={ask.data}
+            onOpen={(documentId, blockId) => selectNote(documentId, blockId)}
+            onDismiss={() => ask.reset()}
+          />
+        )}
         {searching ? (
           <BlockSearchResults
             results={blockSearch.data ?? []}

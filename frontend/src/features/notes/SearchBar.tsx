@@ -10,6 +10,8 @@ interface Props {
   documents?: readonly NoteSummary[];
   savedSearches?: readonly SavedSearch[];
   onSaveSearch?: () => void;
+  /** Ask a question of your notes (shown while there's a query). */
+  onAsk?: () => void;
   onApplySavedSearch?: (search: SavedSearch) => void;
   onDeleteSavedSearch?: (id: string) => void;
   /** Extra controls shown beside the New button (the workspace menu). */
@@ -39,6 +41,7 @@ export function SearchBar({
   documents = [],
   savedSearches = [],
   onSaveSearch,
+  onAsk,
   onApplySavedSearch,
   onDeleteSavedSearch,
   actions,
@@ -92,6 +95,9 @@ export function SearchBar({
             } else if (event.key === "ArrowDown") {
               event.preventDefault();
               focusFirstResult();
+            } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && onAsk) {
+              event.preventDefault();
+              onAsk();
             } else if (event.key === "Enter") {
               event.preventDefault();
               focusFirstResult()?.click();
@@ -118,16 +124,28 @@ export function SearchBar({
           ?
         </button>
       </div>
-      {searching && onSaveSearch && (
+      {searching && (onSaveSearch || onAsk) && (
         <div className="flex gap-1 text-xs">
-          <button
-            type="button"
-            disabled={alreadySaved}
-            onClick={onSaveSearch}
-            className="ml-auto rounded-full px-2 py-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 disabled:text-zinc-400 disabled:hover:bg-transparent"
-          >
-            {alreadySaved ? "★ Saved" : "☆ Save search"}
-          </button>
+          {onAsk && (
+            <button
+              type="button"
+              title="Answer from your notes (⌘/Ctrl+Enter)"
+              onClick={onAsk}
+              className="rounded-full bg-indigo-50 px-2.5 py-1 font-medium text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-100"
+            >
+              ✦ Ask your notes
+            </button>
+          )}
+          {onSaveSearch && (
+            <button
+              type="button"
+              disabled={alreadySaved}
+              onClick={onSaveSearch}
+              className="ml-auto rounded-full px-2 py-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 disabled:text-zinc-400 disabled:hover:bg-transparent"
+            >
+              {alreadySaved ? "★ Saved" : "☆ Save search"}
+            </button>
+          )}
         </div>
       )}
       {!searching && savedSearches.length > 0 && (

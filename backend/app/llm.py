@@ -59,7 +59,15 @@ class LLMNotConfigured(Exception):
     """Raised when OPENROUTER_API_KEY is missing."""
 
 
-async def chat_json(system: str, user: str, *, web: bool = False) -> dict:
+async def chat_json(
+    system: str,
+    user: str,
+    *,
+    web: bool = False,
+    timeout: float = 180,
+    model: str | None = None,
+    fast: bool = False,
+) -> dict:
     """Call OpenRouter and parse the JSON object response.
 
     Set web=True to enable OpenRouter's web search plugin (for fact-freshness).
@@ -70,7 +78,7 @@ async def chat_json(system: str, user: str, *, web: bool = False) -> dict:
         raise LLMNotConfigured
 
     payload: dict = {
-        "model": settings.openrouter_model,
+        "model": model or settings.openrouter_model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -79,6 +87,10 @@ async def chat_json(system: str, user: str, *, web: bool = False) -> dict:
     }
     if web:
         payload["plugins"] = [{"id": "web"}]
+    if fast:
+        # Route to the quickest provider and keep answers short.
+        payload["provider"] = {"sort": "latency"}
+        payload["max_tokens"] = 600
 
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
@@ -86,7 +98,7 @@ async def chat_json(system: str, user: str, *, web: bool = False) -> dict:
         "X-Title": "Fortress Notes",
     }
 
-    async with httpx.AsyncClient(timeout=180) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(OPENROUTER_URL, json=payload, headers=headers)
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]

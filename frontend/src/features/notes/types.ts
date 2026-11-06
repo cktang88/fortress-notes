@@ -154,6 +154,22 @@ export interface UnifiedSearchResult {
   score: number;
 }
 
+export interface AskCitation {
+  block_id: string;
+  document_id: string;
+  document_title: string;
+  quote: string;
+}
+
+export interface AskResponse {
+  status: "answered" | "not_found" | "not_configured" | "timeout" | "unavailable";
+  answer: { text: string; citations: AskCitation[] }[];
+  sources: { block_id: string; document_id: string; document_title: string; text: string }[];
+  /** Extra looks the model took beyond the first search (grep a pattern, read a note). */
+  steps?: { action: "grep" | "read"; detail: string }[];
+  elapsed_ms?: number;
+}
+
 export interface BlockLinkTarget {
   block_id: string;
   document_id: string;

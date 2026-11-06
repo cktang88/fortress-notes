@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     notes_dir: Path = Path("../notes")
     openrouter_api_key: str = ""
     openrouter_model: str = "z-ai/glm-5.3-flash"
+    # Ask needs answers in well under 3 s: a non-reasoning model, measured at ~1.1-1.2 s
+    # median via OpenRouter (GLM 5.3 Flash always reasons and takes 3-4 s).
+    ask_model: str = "google/gemini-2.5-flash-lite"
     embeddings_enabled: bool = True
     colbert_model: str = "lightonai/Agent-ModernColBERT"
     reindex_interval_s: float = 5.0
