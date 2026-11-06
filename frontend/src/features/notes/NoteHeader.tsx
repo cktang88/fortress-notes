@@ -69,7 +69,15 @@ export function NoteHeader({ note, onTitle, onDelete, onSetStatus, exportUrl }: 
             window.clearTimeout(timer.current);
             timer.current = window.setTimeout(() => commit(value), TITLE_SAVE_DELAY_MS);
           }}
-          onBlur={() => commit(draft)}
+          onBlur={() => {
+            commit(draft);
+            // A cleared field on a note whose title follows its first line shows that
+            // title again (the rename effect skipped it while the field had focus).
+            if (!draft.trim() && note.title_auto) {
+              committed.current = note.title;
+              setDraft(note.title);
+            }
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();

@@ -20,17 +20,22 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function renderHeader(onTitle = vi.fn()) {
+function renderHeader(onTitle = vi.fn(), shown: typeof note & { title_auto?: boolean } = note) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  act(() => {
-    root?.render(
-      <NoteHeader note={note} onTitle={onTitle} onDelete={vi.fn()} onSetStatus={vi.fn()} />,
-    );
-  });
+  const render = (current: typeof shown) =>
+    act(() => {
+      root?.render(
+        <NoteHeader note={current} onTitle={onTitle} onDelete={vi.fn()} onSetStatus={vi.fn()} />,
+      );
+    });
+  render(shown);
+  renderNote = render;
   return container.querySelector<HTMLInputElement>('input[aria-label="Note title"]')!;
 }
+
+let renderNote: (current: typeof note & { title_auto?: boolean }) => void = () => {};
 
 function type(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -72,5 +77,30 @@ describe("NoteHeader", () => {
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
     expect(onTitle.mock.calls).toEqual([["Final"]]);
+  });
+
+  it("shows the first-line title again after clearing an automatic title", () => {
+    const onTitle = vi.fn();
+    const input = renderHeader(onTitle, { ...note, title: "First line", title_auto: true });
+    act(() => input.focus());
+    type(input, "");
+    act(() => input.blur());
+    expect(onTitle).not.toHaveBeenCalled();
+    expect(input.value).toBe("First line");
+  });
+
+  it("shows the handed-back title once the cleared field loses focus", () => {
+    vi.useFakeTimers();
+    const onTitle = vi.fn();
+    const input = renderHeader(onTitle);
+    act(() => input.focus());
+    type(input, "");
+    act(() => vi.advanceTimersByTime(1000));
+    expect(onTitle.mock.calls).toEqual([[""]]);
+    // The server hands the title back to the first line while the field still has focus.
+    renderNote({ ...note, title: "First line", title_auto: true });
+    expect(input.value).toBe("");
+    act(() => input.blur());
+    expect(input.value).toBe("First line");
   });
 });
