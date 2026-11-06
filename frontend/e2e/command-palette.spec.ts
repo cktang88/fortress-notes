@@ -45,6 +45,8 @@ test("Ctrl+K creates, finds and opens notes and runs workspace actions", async (
   await page.keyboard.type("Alfama");
   await page.getByRole("option", { name: /Search everywhere for “Alfama”/ }).click();
   await expect(page.getByRole("searchbox", { name: "Search notes" })).toHaveValue("Alfama");
+  // …with the cursor in the search box, ready to refine the query or press ↓/Enter.
+  await expect(page.getByRole("searchbox", { name: "Search notes" })).toBeFocused();
   await expect(page.getByText("Day one: Alfama").first()).toBeVisible();
   await page.getByRole("searchbox", { name: "Search notes" }).press("Escape");
 
