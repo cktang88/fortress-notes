@@ -22,3 +22,36 @@ export async function proxyToBackend(page: Page, testInfo: TestInfo) {
     });
   }
 }
+
+interface NavNode {
+  kind: "folder" | "document";
+  id: string;
+  children?: NavNode[];
+}
+
+/**
+ * Empty the shared test workspace through the normal API (trash and purge every
+ * note, then delete folders deepest first). For specs whose pointer gestures
+ * depend on the sidebar's layout.
+ */
+export async function resetWorkspace(page: Page, testInfo: TestInfo) {
+  const api = `${String(testInfo.config.metadata.backendUrl)}/api`;
+  const navigation = (await (await page.request.get(`${api}/navigation`)).json()) as {
+    items: NavNode[];
+  };
+  const folders: { id: string; depth: number }[] = [];
+  const visit = async (nodes: NavNode[], depth: number) => {
+    for (const node of nodes) {
+      if (node.kind === "document") await page.request.delete(`${api}/notes/${node.id}`);
+      else {
+        folders.push({ id: node.id, depth });
+        await visit(node.children ?? [], depth + 1);
+      }
+    }
+  };
+  await visit(navigation.items, 0);
+  await page.request.delete(`${api}/trash`);
+  for (const folder of folders.sort((a, b) => b.depth - a.depth)) {
+    await page.request.delete(`${api}/folders/${folder.id}`);
+  }
+}

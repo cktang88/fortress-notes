@@ -29,6 +29,7 @@ import {
   useLinkChecks,
   useMoveDocument,
   useMoveFolder,
+  useMoveInto,
   useNavigation,
   useNotes,
   useRenameFolder,
@@ -71,6 +72,7 @@ export function App() {
   const moveFolder = useMoveFolder();
   const ask = useAsk();
   const capture = useCapture();
+  const moveInto = useMoveInto();
   const savedSearches = useSavedSearches();
   const saveSearch = useSaveSearch();
   const deleteSavedSearch = useDeleteSavedSearch();
@@ -277,6 +279,20 @@ export function App() {
               linkTargets={allNotes.data ?? []}
               linkChecks={linkChecks.data?.links ?? []}
               onFocusedBlockChange={selection.setActiveBlockId}
+              onOpenNote={(documentId, blockId) => selectNote(documentId, blockId)}
+              moving={moveInto.isPending}
+              onMoveInto={(target) =>
+                moveInto.mutate(
+                  { id: document.data!.id, targetId: target.document_id },
+                  {
+                    onSuccess: () => {
+                      selectNote(target.document_id);
+                      showNotice({ message: `Moved into “${target.title}”` });
+                    },
+                    onError: showError,
+                  },
+                )
+              }
             />
           </>
         ) : document.isError ? (

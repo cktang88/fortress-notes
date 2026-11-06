@@ -163,7 +163,7 @@ describe("App trash and shortcuts", () => {
         }
         if (path.startsWith("/api/block-documents/") && method === "GET") {
           const id = path.split("/").at(-1)!;
-          if (path.endsWith("/backlinks")) return jsonResponse([]);
+          if (path.endsWith("/backlinks") || path.endsWith("/similar")) return jsonResponse([]);
           return jsonResponse({
             ...notes.find((item) => item.id === id),
             revision: 0,

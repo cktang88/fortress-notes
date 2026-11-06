@@ -299,3 +299,44 @@ export function useCapture() {
     onSuccess: () => invalidateDocumentLists(qc),
   });
 }
+
+/**
+ * Related paragraphs for the block being written. `version` changes with the block's
+ * text so suggestions refresh as it grows; nothing is shown from a previous block.
+ */
+export function useWritingSuggestions(
+  documentId: string,
+  blockId: string | null,
+  version: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: [...queryKeys.related, "writing", documentId, blockId, version],
+    queryFn: () => notesApi.related(documentId, 3, blockId),
+    enabled: enabled && !!blockId,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+export function useSimilarDocuments(documentId: string, revision: number) {
+  return useQuery({
+    queryKey: ["similar", documentId, revision],
+    queryFn: () => blockApi.similar(documentId),
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+export function useMoveInto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, targetId }: { id: string; targetId: string }) =>
+      blockApi.moveInto(id, targetId),
+    onSuccess: (_result, { id, targetId }) => {
+      qc.removeQueries({ queryKey: queryKeys.document(id) });
+      void qc.invalidateQueries({ queryKey: queryKeys.document(targetId) });
+      invalidateDocumentLists(qc);
+    },
+  });
+}

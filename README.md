@@ -54,6 +54,12 @@ you're reading.
   ⌘/Ctrl+Shift+Space from anywhere) and Enter saves it as its own note in the
   **Uncategorized** folder, titled from its first line, without leaving what you're doing.
   Drag captures into real folders whenever you like.
+- **Seen before** — a quiet chip on the editor's status line. After you pause writing it
+  shows `↗ 2 related` (paragraphs from other notes like the one you're writing); if the
+  whole note repeats another it turns amber: `Looks like “Kitchen reno”`. It never pops up
+  by itself — click it to **Link** a related paragraph, or **Move** this note into the one
+  it repeats (links keep working; the emptied note goes to Trash), or mark it
+  **Not a duplicate**.
 - **Trash with Undo** — deleting moves a note to Trash; undo it from the toast or
   restore it later from **⋯ → Trash**.
 - **Automatic backups** — a SQLite snapshot is saved daily; **⋯ → Backups** downloads a

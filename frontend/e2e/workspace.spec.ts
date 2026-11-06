@@ -32,9 +32,11 @@ test("trash with undo, saved searches and backups work together", async ({ page 
   await page.getByRole("button", { name: "Workspace menu" }).click();
   await page.getByRole("menuitem", { name: "Trash" }).click();
   const trash = page.getByRole("dialog", { name: "Trash" });
-  await expect(trash.getByText("Packing list")).toBeVisible();
-  await trash.getByRole("button", { name: "Restore" }).click();
-  await expect(trash.getByText("Trash is empty.")).toBeVisible();
+  // Other specs may leave notes in Trash too; act on this one only.
+  const packingRow = trash.getByRole("listitem").filter({ hasText: "Packing list" });
+  await expect(packingRow).toBeVisible();
+  await packingRow.getByRole("button", { name: "Restore" }).click();
+  await expect(packingRow).toHaveCount(0);
   await trash.getByRole("button", { name: "Close" }).click();
   await expect(sidebar.getByText("Packing list").first()).toBeVisible();
 

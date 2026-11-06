@@ -49,7 +49,13 @@ import {
   matchingLinkTargets,
   parseBlockReference,
 } from "./linkSuggestions";
-import { useBlockReference } from "./hooks";
+import {
+  useBlockReference,
+  useDebouncedValue,
+  useSimilarDocuments,
+  useWritingSuggestions,
+} from "./hooks";
+import { SeenBefore } from "./SeenBefore";
 import type {
   BlockDocument,
   BlockLinkTarget,
@@ -57,6 +63,7 @@ import type {
   BlockOperation,
   LinkCheck,
   NoteSummary,
+  SimilarDocument,
 } from "./types";
 
 interface Props {
@@ -67,6 +74,11 @@ interface Props {
   linkTargets: readonly NoteSummary[];
   linkChecks: readonly LinkCheck[];
   onFocusedBlockChange: (blockId: string | null) => void;
+  /** Open another note (used by writing suggestions). */
+  onOpenNote?: (documentId: string, blockId: string | null) => void;
+  /** Fold this note into another (offered when it largely repeats that note). */
+  onMoveInto?: (target: SimilarDocument) => void;
+  moving?: boolean;
 }
 
 type Location = {
@@ -222,6 +234,9 @@ export function BlockNoteEditor({
   linkTargets,
   linkChecks,
   onFocusedBlockChange,
+  onOpenNote,
+  onMoveInto,
+  moving = false,
 }: Props) {
   const queryClient = useQueryClient();
   const initialContent = useMemo(
@@ -278,6 +293,41 @@ export function BlockNoteEditor({
   const [saveProblem, setSaveProblem] = useState<SaveProblem | null>(null);
   const conflicted = saveProblem?.kind === "conflict";
   const [hasBlockSelection, setHasBlockSelection] = useState(false);
+  // "You wrote about this before": the paragraph being written, once typing pauses.
+  const [writing, setWriting] = useState<{ id: string; text: string } | null>(null);
+  const settledWriting = useDebouncedValue(writing, SUGGESTION_PAUSE_MS);
+  const [suggestionsOn, setSuggestionsOn] = useState(readSuggestionsPreference);
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null);
+  // Near-copies of this whole note, checked once edits settle.
+  const settledRevision = useDebouncedValue(initialDocument.revision, DUPLICATE_PAUSE_MS);
+  const similar = useSimilarDocuments(initialDocument.id, settledRevision);
+  const [notDuplicates, setNotDuplicates] = useState(readNotDuplicates);
+  const duplicate =
+    (Array.isArray(similar.data) ? similar.data : []).find(
+      (item) => !notDuplicates.has(pairKey(initialDocument.id, item.document_id)),
+    ) ?? null;
+  const suggestionTarget =
+    settledWriting &&
+    settledWriting === writing &&
+    settledWriting.text.trim().length >= SUGGESTION_MIN_CHARS &&
+    dismissedFor !== settledWriting.id
+      ? settledWriting
+      : null;
+  const writingSuggestions = useWritingSuggestions(
+    initialDocument.id,
+    suggestionTarget?.id ?? null,
+    suggestionTarget?.text ?? "",
+    suggestionsOn && !!suggestionTarget,
+  );
+  const visibleSuggestions =
+    suggestionTarget && suggestionsOn
+      ? (writingSuggestions.data ?? []).filter(
+          (item) =>
+            item.score > 0 &&
+            item.matched_block_id &&
+            !suggestionTarget.text.includes(item.matched_block_id),
+        )
+      : [];
   const [reviewBlockIds, setReviewBlockIds] = useState<string[]>([]);
   const [preview, setPreview] = useState<{ blockId: string; left: number; top: number } | null>(
     null,
@@ -458,6 +508,8 @@ export function BlockNoteEditor({
     const operations = changesToOperations(changedEditor, context.getChanges());
     if (operations.length === 0) return;
     void enqueueOperations(operations);
+    const block = changedEditor.getTextCursorPosition().block;
+    setWriting({ id: block.id, text: inlineText(block.content) });
   };
 
   // Notes imported from Markdown carry no editor content yet; parse it once per mount.
@@ -691,7 +743,42 @@ export function BlockNoteEditor({
             "Saving…"
           ) : null}
         </span>
-        <span className="ml-auto flex gap-1">
+        <span className="ml-auto flex items-center gap-1">
+          <SeenBefore
+            related={visibleSuggestions}
+            duplicate={duplicate}
+            suggestionsOn={suggestionsOn}
+            onToggleSuggestions={(on) => {
+              setSuggestionsOn(on);
+              writeSuggestionsPreference(on);
+            }}
+            onLink={(item) => {
+              if (!suggestionTarget || !item.matched_block_id) return;
+              editor.setTextCursorPosition(suggestionTarget.id, "end");
+              // A real link: shows the other note's title, previews the paragraph on
+              // hover, and records a backlink (the href is a plain block reference).
+              editor.insertInlineContent([
+                " ",
+                {
+                  type: "link",
+                  href: blockLink({ block_id: item.matched_block_id, text: "" }),
+                  content: item.note.title || "related note",
+                },
+              ]);
+              editor.focus();
+              setDismissedFor(suggestionTarget.id);
+            }}
+            onOpen={(documentId, blockId) => onOpenNote?.(documentId, blockId)}
+            onMoveInto={(target) => onMoveInto?.(target)}
+            onNotDuplicate={(target) => {
+              const next = new Set(notDuplicates).add(
+                pairKey(initialDocument.id, target.document_id),
+              );
+              setNotDuplicates(next);
+              writeNotDuplicates(next);
+            }}
+            moving={moving}
+          />
           <button
             type="button"
             className="rounded border px-2 py-1 disabled:opacity-40"
@@ -1352,4 +1439,49 @@ function hydrateLegacyBlocks(editor: AppEditor, nodes: readonly BlockNode[]) {
       }
     }
   });
+}
+
+const SUGGESTION_PAUSE_MS = 1200;
+const SUGGESTION_MIN_CHARS = 25;
+const SUGGESTIONS_KEY = "fortress-notes:writing-suggestions";
+
+function readSuggestionsPreference(): boolean {
+  try {
+    return window.localStorage.getItem(SUGGESTIONS_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function writeSuggestionsPreference(on: boolean) {
+  try {
+    window.localStorage.setItem(SUGGESTIONS_KEY, on ? "on" : "off");
+  } catch {
+    // Without storage the choice simply lasts for this visit.
+  }
+}
+
+const DUPLICATE_PAUSE_MS = 1500;
+const NOT_DUPLICATES_KEY = "fortress-notes:not-duplicates";
+
+function pairKey(a: string, b: string) {
+  return [a, b].sort().join("|");
+}
+
+function readNotDuplicates(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(NOT_DUPLICATES_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeNotDuplicates(pairs: Set<string>) {
+  try {
+    window.localStorage.setItem(NOT_DUPLICATES_KEY, JSON.stringify([...pairs]));
+  } catch {
+    // Without storage the choice lasts for this visit.
+  }
 }
