@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, blockApi, notesApi, workspaceApi } from "./api";
 import { invalidateDocumentLists, queryKeys } from "./queryKeys";
-import type { BlockDocument, BlockSearchFilters, NoteStatus, SavedSearch } from "./types";
+import type {
+  AskResponse,
+  BlockDocument,
+  BlockSearchFilters,
+  NoteStatus,
+  SavedSearch,
+} from "./types";
 
 // --- Reads ---------------------------------------------------------------------
 
@@ -304,8 +310,39 @@ export function useImportMarkdown() {
   });
 }
 
+/**
+ * Ask your notes. While the answer streams, `data` holds the sentences checked so
+ * far (with `isPending` still true); asking again cancels the previous question.
+ */
 export function useAsk() {
-  return useMutation({ mutationFn: (question: string) => blockApi.ask(question) });
+  const [partial, setPartial] = useState<AskResponse | undefined>();
+  const current = useRef<AbortController | null>(null);
+  const mutation = useMutation({
+    mutationFn: (question: string) => {
+      current.current?.abort();
+      const controller = new AbortController();
+      current.current = controller;
+      setPartial(undefined);
+      return blockApi.ask(
+        question,
+        (update) => {
+          if (current.current === controller) setPartial(update);
+        },
+        controller.signal,
+      );
+    },
+  });
+  useEffect(() => () => current.current?.abort(), []);
+  return {
+    ...mutation,
+    data: mutation.data ?? (mutation.isPending ? partial : undefined),
+    reset: () => {
+      current.current?.abort();
+      current.current = null;
+      setPartial(undefined);
+      mutation.reset();
+    },
+  };
 }
 
 export function useCapture() {

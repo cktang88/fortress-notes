@@ -95,3 +95,30 @@ describe("AnswerCard trace", () => {
     act(() => root.unmount());
   });
 });
+
+describe("AnswerCard while streaming", () => {
+  it("shows the sentences checked so far instead of the waiting line", () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    act(() =>
+      root.render(
+        <AnswerCard
+          question="hotel?"
+          loading={true}
+          error={null}
+          onOpen={vi.fn()}
+          onDismiss={vi.fn()}
+          response={{
+            status: "answered",
+            answer: [{ text: "You chose Alfama.", citations: [citation("a", "Lisbon trip")] }],
+            sources: [],
+          }}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain("You chose Alfama.");
+    expect(container.textContent).not.toContain("Reading your notes");
+    expect(container.querySelector('[aria-label="Still answering"]')).not.toBeNull();
+    act(() => root.unmount());
+  });
+});

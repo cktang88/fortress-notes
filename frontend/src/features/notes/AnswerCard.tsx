@@ -38,7 +38,9 @@ export function AnswerCard({ question, loading, error, response, onOpen, onDismi
           ×
         </button>
       </div>
-      {loading && <p className="text-zinc-500">Reading your notes about “{question}”…</p>}
+      {loading && !response?.answer.length && (
+        <p className="text-zinc-500">Reading your notes about “{question}”…</p>
+      )}
       {error && <p className="text-red-600">{error}</p>}
       {response?.status === "not_configured" && (
         <p className="text-zinc-600">
@@ -79,6 +81,11 @@ export function AnswerCard({ question, loading, error, response, onOpen, onDismi
                 ))}{" "}
               </span>
             ))}
+            {loading && (
+              <span aria-label="Still answering" className="animate-pulse text-indigo-400">
+                …
+              </span>
+            )}
           </p>
           <ol className="mt-2 space-y-0.5 text-xs text-zinc-500">
             {cited.map((citation, index) => (
@@ -95,7 +102,7 @@ export function AnswerCard({ question, loading, error, response, onOpen, onDismi
           </ol>
         </>
       )}
-      {response && response.status !== "not_configured" && (
+      {response && !loading && response.status !== "not_configured" && (
         <p className="mt-2 text-[11px] text-zinc-400">
           {[
             ...(response.steps ?? []).map((step) =>
