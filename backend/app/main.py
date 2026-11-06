@@ -672,11 +672,31 @@ def redo_block_transaction(document_id: str, request: BlockHistoryRequest):
         raise HTTPException(409, str(exc)) from exc
 
 
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+_UPLOAD_CHUNK = 1024 * 1024
+
+
+async def _read_upload(file: UploadFile, limit: int | None = None) -> bytes:
+    """Read an upload in chunks, refusing it (413) as soon as it passes the limit."""
+
+    limit = MAX_UPLOAD_BYTES if limit is None else limit
+    chunks: list[bytes] = []
+    size = 0
+    while chunk := await file.read(_UPLOAD_CHUNK):
+        size += len(chunk)
+        if size > limit:
+            raise HTTPException(
+                413, f"File is larger than {limit // (1024 * 1024)} MB; choose a smaller one."
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @app.post("/api/images")
 async def upload_image(file: UploadFile = File(...)):
     if not assets.is_supported_image_type(file.content_type):
         raise HTTPException(400, "Unsupported image type")
-    data = await file.read()
+    data = await _read_upload(file)
     # Save the file and return immediately so the image appears instantly. Caption + OCR
     # (slow, only needed for search) run in the background to populate the sidecar cache.
     url, path = images.save_bytes(data, file.content_type or "image/png")
@@ -693,7 +713,7 @@ async def upload_file(file: UploadFile = File(...)):
     media_type = (file.content_type or "").split(";", 1)[0].strip().lower()
     if media_type.startswith("image/") and not assets.is_supported_image_type(media_type):
         raise HTTPException(415, "Unsupported image type")
-    data = await file.read()
+    data = await _read_upload(file)
     url, name, path = assets.save_upload(data, file.filename, file.content_type)
     block_store.register_asset(
         settings.block_db_path, path, assets.content_hash(data),
