@@ -1,4 +1,14 @@
-import { forwardRef, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import {
+  Component,
+  forwardRef,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Flex } from "@mantine/core";
 import { BlockNoteSchema, defaultBlockSpecs } from "@blocknote/core";
@@ -231,7 +241,80 @@ type AppPartialBlock = PartialBlock<
   typeof editorSchema.styleSchema
 >;
 
-export function BlockNoteEditor({
+/**
+ * The note's editor, behind an error boundary: if it can't render (a malformed block, a
+ * bug), only this area shows a problem and the rest of the app stays usable. Edits still
+ * waiting to be sent stay in localStorage, and "Reload note" starts the editor again from
+ * the server's copy (with those edits on top, as on any reopen).
+ */
+export function BlockNoteEditor(props: Props) {
+  const queryClient = useQueryClient();
+  const [attempt, setAttempt] = useState(0);
+  const [reloaded, setReloaded] = useState<BlockDocument | null>(null);
+  const [reloading, setReloading] = useState(false);
+  const shown =
+    reloaded && reloaded.id === props.document.id && reloaded.revision >= props.document.revision
+      ? reloaded
+      : props.document;
+
+  const reload = async () => {
+    setReloading(true);
+    try {
+      const latest = await blockApi.get(props.document.id);
+      queryClient.setQueryData(queryKeys.document(latest.id), latest);
+      setReloaded(latest);
+    } catch {
+      // Unreachable: try again with the copy already here.
+    } finally {
+      setReloading(false);
+      setAttempt((count) => count + 1);
+    }
+  };
+
+  return (
+    <EditorErrorBoundary key={attempt} reloading={reloading} onReload={() => void reload()}>
+      <EditorBody {...props} document={shown} />
+    </EditorErrorBoundary>
+  );
+}
+
+class EditorErrorBoundary extends Component<
+  { children: ReactNode; reloading: boolean; onReload: () => void },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    console.error("The note editor crashed", error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div
+        role="alert"
+        className="mx-8 mt-6 flex flex-col items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+      >
+        <p className="font-medium">This note couldn't be displayed.</p>
+        <p>Edits that weren't saved yet are kept on this device.</p>
+        <button
+          type="button"
+          disabled={this.props.reloading}
+          onClick={this.props.onReload}
+          className="rounded-md bg-red-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50"
+        >
+          {this.props.reloading ? "Reloading…" : "Reload note"}
+        </button>
+      </div>
+    );
+  }
+}
+
+function EditorBody({
   document: initialDocument,
   focusBlockId,
   focusNonce = 0,
