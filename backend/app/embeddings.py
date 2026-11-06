@@ -7,9 +7,10 @@ Scoring is brute-force MaxSim, which is fast enough for a personal note collecti
 
 from __future__ import annotations
 
-import re
+import threading
 from dataclasses import dataclass, field
 
+from . import block_query
 from .config import get_settings
 
 
@@ -23,6 +24,8 @@ class _Cache:
 
 
 _cache = _Cache()
+# The background reindexer and request threads can all reach for the model first.
+_model_lock = threading.Lock()
 
 
 def model_loaded() -> bool:
@@ -36,15 +39,18 @@ def _get_model():
         return None
     if _cache.model is not None:
         return _cache.model
-    try:
-        from pylate import models  # heavy import; do it lazily
+    with _model_lock:
+        if _cache.model is not None or _cache.failed:
+            return _cache.model
+        try:
+            from pylate import models  # heavy import; do it lazily
 
-        _cache.model = models.ColBERT(model_name_or_path=settings.colbert_model)
-        _cache.loaded = True
-        return _cache.model
-    except Exception:
-        _cache.failed = True
-        return None
+            _cache.model = models.ColBERT(model_name_or_path=settings.colbert_model)
+            _cache.loaded = True
+            return _cache.model
+        except Exception:
+            _cache.failed = True
+            return None
 
 
 def _encode_doc(model, note_id: str, updated_at_iso: str, text: str):
@@ -72,15 +78,12 @@ def available() -> bool:
 
 # ---- keyword fallback ---------------------------------------------------------
 
-_word_re = re.compile(r"[a-z0-9]+")
-
-
 def _tokens(text: str) -> set[str]:
-    return set(_word_re.findall(text.lower()))
+    # Same words as the full-text search: any script, case and accents ignored.
+    return set(block_query.query_tokens(text))
 
 
-def _keyword_score(query: str, text: str) -> float:
-    q = _tokens(query)
+def _keyword_score(q: set[str], text: str) -> float:
     if not q:
         return 0.0
     overlap = q & _tokens(text)
@@ -125,7 +128,8 @@ def score_documents(query: str, docs: list[tuple[str, str, str]]) -> dict[str, f
     """
     model = _get_model()
     if model is None:
-        return {d[0]: _keyword_score(query, d[2]) for d in docs}
+        query_words = _tokens(query)
+        return {d[0]: _keyword_score(query_words, d[2]) for d in docs}
 
     query_emb = model.encode([query], is_query=True, show_progress_bar=False)[0]
     scores: dict[str, float] = {}

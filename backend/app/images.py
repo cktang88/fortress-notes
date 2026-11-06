@@ -26,8 +26,9 @@ _extraction_lock = Lock()
 
 def save_bytes(data: bytes, content_type: str) -> tuple[str, Path]:
     """Save image bytes and return (public_url, path). Fast — no model work."""
-    ext = _EXT_BY_TYPE.get(content_type, ".png")
-    storage_type = content_type if content_type in _EXT_BY_TYPE else "image/png"
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    ext = _EXT_BY_TYPE.get(media_type, ".png")
+    storage_type = media_type if media_type in _EXT_BY_TYPE else "image/png"
     url, _, path = assets.save_upload(data, f"image{ext}", storage_type)
     return url, path
 

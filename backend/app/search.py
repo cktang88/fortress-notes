@@ -1,6 +1,7 @@
 """Full-text search + embedding search + related notes, all over SQLite blocks."""
 
 import math
+import unicodedata
 from datetime import datetime, timezone
 
 from . import block_query, block_store, documents, embeddings
@@ -191,27 +192,36 @@ def _recency(updated_at: str, now: datetime) -> float:
 
 
 def _snippet(text: str, tokens: list[str]) -> tuple[str, list[list[int]]]:
-    """A window of ``text`` around the first matched word, plus highlight ranges."""
+    """A window of ``text`` around the first matched word, plus highlight ranges.
 
-    lowered = text.lower()
-    positions = [lowered.find(token) for token in tokens if token and token in lowered]
-    first = min(positions) if positions else 0
+    Words match whole and ignore case and accents, like the word search. Ranges are
+    UTF-16 offsets into the snippet, because the browser slices strings that way
+    (an emoji counts as two).
+    """
+
+    wanted = set(tokens)
+    matched = [(start, end) for start, end, word in block_query.word_spans(text) if word in wanted]
+    first = matched[0][0] if matched else 0
     start = max(0, min(first - _SNIPPET // 3, len(text) - _SNIPPET))
     if start > 0:
         space = text.find(" ", start)
         start = space + 1 if 0 <= space < first else start
-    window = text[start : start + _SNIPPET]
+    stop = min(start + _SNIPPET, len(text))
+    window = text[start:stop]
     prefix = "…" if start > 0 else ""
-    suffix = "…" if start + _SNIPPET < len(text) else ""
+    suffix = "…" if stop < len(text) else ""
     snippet = f"{prefix}{window}{suffix}"
-    lowered_snippet = snippet.lower()
+    shift = len(prefix) - start
     ranges: list[list[int]] = []
-    for token in sorted(set(tokens), key=len, reverse=True):
-        index = lowered_snippet.find(token)
-        while index != -1:
-            end = index + len(token)
-            if not any(index < r[1] and end > r[0] for r in ranges):
-                ranges.append([index, end])
-            index = lowered_snippet.find(token, end)
-    ranges.sort()
+    for word_start, word_end in matched:
+        if word_start < start or word_end > stop:
+            continue
+        # Keep combining accents (decomposed "é") inside the highlight.
+        while word_end < stop and unicodedata.combining(text[word_end]):
+            word_end += 1
+        ranges.append([_utf16(snippet, word_start + shift), _utf16(snippet, word_end + shift)])
     return snippet, ranges
+
+
+def _utf16(text: str, index: int) -> int:
+    return index + sum(1 for character in text[:index] if ord(character) > 0xFFFF)

@@ -22,8 +22,10 @@ import json
 import logging
 import re
 import time
+import unicodedata
 
 import httpx
+import regex
 
 from . import block_query, block_store, llm, search
 from .config import get_settings
@@ -37,6 +39,8 @@ PREFETCH_GREP = 8
 TOOL_HITS = 8
 SOURCE_CHARS = 1200
 NOTE_BLOCKS = 40
+# Total time one grep over every note may take (the model's regex can backtrack badly).
+GREP_SECONDS = 0.3
 
 _clock = time.monotonic
 
@@ -70,8 +74,22 @@ _SYSTEM = (
 )
 
 
+_TYPOGRAPHY = str.maketrans(
+    {
+        **dict.fromkeys("‘’‚‛′", "'"),
+        **dict.fromkeys("“”„‟″", '"'),
+        **dict.fromkeys("‐‑‒–—―−", "-"),
+    }
+)
+
+
 def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip().lower()
+    """Text as compared for quotes: ignores case, spacing, typographic quotes and
+    dashes, Markdown emphasis, and quote marks wrapped around the whole quote."""
+
+    text = unicodedata.normalize("NFKC", text).translate(_TYPOGRAPHY)
+    text = re.sub(r"[*_`]+", "", text)
+    return re.sub(r"\s+", " ", text).strip().strip("\"'").strip().lower()
 
 
 def key_terms(question: str) -> list[str]:
@@ -128,20 +146,43 @@ class _Sources:
         )
 
 
+def _compile_grep(pattern: str):
+    """The model's case-insensitive regex, or its ``|`` alternatives as plain text."""
+
+    try:
+        return regex.compile(pattern, regex.IGNORECASE)
+    except regex.error:
+        alternatives = [part.strip() for part in pattern.split("|") if part.strip()]
+        if not alternatives:
+            return None
+        return regex.compile("|".join(map(regex.escape, alternatives)), regex.IGNORECASE)
+
+
 def grep_blocks(pattern: str, limit: int = TOOL_HITS) -> list[dict[str, object]]:
-    """Active paragraphs matching a case-insensitive regex (or plain text if invalid)."""
+    """Active paragraphs matching a case-insensitive regex (or plain text if invalid).
+
+    Runs under a time limit so a pathological pattern can't stall Ask, and only a
+    non-empty match counts, so a stray ``|`` doesn't match every paragraph.
+    """
 
     pattern = pattern.strip()[:200]
     if not pattern:
         return []
-    try:
-        regex = re.compile(pattern, re.IGNORECASE)
-    except re.error:
-        regex = re.compile(re.escape(pattern), re.IGNORECASE)
+    compiled = _compile_grep(pattern)
+    if compiled is None:
+        return []
     db_path = get_settings().block_db_path
+    deadline = time.monotonic() + GREP_SECONDS
     hits = []
     for block_id, _document_id, _version, text in block_store.embedding_documents(db_path):
-        if regex.search(text):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            matched = any(match.group() for match in compiled.finditer(text, timeout=remaining))
+        except TimeoutError:
+            break
+        if matched:
             hits.append(block_id)
             if len(hits) >= limit:
                 break
@@ -221,7 +262,9 @@ async def ask(question: str) -> dict[str, object]:
     question = question.strip()
     sources = _Sources()
     steps: list[dict[str, str]] = []
-    first = prefetch(question, sources)
+    # Local search is synchronous (SQLite, ColBERT); keep it off the event loop so
+    # other requests aren't stalled while Ask looks things up.
+    first = await asyncio.to_thread(prefetch, question, sources)
     if not first:
         return _result("not_found", [], sources, steps, started)
 
@@ -266,7 +309,7 @@ async def ask(question: str) -> dict[str, object]:
         ):
             # "Not found" with other wording to try: grep it locally (milliseconds) and,
             # only if that turns up new passages, give the model one last look.
-            added = sources.add(grep_blocks(retry))
+            added = sources.add(await asyncio.to_thread(grep_blocks, retry))
             steps.append({"action": "grep", "detail": retry})
             if added:
                 transcript += (
@@ -278,13 +321,13 @@ async def ask(question: str) -> dict[str, object]:
             return _answer(data, sources, steps, started)
         if action == "grep" and isinstance(data.get("pattern"), str):
             pattern = data["pattern"]
-            added = sources.add(grep_blocks(pattern))
+            added = sources.add(await asyncio.to_thread(grep_blocks, pattern))
             steps.append({"action": "grep", "detail": pattern})
             found = sources.payload(added) if added else "[] (no new matches)"
             transcript += f'\n\nYou searched for /{pattern}/. New sources:\n{found}'
         elif action == "read" and isinstance(data.get("note"), str):
             note = data["note"]
-            added = sources.add(read_note(note))
+            added = sources.add(await asyncio.to_thread(read_note, note))
             steps.append({"action": "read", "detail": note})
             found = sources.payload(added) if added else "[] (no such note, or nothing new)"
             transcript += f'\n\nYou read the note "{note}". New sources:\n{found}'
@@ -304,8 +347,10 @@ def _answer(data: dict, sources: _Sources, steps: list, started: float) -> dict[
                 continue
             source = sources.by_id.get(str(citation.get("id")))
             quote = citation.get("quote")
-            if source is None or not isinstance(quote, str) or not quote.strip():
+            if source is None or not isinstance(quote, str):
                 continue
+            if not any(character.isalnum() for character in quote):
+                continue  # Punctuation alone "matches" almost any passage.
             if _normalize(quote) not in _normalize(str(source["text"])):
                 continue  # The model "quoted" something the note doesn't say.
             citations.append(

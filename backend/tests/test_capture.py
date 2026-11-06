@@ -73,6 +73,17 @@ class QuickCaptureTests(unittest.TestCase):
         self.assertEqual([c["title"] for c in self.folder()["children"]], ["two"])
         self.assertEqual(self.client.post("/api/capture", json={"text": " \n "}).status_code, 422)
 
+    def test_captured_and_created_titles_drop_list_and_quote_markers(self) -> None:
+        # Same rule as the auto title that follows the first line while editing.
+        todo = self.client.post(
+            "/api/capture", json={"text": "- [ ] Buy oat milk\nfrom the corner shop"}
+        ).json()
+        self.assertEqual(todo["title"], "Buy oat milk")
+        quote = self.client.post("/api/notes", json={"title": "", "body": "> Stay hungry"}).json()
+        self.assertEqual(quote["title"], "Stay hungry")
+        long = self.client.post("/api/capture", json={"text": "word " * 40}).json()
+        self.assertTrue(long["title"].endswith("word…"), long["title"])
+
 
 if __name__ == "__main__":
     unittest.main()

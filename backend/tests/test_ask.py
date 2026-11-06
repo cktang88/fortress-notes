@@ -94,6 +94,38 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertEqual(result["answer"], [])
         self.assertTrue(result["sources"])  # the closest passages are still offered
 
+    def test_quotes_match_despite_typographic_and_markdown_differences(self) -> None:
+        self.client.post(
+            "/api/notes",
+            json={"title": "Ferry", "body": "We didn’t book the “fast” ferry — too pricey."},
+        )
+
+        def cite(quote: str) -> dict:
+            return {
+                "found": True,
+                "sentences": [
+                    {"text": "You skipped the ferry.", "citations": [{"id": "S1", "quote": quote}]}
+                ],
+            }
+
+        for quote in (
+            "didn't book the \"fast\" ferry - too pricey",  # straight quotes and hyphen
+            '"We didn’t book the “fast” ferry"',  # wrapped in quote marks
+            "We *didn’t* **book** the",  # markdown emphasis
+        ):
+            result, _ = self.ask("Did we book the ferry?", cite(quote))
+            self.assertEqual(result["status"], "answered", quote)
+
+    def test_a_quote_without_any_words_cites_nothing(self) -> None:
+        result, _ = self.ask(
+            "Which hotel did we pick?",
+            {
+                "found": True,
+                "sentences": [{"text": "It was the Ritz.", "citations": [{"id": "S1", "quote": ", "}]}],
+            },
+        )
+        self.assertEqual(result["status"], "not_found")
+
     def test_reports_missing_key_and_empty_matches_without_calling_the_model(self) -> None:
         from app import llm
 
@@ -156,7 +188,7 @@ class AskYourNotesTests(unittest.TestCase):
         )
         not_found = {"action": "answer", "found": False, "sentences": [], "try": "pastel de nata"}
         result, fake = self.ask(
-            "Where should I get custard tarts?",
+            "Where should I get custard tarts in Lisbon?",
             [
                 not_found,
                 {
@@ -165,7 +197,7 @@ class AskYourNotesTests(unittest.TestCase):
                     "sentences": [
                         {
                             "text": "Get pastel de nata at Manteigaria.",
-                            "citations": [{"id": "S3", "quote": "pastel de nata at Manteigaria"}],
+                            "citations": [{"id": "S2", "quote": "pastel de nata at Manteigaria"}],
                         }
                     ],
                 },
@@ -214,6 +246,70 @@ class AskYourNotesTests(unittest.TestCase):
             down = self.client.post("/api/ask", json={"question": "hotel?"}).json()
         self.assertEqual(down["status"], "unavailable")
         self.assertTrue(down["sources"])
+
+    def test_grep_survives_catastrophic_backtracking_patterns(self) -> None:
+        import time
+
+        from app import ask
+
+        self.client.post("/api/notes", json={"title": "Scream", "body": "a" * 34 + "!"})
+        started = time.monotonic()
+        rows = ask.grep_blocks(r"(a|aa)+$")
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(rows, [])
+        # Ordinary patterns still work afterwards.
+        self.assertEqual([r["document_title"] for r in ask.grep_blocks("alfama")], ["Lisbon trip"])
+
+    def test_grep_alternatives_that_match_nothing_do_not_match_every_note(self) -> None:
+        from app import ask
+
+        # A stray "|" makes the pattern match the empty string, i.e. every paragraph.
+        self.assertEqual([r["document_title"] for r in ask.grep_blocks("alfama|")], ["Lisbon trip"])
+        self.assertEqual(ask.grep_blocks("zebracorn|"), [])
+
+    def test_invalid_grep_regex_still_searches_each_alternative_literally(self) -> None:
+        from app import ask
+
+        self.client.post("/api/notes", json={"title": "Servers", "body": "Runs on any *nix box"})
+        rows = ask.grep_blocks("*nix|unix")  # "nothing to repeat": not a valid regex
+        self.assertEqual([r["document_title"] for r in rows], ["Servers"])
+
+    def test_local_searching_does_not_block_other_requests(self) -> None:
+        import asyncio
+        import time
+
+        from app import ask, llm, search
+
+        real_search = search.unified_search
+
+        def slow_search(*args, **kwargs):
+            time.sleep(0.4)  # e.g. ColBERT encoding freshly edited paragraphs
+            return real_search(*args, **kwargs)
+
+        async def scenario() -> float:
+            gaps = []
+
+            async def heartbeat() -> None:
+                last = time.monotonic()
+                while True:
+                    await asyncio.sleep(0.01)
+                    now = time.monotonic()
+                    gaps.append(now - last)
+                    last = now
+
+            beat = asyncio.create_task(heartbeat())
+            await asyncio.sleep(0.02)
+            await ask.ask("Which hotel did we pick?")
+            await asyncio.sleep(0.03)  # let the heartbeat record the last gap
+            beat.cancel()
+            return max(gaps)
+
+        reply = AsyncMock(return_value={"found": False, "sentences": []})
+        with patch.object(search, "unified_search", slow_search), patch.object(
+            llm, "chat_json", reply
+        ):
+            longest_stall = asyncio.run(scenario())
+        self.assertLess(longest_stall, 0.2)
 
     def test_read_tool_returns_a_whole_note(self) -> None:
         from app import ask

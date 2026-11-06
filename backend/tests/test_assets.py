@@ -33,6 +33,18 @@ class AssetUploadTests(unittest.TestCase):
             self.assertTrue(url.endswith(".bin"))
             self.assertEqual(path.suffix, ".bin")
 
+    def test_pasted_image_keeps_its_type_when_the_header_has_parameters_or_capitals(self) -> None:
+        from app import images
+
+        with tempfile.TemporaryDirectory() as directory:
+            settings = SimpleNamespace(assets_path=Path(directory))
+            with patch("app.assets.get_settings", return_value=settings):
+                for content_type in ("image/jpeg; charset=binary", "IMAGE/JPEG", "image/webp"):
+                    url, path = images.save_bytes(b"jpeg data", content_type)
+                    expected = ".webp" if "webp" in content_type else ".jpg"
+                    self.assertEqual(path.suffix, expected, content_type)
+                    self.assertTrue(url.endswith(expected))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1131,7 +1131,11 @@ _corpus_cache: dict[Path, tuple[tuple, list[tuple[str, str, str, str]]]] = {}
 
 
 def _corpus_fingerprint(connection: sqlite3.Connection) -> tuple:
-    """Changes whenever any block, document or asset text changes (a few ms)."""
+    """Changes whenever any block, document or asset text changes (a few ms).
+
+    Every block edit bumps its document's revision, so the revision total catches
+    edits that the timestamp maxima miss (e.g. another note dated in the future).
+    """
 
     return tuple(
         connection.execute(
@@ -1139,6 +1143,7 @@ def _corpus_fingerprint(connection: sqlite3.Connection) -> tuple:
                       (SELECT MAX(updated_at) FROM blocks),
                       (SELECT COUNT(*) FROM documents WHERE deleted_at IS NULL),
                       (SELECT MAX(updated_at) FROM documents),
+                      (SELECT TOTAL(revision) FROM documents),
                       (SELECT MAX(text_updated_at) FROM assets),
                       (SELECT COUNT(*) FROM block_assets)"""
         ).fetchone()
@@ -2724,11 +2729,9 @@ def first_line_title(texts) -> str:
 
 
 def derive_title(body: str) -> str:
-    for line in body.splitlines():
-        text = line.strip().lstrip("#").strip()
-        if text:
-            return text[:120]
-    return "Untitled"
+    """A title for new Markdown: the same first-line rule as auto titles."""
+
+    return first_line_title([body])
 
 
 def _iso(value: object) -> str:

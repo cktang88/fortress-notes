@@ -7,8 +7,10 @@ This module deliberately contains no HTTP concerns.  Routes can use
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from .block_store import connection_scope, initialize
@@ -220,30 +222,85 @@ def block_details(path: Path, block_ids: list[str]) -> dict[str, dict[str, objec
 
 
 def title_matches(path: Path, query: str, limit: int = 20) -> list[dict[str, object]]:
-    """Documents whose title contains query words (most words first), with their first block."""
+    """Documents with title words starting with query words (most words first).
 
-    tokens = sorted({token.lower() for token in _FTS_TOKEN.findall(query)})
+    Matching ignores case and accents for every script (SQLite's ``lower()`` only
+    folds ASCII), and a word must start with the query word, so a short word such as
+    "a" doesn't match every title that merely contains the letter.
+    """
+
+    tokens = sorted(set(query_tokens(query)))
     if not tokens:
         return []
-    hits = " + ".join("(instr(lower(documents.title), ?) > 0)" for _ in tokens)
     initialize(path)
     with connection_scope(path) as connection:
         rows = connection.execute(
-            f"""SELECT * FROM (
-                    SELECT documents.id AS document_id, ({hits}) AS hits, documents.updated_at,
-                           (SELECT blocks.id FROM blocks
-                             WHERE blocks.document_id = documents.id
-                               AND blocks.parent_id IS NULL
-                             ORDER BY blocks.position LIMIT 1) AS block_id
-                      FROM documents
-                     WHERE documents.deleted_at IS NULL
-                ) WHERE hits > 0
-                ORDER BY hits DESC, updated_at DESC
-                LIMIT ?""",
-            (*tokens, limit),
+            """SELECT documents.id AS document_id, documents.title, documents.updated_at,
+                      (SELECT blocks.id FROM blocks
+                        WHERE blocks.document_id = documents.id
+                          AND blocks.parent_id IS NULL
+                        ORDER BY blocks.position LIMIT 1) AS block_id
+                 FROM documents
+                WHERE documents.deleted_at IS NULL"""
         ).fetchall()
-    return [dict(row) for row in rows if row["block_id"]]
+    matches = []
+    for row in rows:
+        if not row["block_id"]:
+            continue
+        words = query_tokens(str(row["title"] or ""))
+        hits = sum(1 for token in tokens if any(word.startswith(token) for word in words))
+        if hits:
+            matches.append(
+                {
+                    "document_id": row["document_id"],
+                    "hits": hits,
+                    "updated_at": row["updated_at"],
+                    "block_id": row["block_id"],
+                }
+            )
+    matches.sort(key=lambda match: str(match["updated_at"]), reverse=True)
+    matches.sort(key=lambda match: -int(match["hits"]))
+    return matches[:limit]
+
+
+def fold(text: str) -> str:
+    """Lowercase ``text`` and strip accents, keeping exactly one character per character.
+
+    Offsets into the result are offsets into ``text``, so matches found in the folded
+    text can be highlighted in the original. Mirrors the FTS ``unicode61`` tokenizer's
+    case and diacritic folding closely enough for highlighting.
+    """
+
+    if text.isascii():
+        return text.lower()
+    return "".join(map(_fold_char, text))
+
+
+@lru_cache(maxsize=4096)
+def _fold_char(character: str) -> str:
+    if character.isascii():
+        return character.lower()
+    base = "".join(
+        part
+        for part in unicodedata.normalize("NFKD", character)
+        if not unicodedata.combining(part)
+    ).lower()
+    if len(base) == 1:
+        return base
+    lowered = character.lower()
+    return lowered if len(lowered) == 1 else character
 
 
 def query_tokens(query: str) -> list[str]:
-    return [token.lower() for token in _FTS_TOKEN.findall(query)]
+    """Words of ``query`` as the word search sees them: lowercase, without accents."""
+
+    return _FTS_TOKEN.findall(fold(query))
+
+
+def word_spans(text: str) -> list[tuple[int, int, str]]:
+    """(start, end, folded word) for each word of ``text``, in ``text`` offsets."""
+
+    return [
+        (match.start(), match.end(), match.group())
+        for match in _FTS_TOKEN.finditer(fold(text))
+    ]
