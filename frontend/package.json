@@ -19,6 +19,7 @@
     "@blocknote/core": "0.57.0",
     "@blocknote/mantine": "0.57.0",
     "@blocknote/react": "0.57.0",
+    "@dnd-kit/collision": "0.5.3",
     "@dnd-kit/react": "0.5.3",
     "@mantine/core": "9.7.5",
     "@mantine/hooks": "9.7.5",
