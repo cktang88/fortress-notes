@@ -86,6 +86,18 @@ class BlockEmbeddingTests(unittest.TestCase):
             )
         self.assertEqual(scores, {"dessert": 1.0, "email": 0.0})
 
+    def test_keyword_fallback_reads_a_long_query_once_not_once_per_paragraph(self) -> None:
+        import time
+
+        query = " ".join(f"word{i}" for i in range(2000))
+        docs = [(f"b{i}", "v1", f"paragraph {i} mentions word{i}") for i in range(1500)]
+        with patch.object(embeddings, "_get_model", return_value=None):
+            started = time.monotonic()
+            scores = embeddings.score_documents(query, docs)
+            elapsed = time.monotonic() - started
+        self.assertEqual(scores["b7"], 1 / 2000)
+        self.assertLess(elapsed, 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()

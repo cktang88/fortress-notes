@@ -10,6 +10,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from .block_store import connection_scope, initialize
@@ -270,9 +271,12 @@ def fold(text: str) -> str:
     case and diacritic folding closely enough for highlighting.
     """
 
-    return "".join(_fold_char(character) for character in text)
+    if text.isascii():
+        return text.lower()
+    return "".join(map(_fold_char, text))
 
 
+@lru_cache(maxsize=4096)
 def _fold_char(character: str) -> str:
     if character.isascii():
         return character.lower()
