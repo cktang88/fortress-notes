@@ -447,8 +447,12 @@ export function BlockNoteEditor({
   /** Show the server's version of the note in the editor without saving anything. */
   const showServerVersion = (document: BlockDocument) => {
     hydrating.current = true;
-    editor.replaceBlocks(editor.document, document.children.map(toPartialBlock));
-    hydrateLegacyBlocks(editor, document.children);
+    // Not an edit of the person's: keyboard undo mustn't step back to the replaced copy.
+    editor.transact((tr) => {
+      tr.setMeta("addToHistory", false);
+      editor.replaceBlocks(editor.document, document.children.map(toPartialBlock));
+      hydrateLegacyBlocks(editor, document.children);
+    });
     hydrating.current = false;
     blockUpdatedAt.current = blockUpdatedAtById(document.children);
     documentRevision.current = document.revision;
@@ -1428,7 +1432,9 @@ export function mergeOperations(batch: BlockOperation[], next: BlockOperation[])
 
 /** Parse Markdown-only blocks (imported notes) into rich editor content. */
 function hydrateLegacyBlocks(editor: AppEditor, nodes: readonly BlockNode[]) {
-  editor.transact(() => {
+  editor.transact((tr) => {
+    // Showing stored content isn't an edit: keyboard undo mustn't revert it to raw Markdown.
+    tr.setMeta("addToHistory", false);
     for (const node of flattenNodes(nodes)) {
       if (node.content.blocknote !== undefined) continue;
       const block = editor.getBlock(node.id);

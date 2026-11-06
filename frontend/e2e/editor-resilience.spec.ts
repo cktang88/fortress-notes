@@ -94,6 +94,41 @@ test("a change made in another tab shows a clear way forward", async ({
   await expect(editor).toHaveAttribute("contenteditable", "true");
 });
 
+test("keyboard undo after loading the latest version doesn't bring back the refused edit", async ({
+  page,
+  context,
+}, testInfo) => {
+  const editor = await newNote(page, "Shared undo note");
+  await page.keyboard.type("original");
+  await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
+
+  const other = await context.newPage();
+  await proxyToBackend(other, testInfo);
+  await other.goto(page.url());
+  await other.locator(editorSelector).click();
+  await other.keyboard.press("End");
+  const otherSaved = other.waitForResponse(
+    (response) => response.url().endsWith("/transactions") && response.ok(),
+  );
+  await other.keyboard.type(" edited elsewhere");
+  await otherSaved;
+  await expect(other.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
+  await other.close();
+
+  await editor.press("End");
+  await page.keyboard.type(" and mine");
+  const banner = page.getByRole("alert").filter({ hasText: "changed somewhere else" });
+  await banner.getByRole("button", { name: "Load latest version" }).click();
+  await expect(editor).toContainText("original edited elsewhere");
+
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
+  await expect(editor).toContainText("original edited elsewhere");
+  await page.reload();
+  await expect(page.locator(editorSelector)).toContainText("original edited elsewhere");
+});
+
 test("a new note is ready for typing and takes its title from the first line", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "+ New", exact: true }).click();
