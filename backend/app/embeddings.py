@@ -619,11 +619,65 @@ def score_documents(
     if not docs:
         return {}
 
+    query_emb = _query_embedding(model, query)
+    scores = _score_with(model, query_emb, docs)
+    if normalized:
+        count = max(int(query_emb.shape[0]), 1)
+        scores = {block_id: score / count for block_id, score in scores.items()}
+    return scores
+
+
+def note_query_embedding(texts: list[str]):
+    """One query for a whole note: its paragraphs' query encodings, joined.
+
+    Paragraph query encodings are precomputed and saved in the background, so this
+    usually needs no model pass, where encoding the note's full text as one long
+    query took hundreds of milliseconds. Missing ones are encoded in one batch.
+    """
+
+    import torch
+
+    model = _get_model()
+    texts = [text for text in texts if text.strip()]
+    if model is None or not texts:
+        return None
+    found: dict[str, object] = {}
+    missing = []
+    for text in dict.fromkeys(texts):
+        cached = _cache.queries.get(text)
+        if cached is None:
+            cached = _saved_query(text)
+        if cached is None:
+            missing.append(text)
+        else:
+            found[text] = cached
+    if missing:
+        found.update(zip(missing, _encode(model, missing, is_query=True)))
+    for text, embedding in found.items():
+        _cache.queries[text] = embedding
+        _cache.queries.move_to_end(text)
+    while len(_cache.queries) > QUERY_CACHE_SIZE:
+        _cache.queries.popitem(last=False)
+    return torch.cat([found[text] for text in texts], dim=0)
+
+
+def score_note(texts: list[str], docs: list[tuple[str, str, str]]) -> tuple[dict[str, float], int]:
+    """Raw MaxSim of a whole note (see ``note_query_embedding``) and its query token count."""
+
+    model = _get_model()
+    query_emb = note_query_embedding(texts)
+    if model is None or query_emb is None or not docs:
+        return {}, 0
+    return _score_with(model, query_emb, docs), int(query_emb.shape[0])
+
+
+def _score_with(model, query_emb, docs: list[tuple[str, str, str]]) -> dict[str, float]:
+    """MaxSim of a ready query embedding against ``docs``, indexing stale ones as needed."""
+
     global _active_queries
     with _active_lock:
         _active_queries += 1
     try:
-        query_emb = _query_embedding(model, query)
         with _index_lock:
             _load_store()
             where = _cache.index.where
@@ -647,9 +701,6 @@ def score_documents(
     finally:
         with _active_lock:
             _active_queries -= 1
-    if normalized:
-        count = max(int(query_emb.shape[0]), 1)
-        scores = {block_id: score / count for block_id, score in scores.items()}
     return scores
 
 

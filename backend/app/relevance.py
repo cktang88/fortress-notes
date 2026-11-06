@@ -79,6 +79,19 @@ def related_scores(query: str, docs: list[tuple[str, str, str]]) -> dict[str, fl
     return relevant_model_scores(embeddings.score_documents(query, docs), tokens)
 
 
+def related_note_scores(texts: list[str], docs: list[tuple[str, str, str]]) -> dict[str, float]:
+    """Like ``related_scores`` for a whole note given as its title and paragraphs."""
+
+    if not any(text.strip() for text in texts) or not docs:
+        return {}
+    if not embeddings.available():
+        return relevant_keyword_scores("\n\n".join(texts), docs)
+    raw, tokens = embeddings.score_note(texts, docs)
+    if not tokens:
+        return {}
+    return relevant_model_scores(raw, tokens)
+
+
 def _query_token_count(query: str) -> int:
     """How many vectors ColBERT makes for ``query`` (no padding, so no forward pass needed)."""
 

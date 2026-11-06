@@ -62,18 +62,28 @@ def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list
             raise KeyError("Block document not found")
         query = source["subtree"]["text"]
     all_blocks = block_store.embedding_documents(settings.block_db_path)
-    # One pass: the focused paragraph's indexed text, and every other note's paragraphs.
+    # One pass: the focused paragraph's indexed text (or all of this note's), and every
+    # other note's paragraphs.
     candidates = []
+    own_texts = [note.title]
     for bid, document_id, updated_at, text in all_blocks:
         if document_id != note_id:
             candidates.append((bid, updated_at, text))
         elif bid == block_id:
             query = text
+        else:
+            own_texts.append(text)
     if block_id is not None and not query.strip():
         return []
     # Only paragraphs that clear the relevance cutoff, so every consumer (the
     # related panel, the "↗ N related" chip) shows real relations, not just the top k.
-    scores = relevance.related_scores(query, candidates)
+    # A whole note is queried as its title plus each paragraph's saved query encoding,
+    # so it needs no long model pass.
+    scores = (
+        relevance.related_scores(query, candidates)
+        if block_id is not None
+        else relevance.related_note_scores(own_texts, candidates)
+    )
     # Few paragraphs clear the cutoff: look up only theirs (in corpus order, so ties
     # resolve as before).
     note_matches: dict[str, tuple[float, str, str]] = {}

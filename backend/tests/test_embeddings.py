@@ -267,3 +267,30 @@ class BlockEmbeddingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoteQueryTests(unittest.TestCase):
+    def test_a_whole_note_query_reuses_paragraph_encodings_and_batches_the_rest(self) -> None:
+        import torch
+
+        calls: list[list[str]] = []
+
+        def fake_encode(_model, texts, *, is_query):
+            assert is_query
+            calls.append(list(texts))
+            return [torch.ones(len(text.split()), 2) for text in texts]
+
+        embeddings._cache.queries.clear()
+        embeddings._cache.queries["Saved paragraph here"] = torch.zeros(3, 2)
+        with patch.object(embeddings, "_get_model", return_value=object()), patch.object(
+            embeddings, "_encode", side_effect=fake_encode
+        ), patch.object(embeddings, "_saved_query", return_value=None):
+            joined = embeddings.note_query_embedding(
+                ["Kyoto trip", "Saved paragraph here", "", "New one"]
+            )
+        self.addCleanup(embeddings._cache.queries.clear)
+        # One batched model call for the two unseen texts; the saved one is reused.
+        self.assertEqual(calls, [["Kyoto trip", "New one"]])
+        # Title (2 tokens) + saved (3) + new (2), in note order, blank paragraphs skipped.
+        self.assertEqual(tuple(joined.shape), (7, 2))
+        self.assertEqual(float(joined[2:5].sum()), 0.0)
