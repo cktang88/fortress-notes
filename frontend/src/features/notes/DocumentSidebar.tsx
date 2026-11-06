@@ -5,6 +5,7 @@ import {
   useDroppable,
   type DragEndEvent,
 } from "@dnd-kit/react";
+import { pointerIntersection } from "@dnd-kit/collision";
 import { FormEvent, KeyboardEvent, MouseEvent, useEffect, useRef, useState } from "react";
 import { workspaceApi } from "./api";
 import { triggerDownload } from "./download";
@@ -495,6 +496,7 @@ function RootDropButton({
     id: "root-target",
     data: { kind: "root" },
     disabled: !dragItem || dragItem.parentId === null,
+    collisionDetector: pointerIntersection,
   });
   const target: MenuTarget = { kind: "root" };
   return (
@@ -633,6 +635,9 @@ function FolderRow(props: NavigationRowProps & { node: NavigationFolder }) {
     id: `folder-target:${node.id}`,
     data: { kind: "folder", id: node.id },
     disabled: invalidDrop,
+    // Drop where the pointer is. The default also accepts any overlap with the dragged
+    // row, which filed notes released on the row below a folder into that folder.
+    collisionDetector: pointerIntersection,
   });
   return (
     <li

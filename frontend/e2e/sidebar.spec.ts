@@ -150,6 +150,47 @@ test("manages nested notes with context menus and drag and drop across reloads",
   expect(inboxNode?.children?.some((node) => node.title === "Research notes")).toBe(true);
 });
 
+test("a note dropped on the row below a folder stays out of that folder", async ({
+  page,
+}, testInfo) => {
+  const api = `${String(testInfo.config.metadata.backendUrl)}/api`;
+  await page.request.post(`${api}/folders`, { data: { name: "Inbox", parent_id: null } });
+  for (const title of ["Loose one", "Loose two"]) {
+    await page.request.post(`${api}/block-documents`, { data: { title, folder_id: null } });
+  }
+  await page.setViewportSize({ width: 1280, height: 1200 });
+  await page.goto("/");
+  const inbox = page.getByRole("button", { name: "Folder: Inbox" });
+  const looseTwo = page.locator('[data-document-id][aria-label="Loose two"]');
+  await expect(looseTwo).toBeVisible();
+  const moveRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().includes("/move")) {
+      moveRequests.push(request.url());
+    }
+  });
+
+  // Release with the pointer just under the folder's header, over "Loose one". The
+  // dragged row is tall enough to overlap the header, but the pointer isn't on it.
+  const source = (await looseTwo.boundingBox())!;
+  const header = (await inbox.boundingBox())!;
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(250);
+  await page.mouse.move(source.x + source.width / 2 + 12, source.y + source.height / 2 + 8, {
+    steps: 3,
+  });
+  await page.mouse.move(header.x + header.width / 2, header.y + header.height + 8, { steps: 24 });
+  await page.waitForTimeout(250);
+  await expect(page.locator("[data-folder-id].ring-2")).toHaveCount(0);
+  await page.mouse.up();
+
+  await page.waitForTimeout(500);
+  expect(moveRequests).toEqual([]);
+  const tree = await readNavigation(page);
+  expect(tree.find((node) => node.name === "Inbox")?.children).toEqual([]);
+});
+
 async function readNavigation(page: Page): Promise<NavigationNode[]> {
   return page.evaluate(async () => {
     const response = await fetch("/api/navigation");

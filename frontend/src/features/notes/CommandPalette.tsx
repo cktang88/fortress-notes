@@ -53,6 +53,14 @@ export function CommandPalette(props: Props) {
   function close() {
     setQuery("");
     setActive(0);
+    // Close the native dialog now, not in the effect after re-render: while it is
+    // modal the rest of the page is inert, so a command that moves focus (e.g.
+    // "Search everywhere" focusing the search box) would otherwise be undone.
+    const dialog = dialogRef.current;
+    if (dialog?.open) {
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
     onClose();
   }
 

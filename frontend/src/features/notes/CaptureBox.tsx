@@ -39,7 +39,10 @@ export function CaptureBox({ onCapture }: Props) {
       <input
         id={CAPTURE_INPUT_ID}
         value={text}
-        disabled={busy}
+        // Read-only rather than disabled while saving: disabling drops focus to the
+        // page, where the next keystrokes would be lost (or trigger shortcuts).
+        readOnly={busy}
+        aria-busy={busy || undefined}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Escape") {

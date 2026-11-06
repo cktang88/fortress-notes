@@ -26,7 +26,9 @@ export function useNoteSelection() {
   }, []);
 
   function select(id: string, blockId: string | null = null) {
-    const changingNote = id !== selectedId;
+    // Compare with the URL, not `selectedId`: callers such as a toast's Undo keep this
+    // function from an earlier render, when a different note may have been open.
+    const changingNote = id !== noteFromUrl();
     setSelectedId(id);
     setFocus(blockId ? { blockId, nonce: Date.now() } : null);
     if (changingNote) setActiveBlockId(null);
