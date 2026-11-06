@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 NoteStatus = Literal["rough", "polished"]
-ReviewKind = Literal["factcheck", "clarify", "object"]
+ReviewKind = Literal["factcheck", "object"]
 BlockReviewContextKind = Literal["current", "selected", "document", "linked"]
 BlockOperationKind = Literal[
     "insert", "update", "move", "delete", "set_attrs", "set_user_attrs",

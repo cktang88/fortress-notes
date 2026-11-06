@@ -108,7 +108,9 @@ class PortabilityTests(unittest.TestCase):
             assert imported_tree is not None
             self.assertEqual(imported_tree["title"], source_tree["title"])
             self.assertEqual(imported_tree["status"], source_tree["status"])
-            self.assertEqual(imported_tree["tags"], source_tree["tags"])
+            # Tags were removed from the product: not exported, ignored on import.
+            self.assertNotIn("tags:", markdown)
+            self.assertEqual(imported_tree["tags"], [])
             self.assertEqual(
                 _block_shape(imported_tree["children"]),
                 _block_shape(source_tree["children"]),
@@ -158,6 +160,7 @@ class PortabilityTests(unittest.TestCase):
             tree = document_tree(database, "imported")
             assert tree is not None
             self.assertEqual(tree["title"], "Imported")
+            self.assertEqual(tree["tags"], [])
 
     def test_repeated_import_reports_existing_document_and_makes_new_backup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

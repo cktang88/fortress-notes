@@ -346,7 +346,6 @@ async def import_uploaded_markdown(
                     title=parsed.title,
                     body=parsed.body,
                     status=parsed.status,
-                    tags=parsed.tags,
                     folder_id=folder_id,
                 ),
                 created_at=parsed.created_at,
@@ -542,7 +541,6 @@ def search_blocks(
     document_id: str | None = None,
     block_type: str | None = None,
     status: NoteStatus | None = None,
-    tag: str | None = None,
     updated_after: str | None = None,
     updated_before: str | None = None,
 ):
@@ -553,7 +551,6 @@ def search_blocks(
             document_id=document_id,
             block_type=block_type,
             status=status,
-            tag=tag,
             updated_after=updated_after,
             updated_before=updated_before,
         ),

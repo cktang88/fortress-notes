@@ -31,11 +31,6 @@ _SYSTEM_PROMPTS: dict[ReviewKind, str] = {
         "fine under a charitable reading. If a claim is reasonable, do not flag it. "
         "Do not praise; only surface real problems."
     ),
-    "clarify": (
-        "You are a sharp editor reviewing a personal note. Ask the clarifying questions "
-        "needed to make the note unambiguous and complete. Focus on gaps, undefined "
-        "terms, and missing context."
-    ),
     "object": (
         "You are doing a 'code review' for someone's reasoning. Surface objections, "
         "inconsistencies, and faulty or missing steps in the reasoning chain. Steelman "

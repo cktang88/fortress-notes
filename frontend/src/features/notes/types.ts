@@ -1,5 +1,5 @@
 export type NoteStatus = "rough" | "polished";
-export type ReviewKind = "factcheck" | "clarify" | "object";
+export type ReviewKind = "factcheck" | "object";
 export type SearchMode = "text" | "embedding";
 export type BlockType = "paragraph" | "heading" | "list" | "quote" | "code" | "thematic_break";
 

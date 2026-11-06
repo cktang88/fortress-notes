@@ -121,7 +121,6 @@ def export_document_markdown(database_path: Path, document_id: str) -> str:
         _render_markdown(document["children"]),
         title=document["title"],
         status=document["status"],
-        tags=document["tags"],
         created_at=document["created_at"],
         updated_at=document["updated_at"],
     )
@@ -169,13 +168,13 @@ def import_markdown_directory(database_path: Path, source_directory: Path) -> Im
                     )
                 )
                 continue
-            post, title, status, tags, created_at, updated_at = _read_import_source(source_path, raw)
+            post, title, status, created_at, updated_at = _read_import_source(source_path, raw)
             create_document(
                 database_path,
                 document_id,
                 title,
                 status,
-                [str(tag) for tag in tags],
+                [],
                 post.content,
                 created_at,
                 updated_at,
@@ -195,15 +194,12 @@ def _read_import_source(source_path: Path, raw: bytes | None = None):
     title = str(metadata.get("title") or _derive_title(post.content))
     status = metadata.get("status", "rough")
     status = status if status in {"rough", "polished"} else "rough"
-    tags = metadata.get("tags", []) or []
-    if not isinstance(tags, list):
-        tags = [str(tags)]
+    # Old exports may carry a `tags:` line; tags are no longer a feature, so it is ignored.
     now = datetime.now(timezone.utc).isoformat()
     return (
         post,
         title,
         status,
-        [str(tag) for tag in tags],
         metadata.get("created_at", now),
         metadata.get("updated_at", now),
     )
@@ -280,7 +276,6 @@ def safe_filename(name: str, fallback: str = "Untitled") -> str:
 class UploadedNote:
     title: str
     status: str
-    tags: list[str]
     body: str
     created_at: object | None = None
 
@@ -300,14 +295,11 @@ def parse_uploaded_markdown(filename: str, raw: bytes) -> UploadedNote:
     stem = Path(filename).stem.strip()
     title = str(metadata.get("title") or "").strip() or stem or _derive_title(post.content)
     status = metadata.get("status")
-    tags = metadata.get("tags", []) or []
-    if not isinstance(tags, list):
-        tags = [tags]
+    # A `tags:` line from an old export is ignored: tags are no longer a feature.
     created_at = metadata.get("created_at")
     return UploadedNote(
         title=title[:200],
         status=status if isinstance(status, str) and status in {"rough", "polished"} else "rough",
-        tags=[str(tag) for tag in tags if str(tag).strip()],
         body=post.content,
         created_at=created_at if isinstance(created_at, (str, datetime)) else None,
     )
