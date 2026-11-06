@@ -10,6 +10,12 @@
   cursor: pointer;
 }
 
+/* The page margin is editor padding (not container padding) so hovering it shows the block's
+   side menu: BlockNote 0.56+ shows the menu only over the editor element itself. */
+.blocknote-shell .bn-editor {
+  padding-inline: calc(54px + 2rem);
+}
+
 /* Links that failed the automatic link check */
 .blocknote-shell a[data-link-status] {
   color: #dc2626;

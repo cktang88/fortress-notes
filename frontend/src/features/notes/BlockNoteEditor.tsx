@@ -1,7 +1,6 @@
 import { forwardRef, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Flex } from "@mantine/core";
-import { mergeRefs, useFocusTrap, useFocusWithin } from "@mantine/hooks";
 import { BlockNoteSchema, defaultBlockSpecs } from "@blocknote/core";
 import { SideMenuExtension } from "@blocknote/core/extensions";
 import type {
@@ -93,13 +92,12 @@ const accessibleFormattingToolbarRoot = forwardRef<
   ComponentProps["Generic"]["Toolbar"]["Root"]
 >((props, ref) => {
   const { className, children, onMouseEnter, onMouseLeave, variant } = props;
-  const { ref: focusRef, focused } = useFocusWithin();
-  const trapRef = useFocusTrap(focused);
-
+  // No focus trap (BlockNote 0.57 dropped its own): the toolbar's link and caption forms
+  // open in portals outside it, and a trap pulls focus back out of a just-opened form.
   return (
     <Flex
       className={className}
-      ref={mergeRefs(ref, focusRef, trapRef)}
+      ref={ref}
       role="group"
       aria-label="Text formatting"
       onMouseEnter={onMouseEnter}
@@ -750,7 +748,7 @@ export function BlockNoteEditor({
             onFocusedBlockChange(editor.getTextCursorPosition().block.id);
           }
         }}
-        className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 pt-2"
+        className="min-h-0 flex-1 overflow-y-auto pb-12 pt-2"
       >
         <AccessibleFormattingToolbarController />
         <SideMenuController sideMenu={DelayedSideMenu} />

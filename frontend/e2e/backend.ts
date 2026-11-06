@@ -16,7 +16,8 @@ export async function proxyToBackend(page: Page, testInfo: TestInfo) {
       } catch (error) {
         // The page navigated or closed, the test ended or timed out, or a test re-routed this request
         // mid-flight (e.g. simulating going offline); there is nothing left to answer.
-        if (!/disposed|closed|already handled|test ended|test timeout/i.test(String(error))) throw error;
+        if (!/disposed|closed|already handled|test ended|test timeout/i.test(String(error)))
+          throw error;
       }
     });
   }

@@ -24,6 +24,8 @@ dependencies = [
 # pylate, fast-plaid, datasets and sympy pin old versions of these. We only use pylate's
 # ColBERT encoder, never its PLAID index, so lift the pins to stay on current releases.
 # torch's own CUDA libraries stay at the versions torch was built against.
+# fast-plaid's native code is built for torch 2.11 only and segfaults on newer torch:
+# don't use pylate's PLAID index (pylate.indexes) without pinning torch back.
 override-dependencies = [
     "torch",
     "transformers",

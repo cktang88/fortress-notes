@@ -156,3 +156,26 @@ test("copies a loaded local image as embedded clipboard bytes", async ({ page })
   expect(copiedHtml).toMatch(/<img[^>]+src="data:image\/png;base64,/i);
   expect(copiedHtml).not.toMatch(/<img[^>]+src="[^"]*\/media\//i);
 });
+
+test("creates a link from the formatting toolbar and shows the side menu from the margin", async ({
+  page,
+}) => {
+  const editor = await createBlankNote(page);
+  await editor.click();
+  await page.keyboard.type("Link me please");
+  await page.keyboard.press("Shift+Home");
+  const toolbar = page.getByRole("group", { name: "Text formatting" });
+  await toolbar.getByRole("button", { name: /create link/i }).click();
+  // The URL form opens outside the toolbar; focus must move into it.
+  await expect(page.locator("input:focus")).toBeVisible();
+  await page.keyboard.type("https://example.com");
+  await page.keyboard.press("Enter");
+  await expect(editor.locator('a[href="https://example.com"]')).toHaveText("Link me please");
+
+  // Hovering the gutter left of the text still brings up the block's drag handle.
+  await page.keyboard.press("End");
+  await page.mouse.move(5, 5);
+  const block = (await editor.locator(".bn-block-outer").first().boundingBox())!;
+  await page.mouse.move(block.x - 80, block.y + block.height / 2);
+  await expect(page.locator(".bn-side-menu")).toBeVisible();
+});

@@ -116,14 +116,16 @@ test("keeps editor controls aligned and limits review to highlighted blocks", as
   expect(
     await help.evaluate(
       (dialog) =>
-        dialog.contains(document.activeElement) || document.activeElement === document.body,
+        dialog.contains(dialog.ownerDocument.activeElement) ||
+        dialog.ownerDocument.activeElement === dialog.ownerDocument.body,
     ),
   ).toBe(true);
   await page.keyboard.press("Shift+Tab");
   expect(
     await help.evaluate(
       (dialog) =>
-        dialog.contains(document.activeElement) || document.activeElement === document.body,
+        dialog.contains(dialog.ownerDocument.activeElement) ||
+        dialog.ownerDocument.activeElement === dialog.ownerDocument.body,
     ),
   ).toBe(true);
   await page.keyboard.press("Escape");
