@@ -66,6 +66,44 @@ class UnifiedSearchTests(unittest.TestCase):
         start, end = result["highlights"][0]
         self.assertEqual(result["text"][start:end].lower(), "budget")
 
+    @staticmethod
+    def js_slice(text: str, start: int, end: int) -> str:
+        """``text.slice(start, end)`` as the browser does it (UTF-16 code units)."""
+
+        units = text.encode("utf-16-le")
+        return units[start * 2 : end * 2].decode("utf-16-le")
+
+    def test_highlight_offsets_survive_emoji_and_case_changing_letters(self) -> None:
+        # "İ" lowercases to two code points and "😀" is two UTF-16 units in the browser.
+        self.create("Trip", "Met İstanbul friends 😀 at the harbour")
+        [result] = self.find("friends harbour")
+        marked = [self.js_slice(result["text"], a, b) for a, b in result["highlights"]]
+        self.assertEqual(marked, ["friends", "harbour"])
+
+    def test_highlights_ignore_accents_like_the_word_search_does(self) -> None:
+        self.create("Plans", "Meet at the café for crème brûlée")
+        [result] = self.find("cafe creme")
+        self.assertIn("words", result["matched"])
+        marked = [self.js_slice(result["text"], a, b) for a, b in result["highlights"]]
+        self.assertEqual(marked, ["café", "crème"])
+
+    def test_highlights_whole_words_not_letters_inside_words(self) -> None:
+        self.create("Languages", "I code in c++ and rust")
+        [result] = self.find("c++")
+        marked = [self.js_slice(result["text"], a, b) for a, b in result["highlights"]]
+        self.assertEqual(marked, ["c"])
+
+    def test_title_matches_ignore_case_for_accented_letters(self) -> None:
+        school = self.create("ÉCOLE", "Notes about lessons")
+        results = self.find("école")
+        self.assertEqual([r["document_id"] for r in results], [school])
+        self.assertIn("title", results[0]["matched"])
+
+    def test_title_matches_need_a_word_not_a_letter_inside_one(self) -> None:
+        self.create("Café plans", "Nothing relevant here")
+        # "a" is inside both title words but no title word starts with it.
+        self.assertEqual(self.find("a"), [])
+
     def test_filters_apply_to_every_source(self) -> None:
         self.create("Rough idea", "Solar panels on the shed")
         polished = self.create("Final plan", "Solar panels on the roof", status="polished")

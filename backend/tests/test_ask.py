@@ -156,7 +156,7 @@ class AskYourNotesTests(unittest.TestCase):
         )
         not_found = {"action": "answer", "found": False, "sentences": [], "try": "pastel de nata"}
         result, fake = self.ask(
-            "Where should I get custard tarts?",
+            "Where should I get custard tarts in Lisbon?",
             [
                 not_found,
                 {
@@ -165,7 +165,7 @@ class AskYourNotesTests(unittest.TestCase):
                     "sentences": [
                         {
                             "text": "Get pastel de nata at Manteigaria.",
-                            "citations": [{"id": "S3", "quote": "pastel de nata at Manteigaria"}],
+                            "citations": [{"id": "S2", "quote": "pastel de nata at Manteigaria"}],
                         }
                     ],
                 },
