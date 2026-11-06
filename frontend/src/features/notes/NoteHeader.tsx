@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { NoteStatus } from "./types";
 
 interface HeaderDocument {
@@ -46,10 +46,18 @@ export function NoteHeader({ note, onTitle, onDelete, onSetStatus, exportUrl }: 
     setDraft(note.title);
   }, [note.title]);
 
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  // Leaving the note (Back, a note switch) unmounts the field without a blur: save a
+  // title still waiting for its pause rather than drop it.
+  const unsaved = useRef<string | null>(null);
+  const commitOnLeave = useEffectEvent(() => {
+    window.clearTimeout(timer.current);
+    if (unsaved.current !== null) commit(unsaved.current);
+  });
+  useEffect(() => () => commitOnLeave(), []);
 
   function commit(value: string) {
     window.clearTimeout(timer.current);
+    unsaved.current = null;
     const title = value.trim();
     if (title === committed.current || (!title && note.title_auto)) return;
     committed.current = title;
@@ -66,6 +74,7 @@ export function NoteHeader({ note, onTitle, onDelete, onSetStatus, exportUrl }: 
           onChange={(event) => {
             const value = event.target.value;
             setDraft(value);
+            unsaved.current = value;
             window.clearTimeout(timer.current);
             timer.current = window.setTimeout(() => commit(value), TITLE_SAVE_DELAY_MS);
           }}
@@ -85,6 +94,7 @@ export function NoteHeader({ note, onTitle, onDelete, onSetStatus, exportUrl }: 
               focusEditor();
             } else if (event.key === "Escape") {
               window.clearTimeout(timer.current);
+              unsaved.current = null;
               setDraft(committed.current);
             }
           }}

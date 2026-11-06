@@ -64,6 +64,31 @@ describe("NoteHeader", () => {
     expect(onTitle.mock.calls).toEqual([["Exam ideas"]]);
   });
 
+  it("saves a title still being typed when the header goes away (Back, note switch)", () => {
+    vi.useFakeTimers();
+    const onTitle = vi.fn();
+    const input = renderHeader(onTitle);
+    act(() => input.focus());
+    type(input, "Half typed");
+    act(() => root?.unmount());
+    root = undefined;
+    expect(onTitle.mock.calls).toEqual([["Half typed"]]);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(onTitle).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't save a title abandoned with Escape when the header goes away", () => {
+    const onTitle = vi.fn();
+    const input = renderHeader(onTitle);
+    type(input, "Never mind");
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    act(() => root?.unmount());
+    root = undefined;
+    expect(onTitle).not.toHaveBeenCalled();
+  });
+
   it("saves on Enter and reverts on Escape", () => {
     const onTitle = vi.fn();
     const input = renderHeader(onTitle);
