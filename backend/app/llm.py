@@ -103,10 +103,26 @@ async def chat_json(
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
 
+    return _parse_json_object(content)
+
+
+def _parse_json_object(content: object) -> dict:
+    """The JSON object in a model reply, even inside a code fence or after prose."""
+
+    text = content.strip() if isinstance(content, str) else ""
     try:
-        return json.loads(content)
-    except (json.JSONDecodeError, TypeError):
-        return {"_raw": content.strip()}
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        data = None
+        decoder = json.JSONDecoder()
+        start = text.find("{")
+        while start != -1 and not isinstance(data, dict):
+            try:
+                data, _end = decoder.raw_decode(text, start)
+            except json.JSONDecodeError:
+                pass
+            start = text.find("{", start + 1)
+    return data if isinstance(data, dict) else {"_raw": text}
 
 
 async def review_note(kind: ReviewKind, title: str, body: str) -> ReviewResponse:
