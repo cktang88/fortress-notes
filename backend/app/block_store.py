@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -299,6 +300,9 @@ _MIGRATIONS = {
 }
 
 _ready_paths: set[Path] = set()
+# Creating or migrating a database is check-then-write; concurrent first use from
+# several threads would otherwise race (duplicate version rows, lock errors).
+_initialize_lock = threading.Lock()
 UNSET = object()
 
 
@@ -309,11 +313,18 @@ def database_path(notes_path: Path) -> Path:
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=5.0)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA busy_timeout = 5000")
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA synchronous = FULL")
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
+        # Switching modes needs an exclusive lock and fails at once ("database is
+        # locked") while another connection is open, so only switch when needed.
+        if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+            connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = FULL")
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 
@@ -328,6 +339,12 @@ def connection_scope(path: Path):
 
 
 def initialize(path: Path) -> None:
+    with _initialize_lock:
+        _initialize(path)
+    _ready_paths.add(path.resolve())
+
+
+def _initialize(path: Path) -> None:
     with connection_scope(path) as connection:
         connection.executescript(_SCHEMA)
         row = connection.execute(
@@ -351,7 +368,6 @@ def initialize(path: Path) -> None:
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (current, _now()),
                 )
-    _ready_paths.add(path.resolve())
 
 
 def register_asset(db_path: Path, asset_path: Path, content_hash: str, mime_type: str) -> None:

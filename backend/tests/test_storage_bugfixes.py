@@ -1,17 +1,20 @@
 """Regression tests for storage-core bugs (block moves, positions, trash, migrations)."""
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
 from app import workspace
 from app.block_store import (
     apply_transaction,
+    connection_scope,
     create_block_document,
     create_document,
     delete_document,
     document_backlinks,
     document_tree,
+    initialize,
     undo_transaction,
 )
 from app.models import BlockOperation
@@ -114,6 +117,37 @@ class TrashRestoreTests(unittest.TestCase):
                  for link in document_backlinks(database, "target")},
                 {("source", None), ("source", block_id)},
             )
+
+
+class InitializeTests(unittest.TestCase):
+    def test_concurrent_first_use_of_a_new_database_does_not_fail(self) -> None:
+        for _ in range(10):
+            with tempfile.TemporaryDirectory() as directory:
+                database = Path(directory) / ".fortress.sqlite3"
+                barrier = threading.Barrier(8)
+                errors: list[BaseException] = []
+
+                def first_use() -> None:
+                    barrier.wait()
+                    try:
+                        initialize(database)
+                    except BaseException as error:  # noqa: BLE001 - collected for the assertion
+                        errors.append(error)
+
+                threads = [threading.Thread(target=first_use) for _ in range(8)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+
+                self.assertEqual(errors, [])
+                with connection_scope(database) as connection:
+                    versions = connection.execute(
+                        "SELECT version FROM schema_migrations"
+                    ).fetchall()
+                    mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                self.assertEqual(len(versions), 1)
+                self.assertEqual(mode, "wal")
 
 
 if __name__ == "__main__":
