@@ -554,6 +554,29 @@ class BlockStoreTests(unittest.TestCase):
             redo_split = redo_transaction(database, created["id"], undo_split["revision"])
             self.assertEqual([node["id"] for node in redo_split["children"]], split_ids)
 
+    def test_split_at_is_a_utf16_offset_like_the_browser_sends(self) -> None:
+        # In JavaScript "😀" has length 2, so the editor's offset 2 is right after it.
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            created = create_block_document(database, "Draft", "rough", [], "😀ab 😀c")
+            block_id = created["children"][0]["id"]
+            split = apply_transaction(
+                database,
+                created["id"],
+                [BlockOperation(operation="split", block_id=block_id, split_at=7)],
+                created["revision"],
+            )
+            self.assertEqual([node["text"] for node in split["children"]], ["😀ab 😀", "c"])
+            # The whole text is 8 UTF-16 units long; inside a surrogate pair is refused.
+            for bad in (9, 1):
+                with self.assertRaises(ValueError):
+                    apply_transaction(
+                        database,
+                        created["id"],
+                        [BlockOperation(operation="split", block_id=block_id, split_at=bad)],
+                        split["revision"],
+                    )
+
     def test_undo_redo_preserves_duplicate_ids_and_sibling_positions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"

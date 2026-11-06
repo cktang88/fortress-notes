@@ -2434,8 +2434,8 @@ def _duplicate_block(connection: sqlite3.Connection, document_id: str, row: sqli
 
 def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row,
                  operation: BlockOperation, now: str) -> str:
-    offset = operation.split_at
-    if offset is None or offset > len(row["text"]):
+    offset = _code_point_offset(row["text"], operation.split_at)
+    if offset is None:
         raise ValueError("split requires split_at within block text")
     if len(_subtree_rows(connection, row["id"])) > 1:
         raise ValueError("cannot split a block with children")
@@ -2454,6 +2454,25 @@ def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.
     _replace_attrs(connection, new_id, json.loads(row["attrs_json"]))
     _refresh_fts(connection, new_id, document_id, second)
     return new_id
+
+
+def _code_point_offset(text: str, utf16_offset: int | None) -> int | None:
+    """Python index for a UTF-16 offset (what browsers count), or None if it isn't one.
+
+    An emoji is one Python character but two UTF-16 units; an offset that falls
+    between the two halves, or past the end, is rejected.
+    """
+
+    if utf16_offset is None or utf16_offset < 0:
+        return None
+    units = 0
+    for index, character in enumerate(text):
+        if units == utf16_offset:
+            return index
+        units += 2 if ord(character) > 0xFFFF else 1
+        if units > utf16_offset:
+            return None
+    return len(text) if units == utf16_offset else None
 
 
 def _merge_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row, now: str) -> None:
