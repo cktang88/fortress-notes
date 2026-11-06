@@ -106,7 +106,9 @@ export function App() {
       showError(error);
       return;
     }
-    if (id === selectedId) selection.clear();
+    // Ask now, not with the `selectedId` from before the request: another note may
+    // have been opened meanwhile, and that one stays open.
+    if (selection.isOpen(id)) selection.clear();
     showNotice({
       message: `Moved “${title}” to Trash`,
       action: {

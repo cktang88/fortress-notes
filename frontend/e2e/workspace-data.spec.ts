@@ -78,6 +78,36 @@ test("trash: undo from the toast, delete forever, and empty with confirmation", 
   await expect(results).toContainText(keep.title);
 });
 
+test("opening another note while a delete is on its way keeps that note open", async ({
+  page,
+}, testInfo) => {
+  const word = uniqueWord("dlr");
+  const doomed = await createNote(page, testInfo, { title: `Doomed ${word}`, body: "Bye." });
+  const next = await createNote(page, testInfo, { title: `Next ${word}`, body: "Stay." });
+  await openApp(page, `/?note=${doomed.id}`);
+  await expect(noteTitle(page)).toHaveValue(doomed.title);
+
+  // Hold the trash request until the other note is open.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(`**/api/block-documents/${doomed.id}`, async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    await held;
+    await route.fallback();
+  });
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await treeRow(page, next.title).click();
+  await expect(noteTitle(page)).toHaveValue(next.title);
+  release();
+
+  await expect(
+    page.getByRole("status").filter({ hasText: `Moved “${doomed.title}”` }),
+  ).toBeVisible();
+  await expect(treeRow(page, doomed.title)).toHaveCount(0);
+  await expect(noteTitle(page)).toHaveValue(next.title);
+  await expect(page).toHaveURL(new RegExp(`note=${next.id}`));
+});
+
 test("Open on the Restored toast opens the note in one click while Trash is open", async ({
   page,
 }, testInfo) => {
