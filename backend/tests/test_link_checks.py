@@ -217,6 +217,72 @@ class LinkCheckTests(unittest.TestCase):
             )
             self.assertEqual(result, {"links": []})
 
+    def test_checks_run_with_bounded_concurrency_per_batch_and_per_host(self) -> None:
+        import asyncio
+
+        in_flight: dict[str, int] = {}
+        peaks = {"total": 0, "host": 0}
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            host = request.url.host
+            in_flight[host] = in_flight.get(host, 0) + 1
+            peaks["total"] = max(peaks["total"], sum(in_flight.values()))
+            peaks["host"] = max(peaks["host"], in_flight[host])
+            await asyncio.sleep(0.01)
+            in_flight[host] -= 1
+            return httpx.Response(200)
+
+        urls = [f"https://host{i % 10}.example/{i}" for i in range(40)]
+        urls += [f"https://busy.example/{i}" for i in range(10)]
+        statuses = asyncio.run(
+            link_checks._check_urls(urls, transport=httpx.MockTransport(handler))
+        )
+        self.assertEqual(set(statuses.values()), {"ok"})
+        self.assertEqual(len(statuses), 50)
+        self.assertLessEqual(peaks["total"], link_checks.MAX_CONCURRENT_CHECKS)
+        self.assertGreater(peaks["total"], 1)
+        self.assertLessEqual(peaks["host"], link_checks.MAX_CONCURRENT_PER_HOST)
+
+    def test_database_work_runs_off_the_event_loop_thread(self) -> None:
+        import asyncio
+        import threading
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+            block_store.create_document(
+                database, "note", "Note", "rough", [], "https://a.example/x", old, old
+            )
+            loop_threads: list[threading.Thread] = []
+            db_threads: list[threading.Thread] = []
+
+            def tracked(function):
+                def wrapper(*args, **kwargs):
+                    db_threads.append(threading.current_thread())
+                    return function(*args, **kwargs)
+
+                return wrapper
+
+            async def run() -> dict:
+                loop_threads.append(threading.current_thread())
+                return await link_checks.check_document_links(
+                    database,
+                    "note",
+                    transport=httpx.MockTransport(lambda request: httpx.Response(200)),
+                )
+
+            with (
+                patch.object(block_store, "document_tree", tracked(block_store.document_tree)),
+                patch.object(
+                    block_store, "get_link_check_cache", tracked(block_store.get_link_check_cache)
+                ),
+                patch.object(block_store, "store_link_check", tracked(block_store.store_link_check)),
+            ):
+                result = asyncio.run(run())
+            self.assertEqual([link["status"] for link in result["links"]], ["ok"])
+            self.assertEqual(len(db_threads), 3)
+            self.assertNotIn(loop_threads[0], db_threads)
+
     def test_missing_document_endpoint_returns_404(self) -> None:
         from app import main
 
