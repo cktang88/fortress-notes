@@ -54,7 +54,14 @@ test("the palette is driven by arrow keys, and Escape or a click outside closes 
   await expect(palette(page)).toHaveCount(0);
   await page.keyboard.press("Control+KeyK");
   await expect(palette(page)).toHaveValue("");
-  // Ctrl+K again toggles it closed.
+  // Ctrl+K again toggles it closed, and that starts fresh next time too.
+  await page.keyboard.type("gard");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Control+KeyK");
+  await expect(palette(page)).toHaveCount(0);
+  await page.keyboard.press("Control+KeyK");
+  await expect(palette(page)).toHaveValue("");
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Control+KeyK");
   await expect(palette(page)).toHaveCount(0);
 
@@ -120,6 +127,55 @@ test("the palette creates notes with a title and opens workspace dialogs", async
   await expect(selectedOption(page)).toHaveText(/Import Markdown files/);
   await page.keyboard.press("Enter");
   expect((await chooser).isMultiple()).toBe(true);
+});
+
+test("global shortcuts don't act behind an open dialog", async ({ page }, testInfo) => {
+  const word = uniqueWord("mod");
+  const note = await createNote(page, testInfo, { title: `Behind ${word}`, body: "Stay." });
+  await openApp(page, `/?note=${note.id}`);
+  await expect(noteTitle(page)).toHaveValue(note.title);
+  const search = page.getByRole("searchbox", { name: "Search notes" });
+  const capture = page.getByRole("textbox", { name: "Quick capture" });
+  const help = page.getByRole("dialog", { name: "Quick tips" });
+
+  const expectNothingBehind = async (dialog: ReturnType<Page["getByRole"]>) => {
+    for (const key of ["Alt+KeyN", "Slash", "Control+Shift+Space", "Control+KeyK", "Shift+Slash"])
+      await page.keyboard.press(key);
+    await expect(dialog).toBeVisible();
+    await expect(palette(page)).toHaveCount(0);
+    await expect(search).not.toBeFocused();
+    await expect(capture).not.toBeFocused();
+    if (dialog !== help) await expect(help).toBeHidden();
+    await expect(page).toHaveURL(new RegExp(`note=${note.id}`));
+  };
+
+  // The Trash and Backups dialogs.
+  for (const name of ["Trash", "Backups"]) {
+    await page.getByRole("button", { name: "Workspace menu" }).click();
+    await page.getByRole("menuitem", { name: name === "Trash" ? "Trash" : "Backups…" }).click();
+    const dialog = page.getByRole("dialog", { name });
+    await expect(dialog).toBeVisible();
+    await expectNothingBehind(dialog);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+  }
+
+  // The help dialog.
+  await page.getByRole("button", { name: "Help and tips" }).click();
+  await expect(help).toBeVisible();
+  await expectNothingBehind(help);
+  await page.keyboard.press("Escape");
+  await expect(help).toBeHidden();
+
+  // In the palette, Ctrl+K still closes it, and the others do nothing.
+  await page.keyboard.press("Control+KeyK");
+  await expect(palette(page)).toBeFocused();
+  for (const key of ["Alt+KeyN", "Control+Shift+Space"]) await page.keyboard.press(key);
+  await expect(palette(page)).toBeFocused();
+  await page.keyboard.press("Control+KeyK");
+  await expect(palette(page)).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`note=${note.id}`));
+  await expect(noteTitle(page)).toHaveValue(note.title);
 });
 
 test("Back and Forward move between opened notes; deep links open a note", async ({

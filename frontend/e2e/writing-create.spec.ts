@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { proxyToBackend } from "./backend";
+import { openNoteRow, uniqueWord } from "./notes";
 
 const editorSelector = '[contenteditable="true"][aria-label="Document content"]';
 
@@ -16,7 +17,6 @@ test("the title follows the first line until you choose one, and clearing it han
   await page.getByRole("button", { name: "+ New", exact: true }).click();
   const editor = page.locator(editorSelector);
   const title = page.getByRole("textbox", { name: "Note title" });
-  const sidebar = page.getByRole("navigation", { name: "Documents" });
   await expect(editor).toBeFocused();
 
   await page.keyboard.type("Autumn reading list");
@@ -24,7 +24,7 @@ test("the title follows the first line until you choose one, and clearing it han
   // Editing the first line keeps the title in step.
   await page.keyboard.type(" for 2027");
   await expect(title).toHaveValue("Autumn reading list for 2027");
-  await expect(sidebar.getByText("Autumn reading list for 2027").first()).toBeVisible();
+  await expect(openNoteRow(page)).toHaveAccessibleName("Autumn reading list for 2027");
   await page.keyboard.press("Enter");
   await page.keyboard.type("The Overstory");
   await saved(page);
@@ -38,7 +38,7 @@ test("the title follows the first line until you choose one, and clearing it han
   await page.keyboard.press("Control+Home");
   await page.keyboard.type("My ");
   await saved(page);
-  await expect(sidebar.getByText("Books", { exact: true }).first()).toBeVisible();
+  await expect(openNoteRow(page)).toHaveAccessibleName("Books");
   await page.reload();
   await expect(title).toHaveValue("Books");
   await expect(page.locator(editorSelector)).toContainText("My Autumn reading list for 2027");
@@ -83,25 +83,20 @@ test("Alt+N makes a note you can type into straight away", async ({ page }) => {
 test("a captured thought lands in Uncategorized with its text, and survives a reload", async ({
   page,
 }) => {
+  const thought = `Buy stamps for the wedding invitations ${uniqueWord("cap")}`;
   await page.goto("/");
   const capture = page.getByRole("textbox", { name: "Quick capture" });
   await capture.click();
-  await capture.fill("Buy stamps for the wedding invitations");
+  await capture.fill(thought);
   await capture.press("Enter");
   await expect(
-    page
-      .getByRole("status")
-      .filter({ hasText: "Saved “Buy stamps for the wedding invitations” to Uncategorized" }),
+    page.getByRole("status").filter({ hasText: `Saved “${thought}” to Uncategorized` }),
   ).toBeVisible();
   // Nothing was opened: the empty state is still there.
   await expect(page.getByText("Select a note or create a new one.")).toBeVisible();
   await page.getByRole("button", { name: "Open" }).click();
-  await expect(page.getByRole("textbox", { name: "Note title" })).toHaveValue(
-    "Buy stamps for the wedding invitations",
-  );
-  await expect(page.locator(editorSelector)).toContainText(
-    "Buy stamps for the wedding invitations",
-  );
+  await expect(page.getByRole("textbox", { name: "Note title" })).toHaveValue(thought);
+  await expect(page.locator(editorSelector)).toContainText(thought);
 
   // The captured note is editable like any other, and lives in Uncategorized.
   await page.locator(editorSelector).locator("p").first().click();
@@ -109,16 +104,12 @@ test("a captured thought lands in Uncategorized with its text, and survives a re
   await page.keyboard.type(" (40 of them)");
   await saved(page);
   await page.reload();
-  await expect(page.locator(editorSelector)).toContainText(
-    "Buy stamps for the wedding invitations (40 of them)",
-  );
+  await expect(page.locator(editorSelector)).toContainText(`${thought} (40 of them)`);
   const sidebar = page.getByRole("navigation", { name: "Documents" });
   const folder = sidebar.locator("li[data-folder-id]").filter({
     has: page.getByRole("button", { name: "Folder: Uncategorized" }),
   });
-  await expect(
-    folder.getByRole("button", { name: "Buy stamps for the wedding invitations", exact: true }),
-  ).toBeVisible();
+  await expect(folder.getByRole("button", { name: thought, exact: true })).toBeVisible();
 
   // An empty capture does nothing.
   await capture.click();
@@ -127,18 +118,20 @@ test("a captured thought lands in Uncategorized with its text, and survives a re
 });
 
 test("the palette creates a titled note that keeps its title as you write", async ({ page }) => {
+  const pottery = `Pottery class schedule ${uniqueWord("pot")}`;
   await page.goto("/");
   await expect(page.getByText("Select a note or create a new one.")).toBeVisible();
   await page.keyboard.press("Control+KeyK");
-  await page.keyboard.type("Pottery class schedule");
+  await page.keyboard.type(pottery);
+  await expect(page.getByRole("option", { selected: true })).toHaveText(/^Create note/);
   await page.keyboard.press("Enter");
   const title = page.getByRole("textbox", { name: "Note title" });
-  await expect(title).toHaveValue("Pottery class schedule");
+  await expect(title).toHaveValue(pottery);
   await expect(page.locator(editorSelector)).toBeFocused();
   // Its title was chosen, so the first line doesn't replace it.
   await page.keyboard.type("Tuesdays at seven");
   await saved(page);
   await page.reload();
-  await expect(title).toHaveValue("Pottery class schedule");
+  await expect(title).toHaveValue(pottery);
   await expect(page.locator(editorSelector)).toContainText("Tuesdays at seven");
 });

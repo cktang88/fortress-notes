@@ -33,3 +33,28 @@ export function isEditableTarget(target: EventTarget | null) {
     target.closest("input, textarea, select, [contenteditable='true']") !== null
   );
 }
+
+/**
+ * True while an input method (Japanese, Chinese, …) is composing: Enter then confirms
+ * the composition and must not submit or run anything. Safari reports the confirming
+ * Enter with keyCode 229 instead of isComposing.
+ */
+export function isComposing(event: KeyboardEvent) {
+  const native = event.nativeEvent;
+  return native.isComposing || native.keyCode === 229;
+}
+
+/** The open modal dialog shown last (the one on top), or null. */
+export function topModalDialog(): HTMLDialogElement | null {
+  const open = Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]"));
+  return open.filter(isModalDialog).at(-1) ?? null;
+}
+
+function isModalDialog(dialog: HTMLDialogElement) {
+  try {
+    return dialog.matches(":modal");
+  } catch {
+    // Engines without :modal (such as jsdom): every dialog here is shown modally.
+    return true;
+  }
+}

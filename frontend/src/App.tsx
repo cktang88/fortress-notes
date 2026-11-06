@@ -6,7 +6,7 @@ import { AnswerCard } from "./features/notes/AnswerCard";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
 import { CaptureBox, CAPTURE_INPUT_ID } from "./features/notes/CaptureBox";
 import { DocumentSidebar } from "./features/notes/DocumentSidebar";
-import { isEditableTarget, SEARCH_INPUT_ID } from "./features/notes/listKeyboard";
+import { isEditableTarget, SEARCH_INPUT_ID, topModalDialog } from "./features/notes/listKeyboard";
 import { NoteHeader } from "./features/notes/NoteHeader";
 import { NoteList } from "./features/notes/NoteList";
 import { OutlinePanel } from "./features/notes/OutlinePanel";
@@ -15,7 +15,7 @@ import { SearchBar } from "./features/notes/SearchBar";
 import { Toast, type Notice } from "./features/notes/Toast";
 import { useNoteSelection } from "./features/notes/useNoteSelection";
 import { WorkspaceMenu, type WorkspaceAction } from "./features/notes/WorkspaceMenu";
-import { CommandPalette } from "./features/notes/CommandPalette";
+import { COMMAND_PALETTE_ATTRIBUTE, CommandPalette } from "./features/notes/CommandPalette";
 import {
   useAsk,
   useBlockDocument,
@@ -77,6 +77,8 @@ export function App() {
   const saveSearch = useSaveSearch();
   const deleteSavedSearch = useDeleteSavedSearch();
 
+  // Follow-ups use mutateAsync rather than mutate's callbacks throughout: those only
+  // fire for the latest call, so a quick second Undo (or rename) drops the first's.
   const showNotice = (next: Omit<Notice, "id">) => setNotice({ ...next, id: Date.now() });
   const showError = (error: unknown) =>
     showNotice({ tone: "error", message: error instanceof Error ? error.message : String(error) });
@@ -106,13 +108,14 @@ export function App() {
       showError(error);
       return;
     }
-    if (id === selectedId) selection.clear();
+    // Ask now, not with the `selectedId` from before the request: another note may
+    // have been opened meanwhile, and that one stays open.
+    if (selection.isOpen(id)) selection.clear();
     showNotice({
       message: `Moved “${title}” to Trash`,
       action: {
         label: "Undo",
-        run: () =>
-          restoreDocument.mutate(id, { onSuccess: () => selectNote(id), onError: showError }),
+        run: () => void restoreDocument.mutateAsync(id).then(() => selectNote(id), showError),
       },
     });
   };
@@ -124,18 +127,14 @@ export function App() {
 
   const handleSaveSearch = () => {
     const savedQuery = query.trim();
-    saveSearch.mutate(
-      {
+    void saveSearch
+      .mutateAsync({
         name: savedQuery,
         query: savedQuery,
         mode: "text",
         filters: blockSearchFilters,
-      },
-      {
-        onSuccess: () => showNotice({ message: `Saved search “${savedQuery}”` }),
-        onError: showError,
-      },
-    );
+      })
+      .then(() => showNotice({ message: `Saved search “${savedQuery}”` }), showError);
   };
 
   // Global shortcuts: ⌘/Ctrl+K opens the palette, "/" focuses full-text search, Alt+N
@@ -143,11 +142,23 @@ export function App() {
   // types accents such as ñ.
   const onShortcut = useEffectEvent((event: KeyboardEvent) => {
     const mod = event.metaKey || event.ctrlKey;
-    if (mod && event.shiftKey && event.code === "Space") {
+    const capture = mod && event.shiftKey && event.code === "Space";
+    const togglePalette =
+      mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k";
+    // Behind a dialog (Trash, Backups, help) shortcuts would act on the page out of
+    // sight; only ⌘K still closes the palette itself.
+    const modal = topModalDialog();
+    if (modal && !(togglePalette && modal.hasAttribute(COMMAND_PALETTE_ATTRIBUTE))) {
+      // Still swallow the app's chords, so e.g. the Space of ⌘⇧Space doesn't press the
+      // dialog's focused button.
+      if (capture || togglePalette) event.preventDefault();
+      return;
+    }
+    if (capture) {
       // Quick capture works from anywhere, even mid-sentence in a note.
       event.preventDefault();
       window.document.getElementById(CAPTURE_INPUT_ID)?.focus();
-    } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+    } else if (togglePalette) {
       event.preventDefault();
       setPaletteOpen((open) => !open);
     } else if (event.key === "/" && !mod && !isEditableTarget(event.target)) {
@@ -198,7 +209,7 @@ export function App() {
           onAsk={() => ask.mutate(query.trim())}
           onApplySavedSearch={applySavedSearch}
           onOpenFirst={() => setOpenFirstFor(query.trim())}
-          onDeleteSavedSearch={(id) => deleteSavedSearch.mutate(id, { onError: showError })}
+          onDeleteSavedSearch={(id) => void deleteSavedSearch.mutateAsync(id).catch(showError)}
           onNew={() => void handleNew()}
           actions={
             <WorkspaceMenu
@@ -282,10 +293,10 @@ export function App() {
               key={`header:${document.data.id}`}
               note={document.data}
               onTitle={(title) =>
-                updateDocument.mutate({ id: document.data!.id, title }, { onError: showError })
+                void updateDocument.mutateAsync({ id: document.data!.id, title }).catch(showError)
               }
               onSetStatus={(status) =>
-                updateDocument.mutate({ id: document.data!.id, status }, { onError: showError })
+                void updateDocument.mutateAsync({ id: document.data!.id, status }).catch(showError)
               }
               onDelete={() => void handleDelete(document.data!.id)}
               exportUrl={workspaceApi.documentMarkdownUrl(document.data.id)}
@@ -303,16 +314,12 @@ export function App() {
               onOpenNote={(documentId, blockId) => selectNote(documentId, blockId)}
               moving={moveInto.isPending}
               onMoveInto={(target) =>
-                moveInto.mutate(
-                  { id: document.data!.id, targetId: target.document_id },
-                  {
-                    onSuccess: () => {
-                      selectNote(target.document_id);
-                      showNotice({ message: `Moved into “${target.title}”` });
-                    },
-                    onError: showError,
-                  },
-                )
+                void moveInto
+                  .mutateAsync({ id: document.data!.id, targetId: target.document_id })
+                  .then(() => {
+                    selectNote(target.document_id);
+                    showNotice({ message: `Moved into “${target.title}”` });
+                  }, showError)
               }
             />
           </>

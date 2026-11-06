@@ -50,7 +50,12 @@ export function useNoteSelection() {
     window.history.replaceState(null, "", url);
   }
 
-  return { selectedId, focus, activeBlockId, setActiveBlockId, select, clear };
+  /** Whether `id` is open now, even if this render's `selectedId` is out of date (after an await). */
+  function isOpen(id: string) {
+    return id === noteFromUrl();
+  }
+
+  return { selectedId, focus, activeBlockId, setActiveBlockId, select, clear, isOpen };
 }
 
 function noteFromUrl() {

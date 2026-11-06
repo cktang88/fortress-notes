@@ -193,7 +193,7 @@ test("list, task, code and math blocks keep their type through a reload", async 
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await page.keyboard.type("/math");
-  await expect(page.getByRole("option", { name: /Math placeholder/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /^Math placeholder/ })).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(editor.getByRole("note", { name: "Math placeholder" })).toBeVisible();
   await page.keyboard.type("``` ");

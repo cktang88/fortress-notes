@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { isComposing } from "./listKeyboard";
 
 export const CAPTURE_INPUT_ID = "quick-capture";
 
@@ -45,6 +46,11 @@ export function CaptureBox({ onCapture }: Props) {
         aria-busy={busy || undefined}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
+          if (isComposing(event)) {
+            // Enter confirms the input method's text; it mustn't submit the form too.
+            if (event.key === "Enter") event.preventDefault();
+            return;
+          }
           if (event.key === "Escape") {
             setText("");
             event.currentTarget.blur();

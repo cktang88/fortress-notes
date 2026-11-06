@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { fuzzyFilter } from "./fuzzy";
+import { isComposing } from "./listKeyboard";
 import type { NoteSummary } from "./types";
 import type { WorkspaceAction } from "./WorkspaceMenu";
 
@@ -24,6 +25,9 @@ type Item = {
 
 const NOTE_LIMIT = 8;
 
+/** Marks the palette's dialog, so global shortcuts can tell it from the others. */
+export const COMMAND_PALETTE_ATTRIBUTE = "data-command-palette";
+
 /** ⌘K: jump to a note by title, create one, search everywhere, or run a command. */
 export function CommandPalette(props: Props) {
   const { open, onClose } = props;
@@ -32,6 +36,16 @@ export function CommandPalette(props: Props) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
+  // Every opening starts fresh, however the last one was closed (⌘K closes it from
+  // App, without going through close() below).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setQuery("");
+      setActive(0);
+    }
+  }
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -73,6 +87,7 @@ export function CommandPalette(props: Props) {
   return (
     <dialog
       ref={dialogRef}
+      data-command-palette=""
       aria-label="Go to a note or run a command"
       onCancel={(event) => {
         event.preventDefault();
@@ -99,6 +114,8 @@ export function CommandPalette(props: Props) {
               setActive(0);
             }}
             onKeyDown={(event) => {
+              // Enter and the arrows belong to the input method while it composes.
+              if (isComposing(event)) return;
               if (event.key === "ArrowDown") {
                 event.preventDefault();
                 setActive((current + 1) % Math.max(items.length, 1));
@@ -214,19 +231,12 @@ export function buildItems(props: Props, query: string): Item[] {
   // A command that plainly names what you typed ("trash") beats creating a note with
   // that title; a looser match ("new ideas" ~ "New note") must not.
   const matching = fuzzyFilter(actions, trimmed, (action) => action.label);
-  const named = matching.filter((action) =>
-    action.label.toLowerCase().includes(trimmed.toLowerCase()),
-  );
+  const says = (text: string) => text.toLowerCase().includes(trimmed.toLowerCase());
+  const named = matching.filter((action) => says(action.label));
   const loose = matching.filter((action) => !named.includes(action));
-  // ...and beats notes that only match letter by letter ("trash" ~ "Trip ask…h").
-  const lowered = trimmed.toLowerCase();
-  const namedNotes = notes.filter((note) => note.title.toLowerCase().includes(lowered));
-  const scattered = notes.filter((note) => !namedNotes.includes(note));
-  return [
-    ...(named.length > 0 ? namedNotes : notes).map(noteItem),
-    ...named,
-    ...(named.length > 0 ? scattered.map(noteItem) : []),
-    ...extras,
-    ...loose,
-  ];
+  // It also beats notes whose titles merely hold its letters in order ("Trip zqaksh"
+  // for "trash"); notes that do say it stay first.
+  const sayingNotes = named.length > 0 ? notes.filter((note) => says(note.title)) : notes;
+  const otherNotes = notes.filter((note) => !sayingNotes.includes(note));
+  return [...sayingNotes.map(noteItem), ...named, ...otherNotes.map(noteItem), ...extras, ...loose];
 }
