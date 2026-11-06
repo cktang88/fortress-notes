@@ -231,9 +231,12 @@ export function buildItems(props: Props, query: string): Item[] {
   // A command that plainly names what you typed ("trash") beats creating a note with
   // that title; a looser match ("new ideas" ~ "New note") must not.
   const matching = fuzzyFilter(actions, trimmed, (action) => action.label);
-  const named = matching.filter((action) =>
-    action.label.toLowerCase().includes(trimmed.toLowerCase()),
-  );
+  const says = (text: string) => text.toLowerCase().includes(trimmed.toLowerCase());
+  const named = matching.filter((action) => says(action.label));
   const loose = matching.filter((action) => !named.includes(action));
-  return [...notes.map(noteItem), ...named, ...extras, ...loose];
+  // It also beats notes whose titles merely hold its letters in order ("Trip zqaksh"
+  // for "trash"); notes that do say it stay first.
+  const sayingNotes = named.length > 0 ? notes.filter((note) => says(note.title)) : notes;
+  const otherNotes = notes.filter((note) => !sayingNotes.includes(note));
+  return [...sayingNotes.map(noteItem), ...named, ...otherNotes.map(noteItem), ...extras, ...loose];
 }

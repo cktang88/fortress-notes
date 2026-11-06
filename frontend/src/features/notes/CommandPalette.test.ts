@@ -40,6 +40,17 @@ describe("command palette ranking", () => {
     expect(labels("trash")[0]).toBe("Open Trash");
   });
 
+  it("lets a plainly named command win over notes whose titles only scatter its letters", () => {
+    // "Trip zqaksh" holds t-r-a-s-h in order, but doesn't say "trash".
+    expect(labels("trash", ["Trip zqaksh", "Travel spreadsheet"])[0]).toBe("Open Trash");
+    expect(labels("backups", ["Back up the bikes"])[0]).toBe("Backups…");
+    // A note that does say it still comes first.
+    expect(labels("trash", ["Trash day", "Trip zqaksh"]).slice(0, 2)).toEqual([
+      "Trash day",
+      "Open Trash",
+    ]);
+  });
+
   it("doesn't offer to create a note that already exists", () => {
     expect(labels("garden plan")).not.toContain("Create note “garden plan”");
   });
