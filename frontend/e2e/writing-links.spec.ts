@@ -1,5 +1,6 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { proxyToBackend } from "./backend";
+import { uniqueWord } from "./notes";
 
 const editorSelector = '[contenteditable="true"][aria-label="Document content"]';
 
@@ -52,7 +53,7 @@ function backlinks(page: Page) {
 }
 
 test("[[ links to another note and the target's backlinks show it", async ({ page }, testInfo) => {
-  const suffix = Date.now().toString(36);
+  const suffix = uniqueWord("lnk");
   const target = await createNote(
     page,
     testInfo,
@@ -92,7 +93,7 @@ test("[[ links to another note and the target's backlinks show it", async ({ pag
 test("(( references a block, previews it on hover, and records a backlink", async ({
   page,
 }, testInfo) => {
-  const suffix = Date.now().toString(36);
+  const suffix = uniqueWord("lnk");
   const target = await createNote(
     page,
     testInfo,
@@ -104,7 +105,9 @@ test("(( references a block, previews it on hover, and records a backlink", asyn
   await page.keyboard.type("Today's dough: ");
   await page.keyboard.type("((");
   await page.keyboard.type(`ciabatta ${suffix}`);
-  const option = page.getByRole("option", { name: /Hydration seventy percent/ });
+  const option = page.getByRole("option", {
+    name: new RegExp(`Hydration seventy percent for ciabatta ${suffix}`),
+  });
   await expect(option).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("option")).toHaveCount(0);
@@ -133,7 +136,7 @@ test("(( references a block, previews it on hover, and records a backlink", asyn
 test("a link that fails its check is marked, and the mark survives a reload", async ({
   page,
 }, testInfo) => {
-  const suffix = Date.now().toString(36);
+  const suffix = uniqueWord("lnk");
   const note = await createNote(
     page,
     testInfo,

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { proxyToBackend } from "./backend";
+import { uniqueWord } from "./notes";
 
 const editorSelector = '[contenteditable="true"][aria-label="Document content"]';
 const PLAN =
@@ -23,10 +24,12 @@ test("related paragraphs wait behind a quiet chip and link on request", async ({
   page,
 }, testInfo) => {
   const backendUrl = String(testInfo.config.metadata.backendUrl);
+  // A unique title: an earlier run leaves its own "Sourdough notes" behind.
+  const sourdough = `Sourdough notes ${uniqueWord("sd")}`;
   const sourceId = await createNote(
     page,
     backendUrl,
-    "Sourdough notes",
+    sourdough,
     "Feed the sourdough starter twice a day with rye flour and water.",
   );
   await page.goto("/");
@@ -49,11 +52,11 @@ test("related paragraphs wait behind a quiet chip and link on request", async ({
   );
   await panel
     .getByRole("listitem")
-    .filter({ hasText: "Sourdough notes" })
+    .filter({ hasText: sourdough })
     .getByRole("button", { name: "Link" })
     .click();
   await linkSaved;
-  await expect(editor.locator("a")).toHaveText("Sourdough notes");
+  await expect(editor.locator("a")).toHaveText(sourdough);
   await expect(panel).toHaveCount(0);
 
   const draftUrl = page.url();

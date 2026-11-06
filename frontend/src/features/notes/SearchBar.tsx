@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { focusFirstResult, isEditableTarget, SEARCH_INPUT_ID } from "./listKeyboard";
+import {
+  focusFirstResult,
+  isComposing,
+  isEditableTarget,
+  SEARCH_INPUT_ID,
+  topModalDialog,
+} from "./listKeyboard";
 import type { BlockSearchFilters, BlockType, NoteStatus, NoteSummary, SavedSearch } from "./types";
 
 interface Props {
@@ -70,6 +76,7 @@ export function SearchBar({
       if (
         event.key === "?" &&
         !isEditableTarget(event.target) &&
+        !topModalDialog() &&
         !event.metaKey &&
         !event.ctrlKey
       ) {
@@ -91,6 +98,8 @@ export function SearchBar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(event) => {
+            // Enter, Escape and the arrows belong to the input method while it composes.
+            if (isComposing(event)) return;
             if (event.key === "Escape") {
               event.preventDefault();
               onQuery("");

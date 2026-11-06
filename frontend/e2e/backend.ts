@@ -31,7 +31,7 @@ interface NavNode {
 
 /**
  * Empty the shared test workspace through the normal API (trash and purge every
- * note, then delete folders deepest first). For specs whose pointer gestures
+ * note, delete folders deepest first, forget saved searches). For specs whose pointer gestures
  * depend on the sidebar's layout.
  */
 export async function resetWorkspace(page: Page, testInfo: TestInfo) {
@@ -54,4 +54,9 @@ export async function resetWorkspace(page: Page, testInfo: TestInfo) {
   for (const folder of folders.sort((a, b) => b.depth - a.depth)) {
     await page.request.delete(`${api}/folders/${folder.id}`);
   }
+  // Saved-search chips sit above the tree and would shift it too.
+  const saved = (await (await page.request.get(`${api}/saved-searches`)).json()) as {
+    id: string;
+  }[];
+  for (const search of saved) await page.request.delete(`${api}/saved-searches/${search.id}`);
 }

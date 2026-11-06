@@ -40,11 +40,15 @@ describe("command palette ranking", () => {
     expect(labels("trash")[0]).toBe("Open Trash");
   });
 
-  it("lets a plainly named command win over a note that only loosely matches", () => {
-    // "trash" is a scattered match for "Trip askrbwh" (T-r-…a-s-…h), not a name.
-    expect(labels("trash", ["Trip askrbwh"])[0]).toBe("Open Trash");
-    // A note that really contains the words still comes first.
-    expect(labels("trash", ["Trash day"])[0]).toBe("Trash day");
+  it("lets a plainly named command win over notes whose titles only scatter its letters", () => {
+    // "Trip zqaksh" holds t-r-a-s-h in order, but doesn't say "trash".
+    expect(labels("trash", ["Trip zqaksh", "Travel spreadsheet"])[0]).toBe("Open Trash");
+    expect(labels("backups", ["Back up the bikes"])[0]).toBe("Backups…");
+    // A note that does say it still comes first.
+    expect(labels("trash", ["Trash day", "Trip zqaksh"]).slice(0, 2)).toEqual([
+      "Trash day",
+      "Open Trash",
+    ]);
   });
 
   it("doesn't offer to create a note that already exists", () => {

@@ -54,8 +54,14 @@ export function TrashDialog({ open, onClose, onRestored }: Props) {
               </div>
               <button
                 type="button"
+                // mutateAsync, not mutate's onSuccess: that only fires for the latest
+                // call, so restoring two in quick succession would skip the first.
+                // (A failure shows in the dialog through restore.error.)
                 onClick={() =>
-                  restore.mutate(item.id, { onSuccess: () => onRestored(item.id, item.title) })
+                  void restore.mutateAsync(item.id).then(
+                    () => onRestored(item.id, item.title),
+                    () => undefined,
+                  )
                 }
                 className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
               >

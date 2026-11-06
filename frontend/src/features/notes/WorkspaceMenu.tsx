@@ -136,7 +136,14 @@ export function WorkspaceMenu({ onNotice, onOpenNote, request = null }: Props) {
         onRestored={(id, title) =>
           onNotice({
             message: `Restored “${title}”`,
-            action: { label: "Open", run: () => onOpenNote(id) },
+            action: {
+              label: "Open",
+              run: () => {
+                // Trash stays open for restoring more; opening one is done with it.
+                setDialog(null);
+                onOpenNote(id);
+              },
+            },
           })
         }
       />
