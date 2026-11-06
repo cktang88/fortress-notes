@@ -28,7 +28,7 @@ import {
 } from "@blocknote/react";
 import type { ComponentProps, DefaultReactSuggestionItem, SideMenuProps } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
-import { NodeSelection, TextSelection } from "@tiptap/pm/state";
+import { AllSelection, NodeSelection, TextSelection } from "@tiptap/pm/state";
 import { calloutBlock } from "./CalloutBlock";
 import { mathPlaceholderBlock } from "./MathPlaceholderBlock";
 import "@blocknote/core/fonts/inter.css";
@@ -441,6 +441,7 @@ export function BlockNoteEditor({
     return saveQueue.current;
   };
 
+  const selectAllStart = useRef<{ from: number; to: number } | null>(null);
   const showPreview = (event: React.MouseEvent<HTMLElement>) => {
     const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a");
     const reference = anchor && parseBlockReference(anchor.getAttribute("href") ?? "");
@@ -628,12 +629,34 @@ export function BlockNoteEditor({
 
         if ((!event.metaKey && !event.ctrlKey) || event.altKey) return;
         const style = event.key.toLowerCase();
+        if (style === "a" && !event.shiftKey) {
+          const { from, to } = editor.prosemirrorState.selection;
+          selectAllStart.current = { from, to };
+          return;
+        }
         if (style !== "b" && style !== "i") return;
 
         syncNativeTextSelection(editor);
         event.preventDefault();
         event.stopPropagation();
         editor.toggleStyles(style === "b" ? { bold: true } : { italic: true });
+      }}
+      onKeyDown={() => {
+        // BlockNote's Ctrl/⌘+A selects the current block, then the whole note as text. A text
+        // selection can't reach a trailing image, so when a press doesn't grow the selection,
+        // select every block instead (images included) so copying the note copies them too.
+        const before = selectAllStart.current;
+        selectAllStart.current = null;
+        if (!before) return;
+        const view = editor.prosemirrorView;
+        const { selection, doc } = view.state;
+        if (
+          selection.from === before.from &&
+          selection.to === before.to &&
+          !(selection instanceof AllSelection)
+        ) {
+          view.dispatch(view.state.tr.setSelection(new AllSelection(doc)));
+        }
       }}
       onMouseOver={showPreview}
       onClick={(event) => {

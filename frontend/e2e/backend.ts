@@ -10,8 +10,14 @@ export async function proxyToBackend(page: Page, testInfo: TestInfo) {
   for (const pattern of ["**/api/**", "**/media/**"]) {
     await page.route(pattern, async (route) => {
       const url = new URL(route.request().url());
-      const response = await route.fetch({ url: `${backendUrl}${url.pathname}${url.search}` });
-      return route.fulfill({ response });
+      try {
+        const response = await route.fetch({ url: `${backendUrl}${url.pathname}${url.search}` });
+        await route.fulfill({ response });
+      } catch (error) {
+        // The page navigated, closed, the test ended, or a test re-routed this request
+        // mid-flight (e.g. simulating going offline); there is nothing left to answer.
+        if (!/disposed|closed|already handled|test ended/i.test(String(error))) throw error;
+      }
     });
   }
 }

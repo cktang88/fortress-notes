@@ -55,6 +55,8 @@ test("edits a blank note with bold and italic shortcuts and copies rich HTML", a
   expect(browserErrors).toEqual([]);
 
   await editor.click();
+  // The first ⌘/Ctrl+A selects the current block, the second the whole note.
+  await page.keyboard.press(`${shortcut}+a`);
   await page.keyboard.press(`${shortcut}+a`);
   await page.keyboard.press(`${shortcut}+c`);
   const copiedHtml = await readClipboardHtml(page);
@@ -87,6 +89,8 @@ test("pastes rich HTML with a data URL image and restores it through reload, und
   await expect(editor.locator(`img[src="${embeddedImage}"]`)).toHaveCount(1);
   // Click the text (the editor's centre can land on the image and select only it).
   await editor.locator("strong").click();
+  // The first ⌘/Ctrl+A selects the current block, the second the whole note.
+  await page.keyboard.press(`${shortcut}+a`);
   await page.keyboard.press(`${shortcut}+a`);
   await page.keyboard.press(`${shortcut}+c`);
   const copiedHtml = await readClipboardHtml(page);
@@ -143,6 +147,8 @@ test("copies a loaded local image as embedded clipboard bytes", async ({ page })
   expect(new URL(renderedImageUrl!, page.url()).origin).toBe(new URL(page.url()).origin);
   expect(new URL(renderedImageUrl!, page.url()).pathname).toContain("/media/");
   await editor.locator("p").click();
+  // The first ⌘/Ctrl+A selects the current block, the second the whole note.
+  await page.keyboard.press(`${shortcut}+a`);
   await page.keyboard.press(`${shortcut}+a`);
   await page.keyboard.press(`${shortcut}+c`);
   const copiedHtml = await readClipboardHtml(page);
