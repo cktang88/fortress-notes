@@ -4,7 +4,7 @@ import math
 import unicodedata
 from datetime import datetime, timezone
 
-from . import block_query, block_store, documents, embeddings
+from . import block_query, block_store, documents, embeddings, relevance
 from .config import get_settings
 from .models import RelatedResult, SearchResult
 
@@ -65,7 +65,9 @@ def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list
         if not query.strip():
             return []
     block_docs = [d for d in all_blocks if d[1] != note_id]
-    scores = embeddings.score_documents(
+    # Only paragraphs that clear the relevance cutoff, so every consumer (the
+    # related panel, the "↗ N related" chip) shows real relations, not just the top k.
+    scores = relevance.related_scores(
         query, [(bid, updated_at, text) for bid, _, updated_at, text in block_docs]
     )
     document_ids = {bid: document_id for bid, document_id, _, _ in block_docs}

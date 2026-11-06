@@ -17,6 +17,10 @@ _URL_RE = re.compile(r"https?://[^\s\)\]\>\"'`]+", re.IGNORECASE)
 _CHECK_LOCK = asyncio.Lock()
 _CHECK_INTERVAL = timedelta(days=30)
 _MARKDOWN = MarkdownIt("commonmark")
+# A note can hold hundreds of links: check a few at a time, and only a couple
+# against any one site, so neither this machine nor someone's server gets flooded.
+MAX_CONCURRENT_CHECKS = 8
+MAX_CONCURRENT_PER_HOST = 2
 
 
 def extract_urls(text: str) -> list[str]:
@@ -69,13 +73,23 @@ async def _check_urls(
     unique_urls = list(dict.fromkeys(urls))
     if not unique_urls:
         return {}
+    overall = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
+    per_host: dict[str, asyncio.Semaphore] = {}
+
+    async def check(client: httpx.AsyncClient, url: str) -> str:
+        host = (urlsplit(url).hostname or "").lower()
+        host_slot = per_host.setdefault(host, asyncio.Semaphore(MAX_CONCURRENT_PER_HOST))
+        # Take the host's slot first so waiting on a busy site doesn't hold a
+        # shared slot that another site could use.
+        async with host_slot, overall:
+            return await _request_status(client, url)
+
     async with httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 (FortressNotes link checker)"},
         transport=transport,
+        limits=httpx.Limits(max_connections=MAX_CONCURRENT_CHECKS),
     ) as client:
-        statuses = await asyncio.gather(
-            *(_request_status(client, url) for url in unique_urls)
-        )
+        statuses = await asyncio.gather(*(check(client, url) for url in unique_urls))
     return dict(zip(unique_urls, statuses, strict=True))
 
 
@@ -88,7 +102,8 @@ async def check_document_links(
     """Return known link statuses and check old blocks whose valid cache expired."""
 
     async with _CHECK_LOCK:
-        tree = block_store.document_tree(database_path, document_id)
+        # SQLite calls block, so they run in a worker thread, not on the event loop.
+        tree = await asyncio.to_thread(block_store.document_tree, database_path, document_id)
         if tree is None:
             raise KeyError("document not found")
 
@@ -99,7 +114,9 @@ async def check_document_links(
         if not links:
             return {"links": []}
 
-        cached = block_store.get_link_check_cache(database_path, list(links))
+        cached = await asyncio.to_thread(
+            block_store.get_link_check_cache, database_path, list(links)
+        )
         due: list[str] = []
         for url, link in links.items():
             entry = cached.get(url)
@@ -109,8 +126,8 @@ async def check_document_links(
         if due:
             statuses = await _check_urls(due, transport=transport)
             checked_at = now.isoformat()
+            await asyncio.to_thread(_store_statuses, database_path, statuses, checked_at)
             for url, status in statuses.items():
-                block_store.store_link_check(database_path, url, status, checked_at)
                 cached[url] = {"status": status, "checked_at": checked_at}
 
         results: list[dict[str, object]] = []
@@ -127,6 +144,11 @@ async def check_document_links(
                 }
             )
         return {"links": results}
+
+
+def _store_statuses(database_path: Path, statuses: dict[str, str], checked_at: str) -> None:
+    for url, status in statuses.items():
+        block_store.store_link_check(database_path, url, status, checked_at)
 
 
 def _collect_links(

@@ -32,7 +32,6 @@ class BlockSearchFilters:
     document_id: str | None = None
     block_type: str | None = None
     status: str | None = None
-    tag: str | None = None
     updated_after: datetime | str | None = None
     updated_before: datetime | str | None = None
 
@@ -114,21 +113,6 @@ def _add_filters(
             return False
         predicates.append("documents.status = ?")
         parameters.append(filters.status)
-
-    if filters.tag is not None:
-        if not isinstance(filters.tag, str) or not filters.tag.strip():
-            return False
-        predicates.append(
-            """EXISTS (
-                   SELECT 1
-                     FROM json_each(
-                         CASE WHEN json_valid(documents.tags_json)
-                              THEN documents.tags_json ELSE '[]' END
-                     ) AS tags
-                    WHERE tags.value = ?
-               )"""
-        )
-        parameters.append(filters.tag)
 
     updated_after = _normalize_timestamp(filters.updated_after)
     updated_before = _normalize_timestamp(filters.updated_before, upper_bound=True)

@@ -376,6 +376,11 @@ def _initialize(path: Path) -> None:
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (current, _now()),
                 )
+        # Migration 3 creates this index; _SCHEMA can't (older documents tables have
+        # no folder_id until that migration runs), so fresh databases get it here.
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS documents_folder_position ON documents(folder_id, position)"
+        )
 
 
 def register_asset(db_path: Path, asset_path: Path, content_hash: str, mime_type: str) -> None:
@@ -653,6 +658,39 @@ def create_document(
                 "UPDATE documents SET folder_id = ?, position = ? WHERE id = ?",
                 (folder_id, position, document_id),
             )
+
+
+def ensure_editable_block(path: Path, document_id: str) -> bool:
+    """Give a live document with no blocks one empty paragraph; True if one was added.
+
+    The editor always shows a paragraph to type into, so it needs a stable ID the
+    server knows (an empty import, or a note emptied by move-into and restored,
+    has none). The content is unchanged - an empty paragraph exports as nothing -
+    so the revision and history stay as they are.
+    """
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        if not _needs_editable_block(connection, document_id):
+            return False
+    with connection_scope(path, immediate=True) as connection:
+        if not _needs_editable_block(connection, document_id):
+            return False
+        now = _now()
+        _insert_blocks(connection, document_id, "", now, now, ensure_empty_paragraph=True)
+    return True
+
+
+def _needs_editable_block(connection: sqlite3.Connection, document_id: str) -> bool:
+    return (
+        connection.execute(
+            """SELECT 1 FROM documents
+                WHERE id = ? AND deleted_at IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.document_id = documents.id)""",
+            (document_id,),
+        ).fetchone()
+        is not None
+    )
 
 
 def list_documents(path: Path) -> list[dict[str, object]]:
@@ -2396,8 +2434,8 @@ def _duplicate_block(connection: sqlite3.Connection, document_id: str, row: sqli
 
 def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row,
                  operation: BlockOperation, now: str) -> str:
-    offset = operation.split_at
-    if offset is None or offset > len(row["text"]):
+    offset = _code_point_offset(row["text"], operation.split_at)
+    if offset is None:
         raise ValueError("split requires split_at within block text")
     if len(_subtree_rows(connection, row["id"])) > 1:
         raise ValueError("cannot split a block with children")
@@ -2416,6 +2454,25 @@ def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.
     _replace_attrs(connection, new_id, json.loads(row["attrs_json"]))
     _refresh_fts(connection, new_id, document_id, second)
     return new_id
+
+
+def _code_point_offset(text: str, utf16_offset: int | None) -> int | None:
+    """Python index for a UTF-16 offset (what browsers count), or None if it isn't one.
+
+    An emoji is one Python character but two UTF-16 units; an offset that falls
+    between the two halves, or past the end, is rejected.
+    """
+
+    if utf16_offset is None or utf16_offset < 0:
+        return None
+    units = 0
+    for index, character in enumerate(text):
+        if units == utf16_offset:
+            return index
+        units += 2 if ord(character) > 0xFFFF else 1
+        if units > utf16_offset:
+            return None
+    return len(text) if units == utf16_offset else None
 
 
 def _merge_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row, now: str) -> None:
@@ -2575,36 +2632,40 @@ def _parse_blocks(body: str) -> list[ImportedBlock]:
 
 
 def _parse_sequence(
-    tokens: list[Token], lines: list[str], index: int, stop: str | None = None
+    tokens: list[Token], lines: list[str], index: int, stop: str | None = None, indent: int = 0
 ) -> tuple[list[ImportedBlock], int]:
+    """Blocks from ``tokens[index:]``; ``indent`` is the enclosing list item's content column."""
+
     blocks: list[ImportedBlock] = []
     while index < len(tokens):
         token = tokens[index]
         if stop and token.type == stop and token.nesting == -1:
             return blocks, index + 1
         if token.type in {"bullet_list_open", "ordered_list_open"}:
-            nested, index = _parse_list(tokens, lines, index)
+            nested, index = _parse_list(tokens, lines, index, indent)
             blocks.extend(nested)
             continue
         if token.type == "heading_open":
-            block, index = _parse_inline_block(tokens, lines, index, "heading")
+            block, index = _parse_inline_block(tokens, lines, index, "heading", indent)
         elif token.type == "paragraph_open":
-            block, index = _parse_inline_block(tokens, lines, index, "paragraph")
+            block, index = _parse_inline_block(tokens, lines, index, "paragraph", indent)
         elif token.type == "blockquote_open":
-            block, index = _parse_container_block(tokens, lines, index, "blockquote_close", "quote")
+            block, index = _parse_container_block(
+                tokens, lines, index, "blockquote_close", "quote", indent
+            )
         elif token.type in {"fence", "code_block"}:
             block = ImportedBlock(
                 _new_ulid(),
                 "code",
-                _token_source(lines, token),
+                _token_source(lines, token, indent),
                 {"language": token.info.strip()} if token.type == "fence" and token.info else {},
             )
             index += 1
         elif token.type == "hr":
-            block = ImportedBlock(_new_ulid(), "thematic_break", _token_source(lines, token))
+            block = ImportedBlock(_new_ulid(), "thematic_break", _token_source(lines, token, indent))
             index += 1
         elif token.type in {"html_block", "table_open"}:
-            block = ImportedBlock(_new_ulid(), "raw", _token_source(lines, token))
+            block = ImportedBlock(_new_ulid(), "raw", _token_source(lines, token, indent))
             index += 1
         else:
             index += 1
@@ -2614,7 +2675,7 @@ def _parse_sequence(
 
 
 def _parse_list(
-    tokens: list[Token], lines: list[str], index: int
+    tokens: list[Token], lines: list[str], index: int, indent: int = 0
 ) -> tuple[list[ImportedBlock], int]:
     ordered = tokens[index].type == "ordered_list_open"
     close_type = "ordered_list_close" if ordered else "bullet_list_close"
@@ -2624,22 +2685,31 @@ def _parse_list(
         if tokens[index].type != "list_item_open":
             index += 1
             continue
-        block, index = _parse_list_item(tokens, lines, index, ordered)
+        block, index = _parse_list_item(tokens, lines, index, ordered, indent)
         blocks.append(block)
     return blocks, min(index + 1, len(tokens))
 
 
 def _parse_list_item(
-    tokens: list[Token], lines: list[str], index: int, ordered: bool
+    tokens: list[Token], lines: list[str], index: int, ordered: bool, indent: int = 0
 ) -> tuple[ImportedBlock, int]:
     open_token = tokens[index]
+    # Lines inside the item are indented to its content column; blocks are stored
+    # without that indentation (export adds it back), or it would pile up.
+    content_indent = indent
+    if open_token.map:
+        marker = _LIST_CONTENT_RE.match(lines[open_token.map[0]])
+        if marker:
+            content_indent = len(marker.group(0).expandtabs(4))
     attrs: dict[str, object] = {}
     if ordered:
         attrs["ordered"] = True
     first_token = tokens[index + 1] if index + 1 < len(tokens) else None
     # Parse everything inside the item like a document, so a second paragraph, a
     # heading or raw HTML inside an item is kept as a child instead of dropped.
-    children, index = _parse_sequence(tokens, lines, index + 1, stop="list_item_close")
+    children, index = _parse_sequence(
+        tokens, lines, index + 1, stop="list_item_close", indent=content_indent
+    )
     source = ""
     if (
         children
@@ -2663,10 +2733,10 @@ def _parse_list_item(
 
 
 def _parse_inline_block(
-    tokens: list[Token], lines: list[str], index: int, block_type: str
+    tokens: list[Token], lines: list[str], index: int, block_type: str, indent: int = 0
 ) -> tuple[ImportedBlock, int]:
     open_token = tokens[index]
-    source = _token_source(lines, open_token)
+    source = _token_source(lines, open_token, indent)
     index += 1
     while index < len(tokens) and tokens[index].type != f"{block_type}_close":
         index += 1
@@ -2674,7 +2744,8 @@ def _parse_inline_block(
 
 
 def _parse_container_block(
-    tokens: list[Token], lines: list[str], index: int, close_type: str, block_type: str
+    tokens: list[Token], lines: list[str], index: int, close_type: str, block_type: str,
+    indent: int = 0,
 ) -> tuple[ImportedBlock, int]:
     open_token = tokens[index]
     index += 1
@@ -2688,15 +2759,28 @@ def _parse_container_block(
             depth -= 1
         index += 1
     end = tokens[index - 1].map[1] if index and tokens[index - 1].map else len(lines)
-    source = "\n".join(lines[start:end]).strip()
+    source = "\n".join(_dedent(line, indent) for line in lines[start:end]).strip()
     return ImportedBlock(_new_ulid(), block_type, source), index
 
 
-def _token_source(lines: list[str], token: Token) -> str:
+def _token_source(lines: list[str], token: Token, indent: int = 0) -> str:
     if not token.map:
         return ""
     start, end = token.map
-    return "\n".join(lines[start:end]).strip()
+    return "\n".join(_dedent(line, indent) for line in lines[start:end]).strip()
+
+
+_LIST_CONTENT_RE = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]{1,4}(?=\S)|[ \t]*$)")
+
+
+def _dedent(line: str, indent: int) -> str:
+    """``line`` without up to ``indent`` columns of leading whitespace."""
+
+    if not indent:
+        return line
+    expanded = line.expandtabs(4) if line[:1] == "\t" or "\t" in line[:indent] else line
+    stripped = len(expanded) - len(expanded.lstrip(" "))
+    return expanded[min(stripped, indent):]
 
 
 _TITLE_LIMIT = 80

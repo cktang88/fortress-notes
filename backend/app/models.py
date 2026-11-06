@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 NoteStatus = Literal["rough", "polished"]
-ReviewKind = Literal["factcheck", "clarify", "object"]
+ReviewKind = Literal["factcheck", "object"]
 BlockReviewContextKind = Literal["current", "selected", "document", "linked"]
 BlockOperationKind = Literal[
     "insert", "update", "move", "delete", "set_attrs", "set_user_attrs",
@@ -55,7 +55,8 @@ class BlockOperation(BaseModel):
     content: dict[str, Any] | None = None
     text: str | None = None
     split_at: int | None = Field(default=None, ge=0)
-    # For split, the character offset in the block text. For duplicate/merge,
+    # For split, the offset in the block text in UTF-16 code units (JavaScript string
+    # indices, as the browser counts; an emoji is 2). For duplicate/merge,
     # position keeps its existing sibling-position meaning.
     expected_updated_at: str | None = None
 

@@ -123,6 +123,8 @@ def trash(document_id: str) -> None:
 def restore(document_id: str) -> dict[str, object]:
     db_path, _ = _paths()
     result = workspace.restore_document(db_path, document_id)
+    # A note emptied by move-into comes back with no blocks; give it one to type in.
+    block_store.ensure_editable_block(db_path, document_id)
     write_mirror(document_id)
     return result
 

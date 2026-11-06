@@ -173,7 +173,8 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.assertEqual([item["title"] for item in result["imported"]], ["trip", "plain"])
         self.assertEqual([item["name"] for item in result["errors"]], ["bad.md"])
         trip_id = result["imported"][0]["id"]
-        self.assertEqual(self.client.get(f"/api/notes/{trip_id}").json()["tags"], ["travel"])
+        # Old files with tags still import; the tags are ignored (no longer a feature).
+        self.assertEqual(self.client.get(f"/api/notes/{trip_id}").json()["tags"], [])
         navigation = self.client.get("/api/navigation").json()
         self.assertEqual(len(navigation["items"][0]["children"]), 2)
 
