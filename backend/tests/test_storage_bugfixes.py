@@ -1,5 +1,6 @@
 """Regression tests for storage-core bugs (block moves, positions, trash, migrations)."""
 
+import hashlib
 import tempfile
 import threading
 import unittest
@@ -14,7 +15,10 @@ from app.block_store import (
     delete_document,
     document_backlinks,
     document_tree,
+    fts_is_consistent,
     initialize,
+    register_asset,
+    store_asset_text,
     undo_transaction,
 )
 from app.models import BlockOperation
@@ -117,6 +121,23 @@ class TrashRestoreTests(unittest.TestCase):
                  for link in document_backlinks(database, "target")},
                 {("source", None), ("source", block_id)},
             )
+
+    def test_image_text_arriving_for_a_trashed_note_keeps_it_out_of_search(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / ".fortress.sqlite3"
+            media = root / "01ARZ3NDEKTSV4RRFFQ69G5FAV.png"
+            media.write_bytes(b"image")
+            image_hash = hashlib.sha256(b"image").hexdigest()
+            register_asset(database, media, image_hash, "image/png")
+            document = create_block_document(
+                database, "Pic", "rough", [], f"![x](/media/{media.name})"
+            )
+            delete_document(database, document["id"])
+
+            store_asset_text(database, image_hash, "late OCR text")
+
+            self.assertTrue(fts_is_consistent(database))
 
 
 class InitializeTests(unittest.TestCase):

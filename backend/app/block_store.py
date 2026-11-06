@@ -396,7 +396,8 @@ def store_asset_text(path: Path, content_hash: str, text: str) -> None:
         rows = connection.execute(
             """SELECT DISTINCT blocks.id, blocks.document_id, blocks.text
                  FROM blocks JOIN block_assets ON block_assets.block_id = blocks.id
-                WHERE block_assets.content_hash = ?""",
+                 JOIN documents ON documents.id = blocks.document_id
+                WHERE block_assets.content_hash = ? AND documents.deleted_at IS NULL""",
             (content_hash,),
         ).fetchall()
         for row in rows:
