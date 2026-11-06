@@ -262,7 +262,9 @@ async def ask(question: str) -> dict[str, object]:
     question = question.strip()
     sources = _Sources()
     steps: list[dict[str, str]] = []
-    first = prefetch(question, sources)
+    # Local search is synchronous (SQLite, ColBERT); keep it off the event loop so
+    # other requests aren't stalled while Ask looks things up.
+    first = await asyncio.to_thread(prefetch, question, sources)
     if not first:
         return _result("not_found", [], sources, steps, started)
 
@@ -307,7 +309,7 @@ async def ask(question: str) -> dict[str, object]:
         ):
             # "Not found" with other wording to try: grep it locally (milliseconds) and,
             # only if that turns up new passages, give the model one last look.
-            added = sources.add(grep_blocks(retry))
+            added = sources.add(await asyncio.to_thread(grep_blocks, retry))
             steps.append({"action": "grep", "detail": retry})
             if added:
                 transcript += (
@@ -319,13 +321,13 @@ async def ask(question: str) -> dict[str, object]:
             return _answer(data, sources, steps, started)
         if action == "grep" and isinstance(data.get("pattern"), str):
             pattern = data["pattern"]
-            added = sources.add(grep_blocks(pattern))
+            added = sources.add(await asyncio.to_thread(grep_blocks, pattern))
             steps.append({"action": "grep", "detail": pattern})
             found = sources.payload(added) if added else "[] (no new matches)"
             transcript += f'\n\nYou searched for /{pattern}/. New sources:\n{found}'
         elif action == "read" and isinstance(data.get("note"), str):
             note = data["note"]
-            added = sources.add(read_note(note))
+            added = sources.add(await asyncio.to_thread(read_note, note))
             steps.append({"action": "read", "detail": note})
             found = sources.payload(added) if added else "[] (no such note, or nothing new)"
             transcript += f'\n\nYou read the note "{note}". New sources:\n{found}'

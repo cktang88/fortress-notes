@@ -274,6 +274,43 @@ class AskYourNotesTests(unittest.TestCase):
         rows = ask.grep_blocks("*nix|unix")  # "nothing to repeat": not a valid regex
         self.assertEqual([r["document_title"] for r in rows], ["Servers"])
 
+    def test_local_searching_does_not_block_other_requests(self) -> None:
+        import asyncio
+        import time
+
+        from app import ask, llm, search
+
+        real_search = search.unified_search
+
+        def slow_search(*args, **kwargs):
+            time.sleep(0.4)  # e.g. ColBERT encoding freshly edited paragraphs
+            return real_search(*args, **kwargs)
+
+        async def scenario() -> float:
+            gaps = []
+
+            async def heartbeat() -> None:
+                last = time.monotonic()
+                while True:
+                    await asyncio.sleep(0.01)
+                    now = time.monotonic()
+                    gaps.append(now - last)
+                    last = now
+
+            beat = asyncio.create_task(heartbeat())
+            await asyncio.sleep(0.02)
+            await ask.ask("Which hotel did we pick?")
+            await asyncio.sleep(0.03)  # let the heartbeat record the last gap
+            beat.cancel()
+            return max(gaps)
+
+        reply = AsyncMock(return_value={"found": False, "sentences": []})
+        with patch.object(search, "unified_search", slow_search), patch.object(
+            llm, "chat_json", reply
+        ):
+            longest_stall = asyncio.run(scenario())
+        self.assertLess(longest_stall, 0.2)
+
     def test_read_tool_returns_a_whole_note(self) -> None:
         from app import ask
 
