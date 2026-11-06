@@ -33,13 +33,7 @@ function formatDate(iso: string): string {
 /**
  * Render with `key={note.id}` so the draft starts fresh for each note.
  */
-export function NoteHeader({
-  note,
-  onTitle,
-  onDelete,
-  onSetStatus,
-  exportUrl,
-}: Props) {
+export function NoteHeader({ note, onTitle, onDelete, onSetStatus, exportUrl }: Props) {
   const [draft, setDraft] = useState(note.title);
   const committed = useRef(note.title);
   const timer = useRef<number | undefined>(undefined);

@@ -58,8 +58,9 @@ test("related paragraphs wait behind a quiet chip and link on request", async ({
 
   const draftUrl = page.url();
   await page.goto(`/?note=${sourceId}`);
+  // The new note took its title from its first line.
   await expect(page.getByText("Backlinks", { exact: true }).locator("..")).toContainText(
-    "Untitled",
+    "My sourdough starter needs rye flour every morning",
   );
   await page.goto(draftUrl);
 });
