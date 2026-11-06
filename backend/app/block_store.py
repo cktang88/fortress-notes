@@ -376,6 +376,11 @@ def _initialize(path: Path) -> None:
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (current, _now()),
                 )
+        # Migration 3 creates this index; _SCHEMA can't (older documents tables have
+        # no folder_id until that migration runs), so fresh databases get it here.
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS documents_folder_position ON documents(folder_id, position)"
+        )
 
 
 def register_asset(db_path: Path, asset_path: Path, content_hash: str, mime_type: str) -> None:

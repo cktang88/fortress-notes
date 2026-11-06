@@ -60,6 +60,19 @@ class BlockStoreTests(unittest.TestCase):
             self.assertIsNotNone(table)
             self.assertEqual(version, 12)
 
+    def test_fresh_database_has_the_folder_position_index_migrations_create(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            initialize(database)
+            initialize(database)  # and initializing again is harmless
+            with connection_scope(database) as connection:
+                index = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                    "AND name = 'documents_folder_position'"
+                ).fetchone()
+            self.assertIsNotNone(index)
+            self.assertIn("folder_id, position", index["sql"])
+
     def test_empty_document_starts_with_a_persisted_paragraph(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
