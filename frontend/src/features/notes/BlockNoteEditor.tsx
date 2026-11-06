@@ -46,9 +46,12 @@ import {
 } from "./pendingBlockTransactions";
 import {
   blockLink,
-  documentLink,
+  documentLinkContent,
+  documentLinksAsWikiText,
+  linkifyDocumentLinks,
   matchingLinkTargets,
   parseBlockReference,
+  parseDocumentLink,
 } from "./linkSuggestions";
 import {
   useBlockReference,
@@ -255,12 +258,34 @@ export function BlockNoteEditor({
   const initialContent = useMemo(() => startingNodes.map(toPartialBlock), [startingNodes]);
   const [editorActionError, setEditorActionError] = useState<string | null>(null);
   const editorRef = useRef<AppEditor | null>(null);
+  const openNoteRef = useRef(onOpenNote);
+  useEffect(() => {
+    openNoteRef.current = onOpenNote;
+  });
   const editor = useCreateBlockNote(
     {
       schema: editorSchema,
       domAttributes: { editor: { "aria-label": "Document content" } },
       initialContent: initialContent.length > 0 ? initialContent : undefined,
       extensions: [slashMenuShortcut],
+      links: {
+        // Note links open that note; block references show their preview (the section's
+        // click handler); other links open in a new window, as BlockNote does by default.
+        onClick: (event) => {
+          const anchor = (event.target as HTMLElement | null)?.closest("a");
+          if (!anchor) return false;
+          const href = anchor.getAttribute("href") ?? "";
+          if (parseBlockReference(href)) return true;
+          const note = parseDocumentLink(href);
+          if (note) {
+            event.preventDefault();
+            openNoteRef.current?.(note.documentId, null);
+            return true;
+          }
+          if (anchor.href) window.open(anchor.href, anchor.target);
+          return true;
+        },
+      },
       uploadFile: async (file, blockId) => {
         setEditorActionError(null);
         try {
@@ -666,7 +691,7 @@ export function BlockNoteEditor({
       subtext: `Document · ${target.id}`,
       group: "Link to document",
       onItemClick: () => {
-        editor.insertInlineContent(documentLink(target));
+        editor.insertInlineContent([documentLinkContent(target)]);
         editor.getExtension(SuggestionMenu)?.closeMenu();
       },
     }));
@@ -1326,7 +1351,12 @@ export function toPartialBlock(node: BlockNode): AppPartialBlock {
       id: node.id,
       type: node.type,
       ...(Object.keys(props).length > 0 ? { props } : {}),
-      ...(spec.content === "none" ? {} : { content: storedContent }),
+      ...(spec.content === "none"
+        ? {}
+        : {
+            content:
+              node.type === "codeBlock" ? storedContent : linkifyDocumentLinks(storedContent),
+          }),
       children,
     } as unknown as AppPartialBlock;
   }
@@ -1457,7 +1487,7 @@ function toOperation(
       markdown:
         block.type === "mathPlaceholder"
           ? "Math placeholder"
-          : editor.blocksToMarkdownLossy([block]),
+          : documentLinksAsWikiText(editor.blocksToMarkdownLossy([block])),
     },
     text: block.type === "mathPlaceholder" ? "Math placeholder" : inlineText(block.content),
   };
@@ -1580,7 +1610,9 @@ function hydrateLegacyBlocks(editor: AppEditor, nodes: readonly BlockNode[]) {
       if (!block || editorSchema.blockSchema[block.type].content !== "inline") continue;
       const parsed = editor.tryParseMarkdownToBlocks(markdownText(node));
       if (parsed[0]?.content !== undefined) {
-        editor.updateBlock(block.id, { content: parsed[0].content } as PartialBlock);
+        const content =
+          block.type === "codeBlock" ? parsed[0].content : linkifyDocumentLinks(parsed[0].content);
+        editor.updateBlock(block.id, { content } as PartialBlock);
       }
     }
   });
