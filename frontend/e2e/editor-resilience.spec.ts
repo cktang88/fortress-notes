@@ -83,6 +83,54 @@ test("edits still waiting to sync stay visible after reopening the note", async 
   await expect(page.locator(editorSelector)).toContainText("first part and second part and more");
 });
 
+test("a failed rename doesn't roll the text back to an older copy", async ({ page }) => {
+  const editor = await newNote(page, "Rename rollback");
+  await page.keyboard.type("first");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Object.keys(localStorage).filter((key) => key.includes("pending-block")).length,
+      ),
+    )
+    .toBe(0);
+
+  let releaseRename = () => {};
+  const renameHeld = new Promise<void>((resolve) => (releaseRename = resolve));
+  await page.route("**/api/block-documents/*", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    await renameHeld;
+    await route.fulfill({ status: 500, body: "rename failed" });
+  });
+  const title = page.getByRole("textbox", { name: "Note title" });
+  await title.fill("Renamed note");
+  await title.press("Enter");
+  await expect(editor).toBeFocused();
+  await page.keyboard.press("End");
+  const saved = page.waitForResponse(
+    (response) => response.url().endsWith("/transactions") && response.ok(),
+  );
+  await page.keyboard.type(" second");
+  await saved;
+  const failed = page.waitForResponse((response) => response.request().method() === "PATCH");
+  releaseRename();
+  await failed;
+
+  await expect(editor).toContainText("first second");
+  await page.keyboard.type(" third");
+  await expect(page.getByRole("alert").filter({ hasText: "changed somewhere else" })).toHaveCount(
+    0,
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Object.keys(localStorage).filter((key) => key.includes("pending-block")).length,
+      ),
+    )
+    .toBe(0);
+  await page.reload();
+  await expect(page.locator(editorSelector)).toContainText("first second third");
+});
+
 test("a change made in another tab shows a clear way forward", async ({
   page,
   context,

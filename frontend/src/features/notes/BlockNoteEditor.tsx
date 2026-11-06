@@ -540,7 +540,9 @@ export function BlockNoteEditor({
   // A newer revision that didn't come from this editor (another tab, a backup restore):
   // show it, unless local edits are waiting — then the next save reports the conflict.
   const adoptOutsideChange = useEffectEvent(() => {
-    if (initialDocument.revision === documentRevision.current) return;
+    // Revisions only grow, so an older copy (a late refetch, a rolled-back rename) is
+    // stale: showing it would undo visible edits and send the next save on a stale base.
+    if (initialDocument.revision <= documentRevision.current) return;
     const waiting =
       inFlightId.current !== null || readPendingTransactions(initialDocument.id).length > 0;
     if (!waiting) showServerVersion(initialDocument);
