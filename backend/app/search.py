@@ -109,6 +109,10 @@ def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list
 
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="meaning")
 _RRF_K = 60
+# A title containing every query word outweighs a block found by both other sources.
+_FULL_TITLE_WEIGHT = 3.0
+# How much covering all query words (title + text) multiplies a result's score.
+_COVERAGE_WEIGHT = 1.0
 _MEANING_CANDIDATES = 25
 _PER_DOCUMENT = 3
 _SNIPPET = 220
@@ -145,11 +149,22 @@ def unified_search(
     words = block_query.search_blocks(db_path, q, filters, limit=100)
     word_ranking = [str(hit["block_id"]) for hit in words]
 
-    title_ranking = [
-        str(match["block_id"])
+    title_hits = [
+        match
         for match in block_query.title_matches(db_path, q)
         if allowed is None or match["block_id"] in allowed
     ]
+    title_ranking = [str(match["block_id"]) for match in title_hits]
+    # A title naming every query word is almost certainly the note being looked for;
+    # one sharing a single word of several is weak evidence. Plain rank fusion would
+    # count both the same, so weight title matches by how much of the query they cover.
+    query_words = max(1, len(set(block_query.query_tokens(q))))
+    title_weight = {
+        str(match["block_id"]): _FULL_TITLE_WEIGHT
+        if int(match["hits"]) >= query_words
+        else int(match["hits"]) / query_words
+        for match in title_hits
+    }
     meaning_ranking = meaning_future.result()
 
     fused: dict[str, float] = {}
@@ -160,15 +175,23 @@ def unified_search(
         ("title", title_ranking),
     ):
         for rank, block_id in enumerate(ranking):
-            fused[block_id] = fused.get(block_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
+            weight = title_weight[block_id] if reason == "title" else 1.0
+            fused[block_id] = fused.get(block_id, 0.0) + weight / (_RRF_K + rank + 1)
             reasons.setdefault(block_id, []).append(reason)
 
     details = block_query.block_details(db_path, list(fused))
     now = datetime.now(timezone.utc)
+    tokens = block_query.query_tokens(q)
+    wanted = set(tokens)
     for block_id, row in details.items():
         fused[block_id] *= 1.0 + 0.15 * _recency(str(row["updated_at"]), now)
-
-    tokens = block_query.query_tokens(q)
+        # Each source ranks blocks on its own, so nothing above rewards a result whose
+        # note covers every query word across its title and text ("hotel <name>": the
+        # name in the title, "hotel" in the paragraph). Boost by the share it covers.
+        if wanted:
+            words = block_query.query_tokens(f"{row['document_title']} {row['text']}")
+            covered = sum(1 for token in wanted if any(w.startswith(token) for w in words))
+            fused[block_id] *= 1.0 + _COVERAGE_WEIGHT * covered / len(wanted)
     results: list[dict[str, object]] = []
     per_document: dict[str, int] = {}
     for block_id in sorted(details, key=lambda bid: -fused[bid]):

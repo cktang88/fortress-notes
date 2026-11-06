@@ -104,6 +104,23 @@ class UnifiedSearchTests(unittest.TestCase):
         # "a" is inside both title words but no title word starts with it.
         self.assertEqual(self.find("a"), [])
 
+    def test_a_title_naming_every_query_word_beats_one_that_shares_a_word(self) -> None:
+        # Reported from the e2e suite: "Structured trip plan" matched "trip" in both its
+        # title and its text, and outranked the note whose title has every word.
+        self.create("Structured trip plan", "Trip checklist: passport, chargers, trip insurance.")
+        lake = self.create("Lake trip zqvarn", "Rent a cabin for the weekend.")
+        results = self.find("lake trip zqvarn")
+        self.assertEqual(results[0]["document_id"], lake)
+
+    def test_a_result_holding_every_query_word_beats_one_holding_some(self) -> None:
+        # "hotel zqmarl": the budget note has "zqmarl" in its title and "hotel" in its
+        # text; the packing note (edited later) only shares "zqmarl".
+        packing = self.create("Packing zqmarl", "Packing zqmarl\n\nPassport and charger.")
+        budget = self.create("Budget zqmarl", "Hotel 120 a night.")
+        self.client.patch(f"/api/notes/{packing}", json={"status": "rough"})
+        results = self.find("hotel zqmarl")
+        self.assertEqual(results[0]["document_id"], budget)
+
     def test_filters_apply_to_every_source(self) -> None:
         self.create("Rough idea", "Solar panels on the shed")
         polished = self.create("Final plan", "Solar panels on the roof", status="polished")

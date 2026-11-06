@@ -28,6 +28,13 @@ test("write, find, file away and restore a note without touching the mouse", asy
   await page.keyboard.press("Enter");
   await expect(noteTitle(page)).toHaveValue(`Budget ${word}`);
   await page.keyboard.type("Hotel 120 a night.");
+  // Search reads saved text, so let this save land before looking for "hotel".
+  await expectSavedText(
+    page,
+    testInfo,
+    new URL(page.url()).searchParams.get("note")!,
+    "Hotel 120 a night.",
+  );
   await page.keyboard.press("Control+KeyK");
   await page.keyboard.type(`packing ${word}`);
   await page.keyboard.press("Enter");

@@ -78,6 +78,8 @@ def _spawn(coro) -> None:
 
     def _done(t: asyncio.Task) -> None:
         _background_tasks.discard(t)
+        if t.cancelled():  # e.g. shutdown: t.exception() would raise CancelledError
+            return
         exc = t.exception()
         if exc:
             logging.getLogger("fortress").exception("background task failed", exc_info=exc)

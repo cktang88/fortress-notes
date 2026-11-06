@@ -69,6 +69,9 @@ test("[[ links to another note and the target's backlinks show it", async ({ pag
   await page.keyboard.type(`Greenhouse wiring ${suffix}`);
   const option = page.getByRole("option", { name: new RegExp(`Greenhouse wiring ${suffix}`) });
   await expect(option).toBeVisible();
+  // Results for the last letters typed are still loading while the loader shows; an
+  // Enter in that instant can leave BlockNote's menu open, so wait as a person would.
+  await expect(page.locator(".bn-suggestion-menu-loader")).toHaveCount(0);
   await page.keyboard.press("Enter");
   await expect(page.getByRole("option")).toHaveCount(0);
   await expect(editor).toContainText(`Greenhouse wiring ${suffix}`);
@@ -109,6 +112,9 @@ test("(( references a block, previews it on hover, and records a backlink", asyn
     name: new RegExp(`Hydration seventy percent for ciabatta ${suffix}`),
   });
   await expect(option).toBeVisible();
+  // Results for the last letters typed are still loading while the loader shows; an
+  // Enter in that instant can leave BlockNote's menu open, so wait as a person would.
+  await expect(page.locator(".bn-suggestion-menu-loader")).toHaveCount(0);
   await page.keyboard.press("Enter");
   await expect(page.getByRole("option")).toHaveCount(0);
   await allSaved(page);

@@ -793,6 +793,29 @@ function EditorBody({
     }));
   };
 
+  // BlockNote reloads a suggestion menu's items whenever `getItems` changes identity, and
+  // its Enter handler acts on the items on screen while it swaps them. Fresh functions on
+  // every render made each re-render refetch mid-typing, so an Enter could land between
+  // two item lists and leave the menu open. Give the menus stable functions instead.
+  const latestGetters = useRef({
+    slash: (query: string) => getSlashItems(query),
+    documents: (query: string) => getDocumentLinkItems(query),
+    blocks: (query: string) => getBlockLinkItems(query),
+  });
+  latestGetters.current = {
+    slash: (query: string) => getSlashItems(query),
+    documents: (query: string) => getDocumentLinkItems(query),
+    blocks: (query: string) => getBlockLinkItems(query),
+  };
+  const [stableGetters] = useState(() => ({
+    slash: (query: string) => latestGetters.current.slash(query),
+    documents: (query: string) => latestGetters.current.documents(query),
+    blocks: (query: string) => latestGetters.current.blocks(query),
+  }));
+  const stableGetSlashItems = stableGetters.slash;
+  const stableGetDocumentLinkItems = stableGetters.documents;
+  const stableGetBlockLinkItems = stableGetters.blocks;
+
   const getSlashItems = async (query: string): Promise<DefaultReactSuggestionItem[]> => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     const defaults = getDefaultReactSlashMenuItems(editor).filter((item) =>
@@ -1065,17 +1088,17 @@ function EditorBody({
         <SideMenuController sideMenu={DelayedSideMenu} />
         <SuggestionMenuController
           triggerCharacter="/"
-          getItems={getSlashItems}
+          getItems={stableGetSlashItems}
           minQueryLength={0}
         />
         <SuggestionMenuController
           triggerCharacter="[["
-          getItems={getDocumentLinkItems}
+          getItems={stableGetDocumentLinkItems}
           minQueryLength={0}
         />
         <SuggestionMenuController
           triggerCharacter="(("
-          getItems={getBlockLinkItems}
+          getItems={stableGetBlockLinkItems}
           minQueryLength={1}
         />
       </BlockNoteView>
