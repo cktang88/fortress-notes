@@ -2241,6 +2241,8 @@ def _insert_block(
     now: str,
 ) -> str:
     block_id = operation.block_id or _new_ulid()
+    if connection.execute("SELECT 1 FROM blocks WHERE id = ?", (block_id,)).fetchone():
+        raise ValueError(f"block already exists: {block_id}")
     parent_id = operation.parent_id
     _validate_parent(connection, document_id, parent_id)
     position = _next_position(connection, document_id, parent_id)

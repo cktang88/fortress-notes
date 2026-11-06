@@ -101,6 +101,26 @@ class BlockMoveTests(unittest.TestCase):
             )
             self.assertEqual([n["text"] for n in merged["children"]], ["two", "threeone", "one"])
 
+    def test_inserting_an_existing_block_id_is_a_conflict_not_a_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            created = create_block_document(database, "T", "rough", [], "one")
+            other = create_block_document(database, "O", "rough", [], "two")
+            for target, existing in (
+                (created, created["children"][0]["id"]),
+                (other, created["children"][0]["id"]),
+            ):
+                with self.assertRaisesRegex(ValueError, "already exists"):
+                    apply_transaction(
+                        database,
+                        target["id"],
+                        [BlockOperation(operation="insert", block_id=existing, text="x")],
+                        target["revision"],
+                    )
+            tree = document_tree(database, created["id"])
+            assert tree is not None
+            self.assertEqual(tree["revision"], created["revision"])
+
 
 class TrashRestoreTests(unittest.TestCase):
     def test_restore_recovers_links_written_while_the_document_was_in_the_trash(self) -> None:
