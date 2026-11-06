@@ -1,12 +1,13 @@
 import asyncio
 import contextlib
+import json
 import logging
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
 
@@ -85,11 +86,15 @@ def _spawn(coro) -> None:
 
 
 async def _reindex_loop() -> None:
-    """Periodically pre-warm embeddings for changed notes so searches stay instant."""
+    """Keep embeddings current so searches stay instant.
+
+    Starts right away: the first pass loads the model and the saved embeddings
+    (and, on a first run, encodes everything in the background).
+    """
     while True:
-        await asyncio.sleep(settings.reindex_interval_s)
         with contextlib.suppress(Exception):
             await asyncio.to_thread(embeddings.warm_index)
+        await asyncio.sleep(settings.reindex_interval_s)
 
 
 async def _backup_loop() -> None:
@@ -561,7 +566,7 @@ def search_blocks(
 
 
 @app.get("/api/unified-search")
-def unified_search(
+async def unified_search(
     q: str,
     limit: int = Query(30, ge=1, le=100),
     document_id: str | None = None,
@@ -572,7 +577,10 @@ def unified_search(
 ):
     """Blocks matching by exact words, meaning, or note title, in one ranked list."""
 
-    return search.unified_search(
+    # Someone typing a search may press Ask next: have the model connection ready.
+    _spawn(llm.preconnect())
+    return await asyncio.to_thread(
+        search.unified_search,
         q,
         block_query.BlockSearchFilters(
             document_id=document_id,
@@ -586,10 +594,26 @@ def unified_search(
 
 
 @app.post("/api/ask")
-async def ask(data: AskRequest):
-    """Answer a question from the notes, citing the paragraph behind each sentence."""
+async def ask(data: AskRequest, request: Request):
+    """Answer a question from the notes, citing the paragraph behind each sentence.
 
-    return await ask_notes.ask(data.question)
+    With ``Accept: application/x-ndjson`` the answer streams as one JSON event per
+    line: ``sentence`` (each checked sentence as soon as it is complete), ``step``
+    (an extra grep or read), and finally ``done`` with the full result.
+    """
+
+    if "application/x-ndjson" not in request.headers.get("accept", ""):
+        return await ask_notes.ask(data.question)
+
+    async def lines():
+        async for event in ask_notes.ask_stream(data.question):
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(
+        lines(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/block-search/rebuild")

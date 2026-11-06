@@ -10,11 +10,22 @@ class Settings(BaseSettings):
     notes_dir: Path = Path("../notes")
     openrouter_api_key: str = ""
     openrouter_model: str = "z-ai/glm-5.3-flash"
-    # Ask needs answers in well under 3 s: a non-reasoning model, measured at ~1.1-1.2 s
-    # median via OpenRouter (GLM 5.3 Flash always reasons and takes 3-4 s).
-    ask_model: str = "google/gemini-2.5-flash-lite"
+    # Ask needs answers in well under 3 s. Measured end to end (scripts/bench.py, 18
+    # questions, streamed): Mercury 3 p50 0.90 s / p95 1.08 s; Gemini 2.5 Flash Lite
+    # 1.03 / 1.74 s; GPT-4.1 nano, Claude Haiku 5.5, Gemini 3.1 Flash Lite 1.3-1.5 s
+    # p50; same answers found. (GLM 5.3 Flash always reasons and takes 3-4 s.)
+    ask_model: str = "inception/mercury-3"
+    # OpenRouter reasoning effort for ASK_MODEL ("none", "minimal", "low"...; empty
+    # leaves the model's default). Reasoning models need "none" to stay fast.
+    ask_reasoning_effort: str = "none"
     embeddings_enabled: bool = True
     colbert_model: str = "lightonai/Agent-ModernColBERT"
+    # "auto" runs ColBERT in bfloat16 on CPUs with native support (AVX512-BF16/AMX):
+    # several times faster and within ~0.3% of float32 scores. Or "float32"/"bfloat16".
+    embeddings_precision: str = "auto"
+    # Also precompute each paragraph's query encoding (after indexing, in the
+    # background) so "related to this paragraph" skips the model entirely.
+    precompute_query_embeddings: bool = True
     reindex_interval_s: float = 5.0
     vision_enabled: bool = True  # OCR (fast); makes image text searchable
     # Captions and OCR run locally in the background and reuse cached image text.

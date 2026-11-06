@@ -113,6 +113,10 @@ CREATE TABLE IF NOT EXISTS blocks (
 CREATE INDEX IF NOT EXISTS blocks_document_position
     ON blocks(document_id, parent_id, position);
 
+-- The search corpus fingerprint reads MAX(updated_at) on every search: an index
+-- makes that a lookup instead of a scan of every block.
+CREATE INDEX IF NOT EXISTS blocks_updated_at ON blocks(updated_at);
+
 CREATE TABLE IF NOT EXISTS block_attrs (
     block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
@@ -693,17 +697,21 @@ def _needs_editable_block(connection: sqlite3.Connection, document_id: str) -> b
     )
 
 
-def list_documents(path: Path) -> list[dict[str, object]]:
+def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, object]]:
+    """Active documents, newest first; only ``ids`` when given (one query either way)."""
+
     initialize(path)
+    only = "" if ids is None else f"AND id IN ({','.join('?' for _ in ids)})"
     with connection_scope(path) as connection:
         rows = connection.execute(
-            """SELECT id, title, status, tags_json, folder_id, position,
+            f"""SELECT id, title, status, tags_json, folder_id, position,
                       created_at, updated_at,
                       COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
                                 ORDER BY parent_id, position, id LIMIT 1), '') AS snippet
                  FROM documents
-                WHERE deleted_at IS NULL
-                ORDER BY updated_at DESC, id ASC"""
+                WHERE deleted_at IS NULL {only}
+                ORDER BY updated_at DESC, id ASC""",
+            [] if ids is None else list(ids),
         ).fetchall()
     return [_navigation_document(row) for row in rows]
 

@@ -51,3 +51,52 @@ test("asks a question and jumps to the cited paragraph", async ({ page }, testIn
   await expect(page.getByRole("textbox", { name: "Note title" })).toHaveValue("Kyoto plans");
   await expect(page).toHaveURL(new RegExp(`block=${blockId}`));
 });
+
+test("shows a streamed answer and its trace", async ({ page }, testInfo) => {
+  const backendUrl = String(testInfo.config.metadata.backendUrl);
+  const created = await (
+    await page.request.post(`${backendUrl}/api/notes`, {
+      data: { title: "Porto flat", body: "The wifi password is sardinha2024." },
+    })
+  ).json();
+  const blockId = (
+    await (await page.request.get(`${backendUrl}/api/block-documents/${created.id}`)).json()
+  ).children[0].id;
+  const sentence = {
+    text: "The wifi password is sardinha2024.",
+    citations: [
+      {
+        block_id: blockId,
+        document_id: created.id,
+        document_title: "Porto flat",
+        quote: "wifi password is sardinha2024",
+      },
+    ],
+  };
+  const steps = [{ action: "grep", detail: "wifi|password" }];
+  await page.route("**/api/ask", (route) => {
+    expect(route.request().headers()["accept"]).toContain("application/x-ndjson");
+    const events = [
+      { type: "step", step: steps[0] },
+      { type: "sentence", sentence },
+      {
+        type: "done",
+        result: { status: "answered", answer: [sentence], sources: [], steps, elapsed_ms: 900 },
+      },
+    ];
+    return route.fulfill({
+      contentType: "application/x-ndjson",
+      body: events.map((event) => JSON.stringify(event)).join("\n"),
+    });
+  });
+
+  await page.goto("/");
+  const search = page.getByRole("searchbox", { name: "Search notes" });
+  await search.fill("what is the wifi password in porto?");
+  await search.press("Control+Enter");
+  const answer = page.getByRole("region", { name: "Answer from your notes" });
+  await expect(answer).toContainText("The wifi password is sardinha2024.");
+  await expect(answer).toContainText("Searched for “wifi|password” · 0.9 s");
+  await answer.getByRole("button", { name: "1. Porto flat" }).click();
+  await expect(page.getByRole("textbox", { name: "Note title" })).toHaveValue("Porto flat");
+});

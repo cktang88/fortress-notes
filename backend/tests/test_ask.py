@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -5,6 +6,18 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+
+
+def streaming(fake):
+    """A ``chat_json_stream`` stand-in that streams ``fake``'s reply in small chunks."""
+
+    async def stream(*args, **kwargs):
+        data = await fake(*args, **kwargs)
+        text = json.dumps(data)
+        for start in range(0, len(text), 9):
+            yield text[start : start + 9]
+
+    return stream
 
 
 class AskYourNotesTests(unittest.TestCase):
@@ -50,7 +63,7 @@ class AskYourNotesTests(unittest.TestCase):
         fake = AsyncMock(side_effect=reply) if isinstance(reply, list) else AsyncMock(
             return_value=reply
         )
-        with patch.object(llm, "chat_json", fake):
+        with patch.object(llm, "chat_json_stream", streaming(fake)):
             response = self.client.post("/api/ask", json={"question": question})
         self.assertEqual(response.status_code, 200, response.text)
         return response.json(), fake
@@ -129,7 +142,9 @@ class AskYourNotesTests(unittest.TestCase):
     def test_reports_missing_key_and_empty_matches_without_calling_the_model(self) -> None:
         from app import llm
 
-        with patch.object(llm, "chat_json", AsyncMock(side_effect=llm.LLMNotConfigured)):
+        with patch.object(
+            llm, "chat_json_stream", streaming(AsyncMock(side_effect=llm.LLMNotConfigured))
+        ):
             result = self.client.post("/api/ask", json={"question": "hotel?"}).json()
         self.assertEqual(result["status"], "not_configured")
         result, fake = self.ask("zebracorn quantum", {"found": False, "sentences": []})
@@ -234,7 +249,7 @@ class AskYourNotesTests(unittest.TestCase):
         async def slow(*_args, **_kwargs):
             raise TimeoutError
 
-        with patch.object(llm, "chat_json", slow):
+        with patch.object(llm, "chat_json_stream", streaming(slow)):
             timed_out = self.client.post("/api/ask", json={"question": "hotel?"}).json()
         self.assertEqual(timed_out["status"], "timeout")
         self.assertTrue(timed_out["sources"])
@@ -242,7 +257,7 @@ class AskYourNotesTests(unittest.TestCase):
         async def unreachable(*_args, **_kwargs):
             raise ConnectionError("proxy said 403")
 
-        with patch.object(llm, "chat_json", unreachable):
+        with patch.object(llm, "chat_json_stream", streaming(unreachable)):
             down = self.client.post("/api/ask", json={"question": "hotel?"}).json()
         self.assertEqual(down["status"], "unavailable")
         self.assertTrue(down["sources"])
@@ -306,10 +321,92 @@ class AskYourNotesTests(unittest.TestCase):
 
         reply = AsyncMock(return_value={"found": False, "sentences": []})
         with patch.object(search, "unified_search", slow_search), patch.object(
-            llm, "chat_json", reply
+            llm, "chat_json_stream", streaming(reply)
         ):
             longest_stall = asyncio.run(scenario())
         self.assertLess(longest_stall, 0.2)
+
+    def test_streams_each_checked_sentence_before_the_final_result(self) -> None:
+        from app import llm
+
+        reply = {
+            "action": "answer",
+            "found": True,
+            "sentences": [
+                {
+                    "text": "You picked a hotel in Alfama.",
+                    "citations": [{"id": "S1", "quote": "the hotel in Alfama"}],
+                },
+                {"text": "It had a pool.", "citations": [{"id": "S1", "quote": "a pool"}]},
+                {"text": "For 3 nights.", "citations": [{"id": "S1", "quote": "3 nights"}]},
+            ],
+        }
+        with patch.object(llm, "chat_json_stream", streaming(AsyncMock(return_value=reply))):
+            response = self.client.post(
+                "/api/ask",
+                json={"question": "Which hotel did we pick?"},
+                headers={"Accept": "application/x-ndjson"},
+            )
+        self.assertEqual(response.headers["content-type"], "application/x-ndjson")
+        events = [json.loads(line) for line in response.text.splitlines() if line]
+        self.assertEqual([event["type"] for event in events], ["sentence", "sentence", "done"])
+        # The made-up "pool" sentence is never shown, not even for a moment.
+        self.assertEqual(
+            [event["sentence"]["text"] for event in events[:2]],
+            ["You picked a hotel in Alfama.", "For 3 nights."],
+        )
+        done = events[-1]["result"]
+        self.assertEqual(done["status"], "answered")
+        self.assertEqual([s["text"] for s in done["answer"]], ["You picked a hotel in Alfama.", "For 3 nights."])
+
+    def test_a_timeout_mid_answer_keeps_the_sentences_already_checked(self) -> None:
+        import asyncio
+
+        from app import ask, llm
+
+        async def stalls(*_args, **_kwargs):
+            yield '{"action": "answer", "found": true, "sentences": [{"text": "Alfama.", '
+            yield '"citations": [{"id": "S1", "quote": "hotel in Alfama"}]}, {"text": "And'
+            await asyncio.sleep(5)
+            yield 'more"}]}'
+
+        with patch.object(llm, "chat_json_stream", stalls), patch.object(ask, "BUDGET_SECONDS", 0.3):
+            result = self.client.post("/api/ask", json={"question": "Which hotel?"}).json()
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual([s["text"] for s in result["answer"]], ["Alfama."])
+
+    def test_sentence_stream_finds_objects_split_anywhere_with_tricky_strings(self) -> None:
+        from app import ask
+
+        text = json.dumps(
+            {
+                "found": True,
+                "note": {"sentences": [{"text": "nested, not an answer"}]},
+                "sentences": [
+                    {"text": 'Brace } and "quote" \\ ok', "citations": [{"id": "S1", "quote": "a]b"}]},
+                    {"text": "Second", "citations": []},
+                ],
+                "action": "answer",
+            }
+        )
+        for size in (1, 3, 17, len(text)):
+            stream = ask._SentenceStream()
+            found = []
+            for start in range(0, len(text), size):
+                found.extend(stream.feed(text[start : start + size]))
+            self.assertEqual([item["text"] for item in found], ['Brace } and "quote" \\ ok', "Second"])
+
+    def test_long_paragraphs_are_cut_to_a_window_around_the_question_words(self) -> None:
+        from app import ask
+
+        body = ("Filler words about nothing much at all. " * 40) + "The ferry leaves at 7:40 from Cais do Sodre. " + (
+            "More filler text that goes on. " * 40
+        )
+        window = ask._window(body, ["ferry"])
+        self.assertLessEqual(len(window), ask.SOURCE_CHARS)
+        self.assertIn("The ferry leaves at 7:40", window)
+        self.assertIn(window, body)  # a verbatim slice, so quotes from it are real
+        self.assertEqual(ask._window("short", ["ferry"]), "short")
 
     def test_read_tool_returns_a_whole_note(self) -> None:
         from app import ask

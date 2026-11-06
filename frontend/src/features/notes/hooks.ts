@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, blockApi, notesApi, workspaceApi } from "./api";
 import { invalidateDocumentLists, queryKeys } from "./queryKeys";
-import type { BlockDocument, BlockSearchFilters, NoteStatus, SavedSearch } from "./types";
+import type {
+  AskResponse,
+  BlockDocument,
+  BlockSearchFilters,
+  NoteStatus,
+  SavedSearch,
+} from "./types";
 
 // --- Reads ---------------------------------------------------------------------
 
@@ -304,8 +310,34 @@ export function useImportMarkdown() {
   });
 }
 
+/**
+ * Ask your notes. While the answer streams, `data` holds the sentences checked so
+ * far (with `isPending` still true).
+ */
 export function useAsk() {
-  return useMutation({ mutationFn: (question: string) => blockApi.ask(question) });
+  const [partial, setPartial] = useState<AskResponse | undefined>();
+  // The question being shown: sentences streaming in for an older one are ignored
+  // (its final result is too, as the mutation only reports its latest call).
+  const current = useRef<object | null>(null);
+  const mutation = useMutation({
+    mutationFn: (question: string) => {
+      const asked = {};
+      current.current = asked;
+      setPartial(undefined);
+      return blockApi.ask(question, (update) => {
+        if (current.current === asked) setPartial(update);
+      });
+    },
+  });
+  return {
+    ...mutation,
+    data: mutation.data ?? (mutation.isPending ? partial : undefined),
+    reset: () => {
+      current.current = null;
+      setPartial(undefined);
+      mutation.reset();
+    },
+  };
 }
 
 export function useCapture() {

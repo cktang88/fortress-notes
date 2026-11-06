@@ -56,6 +56,54 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/**
+ * Ask a question. The answer streams (one JSON event per line): `onPartial` gets
+ * the checked sentences so far as each one completes; the promise resolves to the
+ * final response. A plain JSON reply (an older server, a test double) also works.
+ */
+async function askNotes(
+  question: string,
+  onPartial?: (partial: AskResponse) => void,
+  signal?: AbortSignal,
+): Promise<AskResponse> {
+  const res = await fetch(`${API}/ask`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/x-ndjson, application/json",
+    },
+    body: JSON.stringify({ question }),
+    signal,
+  });
+  if (!res.ok) throw await failure(res);
+  if (!res.body || !res.headers.get("content-type")?.includes("ndjson")) {
+    return res.json() as Promise<AskResponse>;
+  }
+  const partial: AskResponse = { status: "answered", answer: [], sources: [], steps: [] };
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffered = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffered += value ?? "";
+    const lines = done ? [buffered] : buffered.split("\n");
+    buffered = done ? "" : (lines.pop() ?? "");
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as AskStreamEvent;
+      if (event.type === "done") return event.result;
+      if (event.type === "sentence") partial.answer = [...partial.answer, event.sentence];
+      if (event.type === "step") partial.steps = [...(partial.steps ?? []), event.step];
+      if (partial.answer.length > 0) onPartial?.({ ...partial });
+    }
+    if (done) throw new ApiError(502, "The answer was cut off. Try asking again.");
+  }
+}
+
+type AskStreamEvent =
+  | { type: "sentence"; sentence: AskResponse["answer"][number] }
+  | { type: "step"; step: NonNullable<AskResponse["steps"]>[number] }
+  | { type: "done"; result: AskResponse };
+
 export const notesApi = {
   list: (status?: NoteStatus) =>
     request<NoteSummary[]>(`/notes${status ? `?status=${status}` : ""}`),
@@ -151,8 +199,7 @@ export const blockApi = {
     request<Backlink[]>(`/block-documents/${id}/backlinks?limit=${limit}`),
   search: (q: string, filters: BlockSearchFilters = {}, limit = 30) =>
     request<UnifiedSearchResult[]>(`/unified-search?${blockSearchParams(q, filters, limit)}`),
-  ask: (question: string) =>
-    request<AskResponse>("/ask", { method: "POST", body: JSON.stringify({ question }) }),
+  ask: askNotes,
   linkTargets: (q: string, limit = 50) =>
     request<BlockLinkTarget[]>(`/block-link-targets?q=${encodeURIComponent(q)}&limit=${limit}`),
   transaction: (id: string, transaction: BlockTransaction) => {

@@ -3,16 +3,21 @@
 The design follows what works for agentic search (grep-style tools the model can
 steer) while keeping answers under ~3 seconds:
 
-1. Before any model call, gather candidates locally (milliseconds): literal grep
-   for the question's key words plus unified search for paraphrases.
+1. Before any model call, gather candidates locally (tens of milliseconds): literal
+   grep for the question's key words and unified search for paraphrases, in
+   parallel.
 2. One model call sees those passages and either answers or asks for one more
    look: ``grep`` a pattern across every note, or ``read`` a whole note.
-3. A hard time budget: when time is short the model must answer with what it
-   has, and if the model is too slow the closest passages are returned instead.
+3. The reply is streamed: each answer sentence is checked and sent on as soon as
+   it is complete, so the first sentence shows well before the whole answer.
+4. A hard time budget: when time is short the model must answer with what it
+   has, and if the model is too slow the closest passages (plus any sentences
+   already checked) are returned instead.
 
-Only passages are sent to the model, never the whole workspace. Every sentence
-must cite a verbatim quote; sentences whose quotes aren't really in the cited
-passage are dropped, so the answer can't claim things the notes don't say.
+Only passages are sent to the model, never the whole workspace, and only the part
+of a long paragraph around the matched words. Every sentence must cite a verbatim
+quote; sentences whose quotes aren't really in the cited passage are dropped, so
+the answer can't claim things the notes don't say.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import logging
 import re
 import time
 import unicodedata
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import httpx
 import regex
@@ -34,10 +40,11 @@ BUDGET_SECONDS = 3.0
 # Leave room for one more model call after a tool round only if at least this much time is left.
 MIN_CALL_SECONDS = 1.2
 MAX_TOOL_ROUNDS = 2
-PREFETCH_SEARCH = 8
-PREFETCH_GREP = 8
+PREFETCH_SEARCH = 6
+PREFETCH_GREP = 6
 TOOL_HITS = 8
-SOURCE_CHARS = 1200
+# Characters of a paragraph shown to the model: a window around the matched words.
+SOURCE_CHARS = 700
 NOTE_BLOCKS = 40
 # Total time one grep over every note may take (the model's regex can backtrack badly).
 GREP_SECONDS = 0.3
@@ -105,12 +112,30 @@ def key_terms(question: str) -> list[str]:
     return sorted(terms, key=len, reverse=True)[:6]
 
 
+def _window(text: str, terms: list[str]) -> str:
+    """At most ``SOURCE_CHARS`` of ``text``, centred on the first matched term.
+
+    The window is a verbatim slice, so a quote found in it is in the note too.
+    """
+
+    if len(text) <= SOURCE_CHARS:
+        return text
+    lowered = text.lower()
+    first = min((i for i in (lowered.find(term) for term in terms) if i >= 0), default=0)
+    start = max(0, min(first - SOURCE_CHARS // 3, len(text) - SOURCE_CHARS))
+    if start > 0:  # Start on a word boundary.
+        space = text.find(" ", start, first if first > start else start + 40)
+        start = space + 1 if space >= 0 else start
+    return text[start : start + SOURCE_CHARS]
+
+
 class _Sources:
     """Numbered passages shown to the model, deduplicated by block."""
 
-    def __init__(self) -> None:
+    def __init__(self, terms: list[str] | None = None) -> None:
         self.by_id: dict[str, dict[str, object]] = {}
         self._block_ids: set[str] = set()
+        self.terms = terms or []
 
     def add(self, rows: list[dict[str, object]]) -> list[str]:
         added = []
@@ -126,7 +151,7 @@ class _Sources:
                 "document_id": row["document_id"],
                 "document_title": row["document_title"],
                 "updated_at": row.get("updated_at", ""),
-                "text": text[:SOURCE_CHARS],
+                "text": _window(text, self.terms),
             }
             added.append(source_id)
         return added
@@ -190,16 +215,33 @@ def grep_blocks(pattern: str, limit: int = TOOL_HITS) -> list[dict[str, object]]
     return [details[block_id] for block_id in hits if block_id in details]
 
 
+# The corpus lower-cased once per change, so a term grep is one pass of `in` checks.
+_lowered: tuple[object, list[tuple[str, str]]] | None = None
+
+
+def _lowered_corpus(corpus) -> list[tuple[str, str]]:
+    global _lowered
+    cached = _lowered
+    if cached is not None and cached[0] is corpus:
+        return cached[1]
+    lowered = [(block_id, text.lower()) for block_id, _document_id, _version, text in corpus]
+    _lowered = (corpus, lowered)
+    return lowered
+
+
 def grep_terms(terms: list[str], limit: int = PREFETCH_GREP) -> list[dict[str, object]]:
     """Paragraphs containing the most of ``terms`` (literal, case-insensitive)."""
 
     if not terms:
         return []
     db_path = get_settings().block_db_path
+    corpus = _lowered_corpus(block_store.embedding_documents(db_path))
     scored = []
-    for block_id, _document_id, _version, text in block_store.embedding_documents(db_path):
-        lowered = text.lower()
-        hits = sum(1 for term in terms if term in lowered)
+    for block_id, lowered in corpus:
+        hits = 0
+        for term in terms:
+            if term in lowered:
+                hits += 1
         if hits:
             scored.append((hits, block_id))
     scored.sort(key=lambda item: -item[0])
@@ -244,27 +286,152 @@ def read_note(name: str) -> list[dict[str, object]]:
     return rows
 
 
+def _semantic(question: str) -> list[dict[str, object]]:
+    hits = search.unified_search(question, limit=PREFETCH_SEARCH)
+    details = block_query.block_details(
+        get_settings().block_db_path, [str(hit["block_id"]) for hit in hits]
+    )
+    return [details[str(hit["block_id"])] for hit in hits if str(hit["block_id"]) in details]
+
+
 def prefetch(question: str, sources: _Sources) -> list[str]:
     """Literal grep for key words, then meaning-based search, merged (no model call)."""
 
     literal = grep_terms(key_terms(question))
-    hits = search.unified_search(question, limit=PREFETCH_SEARCH)
-    semantic = block_query.block_details(
-        get_settings().block_db_path, [str(hit["block_id"]) for hit in hits]
+    return sources.add([*literal, *_semantic(question)])
+
+
+async def _prefetch_parallel(question: str, sources: _Sources) -> list[str]:
+    # Both are synchronous (SQLite, ColBERT); run them side by side off the event
+    # loop so other requests aren't stalled while Ask looks things up.
+    literal, semantic = await asyncio.gather(
+        asyncio.to_thread(grep_terms, key_terms(question)),
+        asyncio.to_thread(_semantic, question),
     )
-    ordered = [*literal, *(semantic[str(hit["block_id"])] for hit in hits if str(hit["block_id"]) in semantic)]
-    return sources.add(ordered)
+    return sources.add([*literal, *semantic])
 
 
-async def ask(question: str) -> dict[str, object]:
+class _SentenceStream:
+    """Pulls complete ``sentences`` items out of a JSON reply as it streams in.
+
+    A tiny incremental scanner (strings, escapes, nesting): every time an object
+    directly inside the top-level ``"sentences"`` array closes, it is parsed and
+    returned. Anything unexpected is simply left for the final full parse.
+    """
+
+    def __init__(self) -> None:
+        self.text = ""
+        self._depth = 0
+        self._in_string = False
+        self._escape = False
+        self._string_start = 0
+        self._last_string: str | None = None
+        self._last_key: str | None = None
+        self._array_depth: int | None = None
+        self._object_start: int | None = None
+
+    def feed(self, delta: str) -> list[dict]:
+        start = len(self.text)
+        self.text += delta
+        text = self.text
+        found = []
+        for i in range(start, len(text)):
+            char = text[i]
+            if self._in_string:
+                if self._escape:
+                    self._escape = False
+                elif char == "\\":
+                    self._escape = True
+                elif char == '"':
+                    self._in_string = False
+                    self._last_string = text[self._string_start : i + 1]
+                continue
+            if char == '"':
+                self._in_string = True
+                self._string_start = i
+            elif char == ":":
+                try:
+                    self._last_key = json.loads(self._last_string) if self._last_string else None
+                except json.JSONDecodeError:
+                    self._last_key = None
+            elif char in "{[":
+                if char == "[" and self._depth == 1 and self._last_key == "sentences":
+                    self._array_depth = self._depth + 1
+                elif char == "{" and self._array_depth == self._depth:
+                    self._object_start = i
+                self._depth += 1
+            elif char in "}]":
+                self._depth -= 1
+                if char == "}" and self._object_start is not None and self._depth == self._array_depth:
+                    try:
+                        item = json.loads(text[self._object_start : i + 1])
+                    except json.JSONDecodeError:
+                        item = None
+                    if isinstance(item, dict):
+                        found.append(item)
+                    self._object_start = None
+                elif char == "]" and self._array_depth is not None and self._depth < self._array_depth:
+                    self._array_depth = None
+        return found
+
+
+def _checked(sentence: object, sources: _Sources) -> dict | None:
+    """The sentence with only its genuine citations, or None if none hold up."""
+
+    if not isinstance(sentence, dict) or not isinstance(sentence.get("text"), str):
+        return None
+    citations = []
+    for citation in sentence.get("citations", []) or []:
+        if not isinstance(citation, dict):
+            continue
+        source = sources.by_id.get(str(citation.get("id")))
+        quote = citation.get("quote")
+        if source is None or not isinstance(quote, str):
+            continue
+        if not any(character.isalnum() for character in quote):
+            continue  # Punctuation alone "matches" almost any passage.
+        if _normalize(quote) not in _normalize(str(source["text"])):
+            continue  # The model "quoted" something the note doesn't say.
+        citations.append(
+            {
+                "block_id": source["block_id"],
+                "document_id": source["document_id"],
+                "document_title": source["document_title"],
+                "quote": quote.strip(),
+            }
+        )
+    if not citations or not sentence["text"].strip():
+        return None
+    return {"text": sentence["text"].strip(), "citations": citations}
+
+
+Emit = Callable[[dict], Awaitable[None]]
+
+
+async def _call(prompt: str, timeout: float, sources: _Sources, emit: Emit, shown: list) -> dict:
+    """One streamed model call; checked sentences are emitted as they complete."""
+
+    stream = _SentenceStream()
+    settings = get_settings()
+    options: dict = {"model": settings.ask_model, "fast": True}
+    if getattr(settings, "ask_reasoning_effort", ""):
+        options["reasoning_effort"] = settings.ask_reasoning_effort
+    async with asyncio.timeout(timeout):
+        async for delta in llm.chat_json_stream(_SYSTEM, prompt, timeout=timeout, **options):
+            for sentence in stream.feed(delta):
+                checked = _checked(sentence, sources)
+                if checked is not None:
+                    shown.append(checked)
+                    await emit({"type": "sentence", "sentence": checked})
+    return llm._parse_json_object(stream.text)
+
+
+async def _run(question: str, emit: Emit) -> dict[str, object]:
     started = _clock()
-    model = get_settings().ask_model
     question = question.strip()
-    sources = _Sources()
+    sources = _Sources(key_terms(question))
     steps: list[dict[str, str]] = []
-    # Local search is synchronous (SQLite, ColBERT); keep it off the event loop so
-    # other requests aren't stalled while Ask looks things up.
-    first = await asyncio.to_thread(prefetch, question, sources)
+    first = await _prefetch_parallel(question, sources)
     if not first:
         return _result("not_found", [], sources, steps, started)
 
@@ -276,25 +443,17 @@ async def ask(question: str) -> dict[str, object]:
         prompt = transcript + (
             "\n\nYou are out of time: answer now with action \"answer\"." if must_answer else ""
         )
+        shown: list[dict] = []
         try:
-            data = await asyncio.wait_for(
-                llm.chat_json(
-                    _SYSTEM,
-                    prompt,
-                    timeout=max(remaining, 0.5),
-                    model=model,
-                    fast=True,
-                ),
-                timeout=max(remaining, 0.5),
-            )
+            data = await _call(prompt, max(remaining, 0.5), sources, emit, shown)
         except llm.LLMNotConfigured:
             return _result("not_configured", [], sources, steps, started)
-        except (asyncio.TimeoutError, httpx.TimeoutException):
-            # Too slow: show the closest passages instead of making you wait.
-            return _result("timeout", [], sources, steps, started)
+        except (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException):
+            # Too slow: keep what was already checked, else show the closest passages.
+            return _result("answered" if shown else "timeout", shown, sources, steps, started)
         except Exception:
             logging.getLogger("fortress").warning("Ask could not reach the model", exc_info=True)
-            return _result("unavailable", [], sources, steps, started)
+            return _result("answered" if shown else "unavailable", shown, sources, steps, started)
         if not isinstance(data, dict):
             break
         action = data.get("action", "answer")
@@ -311,24 +470,27 @@ async def ask(question: str) -> dict[str, object]:
             # only if that turns up new passages, give the model one last look.
             added = sources.add(await asyncio.to_thread(grep_blocks, retry))
             steps.append({"action": "grep", "detail": retry})
+            await emit({"type": "step", "step": steps[-1]})
             if added:
                 transcript += (
                     f"\n\nYou searched for /{retry}/. New sources:\n{sources.payload(added)}"
                 )
                 continue
-            return _answer(data, sources, steps, started)
-        if action == "answer" or must_answer:
-            return _answer(data, sources, steps, started)
+            return _answer(data, sources, steps, started, shown)
+        if action == "answer" or must_answer or data.get("sentences"):
+            return _answer(data, sources, steps, started, shown)
         if action == "grep" and isinstance(data.get("pattern"), str):
             pattern = data["pattern"]
             added = sources.add(await asyncio.to_thread(grep_blocks, pattern))
             steps.append({"action": "grep", "detail": pattern})
+            await emit({"type": "step", "step": steps[-1]})
             found = sources.payload(added) if added else "[] (no new matches)"
             transcript += f'\n\nYou searched for /{pattern}/. New sources:\n{found}'
         elif action == "read" and isinstance(data.get("note"), str):
             note = data["note"]
             added = sources.add(await asyncio.to_thread(read_note, note))
             steps.append({"action": "read", "detail": note})
+            await emit({"type": "step", "step": steps[-1]})
             found = sources.payload(added) if added else "[] (no such note, or nothing new)"
             transcript += f'\n\nYou read the note "{note}". New sources:\n{found}'
         else:
@@ -336,33 +498,50 @@ async def ask(question: str) -> dict[str, object]:
     return _result("not_found", [], sources, steps, started)
 
 
-def _answer(data: dict, sources: _Sources, steps: list, started: float) -> dict[str, object]:
-    answer = []
-    for sentence in data.get("sentences", []) or []:
-        if not isinstance(sentence, dict) or not isinstance(sentence.get("text"), str):
-            continue
-        citations = []
-        for citation in sentence.get("citations", []) or []:
-            if not isinstance(citation, dict):
-                continue
-            source = sources.by_id.get(str(citation.get("id")))
-            quote = citation.get("quote")
-            if source is None or not isinstance(quote, str):
-                continue
-            if not any(character.isalnum() for character in quote):
-                continue  # Punctuation alone "matches" almost any passage.
-            if _normalize(quote) not in _normalize(str(source["text"])):
-                continue  # The model "quoted" something the note doesn't say.
-            citations.append(
-                {
-                    "block_id": source["block_id"],
-                    "document_id": source["document_id"],
-                    "document_title": source["document_title"],
-                    "quote": quote.strip(),
-                }
-            )
-        if citations:
-            answer.append({"text": sentence["text"].strip(), "citations": citations})
+async def ask_stream(question: str) -> AsyncIterator[dict]:
+    """Ask, as events: ``sentence`` (checked, as soon as complete), ``step`` (a
+    grep or read), then ``done`` with the same result ``ask`` returns."""
+
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def emit(event: dict) -> None:
+        await queue.put(event)
+
+    async def run() -> None:
+        try:
+            result = await _run(question, emit)
+        except Exception:
+            logging.getLogger("fortress").exception("Ask failed")
+            result = _result("unavailable", [], _Sources(), [], _clock())
+        await queue.put({"type": "done", "result": result})
+
+    task = asyncio.create_task(run())
+    try:
+        while True:
+            event = await queue.get()
+            yield event
+            if event["type"] == "done":
+                return
+    finally:
+        if not task.done():
+            task.cancel()
+
+
+async def ask(question: str) -> dict[str, object]:
+    async for event in ask_stream(question):
+        if event["type"] == "done":
+            return event["result"]
+    raise RuntimeError("Ask ended without a result")  # pragma: no cover
+
+
+def _answer(
+    data: dict, sources: _Sources, steps: list, started: float, shown: list | None = None
+) -> dict[str, object]:
+    sentences = data.get("sentences")
+    checked = (_checked(s, sources) for s in (sentences if isinstance(sentences, list) else []))
+    answer = [sentence for sentence in checked if sentence is not None]
+    if not answer and shown:
+        answer = list(shown)  # The full reply didn't parse; keep what streamed.
     return _result("answered" if answer else "not_found", answer, sources, steps, started)
 
 
