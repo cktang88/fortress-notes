@@ -43,6 +43,9 @@ export default defineConfig({
     {
       command: `npm run dev -- --host 127.0.0.1 --port ${frontendPort} --strictPort`,
       cwd: process.cwd(),
+      // Downloads (backups, Markdown export) skip page.route, so the dev server's own
+      // proxy must point at the test backend too, never at a real one on port 8000.
+      env: { FORTRESS_BACKEND_URL: backendUrl },
       url: frontendUrl,
       stdout: "pipe",
       stderr: "pipe",

@@ -294,7 +294,9 @@ export function App() {
               focusNonce={selection.focus?.nonce ?? 0}
               linkTargets={allNotes.data ?? []}
               linkChecks={linkChecks.data?.links ?? []}
-              onFocusedBlockChange={selection.setActiveBlockId}
+              // Related notes follow the block last focused, so leaving the editor (to
+              // click the outline, say) doesn't reshuffle the panels under the pointer.
+              onFocusedBlockChange={(blockId) => blockId && selection.setActiveBlockId(blockId)}
               onOpenNote={(documentId, blockId) => selectNote(documentId, blockId)}
               moving={moveInto.isPending}
               onMoveInto={(target) =>

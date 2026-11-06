@@ -282,10 +282,18 @@ test("the sidebar works from the keyboard alone", async ({ page }, testInfo) => 
   await page.keyboard.press("Enter");
   await expect(folder(page, "Library")).toBeVisible();
 
-  // Enter on a note opens it.
+  // Enter on a closed note opens it (Space is for picking it up to move it), and
+  // Enter on a folder folds it.
+  await openApp(page);
+  await expect(page.getByText("Select a note or create a new one.")).toBeVisible();
   await treeRow(page, "Books to borrow").focus();
   await page.keyboard.press("Enter");
   await expect(noteTitle(page)).toHaveValue("Books to borrow");
+  await folder(page, "Library").focus();
+  await page.keyboard.press("Enter");
+  await expect(folder(page, "Library")).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("Enter");
+  await expect(folder(page, "Library")).toHaveAttribute("aria-expanded", "true");
 
   await page.reload();
   await expect(folder(page, "Library")).toBeVisible();

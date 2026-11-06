@@ -1,6 +1,8 @@
 import {
   DragDropProvider,
   DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
   useDraggable,
   useDroppable,
   type DragEndEvent,
@@ -37,6 +39,15 @@ type DragData =
   | { kind: "folder"; id: string; parentId: string | null }
   | { kind: "document"; id: string; parentId: string | null };
 type DropData = { kind: "root" } | { kind: "folder"; id: string };
+
+// Space picks a row up to move it with the arrow keys; Enter still opens the note or
+// toggles the folder, as on any other button.
+const dragSensors = [
+  PointerSensor,
+  KeyboardSensor.configure({
+    keyboardCodes: { ...KeyboardSensor.defaults.keyboardCodes, start: ["Space"] },
+  }),
+];
 
 export function DocumentSidebar({
   nodes,
@@ -253,6 +264,7 @@ export function DocumentSidebar({
 
   return (
     <DragDropProvider
+      sensors={dragSensors}
       onDragStart={(event) => setDragItem(readDragData(event.operation.source?.data))}
       onDragEnd={handleDragEnd}
     >
