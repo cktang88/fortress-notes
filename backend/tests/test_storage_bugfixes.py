@@ -19,6 +19,7 @@ from app.block_store import (
     fts_is_consistent,
     initialize,
     register_asset,
+    render_markdown,
     store_asset_text,
     undo_transaction,
 )
@@ -162,6 +163,47 @@ class EmbeddingCorpusTests(unittest.TestCase):
             )
 
             self.assertEqual([item[3] for item in embedding_documents(database)], ["new words", "other", "second"])
+
+
+class MarkdownImportTests(unittest.TestCase):
+    def test_list_items_keep_every_block_they_contain(self) -> None:
+        body = (
+            "- [ ] first paragraph\n"
+            "\n"
+            "  second paragraph\n"
+            "\n"
+            "  ## heading inside\n"
+            "\n"
+            "  <div>raw html</div>\n"
+            "\n"
+            "  - nested\n"
+            "- next item\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            created = create_block_document(database, "T", "rough", [], body)
+
+            first = created["children"][0]
+            self.assertEqual(first["text"], "- [ ] first paragraph")
+            self.assertEqual(first["attrs"], {"checked": False})
+            self.assertEqual(
+                [(child["type"], child["text"]) for child in first["children"]],
+                [
+                    ("paragraph", "second paragraph"),
+                    ("heading", "## heading inside"),
+                    ("raw", "<div>raw html</div>"),
+                    ("list", "- nested"),
+                ],
+            )
+            self.assertEqual(created["children"][1]["text"], "- next item")
+            rendered = render_markdown(created["children"])
+            for text in ("first paragraph", "second paragraph", "heading inside", "raw html"):
+                self.assertIn(text, rendered)
+            # The export imports back to the same shape.
+            again = create_block_document(database, "T2", "rough", [], rendered)
+            self.assertEqual(
+                render_markdown(again["children"]), rendered
+            )
 
 
 class InitializeTests(unittest.TestCase):

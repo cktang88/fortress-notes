@@ -2609,40 +2609,33 @@ def _parse_list_item(
     tokens: list[Token], lines: list[str], index: int, ordered: bool
 ) -> tuple[ImportedBlock, int]:
     open_token = tokens[index]
-    index += 1
-    source = ""
     attrs: dict[str, object] = {}
     if ordered:
         attrs["ordered"] = True
-    children: list[ImportedBlock] = []
-    while index < len(tokens) and tokens[index].type != "list_item_close":
-        token = tokens[index]
-        if token.type == "paragraph_open":
-            paragraph = tokens[index]
-            source = _token_source(lines, paragraph)
+    first_token = tokens[index + 1] if index + 1 < len(tokens) else None
+    # Parse everything inside the item like a document, so a second paragraph, a
+    # heading or raw HTML inside an item is kept as a child instead of dropped.
+    children, index = _parse_sequence(tokens, lines, index + 1, stop="list_item_close")
+    source = ""
+    if (
+        children
+        and first_token is not None
+        and first_token.type not in {"bullet_list_open", "ordered_list_open"}
+        and first_token.map
+        and open_token.map
+        and first_token.map[0] == open_token.map[0]
+    ):
+        # The block on the marker line is the item's own text.
+        first = children.pop(0)
+        source = first.source
+        if first.type == "paragraph":
             task = _TASK_RE.match(source)
             if task:
                 attrs["checked"] = task.group(1).lower() == "x"
-            index += 1
-            while index < len(tokens) and tokens[index].type != "paragraph_close":
-                index += 1
-            index += 1
-            continue
-        if token.type in {"bullet_list_open", "ordered_list_open"}:
-            nested, index = _parse_list(tokens, lines, index)
-            children.extend(nested)
-            continue
-        if token.type == "blockquote_open":
-            child, index = _parse_container_block(tokens, lines, index, "blockquote_close", "quote")
-            children.append(child)
-            continue
-        if token.type in {"fence", "code_block"}:
-            child = ImportedBlock(_new_ulid(), "code", _token_source(lines, token))
-            children.append(child)
-        index += 1
     if not source:
-        source = _token_source(lines, open_token)
-    return ImportedBlock(_new_ulid(), "list", source, attrs, children), min(index + 1, len(tokens))
+        # Only the marker: the item's content is all in its children.
+        source = f"{open_token.info}{open_token.markup}" if ordered else open_token.markup
+    return ImportedBlock(_new_ulid(), "list", source, attrs, children), index
 
 
 def _parse_inline_block(
