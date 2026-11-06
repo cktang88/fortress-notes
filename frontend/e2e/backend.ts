@@ -14,9 +14,9 @@ export async function proxyToBackend(page: Page, testInfo: TestInfo) {
         const response = await route.fetch({ url: `${backendUrl}${url.pathname}${url.search}` });
         await route.fulfill({ response });
       } catch (error) {
-        // The page navigated, closed, the test ended, or a test re-routed this request
+        // The page navigated or closed, the test ended or timed out, or a test re-routed this request
         // mid-flight (e.g. simulating going offline); there is nothing left to answer.
-        if (!/disposed|closed|already handled|test ended/i.test(String(error))) throw error;
+        if (!/disposed|closed|already handled|test ended|test timeout/i.test(String(error))) throw error;
       }
     });
   }
