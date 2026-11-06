@@ -179,3 +179,48 @@ test("creates a link from the formatting toolbar and shows the side menu from th
   await page.mouse.move(block.x - 80, block.y + block.height / 2);
   await expect(page.locator(".bn-side-menu")).toBeVisible();
 });
+
+test("list, task, code and math blocks keep their type through a reload", async ({ page }) => {
+  const editor = await createBlankNote(page);
+  await editor.click();
+  await page.keyboard.type("- bullet item");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("1. numbered item");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("[ ] task item");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/math");
+  await expect(page.getByRole("option", { name: /Math placeholder/ })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(editor.getByRole("note", { name: "Math placeholder" })).toBeVisible();
+  await page.keyboard.type("``` ");
+  await page.keyboard.type("const answer = 42;");
+  await expect(editor.locator('[data-content-type="bulletListItem"]')).toHaveCount(1);
+  await expect(editor.locator('[data-content-type="numberedListItem"]')).toHaveCount(1);
+  await expect(editor.locator('[data-content-type="checkListItem"]')).toHaveCount(1);
+  await expect(editor.locator('[data-content-type="codeBlock"]')).toHaveCount(1);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Object.keys(localStorage).filter((key) => key.includes("pending-block")).length,
+      ),
+    )
+    .toBe(0);
+  await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
+
+  await page.reload();
+  const reloaded = page.locator(editorSelector);
+  await expect(reloaded).toContainText("const answer = 42;");
+  await expect(reloaded.locator('[data-content-type="bulletListItem"]')).toHaveText("bullet item");
+  await expect(reloaded.locator('[data-content-type="numberedListItem"]')).toHaveText(
+    "numbered item",
+  );
+  await expect(reloaded.locator('[data-content-type="checkListItem"]')).toContainText("task item");
+  await expect(reloaded.locator('[data-content-type="codeBlock"]')).toContainText(
+    "const answer = 42;",
+  );
+  await expect(reloaded.getByRole("note", { name: "Math placeholder" })).toHaveCount(1);
+});

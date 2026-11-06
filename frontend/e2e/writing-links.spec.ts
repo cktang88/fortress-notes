@@ -22,7 +22,10 @@ async function createNote(page: Page, testInfo: TestInfo, title: string, body: s
 }
 
 async function newTitledNote(page: Page, title: string) {
+  const previous = new URL(page.url()).searchParams.get("note");
   await page.getByRole("button", { name: "+ New", exact: true }).click();
+  // Wait for the new note: until it opens, the title box is the previous note's.
+  await expect.poll(() => new URL(page.url()).searchParams.get("note")).not.toBe(previous);
   const titleInput = page.getByRole("textbox", { name: "Note title" });
   await titleInput.fill(title);
   await titleInput.press("Enter");
@@ -62,13 +65,13 @@ test("[[ links to another note and the target's backlinks show it", async ({ pag
   const editor = await newTitledNote(page, `Winter prep ${suffix}`);
   await page.keyboard.type("Before frost, check ");
   await page.keyboard.type("[[");
-  await page.keyboard.type("Greenhouse wir");
+  await page.keyboard.type(`Greenhouse wiring ${suffix}`);
   const option = page.getByRole("option", { name: new RegExp(`Greenhouse wiring ${suffix}`) });
   await expect(option).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("option")).toHaveCount(0);
   await expect(editor).toContainText(`Greenhouse wiring ${suffix}`);
-  await expect(editor).not.toContainText("[[Greenhouse wir");
+  await expect(editor).not.toContainText(`[[Greenhouse wiring ${suffix}`);
   await page.keyboard.type(" again.");
   await allSaved(page);
 

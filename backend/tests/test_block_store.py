@@ -988,6 +988,11 @@ class BlockStoreTests(unittest.TestCase):
             by_id = block_link_targets(database, str(second["block_id"]), limit=1)
             self.assertEqual([target["text"] for target in by_id], ["Second block"])
 
+            # A reference's own block ID finds that block first (for reference previews).
+            second_id = block_link_targets(database, "second")[0]["block_id"]
+            by_id = block_link_targets(database, second_id, limit=1)
+            self.assertEqual([target["text"] for target in by_id], ["Second block"])
+
     def test_rebuilds_block_and_document_backlinks_in_the_same_store(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

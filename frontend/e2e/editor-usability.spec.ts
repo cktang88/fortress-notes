@@ -143,6 +143,65 @@ interface TestDocument {
   children: TestBlock[];
 }
 
+test("a block reference preview closes when the pointer leaves the link", async ({ page }) => {
+  await page.goto("/");
+  const created = await page.evaluate(async () => {
+    const make = async (title: string, body: string) => {
+      const note = (await (
+        await fetch("/api/notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, status: "rough", body }),
+        })
+      ).json()) as { id: string };
+      return (await (await fetch(`/api/block-documents/${note.id}`)).json()) as {
+        id: string;
+        revision: number;
+        children: { id: string }[];
+      };
+    };
+    const source = await make("Preview source", "The referenced paragraph text.");
+    const linking = await make("Preview linking", "placeholder\n\nA second paragraph below.");
+    const text = (value: string) => ({ type: "text", text: value, styles: {} });
+    await fetch(`/api/block-documents/${linking.id}/transactions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        base_revision: linking.revision,
+        operations: [
+          {
+            operation: "update",
+            block_id: linking.children[0].id,
+            type: "paragraph",
+            text: "See source here",
+            content: {
+              markdown: "See source here",
+              blocknote: [
+                text("See "),
+                {
+                  type: "link",
+                  href: `(( ${source.children[0].id} ))`,
+                  content: [text("source")],
+                },
+                text(" here"),
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    return linking.id;
+  });
+
+  await page.goto(`/?note=${created}`);
+  const editor = page.locator('[contenteditable="true"][aria-label="Document content"]');
+  const preview = page.getByRole("status").filter({ hasText: "The referenced paragraph text." });
+  await editor.getByRole("link", { name: "source" }).hover();
+  await expect(preview).toBeVisible();
+  await editor.getByText("A second paragraph below.").hover();
+  await expect(preview).toHaveCount(0);
+});
+
 async function createEditorDocument(page: Page): Promise<TestDocument> {
   return page.evaluate(async () => {
     const response = await fetch("/api/notes", {

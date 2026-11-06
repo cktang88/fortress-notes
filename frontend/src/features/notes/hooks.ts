@@ -122,7 +122,19 @@ export function useUpdateDocument() {
       return { previous };
     },
     onError: (_error, { id }, context) => {
-      if (context?.previous) qc.setQueryData(queryKeys.document(id), context.previous);
+      // Put back only the metadata: the editor may have saved newer blocks meanwhile.
+      const previous = context?.previous;
+      if (!previous) return;
+      qc.setQueryData<BlockDocument>(queryKeys.document(id), (current) =>
+        current
+          ? {
+              ...current,
+              title: previous.title,
+              title_auto: previous.title_auto,
+              status: previous.status,
+            }
+          : previous,
+      );
     },
     onSuccess: (saved) => {
       // Merge metadata only: the editor owns the blocks, and its saves may be newer.
@@ -131,6 +143,8 @@ export function useUpdateDocument() {
           ? {
               ...current,
               title: saved.title,
+              // Naming a note stops its title following the first line; clearing it resumes.
+              title_auto: saved.title_auto,
               status: saved.status,
               updated_at: saved.updated_at,
             }

@@ -41,6 +41,7 @@ import {
   asBlockTransaction,
   makePendingTransaction,
   readPendingTransactions,
+  withPendingOperations,
   writePendingTransactions,
 } from "./pendingBlockTransactions";
 import {
@@ -239,10 +240,19 @@ export function BlockNoteEditor({
   moving = false,
 }: Props) {
   const queryClient = useQueryClient();
-  const initialContent = useMemo(
-    () => initialDocument.children.map(toPartialBlock),
-    [initialDocument.children],
-  );
+  // The note as saved plus any edits still waiting on this device (made before a reload
+  // or the last time it was open), so the editor shows them and new edits build on them.
+  const [startingNodes] = useState(() => {
+    try {
+      return withPendingOperations(
+        initialDocument.children,
+        readPendingTransactions(initialDocument.id),
+      );
+    } catch {
+      return initialDocument.children;
+    }
+  });
+  const initialContent = useMemo(() => startingNodes.map(toPartialBlock), [startingNodes]);
   const [editorActionError, setEditorActionError] = useState<string | null>(null);
   const editorRef = useRef<AppEditor | null>(null);
   const editor = useCreateBlockNote(
@@ -292,9 +302,9 @@ export function BlockNoteEditor({
   const [saving, setSaving] = useState(false);
   /**
    * Edits left on this device by an earlier visit (a reload mid-save, or a note closed
-   * before its save finished). The editor shows the server's copy, which doesn't have
-   * them yet, so it stays read-only until they are sent and then shows the result;
-   * typing on the stale copy would overwrite them.
+   * before its save finished). The editor starts from the server's copy with them applied
+   * (`startingNodes`) and stays editable, even offline; once they are sent it shows the
+   * saved note so later saves build on the server's revision.
    */
   const recoveredIds = useRef<Set<string> | null>(null);
   if (recoveredIds.current === null) {
@@ -306,9 +316,9 @@ export function BlockNoteEditor({
       recoveredIds.current = new Set();
     }
   }
-  const [recovering, setRecovering] = useState(() => recoveredIds.current!.size > 0);
   const [saveProblem, setSaveProblem] = useState<SaveProblem | null>(null);
   const conflicted = saveProblem?.kind === "conflict";
+  const [changingHistory, setChangingHistory] = useState(false);
   const [hasBlockSelection, setHasBlockSelection] = useState(false);
   // "You wrote about this before": the paragraph being written, once typing pauses.
   const [writing, setWriting] = useState<{ id: string; text: string } | null>(null);
@@ -471,14 +481,17 @@ export function BlockNoteEditor({
     recoveredIds.current.clear();
     const latest = queryClient.getQueryData<BlockDocument>(queryKeys.document(initialDocument.id));
     if (latest) showServerVersion(latest);
-    setRecovering(false);
   };
 
   /** Show the server's version of the note in the editor without saving anything. */
   const showServerVersion = (document: BlockDocument) => {
     hydrating.current = true;
-    editor.replaceBlocks(editor.document, document.children.map(toPartialBlock));
-    hydrateLegacyBlocks(editor, document.children);
+    // Not an edit of the person's: keyboard undo mustn't step back to the replaced copy.
+    editor.transact((tr) => {
+      tr.setMeta("addToHistory", false);
+      editor.replaceBlocks(editor.document, document.children.map(toPartialBlock));
+      hydrateLegacyBlocks(editor, document.children);
+    });
     hydrating.current = false;
     blockUpdatedAt.current = blockUpdatedAtById(document.children);
     documentRevision.current = document.revision;
@@ -492,7 +505,6 @@ export function BlockNoteEditor({
     try {
       showServerVersion(await blockApi.get(initialDocument.id));
       recoveredIds.current?.clear();
-      setRecovering(false);
       setSaveProblem(null);
     } catch (error) {
       setSaveProblem({
@@ -503,6 +515,9 @@ export function BlockNoteEditor({
   };
 
   const changeHistory = (action: "undo" | "redo") => {
+    // Hold typing until the server's version arrives: it replaces the editor's
+    // content, so anything typed meanwhile would be hidden yet still saved.
+    setChangingHistory(true);
     // Send any edits still waiting for a pause first, so undo applies to them.
     void flush();
     saveQueue.current = saveQueue.current.then(async () => {
@@ -516,6 +531,7 @@ export function BlockNoteEditor({
         setEditorActionError(error instanceof Error ? error.message : `Could not ${action}`);
       } finally {
         setSaving(false);
+        setChangingHistory(false);
       }
     });
     return saveQueue.current;
@@ -525,7 +541,11 @@ export function BlockNoteEditor({
   const showPreview = (event: React.MouseEvent<HTMLElement>) => {
     const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a");
     const reference = anchor && parseBlockReference(anchor.getAttribute("href") ?? "");
-    if (!anchor || !reference) return;
+    // Off a block reference: close the preview rather than leave it over the text.
+    if (!anchor || !reference) {
+      setPreview(null);
+      return;
+    }
     const surface = event.currentTarget.getBoundingClientRect();
     const bounds = anchor.getBoundingClientRect();
     setPreview({
@@ -546,7 +566,7 @@ export function BlockNoteEditor({
 
   // Notes imported from Markdown carry no editor content yet; parse it once per mount.
   const hydrateOnMount = useEffectEvent(() => {
-    hydrateLegacyBlocks(editor, initialDocument.children);
+    hydrateLegacyBlocks(editor, startingNodes);
     hydrating.current = false;
   });
   useEffect(() => hydrateOnMount(), [editor]);
@@ -554,7 +574,9 @@ export function BlockNoteEditor({
   // A newer revision that didn't come from this editor (another tab, a backup restore):
   // show it, unless local edits are waiting — then the next save reports the conflict.
   const adoptOutsideChange = useEffectEvent(() => {
-    if (initialDocument.revision === documentRevision.current) return;
+    // Revisions only grow, so an older copy (a late refetch, a rolled-back rename) is
+    // stale: showing it would undo visible edits and send the next save on a stale base.
+    if (initialDocument.revision <= documentRevision.current) return;
     const waiting =
       inFlightId.current !== null || readPendingTransactions(initialDocument.id).length > 0;
     if (!waiting) showServerVersion(initialDocument);
@@ -856,7 +878,7 @@ export function BlockNoteEditor({
         slashMenu={false}
         formattingToolbar={false}
         sideMenu={false}
-        editable={!conflicted && !recovering}
+        editable={!conflicted && !changingHistory}
         onChange={onChange}
         onSelectionChange={() => {
           const selection = editor.prosemirrorState.selection;
@@ -1234,39 +1256,29 @@ function applyLinkCheckMarkers(
   return () => observer.disconnect();
 }
 
-const EDITOR_TEXT_BLOCK_TYPES = new Set([
-  "paragraph",
-  "heading",
-  "quote",
-  "bulletListItem",
-  "numberedListItem",
-  "checkListItem",
-  "toggleListItem",
-  "codeBlock",
-  "table",
-]);
-
 export function toPartialBlock(node: BlockNode): AppPartialBlock {
   const storedContent = node.content.blocknote;
   const content = storedContent === undefined ? markdownText(node) : storedContent;
   const children = node.children.map(toPartialBlock);
 
-  // Blocks saved by this editor keep their own type and props (list kind, checked,
-  // code language, heading level, colours); only Markdown-only blocks are reparsed.
-  if (storedContent !== undefined && EDITOR_TEXT_BLOCK_TYPES.has(node.type)) {
-    const propNames = Object.keys(
-      editorSchema.blockSchema[node.type as keyof typeof editorSchema.blockSchema].propSchema,
-    );
+  // Saved by the editor: restore its own type, props (list kind, checked, code language,
+  // colours) and rich content as they were, keeping only props the schema knows.
+  // (Imported Markdown blocks carry no editor content and are converted below.)
+  const spec = Object.hasOwn(editorSchema.blockSchema, node.type)
+    ? editorSchema.blockSchema[node.type as keyof typeof editorSchema.blockSchema]
+    : undefined;
+  if (spec && (spec.content === "none" || storedContent !== undefined)) {
+    const propNames = Object.keys(spec.propSchema);
     const props = Object.fromEntries(
       Object.entries(node.attrs).filter(([key]) => propNames.includes(key)),
     );
     return {
       id: node.id,
       type: node.type,
-      props,
-      content: storedContent,
+      ...(Object.keys(props).length > 0 ? { props } : {}),
+      ...(spec.content === "none" ? {} : { content: storedContent }),
       children,
-    } as PartialBlock;
+    } as unknown as AppPartialBlock;
   }
 
   if (node.type === "heading") {
@@ -1507,13 +1519,15 @@ export function mergeOperations(batch: BlockOperation[], next: BlockOperation[])
 
 /** Parse Markdown-only blocks (imported notes) into rich editor content. */
 function hydrateLegacyBlocks(editor: AppEditor, nodes: readonly BlockNode[]) {
-  editor.transact(() => {
+  editor.transact((tr) => {
+    // Showing stored content isn't an edit: keyboard undo mustn't revert it to raw Markdown.
+    tr.setMeta("addToHistory", false);
     for (const node of flattenNodes(nodes)) {
       if (node.content.blocknote !== undefined) continue;
       const block = editor.getBlock(node.id);
-      // Only blocks with inline text can take parsed Markdown (not dividers, math
-      // placeholders, images or tables); giving them inline content crashes the editor.
-      if (!block || !Array.isArray(block.content)) continue;
+      // Only blocks with inline text take parsed Markdown (giving content to a math
+      // placeholder, image or divider throws and takes the whole editor down).
+      if (!block || editorSchema.blockSchema[block.type].content !== "inline") continue;
       const parsed = editor.tryParseMarkdownToBlocks(markdownText(node));
       if (parsed[0]?.content !== undefined) {
         editor.updateBlock(block.id, { content: parsed[0].content } as PartialBlock);
