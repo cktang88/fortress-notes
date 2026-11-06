@@ -60,6 +60,7 @@ from .models import (
     FolderMove,
     FolderRename,
     AskRequest,
+    CaptureRequest,
     SavedSearchCreate,
 )
 
@@ -359,6 +360,16 @@ async def import_uploaded_markdown(
 def _attachment(filename: str) -> str:
     ascii_name = filename.encode("ascii", "ignore").decode() or "download"
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+@app.post("/api/capture", status_code=201)
+def capture(data: CaptureRequest):
+    """Save a quick thought as its own note in the Uncategorized folder."""
+
+    try:
+        return documents.capture(data.text)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 # --- Trash ---------------------------------------------------------------------

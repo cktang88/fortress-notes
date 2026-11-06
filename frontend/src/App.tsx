@@ -4,6 +4,7 @@ import { BacklinksPanel } from "./features/notes/BacklinksPanel";
 import { BlockNoteEditor } from "./features/notes/BlockNoteEditor";
 import { AnswerCard } from "./features/notes/AnswerCard";
 import { BlockSearchResults } from "./features/notes/BlockSearchResults";
+import { CaptureBox, CAPTURE_INPUT_ID } from "./features/notes/CaptureBox";
 import { DocumentSidebar } from "./features/notes/DocumentSidebar";
 import { isEditableTarget, SEARCH_INPUT_ID } from "./features/notes/listKeyboard";
 import { NoteHeader } from "./features/notes/NoteHeader";
@@ -18,6 +19,7 @@ import { CommandPalette } from "./features/notes/CommandPalette";
 import {
   useAsk,
   useBlockDocument,
+  useCapture,
   useBlockSearch,
   useCreateDocument,
   useCreateFolder,
@@ -68,6 +70,7 @@ export function App() {
   const moveDocument = useMoveDocument();
   const moveFolder = useMoveFolder();
   const ask = useAsk();
+  const capture = useCapture();
   const savedSearches = useSavedSearches();
   const saveSearch = useSaveSearch();
   const deleteSavedSearch = useDeleteSavedSearch();
@@ -138,7 +141,11 @@ export function App() {
   // types accents such as ñ.
   const onShortcut = useEffectEvent((event: KeyboardEvent) => {
     const mod = event.metaKey || event.ctrlKey;
-    if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+    if (mod && event.shiftKey && event.code === "Space") {
+      // Quick capture works from anywhere, even mid-sentence in a note.
+      event.preventDefault();
+      window.document.getElementById(CAPTURE_INPUT_ID)?.focus();
+    } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
       event.preventDefault();
       setPaletteOpen((open) => !open);
     } else if (event.key === "/" && !mod && !isEditableTarget(event.target)) {
@@ -179,6 +186,21 @@ export function App() {
               onOpenNote={(id) => selectNote(id)}
               request={workspaceRequest}
             />
+          }
+        />
+        <CaptureBox
+          onCapture={(text) =>
+            capture.mutateAsync(text).then(
+              (result) =>
+                showNotice({
+                  message: `Saved “${result.title}” to ${result.folder}`,
+                  action: { label: "Open", run: () => selectNote(result.document_id) },
+                }),
+              (error: unknown) => {
+                showError(error);
+                throw error;
+              },
+            )
           }
         />
         {searching && ask.variables === query.trim() && (
@@ -275,7 +297,6 @@ export function App() {
         onOpenNote={(id) => selectNote(id)}
         onCreateNote={(title) => void handleNew(null, title)}
         onSearchEverywhere={(text) => {
-          setMode("text");
           setQuery(text);
           focusSearch();
         }}

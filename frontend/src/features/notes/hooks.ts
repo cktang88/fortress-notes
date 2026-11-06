@@ -291,3 +291,11 @@ export function useImportMarkdown() {
 export function useAsk() {
   return useMutation({ mutationFn: (question: string) => blockApi.ask(question) });
 }
+
+export function useCapture() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (text: string) => blockApi.capture(text),
+    onSuccess: () => invalidateDocumentLists(qc),
+  });
+}

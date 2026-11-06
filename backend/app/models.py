@@ -222,3 +222,7 @@ class SavedSearchCreate(BaseModel):
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
+
+
+class CaptureRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=20_000)

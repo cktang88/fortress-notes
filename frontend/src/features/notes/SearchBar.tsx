@@ -288,6 +288,7 @@ export function SearchBar({
           <Shortcut keys={["⌘/Ctrl", "K"]}>Go to a note or run a command</Shortcut>
           <Shortcut keys={["/"]}>Search inside notes (when not typing)</Shortcut>
           <Shortcut keys={["Alt", "N"]}>New note</Shortcut>
+          <Shortcut keys={["⌘/Ctrl", "Shift", "Space"]}>Jot down a quick note</Shortcut>
           <Shortcut keys={["↓", "↑"]}>Move through search results</Shortcut>
           <Shortcut keys={["Enter"]}>Open the highlighted result</Shortcut>
           <Shortcut keys={["Esc"]}>Clear the search</Shortcut>
