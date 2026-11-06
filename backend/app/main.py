@@ -286,6 +286,8 @@ def delete_block_document(document_id: str):
 def get_block_document(document_id: str):
     """Read the bootstrapped block tree while the legacy note API remains active."""
 
+    # The editor needs a block to type into, even in a note that has none.
+    block_store.ensure_editable_block(settings.block_db_path, document_id)
     tree = block_store.document_tree(settings.block_db_path, document_id)
     if tree is None:
         raise HTTPException(404, "Block document not found")

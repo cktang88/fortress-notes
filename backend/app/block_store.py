@@ -655,6 +655,39 @@ def create_document(
             )
 
 
+def ensure_editable_block(path: Path, document_id: str) -> bool:
+    """Give a live document with no blocks one empty paragraph; True if one was added.
+
+    The editor always shows a paragraph to type into, so it needs a stable ID the
+    server knows (an empty import, or a note emptied by move-into and restored,
+    has none). The content is unchanged - an empty paragraph exports as nothing -
+    so the revision and history stay as they are.
+    """
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        if not _needs_editable_block(connection, document_id):
+            return False
+    with connection_scope(path, immediate=True) as connection:
+        if not _needs_editable_block(connection, document_id):
+            return False
+        now = _now()
+        _insert_blocks(connection, document_id, "", now, now, ensure_empty_paragraph=True)
+    return True
+
+
+def _needs_editable_block(connection: sqlite3.Connection, document_id: str) -> bool:
+    return (
+        connection.execute(
+            """SELECT 1 FROM documents
+                WHERE id = ? AND deleted_at IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.document_id = documents.id)""",
+            (document_id,),
+        ).fetchone()
+        is not None
+    )
+
+
 def list_documents(path: Path) -> list[dict[str, object]]:
     initialize(path)
     with connection_scope(path) as connection:
