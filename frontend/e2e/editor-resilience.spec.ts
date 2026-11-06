@@ -58,7 +58,7 @@ test("keeps editing while offline and syncs when the server is back", async ({ p
 });
 
 test("edits still waiting to sync stay visible after reopening the note", async ({ page }) => {
-  const editor = await newNote(page, "Offline reopen");
+  const editor = await newNote(page, "Offline then back");
   await page.keyboard.type("first part");
   await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
 
