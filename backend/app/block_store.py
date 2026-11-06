@@ -2729,11 +2729,9 @@ def first_line_title(texts) -> str:
 
 
 def derive_title(body: str) -> str:
-    for line in body.splitlines():
-        text = line.strip().lstrip("#").strip()
-        if text:
-            return text[:120]
-    return "Untitled"
+    """A title for new Markdown: the same first-line rule as auto titles."""
+
+    return first_line_title([body])
 
 
 def _iso(value: object) -> str:
