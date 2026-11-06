@@ -1,4 +1,5 @@
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 
 export interface Notice {
   id: number;
@@ -21,7 +22,11 @@ export function Toast({ notice, onDismiss }: Props) {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  return (
+  // While a modal dialog is open the rest of the page is inert, and a click there only
+  // lands on the dialog's backdrop. Render inside the dialog then, so Undo/Open work.
+  const modal = useSyncExternalStore(subscribeToDialogs, topModalDialog, () => null);
+
+  const toast = (
     <div
       aria-live="polite"
       className="pointer-events-none fixed bottom-4 left-1/2 z-50 -translate-x-1/2"
@@ -58,4 +63,26 @@ export function Toast({ notice, onDismiss }: Props) {
       )}
     </div>
   );
+  return modal ? createPortal(toast, modal) : toast;
+}
+
+function subscribeToDialogs(onChange: () => void) {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["open"] });
+  return () => observer.disconnect();
+}
+
+/** The open modal dialog shown last (the one on top), or null. */
+function topModalDialog(): HTMLDialogElement | null {
+  const open = Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]"));
+  return open.filter(isModal).at(-1) ?? null;
+}
+
+function isModal(dialog: HTMLDialogElement) {
+  try {
+    return dialog.matches(":modal");
+  } catch {
+    // Engines without :modal (such as jsdom): every dialog here is shown modally.
+    return true;
+  }
 }
