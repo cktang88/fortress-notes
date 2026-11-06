@@ -169,6 +169,55 @@ describe("WorkspaceMenu", () => {
     client.clear();
   });
 
+  it("offers to open each note restored in quick succession", async () => {
+    const trash = ["n1", "n2"].map((id) => ({
+      id,
+      title: `Idea ${id}`,
+      status: "rough",
+      tags: [],
+      deleted_at: "2026-10-01T00:00:00Z",
+      snippet: "",
+    }));
+    const pending: (() => void)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = new URL(String(input), window.location.origin).pathname;
+        if (path === "/api/trash" && !init?.method) return jsonResponse(trash);
+        const restored = /^\/api\/trash\/(\w+)\/restore$/.exec(path)?.[1];
+        if (restored) {
+          // Both restores are in flight before either answers.
+          await new Promise<void>((resolve) => pending.push(resolve));
+          return jsonResponse({ id: restored, folder_id: null, position: 0 });
+        }
+        return jsonResponse([]);
+      }),
+    );
+    const onNotice = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <WorkspaceMenu onNotice={onNotice} onOpenNote={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    act(() => button("Workspace menu").click());
+    act(() => button("Trash").click());
+    await waitFor(() => expect(document.body.textContent).toContain("Idea n2"));
+
+    const restoreButtons = [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
+      (item) => item.textContent === "Restore",
+    );
+    act(() => restoreButtons.forEach((item) => item.click()));
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => pending.forEach((resolve) => resolve()));
+    await waitFor(() => expect(onNotice).toHaveBeenCalledTimes(2));
+    expect(onNotice.mock.calls.map(([notice]) => notice.message)).toEqual([
+      "Restored “Idea n1”",
+      "Restored “Idea n2”",
+    ]);
+    client.clear();
+  });
+
   it("imports chosen Markdown files and opens the first one", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({

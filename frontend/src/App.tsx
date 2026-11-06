@@ -77,6 +77,8 @@ export function App() {
   const saveSearch = useSaveSearch();
   const deleteSavedSearch = useDeleteSavedSearch();
 
+  // Follow-ups use mutateAsync rather than mutate's callbacks throughout: those only
+  // fire for the latest call, so a quick second Undo (or rename) drops the first's.
   const showNotice = (next: Omit<Notice, "id">) => setNotice({ ...next, id: Date.now() });
   const showError = (error: unknown) =>
     showNotice({ tone: "error", message: error instanceof Error ? error.message : String(error) });
@@ -113,8 +115,7 @@ export function App() {
       message: `Moved “${title}” to Trash`,
       action: {
         label: "Undo",
-        run: () =>
-          restoreDocument.mutate(id, { onSuccess: () => selectNote(id), onError: showError }),
+        run: () => void restoreDocument.mutateAsync(id).then(() => selectNote(id), showError),
       },
     });
   };
@@ -126,18 +127,14 @@ export function App() {
 
   const handleSaveSearch = () => {
     const savedQuery = query.trim();
-    saveSearch.mutate(
-      {
+    void saveSearch
+      .mutateAsync({
         name: savedQuery,
         query: savedQuery,
         mode: "text",
         filters: blockSearchFilters,
-      },
-      {
-        onSuccess: () => showNotice({ message: `Saved search “${savedQuery}”` }),
-        onError: showError,
-      },
-    );
+      })
+      .then(() => showNotice({ message: `Saved search “${savedQuery}”` }), showError);
   };
 
   // Global shortcuts: ⌘/Ctrl+K opens the palette, "/" focuses full-text search, Alt+N
@@ -212,7 +209,7 @@ export function App() {
           onAsk={() => ask.mutate(query.trim())}
           onApplySavedSearch={applySavedSearch}
           onOpenFirst={() => setOpenFirstFor(query.trim())}
-          onDeleteSavedSearch={(id) => deleteSavedSearch.mutate(id, { onError: showError })}
+          onDeleteSavedSearch={(id) => void deleteSavedSearch.mutateAsync(id).catch(showError)}
           onNew={() => void handleNew()}
           actions={
             <WorkspaceMenu
@@ -296,10 +293,10 @@ export function App() {
               key={`header:${document.data.id}`}
               note={document.data}
               onTitle={(title) =>
-                updateDocument.mutate({ id: document.data!.id, title }, { onError: showError })
+                void updateDocument.mutateAsync({ id: document.data!.id, title }).catch(showError)
               }
               onSetStatus={(status) =>
-                updateDocument.mutate({ id: document.data!.id, status }, { onError: showError })
+                void updateDocument.mutateAsync({ id: document.data!.id, status }).catch(showError)
               }
               onDelete={() => void handleDelete(document.data!.id)}
               exportUrl={workspaceApi.documentMarkdownUrl(document.data.id)}
@@ -317,16 +314,12 @@ export function App() {
               onOpenNote={(documentId, blockId) => selectNote(documentId, blockId)}
               moving={moveInto.isPending}
               onMoveInto={(target) =>
-                moveInto.mutate(
-                  { id: document.data!.id, targetId: target.document_id },
-                  {
-                    onSuccess: () => {
-                      selectNote(target.document_id);
-                      showNotice({ message: `Moved into “${target.title}”` });
-                    },
-                    onError: showError,
-                  },
-                )
+                void moveInto
+                  .mutateAsync({ id: document.data!.id, targetId: target.document_id })
+                  .then(() => {
+                    selectNote(target.document_id);
+                    showNotice({ message: `Moved into “${target.title}”` });
+                  }, showError)
               }
             />
           </>
