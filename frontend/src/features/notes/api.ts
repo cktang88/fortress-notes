@@ -70,7 +70,7 @@ export const notesApi = {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch(`${API}/images`, { method: "POST", body: form });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) throw await failure(res);
     return res.json();
   },
 
@@ -78,7 +78,7 @@ export const notesApi = {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch(`${API}/files`, { method: "POST", body: form });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) throw await failure(res);
     return res.json();
   },
 };
