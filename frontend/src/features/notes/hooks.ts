@@ -51,8 +51,10 @@ export function useRelated(id: string | null, blockId: string | null = null) {
     queryKey: [...queryKeys.related, id, blockId],
     queryFn: () => notesApi.related(id!, 5, blockId),
     enabled: !!id,
-    // Keep showing the last results while the focused block changes.
-    placeholderData: (previous) => previous,
+    // Keep showing the last results while the focused block changes, but never
+    // another note's results as this one's.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === id ? previous : undefined,
   });
 }
 
