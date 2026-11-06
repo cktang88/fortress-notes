@@ -821,16 +821,28 @@ function EditorBody({
       });
     }
     const targets: BlockLinkTarget[] = await blockApi.linkTargets(query);
-    const references = targets.map((target) => ({
-      key: "paragraph",
-      title: `Embed block: ${target.text || `${target.block_type} block`}`,
-      subtext: `${target.document_title} · ${target.block_id}`,
-      group: "Embeds",
-      onItemClick: () => {
-        editor.insertInlineContent(blockReferenceLink(target));
-        editor.getExtension(SuggestionMenu)?.closeMenu();
-      },
-    }));
+    // BlockNote keys menu items by title, so paragraphs with the same text in different
+    // notes need the note's title to stay distinct (otherwise one can go missing).
+    const seen = new Map<string, number>();
+    const references = targets
+      .map((target) => {
+        let title = `Embed block: ${target.text || `${target.block_type} block`}`;
+        const repeats = seen.get(title) ?? 0;
+        seen.set(title, repeats + 1);
+        if (repeats > 0)
+          title = `${title} (${target.document_title}${repeats > 1 ? ` ${repeats}` : ""})`;
+        return { target, title };
+      })
+      .map(({ target, title }) => ({
+        key: "paragraph",
+        title,
+        subtext: `${target.document_title} · ${target.block_id}`,
+        group: "Embeds",
+        onItemClick: () => {
+          editor.insertInlineContent(blockReferenceLink(target));
+          editor.getExtension(SuggestionMenu)?.closeMenu();
+        },
+      }));
     return [...defaults, ...references];
   };
 
