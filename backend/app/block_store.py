@@ -1299,6 +1299,7 @@ def block_link_targets(path: Path, query: str = "", limit: int = 50) -> list[dic
                             SELECT first_block.id
                               FROM blocks AS first_block
                              WHERE first_block.document_id = documents.id
+                               AND first_block.parent_id IS NULL
                              ORDER BY first_block.position ASC, first_block.id ASC
                              LIMIT 1
                         )

@@ -9,6 +9,7 @@ from pathlib import Path
 from app import workspace
 from app.block_store import (
     apply_transaction,
+    block_link_targets,
     connection_scope,
     create_block_document,
     create_document,
@@ -78,6 +79,21 @@ class BlockMoveTests(unittest.TestCase):
             tree = document_tree(database, created["id"])
             assert tree is not None
             self.assertEqual(tree["revision"], created["revision"])
+
+
+class LinkTargetTests(unittest.TestCase):
+    def test_title_match_offers_the_first_top_level_block(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            created = create_block_document(
+                database, "Zebra facts", "rough", [], "- parent\n  - child\n"
+            )
+
+            targets = block_link_targets(database, "zebra")
+
+            self.assertEqual(
+                [target["block_id"] for target in targets], [created["children"][0]["id"]]
+            )
 
 
 class TrashRestoreTests(unittest.TestCase):
