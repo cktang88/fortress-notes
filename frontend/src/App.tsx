@@ -43,7 +43,6 @@ export function App() {
   const [query, setQuery] = useState("");
   const [blockSearchFilters, setBlockSearchFilters] = useState<BlockSearchFilters>({});
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
 
   const settledQuery = useDebouncedValue(query.trim());
   const searching = query.trim().length > 0;
@@ -78,8 +77,8 @@ export function App() {
   const handleNew = async (folderId: string | null = null) => {
     try {
       const created = await createDocument.mutateAsync({ folderId });
-      setJustCreatedId(created.id);
-      selectNote(created.id);
+      // Start typing straight away: the first line becomes the title.
+      selectNote(created.id, created.children[0]?.id ?? null);
     } catch (error) {
       showError(error);
     }
@@ -226,7 +225,6 @@ export function App() {
             <NoteHeader
               key={`header:${document.data.id}`}
               note={document.data}
-              autoFocusTitle={justCreatedId === document.data.id}
               onTitle={(title) =>
                 updateDocument.mutate({ id: document.data!.id, title }, { onError: showError })
               }

@@ -9,9 +9,9 @@ async function newNote(page: Page, title: string) {
   await page.goto("/");
   await page.getByRole("button", { name: "+ New", exact: true }).click();
   const titleInput = page.getByRole("textbox", { name: "Note title" });
-  await expect(titleInput).toBeFocused();
-  await page.keyboard.type(title);
-  await page.keyboard.press("Enter");
+  await titleInput.click();
+  await titleInput.fill(title);
+  await titleInput.press("Enter");
   const editor = page.locator(editorSelector);
   await expect(editor).toBeFocused();
   return editor;
@@ -92,4 +92,28 @@ test("a change made in another tab shows a clear way forward", async ({
   }
   await expect(editor).toContainText("original edited elsewhere");
   await expect(editor).toHaveAttribute("contenteditable", "true");
+});
+
+test("a new note is ready for typing and takes its title from the first line", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "+ New", exact: true }).click();
+  const editor = page.locator(editorSelector);
+  await expect(editor).toBeFocused();
+  await page.keyboard.type("Ideas for the garden");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Tomatoes along the fence");
+
+  const title = page.getByRole("textbox", { name: "Note title" });
+  await expect(title).toHaveValue("Ideas for the garden");
+  const sidebar = page.getByRole("navigation", { name: "Documents" });
+  await expect(sidebar.getByText("Ideas for the garden").first()).toBeVisible();
+
+  // Choosing a title stops it following the first line.
+  await title.fill("Garden plan");
+  await title.press("Enter");
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.type("Spring: ");
+  await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "Note title" })).toHaveValue("Garden plan");
 });
