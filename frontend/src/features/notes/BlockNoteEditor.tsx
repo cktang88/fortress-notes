@@ -302,6 +302,7 @@ export function BlockNoteEditor({
   const [saving, setSaving] = useState(false);
   const [saveProblem, setSaveProblem] = useState<SaveProblem | null>(null);
   const conflicted = saveProblem?.kind === "conflict";
+  const [changingHistory, setChangingHistory] = useState(false);
   const [hasBlockSelection, setHasBlockSelection] = useState(false);
   // "You wrote about this before": the paragraph being written, once typing pauses.
   const [writing, setWriting] = useState<{ id: string; text: string } | null>(null);
@@ -485,6 +486,9 @@ export function BlockNoteEditor({
   };
 
   const changeHistory = (action: "undo" | "redo") => {
+    // Hold typing until the server's version arrives: it replaces the editor's
+    // content, so anything typed meanwhile would be hidden yet still saved.
+    setChangingHistory(true);
     // Send any edits still waiting for a pause first, so undo applies to them.
     void flush();
     saveQueue.current = saveQueue.current.then(async () => {
@@ -498,6 +502,7 @@ export function BlockNoteEditor({
         setEditorActionError(error instanceof Error ? error.message : `Could not ${action}`);
       } finally {
         setSaving(false);
+        setChangingHistory(false);
       }
     });
     return saveQueue.current;
@@ -844,7 +849,7 @@ export function BlockNoteEditor({
         slashMenu={false}
         formattingToolbar={false}
         sideMenu={false}
-        editable={!conflicted}
+        editable={!conflicted && !changingHistory}
         onChange={onChange}
         onSelectionChange={() => {
           const selection = editor.prosemirrorState.selection;

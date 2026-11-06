@@ -131,6 +131,68 @@ test("a failed rename doesn't roll the text back to an older copy", async ({ pag
   await expect(page.locator(editorSelector)).toContainText("first second third");
 });
 
+test("typing while Undo saved change is on its way keeps the note consistent", async ({ page }) => {
+  const editor = await newNote(page, "Undo in flight");
+  await page.keyboard.type("alpha");
+  await expect(page.getByRole("button", { name: "Undo saved change" })).toBeEnabled();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Object.keys(localStorage).filter((key) => key.includes("pending-block")).length,
+      ),
+    )
+    .toBe(0);
+  await page.keyboard.type(" beta");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Object.keys(localStorage).filter((key) => key.includes("pending-block")).length,
+      ),
+    )
+    .toBe(0);
+
+  let releaseUndo = () => {};
+  const undoHeld = new Promise<void>((resolve) => (releaseUndo = resolve));
+  await page.route("**/undo", async (route) => {
+    await undoHeld;
+    await route.fallback();
+  });
+  await page.getByRole("button", { name: "Undo saved change" }).click();
+  await page.locator('[aria-label="Document content"]').click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" gamma");
+  const undone = page.waitForResponse((response) => response.url().endsWith("/undo"));
+  releaseUndo();
+  await undone;
+  await expect(page.getByRole("status").filter({ hasText: "Saving" })).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Object.keys(localStorage).filter((key) => key.includes("pending-block")).length,
+      ),
+    )
+    .toBe(0);
+
+  // Whatever the editor shows now is what the server has.
+  const shown = (await editor.textContent()) ?? "";
+  await page.reload();
+  await expect(page.locator(editorSelector)).toHaveText(shown);
+
+  // And the note is editable again once the undo has landed.
+  await page.locator(editorSelector).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" delta");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Object.keys(localStorage).filter((key) => key.includes("pending-block")).length,
+      ),
+    )
+    .toBe(0);
+  await page.reload();
+  await expect(page.locator(editorSelector)).toHaveText(`${shown} delta`);
+});
+
 test("a change made in another tab shows a clear way forward", async ({
   page,
   context,
