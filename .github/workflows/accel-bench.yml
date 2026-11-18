@@ -31,10 +31,11 @@ jobs:
         run: |
           .venv/bin/python -m unittest discover -s tests -p test_colbert_mlx.py -v
           .venv/bin/python -m unittest discover -s tests -p test_embeddings.py
-      - name: Bench ColBERT (CPU, MLX, MPS) and the app's own choice
+      - name: Bench OCR (CPU vs CoreML) and ColBERT (CPU, MLX, MPS), and the app's own choice
         run: |
           .venv/bin/python scripts/bench_accel.py all --out "$RUNNER_TEMP/accel" --reps 5 --tag main \
-            --ocr-configs "" --colbert-configs cpu_fp32,cpu_fp32_allcores,mlx_fp32,mlx_fp16,mps_fp16
+            --ocr-configs cpu,cpu_allcores,coreml_mlprogram_all,coreml_mlprogram_gpu \
+            --colbert-configs cpu_fp32,cpu_fp32_allcores,mlx_fp32,mlx_fp16,mps_fp16
       - uses: actions/upload-artifact@v4
         if: always()
         with:

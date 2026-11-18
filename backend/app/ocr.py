@@ -95,6 +95,13 @@ def _get_engine():
                     # screenshots, and no more accurate in our benchmark.
                     "Det.limit_type": "max",
                     "Det.limit_side_len": 1280,
+                    # CPU provider on purpose, Macs included: onnxruntime's CoreML provider
+                    # (MLProgram; ALL, CPU_AND_GPU or CPU_AND_NE) was 2-2.5x slower than
+                    # the CPU with the same cores on GitHub's M1 runners and changed one
+                    # image's text; NeuralNetwork format lost half the words; static
+                    # shapes leave CoreML no nodes (scripts/bench_accel.py). RapidOCR's
+                    # own M2 benchmark found CoreML 3-14x slower too. Apple Vision in
+                    # the Mac app is the accelerated reader.
                     "EngineConfig.onnxruntime.intra_op_num_threads": threads,
                     "EngineConfig.onnxruntime.inter_op_num_threads": 1,
                 }
