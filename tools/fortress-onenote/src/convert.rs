@@ -1522,7 +1522,10 @@ fn toc_skeleton(
 ) -> Vec<Skel> {
     let mut out = Vec::new();
     for name in toc.entries() {
-        if name.eq_ignore_ascii_case(input::RECYCLE_BIN) {
+        // OneNote web exports list the table of contents itself.
+        if name.eq_ignore_ascii_case(input::RECYCLE_BIN)
+            || name.to_ascii_lowercase().ends_with(".onetoc2")
+        {
             continue;
         }
         if !valid_entry_name(name) {
@@ -1612,8 +1615,8 @@ pub fn convert_notebook(
             // reported, exactly as for a folder or zip.
             let dest = work.join(".onepkg").join(&path_id("p", &rel)[2..]);
             let _ = std::fs::remove_dir_all(&dest);
-            let warnings = match input::extract_cab(path, &dest) {
-                Ok(w) => w,
+            let unpacked = match input::extract_cab(path, &dest) {
+                Ok(u) => u,
                 Err(e) => {
                     nb.report.failed_sections.push(FailedSection {
                         path: vec![name.clone()],
@@ -1642,7 +1645,19 @@ pub fn convert_notebook(
                         .position(|s| matches!(s, NotebookSource::Toc { .. }))
                 });
             let inner = match main {
-                Some(i) => found[i].clone(),
+                Some(i) => match found[i].clone() {
+                    // The package's notebook is named after the package,
+                    // not after the extraction folder.
+                    NotebookSource::Toc { toc, root, rel, .. } if rel.is_empty() => {
+                        NotebookSource::Toc {
+                            toc,
+                            root,
+                            name: name.clone(),
+                            rel,
+                        }
+                    }
+                    other => other,
+                },
                 None => NotebookSource::Loose {
                     dir: dest.clone(),
                     sections: input::list_sections(&dest),
@@ -1665,7 +1680,35 @@ pub fn convert_notebook(
                     page_title: None,
                 });
             }
-            for w in warnings {
+            for (file, error) in unpacked.failed_sections {
+                let mut p = vec![name.clone()];
+                p.extend(file.trim_end_matches(".one").split('/').map(str::to_string));
+                // Replaces "listed but missing" for the same file.
+                let fpath = format!("{rel}/{file}");
+                out.report
+                    .failed_sections
+                    .retain(|f| f.file.as_deref() != Some(fpath.as_str()));
+                out.report.failed_sections.push(FailedSection {
+                    path: p,
+                    file: Some(fpath),
+                    reason: "The section could not be unpacked from the package (damaged package)."
+                        .into(),
+                    hint: "Export the notebook again, or export it from OneNote for the web as a .zip."
+                        .into(),
+                    error,
+                });
+            }
+            if out.children.is_empty() && out.report.failed_sections.is_empty() {
+                out.report.failed_sections.push(FailedSection {
+                    path: vec![name.clone()],
+                    file: Some(rel.clone()),
+                    reason: "The package contains no readable sections.".into(),
+                    hint: "Export the notebook again, or export it from OneNote for the web as a .zip."
+                        .into(),
+                    error: "no section files in the package".into(),
+                });
+            }
+            for w in unpacked.warnings {
                 out.report.warnings.push(Warning {
                     message: w,
                     page_id: None,

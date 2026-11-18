@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P6).
 use crate::errors::{ErrorKind, Result};
 use crate::one::property::PropertyType;
 use crate::onestore::Object;
@@ -9,6 +10,11 @@ pub struct OutlineIndentDistance(Vec<f32>);
 impl OutlineIndentDistance {
     pub fn value(&self) -> &[f32] {
         &self.0
+    }
+
+    /// No explicit indents. PATCH(fortress-onenote, P6).
+    pub(crate) fn empty() -> Self {
+        OutlineIndentDistance(Vec::new())
     }
 
     pub(crate) fn into_value(self) -> Vec<f32> {

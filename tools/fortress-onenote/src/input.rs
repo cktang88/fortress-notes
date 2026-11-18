@@ -226,6 +226,15 @@ pub fn extract_zip(zip_path: &Path, dest: &Path, report: &mut InputReport) -> Re
     Ok(())
 }
 
+/// Result of unpacking a `.onepkg`.
+#[derive(Debug, Default)]
+pub struct CabExtract {
+    pub warnings: Vec<String>,
+    /// `(path in package, error)` of section files that could not be
+    /// unpacked.
+    pub failed_sections: Vec<(String, String)>,
+}
+
 /// Maximum number of files we are willing to extract from one `.onepkg`.
 const MAX_CAB_ENTRIES: usize = 100_000;
 
@@ -233,7 +242,7 @@ const MAX_CAB_ENTRIES: usize = 100_000;
 /// same name checks and size limits as zip extraction. Entries that cannot
 /// be read are skipped with a warning (their sections are then reported as
 /// missing), so one damaged entry does not lose the whole package.
-pub fn extract_cab(cab_path: &Path, dest: &Path) -> Result<Vec<String>> {
+pub fn extract_cab(cab_path: &Path, dest: &Path) -> Result<CabExtract> {
     let file = File::open(cab_path).with_context(|| format!("opening {}", cab_path.display()))?;
     // A corrupt cabinet must never abort the whole conversion, even if the
     // decompressor panics (vendor/PATCHES.md, C1, fixes the known cases).
@@ -253,6 +262,7 @@ pub fn extract_cab(cab_path: &Path, dest: &Path) -> Result<Vec<String>> {
     }
     fs::create_dir_all(dest)?;
     let mut warnings = Vec::new();
+    let mut failed_sections = Vec::new();
     let mut total: u64 = 0;
     for (name, size) in names {
         let comps = match safe_components(&name) {
@@ -293,30 +303,27 @@ pub fn extract_cab(cab_path: &Path, dest: &Path) -> Result<Vec<String>> {
             let mut reader = cabinet.read_file(&name)?;
             io::copy(&mut (&mut reader).take(size.saturating_add(1)), &mut out)
         }));
-        match copied {
-            Ok(Ok(n)) if n == size => total += n,
-            Ok(Ok(n)) => {
-                warnings.push(format!(
-                    "package entry {rel} is damaged ({n} bytes instead of {size}); skipped"
-                ));
-                drop(out);
-                let _ = fs::remove_file(&target);
+        let error = match copied {
+            Ok(Ok(n)) if n == size => {
+                total += n;
+                continue;
             }
-            Ok(Err(e)) => {
-                warnings.push(format!("package entry {rel} could not be extracted: {e}"));
-                drop(out);
-                let _ = fs::remove_file(&target);
-            }
-            Err(_) => {
-                warnings.push(format!(
-                    "package entry {rel} could not be extracted (decompressor crashed)"
-                ));
-                drop(out);
-                let _ = fs::remove_file(&target);
-            }
+            Ok(Ok(n)) => format!("damaged ({n} bytes instead of {size})"),
+            Ok(Err(e)) => format!("could not be extracted: {e}"),
+            Err(_) => "could not be extracted (decompressor crashed)".to_string(),
+        };
+        drop(out);
+        let _ = fs::remove_file(&target);
+        if ext_lower(Path::new(&rel)) == "one" {
+            failed_sections.push((rel, format!("package entry {error}")));
+        } else {
+            warnings.push(format!("package entry {rel} {error}; skipped"));
         }
     }
-    Ok(warnings)
+    Ok(CabExtract {
+        warnings,
+        failed_sections,
+    })
 }
 
 /// A notebook (or notebook-like set of sections) found in the input.

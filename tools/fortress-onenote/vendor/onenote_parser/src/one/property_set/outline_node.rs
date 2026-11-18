@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P6).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::layout_alignment::LayoutAlignment;
@@ -48,10 +49,11 @@ pub(crate) fn parse(object: &Object) -> Result<Data> {
     })?;
     let children =
         ObjectReference::parse_vec(PropertyType::ElementChildNodes, object)?.unwrap_or_default();
-    let child_level = simple::parse_u8(PropertyType::OutlineElementChildLevel, object)?
-        .ok_or_else(|| {
-            ErrorKind::MalformedOneNoteFileData("outline node has no child level".into())
-        })?;
+    // PATCH(fortress-onenote, P6): third-party writers omit the child level
+    // and indent distances of an outline; use OneNote's defaults (level 1,
+    // no explicit indents) instead of dropping the outline.
+    let child_level =
+        simple::parse_u8(PropertyType::OutlineElementChildLevel, object)?.unwrap_or(1);
 
     let layout_max_height = simple::parse_f32(PropertyType::LayoutMaxHeight, object)?;
     let layout_reserved_width =
@@ -65,9 +67,8 @@ pub(crate) fn parse(object: &Object) -> Result<Data> {
     let is_layout_size_set_by_user =
         simple::parse_bool(PropertyType::IsLayoutSizeSetByUser, object)?.unwrap_or_default();
     let list_spacing = simple::parse_f32(PropertyType::ListSpacingMu, object)?;
-    let outline_indent_distance = OutlineIndentDistance::parse(object)?.ok_or_else(|| {
-        ErrorKind::MalformedOneNoteFileData("outline node has no outline indent distance".into())
-    })?;
+    let outline_indent_distance =
+        OutlineIndentDistance::parse(object)?.unwrap_or_else(OutlineIndentDistance::empty);
     let offset_from_parent_horiz = simple::parse_f32(PropertyType::OffsetFromParentHoriz, object)?;
     let offset_from_parent_vert = simple::parse_f32(PropertyType::OffsetFromParentVert, object)?;
 

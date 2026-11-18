@@ -41,10 +41,9 @@ pub(crate) fn parse(object: &Object) -> Result<Data> {
     })?;
     let children =
         ObjectReference::parse_vec(PropertyType::ElementChildNodes, object)?.unwrap_or_default();
-    let child_level = simple::parse_u8(PropertyType::OutlineElementChildLevel, object)?
-        .ok_or_else(|| {
-            ErrorKind::MalformedOneNoteFileData("outline has no child element level".into())
-        })?;
+    // PATCH(fortress-onenote, P6): default level 1 when a writer omits it.
+    let child_level =
+        simple::parse_u8(PropertyType::OutlineElementChildLevel, object)?.unwrap_or(1);
     let contents =
         ObjectReference::parse_vec(PropertyType::ContentChildNodes, object)?.unwrap_or_default();
     let list_contents =
