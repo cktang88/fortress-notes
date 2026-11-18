@@ -320,8 +320,28 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let text = DocumentText.build(blocks, theme: theme, context: context)
         storage.append(text)
         blockCache = cachedBlocks(blocks, from: start)
-        // The next read walks the text (and keeps what it can from the cache).
-        lastRead = []
+        extendLastRead(from: start)
+    }
+
+    /// The paragraphs just appended join the last read (so the first save after a long
+    /// note loads doesn't walk all of it): read from the cache, or from the text.
+    private func extendLastRead(from start: Int) {
+        guard !lastRead.isEmpty, lastRead.reduce(0, { $0 + $1.length }) == start else { lastRead = []; return }
+        var added: [ReadBlock] = []
+        var valid = true
+        storage.enumerateAttribute(.fnBlock, in: NSRange(location: start, length: storage.length - start), options: []) { value, range, stop in
+            guard let info = value as? BlockInfo, string.character(at: NSMaxRange(range) - 1) == 0x0A,
+                  string.range(of: "\n", options: .literal, range: NSRange(location: range.location, length: range.length - 1)).location == NSNotFound
+            else { valid = false; stop.pointee = true; return }
+            let block: EditorBlock
+            if let cached = blockCache[info.id], cached.info === info, cached.length == range.length {
+                block = cached.block
+            } else {
+                block = DocumentText.block(in: storage, paragraph: range, info: info)
+            }
+            added.append(ReadBlock(info: info, length: range.length, block: block))
+        }
+        if valid { lastRead += added } else { lastRead = [] }
     }
 
     /// The blocks as they are now (fixing duplicate ids from pastes as a side effect).

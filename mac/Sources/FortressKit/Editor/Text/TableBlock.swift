@@ -13,7 +13,7 @@ import SwiftUI
 /// (OneNote lists and pictures in cells) show read-only under the cell's text and are
 /// saved untouched. Accessibility sees rows of cells (`TableGridView`).
 @MainActor
-final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
+final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTextStorageDelegate {
     private(set) var table: TableContent
     let attrs: [String: JSONValue]
     weak var context: AttachmentContext?
@@ -195,7 +195,10 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         view.cellTheme = cellTheme(row: row, column: column)
         view.delegate = self
         view.setAccessibilityLabel("Row \(row + 1), column \(column + 1)")
+        isLoadingCell = true
         view.textStorage?.setAttributedString(texts[row][column])
+        isLoadingCell = false
+        view.textStorage?.delegate = self
         view.typingAttributes = typingAttributes(for: view, marks: InlineMarks())
         return view
     }
@@ -432,17 +435,41 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         }
     }
 
-    // MARK: Editing (NSTextViewDelegate)
+    // MARK: Editing (NSTextStorageDelegate, NSTextViewDelegate)
 
-    func textDidChange(_ notification: Notification) {
-        guard let view = notification.object as? CellTextView, let storage = view.textStorage else { return }
-        let full = NSRange(location: 0, length: storage.length)
-        if storage.length > 0 {
+    private var isLoadingCell = false
+
+    /// The cell editor holding `storage` (the one in use, or one kept for undo).
+    private func cellView(for storage: NSTextStorage) -> CellTextView? {
+        if let editor, editor.textStorage === storage { return editor }
+        return retired.values.first { $0.textStorage === storage }
+    }
+
+    /// Every change of a cell's text (typing, paste, and undo, which doesn't always
+    /// tell the delegate `textDidChange`) restyles it and writes it to the table.
+    nonisolated func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
+                                 range editedRange: NSRange, changeInLength delta: Int) {
+        nonisolated(unsafe) let storage = textStorage
+        MainActor.assumeIsolated {
+            guard !isLoadingCell, storage.length > 0,
+                  let view = cellView(for: storage) else { return }
             // Pasted rich text becomes marks; presentation follows the marks.
-            storage.beginEditing()
-            view.cellTheme.restyle(storage, range: full)
-            storage.endEditing()
+            view.cellTheme.restyle(storage, range: NSRange(location: 0, length: storage.length))
         }
+    }
+
+    nonisolated func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+                                 range editedRange: NSRange, changeInLength delta: Int) {
+        nonisolated(unsafe) let storage = textStorage
+        MainActor.assumeIsolated {
+            guard !isLoadingCell, let view = cellView(for: storage) else { return }
+            cellTextDidChange(view)
+        }
+    }
+
+    private func cellTextDidChange(_ view: CellTextView) {
+        guard let storage = view.textStorage else { return }
+        let full = NSRange(location: 0, length: storage.length)
         view.wasEdited = true
         table.setRuns(DocumentText.runs(in: storage, range: full), row: view.row, column: view.column)
         if texts.indices.contains(view.row), texts[view.row].indices.contains(view.column) {
