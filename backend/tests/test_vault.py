@@ -211,6 +211,17 @@ class VaultMirrorTests(_Workspace):
         self.assertEqual(imported["children"][0]["provenance"]["external_id"], "{B}")
 
 
+class LinkedBodyTests(_Workspace):
+    def test_wikilinks_typed_in_a_capture_link_to_existing_notes(self) -> None:
+        target = documents.create(NoteCreate(title="Groceries", body="milk"))
+        captured = documents.capture("Add eggs to [[groceries]], see [[Nothing yet]]")
+        [block] = document_tree(self.db, captured["document_id"])["children"]
+        self.assertEqual(block["content"], [
+            {"type": "text", "text": "Add eggs to "}, {"type": "docLink", "id": target["id"]},
+            {"type": "text", "text": ", see [[Nothing yet]]"},
+        ])
+
+
 class UploadTests(_Workspace):
     def test_files_uploaded_together_link_to_each_other(self) -> None:
         from app import main

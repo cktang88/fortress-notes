@@ -74,9 +74,23 @@ def create(
         title_auto=not data.title,
         provenance=source,
         document_id=document_id,
-        specs=specs,
+        specs=specs if specs is not None else _linked_specs(db_path, data.body),
     )
     return tree
+
+
+def _linked_specs(db_path: Path, body: str) -> list | None:
+    """``body``'s blocks with its ``[[Note name]]`` wikilinks resolved to workspace notes
+    (None: nothing to resolve, parse it as usual)."""
+
+    if "[[" not in body:
+        return None
+    from .block_markdown import parse_markdown
+
+    block_store.initialize(db_path)
+    with block_store.read_scope(db_path) as connection:
+        links = vault.ImportLinks(vault.workspace_names(connection))
+    return parse_markdown(body, links)
 
 
 def update(document_id: str, data: NoteUpdate) -> tuple[dict, tuple]:
@@ -143,6 +157,7 @@ def capture(text: str, extra_provenance: dict | None = None) -> dict[str, object
         body,
         folder_id=folder_id,
         provenance=source,
+        specs=_linked_specs(db_path, body),
     )
     block_store.move_document(db_path, tree["id"], folder_id, position=0)
     return {"document_id": tree["id"], "title": tree["title"], "folder": UNCATEGORIZED}
