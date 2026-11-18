@@ -135,7 +135,7 @@ enum FindingFixtures {
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
     }
 
-    static let pictures: [[String: Any]] = [
+    static var pictures: [[String: Any]] { [
         ["block_id": "01M7NZXNSCANB1", "media_name": "01M7NZXNSCANIMG1.png", "content_hash": "a1", "mime_type": "image/png",
          "status": "done", "method": "ocr", "model": "apple-vision/26", "read_at": "2026-11-18T09:12:00+00:00",
          "text": "Ryokan Gion Hatanaka\nCheck-in 15:00 · Check-out 10:00\n2 guests · 3 nights\nTotal ¥186,000 (tax incl.)",
@@ -149,7 +149,7 @@ enum FindingFixtures {
          "text_chars": 1204],
         ["block_id": "01M7NZXNSCANB4", "media_name": "01M7NZXNSCANIMG3.png", "content_hash": "a4", "mime_type": "image/png",
          "status": "queued", "model": "rapidocr-ppocrv6-small/1", "text": "", "text_chars": 0],
-    ]
+    ] }
 
     /// `/info` for the scans note: three pictures read, one waiting.
     static var scansInfo: Data {

@@ -136,19 +136,18 @@ public final class PictureTextReader {
         var reachable = true
         await withTaskGroup(of: (String, ReadOutcome).self) { group in
             var pending = items[...]
-            func startNext() -> Bool {
-                guard reachable, let item = pending.popFirst() else { return false }
-                reading.insert(item.contentHash)
-                peakConcurrency = max(peakConcurrency, reading.count)
-                group.addTask {
-                    (item.contentHash, await Self.readOne(item, backend: backend, recognizer: recognizer))
+            var running = 0
+            while true {
+                while reachable, running < limit, let item = pending.popFirst() {
+                    reading.insert(item.contentHash)
+                    peakConcurrency = max(peakConcurrency, reading.count)
+                    running += 1
+                    group.addTask {
+                        (item.contentHash, await Self.readOne(item, backend: backend, recognizer: recognizer))
+                    }
                 }
-                return true
-            }
-            for _ in 0..<limit {
-                if !startNext() { break }
-            }
-            while let (contentHash, outcome) = await group.next() {
+                guard running > 0, let (contentHash, outcome) = await group.next() else { break }
+                running -= 1
                 reading.remove(contentHash)
                 switch outcome {
                 case .stored:
@@ -163,7 +162,6 @@ public final class PictureTextReader {
                 case .cancelled:
                     reachable = false
                 }
-                _ = startNext()
             }
         }
         return reachable
@@ -214,7 +212,7 @@ public final class PictureTextReader {
     }
 
     private func sleep(_ delay: Duration) async {
-        let sleeper = Task { try? await Task.sleep(for: delay) }
+        let sleeper = Task { _ = try? await Task.sleep(for: delay) }
         self.sleeper = sleeper
         await sleeper.value
         if self.sleeper == sleeper { self.sleeper = nil }
