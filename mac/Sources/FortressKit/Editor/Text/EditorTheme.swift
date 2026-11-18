@@ -4,6 +4,14 @@ import AppKit
 /// to fonts, colors and paragraph styles.
 struct EditorTheme: Sendable {
     var baseSize: CGFloat = 16
+    /// Table cells: no space between paragraphs.
+    var isCompact = false
+    /// Table cells: the cell's alignment.
+    var alignment: NSTextAlignment = .natural
+    /// Table header cells: semibold text.
+    var emphasized = false
+    /// Table cells: the cell's text colour (a name or hex), under any run colour.
+    var textColorName: String?
 
     var scale: CGFloat { baseSize / 16 }
     /// One nesting level.
@@ -41,13 +49,15 @@ struct EditorTheme: Sendable {
 
     /// Space before / after a block.
     func spacing(for kind: BlockKind) -> (before: CGFloat, after: CGFloat) {
-        switch kind {
+        if isCompact { return (0, 0) }
+        return switch kind {
         case .heading1: (24 * scale, 8 * scale)
         case .heading2: (20 * scale, 6 * scale)
         case .heading3: (16 * scale, 4 * scale)
         case .bullet, .numbered, .check: (0, 4 * scale)
         case .code: ((8 + 10) * scale, (12 + 10) * scale)
-        case .image, .embed: (14 * scale, 18 * scale)
+        case .image, .embed, .table, .columns: (14 * scale, 18 * scale)
+        case .math: (6 * scale, 14 * scale)
         case .file: (6 * scale, 12 * scale)
         case .divider: (6 * scale, 10 * scale)
         default: (0, 10 * scale)
@@ -66,7 +76,15 @@ struct EditorTheme: Sendable {
     }
 
     func font(for kind: BlockKind, marks: InlineMarks) -> NSFont {
-        let base = baseFont(for: kind)
+        var base = baseFont(for: kind)
+        if emphasized, kind == .paragraph { base = .systemFont(ofSize: base.pointSize, weight: .semibold) }
+        if marks.sup || marks.sub {
+            // Raised and lowered text is three quarters size (the offset is in `attributes`).
+            var smaller = InlineMarks(bold: marks.bold, italic: marks.italic, code: marks.code, link: marks.link)
+            smaller.extraStyles = [:]
+            let font = self.font(for: kind, marks: smaller)
+            return NSFont(descriptor: font.fontDescriptor, size: font.pointSize * 0.75) ?? font
+        }
         if marks.code && kind != .code {
             return .monospacedSystemFont(ofSize: base.pointSize * 0.875, weight: marks.bold ? .semibold : .regular)
         }
@@ -88,6 +106,7 @@ struct EditorTheme: Sendable {
 
     func paragraphStyle(for info: BlockInfo) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
+        style.alignment = alignment
         let indent = textIndent(kind: info.kind, depth: info.depth)
         style.firstLineHeadIndent = indent
         style.headIndent = indent
@@ -148,6 +167,32 @@ struct EditorTheme: Sendable {
         guard hex.hasPrefix("#") else { return nil }
         hex.removeFirst()
         if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
+        if hex.count == 8 { hex = String(hex.prefix(6)) }
+        guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
+        let color = NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
+                            blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+        // Imported colours were picked for white paper: lighten dark ones in Dark Mode.
+        return NSColor(name: nil) { appearance in
+            guard appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua else { return color }
+            let brightness = color.usingColorSpace(.sRGB).map { 0.299 * $0.redComponent + 0.587 * $0.greenComponent + 0.114 * $0.blueComponent } ?? 0.5
+            return brightness < 0.55 ? (color.blended(withFraction: 0.45, of: .white) ?? color) : color
+        }
+    }
+
+    /// A cell or block background picked in another app: as is on white, quieter in Dark Mode.
+    static func cellBackground(named name: String) -> NSColor? {
+        guard let base = name.hasPrefix("#") ? hexBase(name) : color(named: name) else { return nil }
+        return NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? base.withAlphaComponent(0.22) : base
+        }
+    }
+
+    private static func hexBase(_ string: String) -> NSColor? {
+        var hex = string.trimmingCharacters(in: .whitespaces)
+        guard hex.hasPrefix("#") else { return nil }
+        hex.removeFirst()
+        if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
+        if hex.count == 8 { hex = String(hex.prefix(6)) }
         guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
         return NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
                        blue: CGFloat(value & 0xFF) / 255, alpha: 1)
@@ -155,6 +200,7 @@ struct EditorTheme: Sendable {
 
     func textColor(for info: BlockInfo) -> NSColor {
         if info.kind == .check && info.checked { return .tertiaryLabelColor }
+        if let name = textColorName, let color = Self.color(named: name) { return color }
         switch info.kind {
         case .heading3, .quote: return .secondaryLabelColor
         default: return .textColor
@@ -173,7 +219,10 @@ struct EditorTheme: Sendable {
             .fnStyled: true,
         ]
         if info.kind.hasInlineText {
-            attributes[.baselineOffset] = baselineOffset(font: baseFont(for: info.kind), kind: info.kind)
+            var offset = baselineOffset(font: baseFont(for: info.kind), kind: info.kind)
+            if marks.sup { offset += baseFont(for: info.kind).pointSize * 0.33 }
+            if marks.sub { offset -= baseFont(for: info.kind).pointSize * 0.18 }
+            attributes[.baselineOffset] = offset
         }
         if let highlight = marks.highlight.flatMap(Self.highlightColor(named:)) {
             attributes[.backgroundColor] = highlight

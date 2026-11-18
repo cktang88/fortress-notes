@@ -21,7 +21,7 @@ enum DocumentText {
         if block.kind.hasInlineText {
             output.append(inline(block.runs, info: info, context: context))
         } else {
-            let attachment = BlockAttachment(info: info, context: context)
+            let attachment = BlockAttachment(info: info, context: context, block: block)
             output.append(NSAttributedString(string: objectReplacement, attributes: [.attachment: attachment, .fnBlock: info]))
         }
         output.append(NSAttributedString(string: "\n", attributes: [.fnBlock: info]))
@@ -69,6 +69,10 @@ enum DocumentText {
             if content.length > 0, string.character(at: NSMaxRange(content) - 1) == 0x0A { content.length -= 1 }
             if info.kind.hasInlineText {
                 block.runs = runs(in: text, range: content)
+            } else if let attachment = text.attribute(.attachment, at: paragraph.location, effectiveRange: nil) as? BlockAttachment,
+                      let live = attachment.live {
+                // Tables and columns hold their edits in the attachment.
+                live.write(into: &block)
             }
             blocks.append(block)
         }

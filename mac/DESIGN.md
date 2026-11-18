@@ -392,6 +392,11 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
   - [Cancel] [Import].
   - Then a determinate progress bar, then a summary: "Imported 40 · Skipped 2" with a disclosure listing the reasons.
 - Dropping `.md` files on the window or a sidebar folder skips the file panel and goes straight to this sheet.
+- **File → Import → From OneNote…** (also ⌘K "Import from OneNote…" and Settings ▸ General). One sheet, 560 wide, three steps:
+  1. The export how-to (onenote.com/notebooks → Export notebook, or Download on onedrive.com; unlock password-protected sections first), a dashed drop zone with [Choose File…] (.zip, .onepkg, .one), and "Put notebooks in" (top level or a folder).
+  2. A step list (Uploading → Converting → Importing pages → Linking pages: done steps `checkmark.circle.fill` secondary, the current one a small spinner, later ones `.quaternary`), one linear progress bar (upload fraction, then pages_done/pages_total), and the current "Notebook › Section › Page" in secondary, truncated in the middle. Closing the sheet doesn't stop the import; a toast says when it's done.
+  3. The report: headline + "147 pages · 36 images · 9 files · 12 tables · in 42 s", one card per notebook (`quaternarySystemFill` at 60%, radius 12) with created/updated/unchanged/skipped and images/files/tables/with-columns counts (zeros in `.tertiary`), failed sections with reason and hint, converter notes in a disclosure, unresolved links in a disclosure, [Show in Sidebar] per notebook, and the re-import promise ("Importing the same export again updates these notes; your edits are kept.").
+  - If the backend reports the `fortress-onenote` converter missing, the sheet explains how to build it (`cargo build --release` in tools/fortress-onenote). The app passes `FORTRESS_ONENOTE_BIN` to a backend it starts when the binary is built in the repository (or bundled).
 - **Export**: per note, File → Export as Markdown… (`.fileExporter`). Per folder, a context menu entry that exports a folder of `.md` files.
 
 ### b.10 Settings (`Settings` scene, `TabView`, each tab a `Form` with `.formStyle(.grouped)`, window width 560)
@@ -495,6 +500,12 @@ FortressTextView : NSTextView (TextKit 2)  ← NSViewRepresentable
   - Keep attribute runs minimal.
   - The budget is 50k words opening in under 150ms and typing latency under 8ms. Add a perf test with a generated 50k-word note.
 - **Free system behavior.** Find bar (`usesFindBar`, `isIncrementalSearchingEnabled`), spelling and grammar, Writing Tools (`writingToolsBehavior = .complete` on macOS 15+), Services, dictation, drag and drop, accessibility.
+
+### Tables, columns, math (rich imported content)
+
+- **Tables** stay one atomic paragraph in the note (one attachment character) whose view is a live grid: one small TextKit 2 text view per cell (rich marks, links, ⌘B/⌘I/⌘U/⌘E/⇧⌘X, ⌃⌘= superscript, ⌃⌘− subscript). Tab/⇧Tab move between cells (Tab in the last cell adds a row), ↑/↓ at a cell's edge move to the cell above/below or out of the table, Esc leaves it, ↩ is a line break inside the cell. The context menu inserts/deletes rows and columns and toggles the header row; each is one undo step. Look: 14pt cell text, 10/7 padding, radius 6 outline, `separatorColor` grid when `attrs.borders` (borderless tables show faint dashed guides only while a cell is edited), header cells semibold on a 4.5% label tint, imported cell colours as is in light mode and at 22% in dark. Stored column widths (CSS px ≈ pt) are honoured; automatic columns share the rest; everything shrinks to the measure. Nested cell blocks (OneNote lists/pictures in cells) show read-only under the cell text and are saved untouched (cells are sent without `blocks` while the table keeps its shape; with them after rows/columns change). Saved as one `update` of `content.blocknote`; `markdown`/`text` are derived by the server.
+- **Columns** stay inside the measure (two columns of ~300pt read well; widening past the measure would break the calm single column). Each column hosts its own block editor (the same controller as the note, embedded, no scrolling), with a 32pt gutter and a hairline. Trade-offs: no selection across columns or out of a column, Find works per column, ↑/↓ leave a column at its first/last line. Saving diffs the column blocks as ordinary children (`column` parents), so edits are inserts/updates/moves the backend accepts; columns are never created or removed from the native editor.
+- **Images** use stored width/height (no jump when the picture loads), never wider than the column or taller than 480; caption 12/16 secondary below; alt text as hover help and accessibility label. **Files** are chips with icon, name and size. **Math** is set from the LaTeX by a small reader (Greek, operators, ^/_ raised/lowered, \frac, \sqrt) in New York italic on a quiet fill, source on hover; saved untouched.
 
 ### Risks and mitigations
 

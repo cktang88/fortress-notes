@@ -250,6 +250,22 @@ public enum InlineMarkdown {
                 index = end + 4
                 continue
             }
+            if starts("<sup>", at: index), let end = find("</sup>", from: index + 5) {
+                flush()
+                var raised = marks
+                raised.sup = true
+                output.append(contentsOf: parse(Array(chars[(index + 5)..<end]), raised))
+                index = end + 6
+                continue
+            }
+            if starts("<sub>", at: index), let end = find("</sub>", from: index + 5) {
+                flush()
+                var lowered = marks
+                lowered.sub = true
+                output.append(contentsOf: parse(Array(chars[(index + 5)..<end]), lowered))
+                index = end + 6
+                continue
+            }
             buffer.append(char)
             index += 1
         }
@@ -304,6 +320,8 @@ public enum InlineMarkdown {
         let leading = String(text.prefix { $0 == " " })
         let trailing = String(text.reversed().prefix { $0 == " " })
         var result = escape(core)
+        if marks.sup { result = "<sup>\(result)</sup>" }
+        if marks.sub { result = "<sub>\(result)</sub>" }
         if marks.strike { result = "~~\(result)~~" }
         if marks.italic { result = "*\(result)*" }
         if marks.bold { result = "**\(result)**" }

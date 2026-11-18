@@ -15,7 +15,17 @@ final class AttachmentContext {
     @ObservationIgnored var resolveReference: ((String) async -> String?)?
     @ObservationIgnored var relayout: (() -> Void)?
     @ObservationIgnored var openURL: ((URL) -> Void)?
+    /// Opens a note (a `[[link]]` clicked in a table cell).
+    @ObservationIgnored var openNote: ((String) -> Void)?
     @ObservationIgnored var theme = EditorTheme()
+    /// A table cell or a column's block changed (the editor saves).
+    @ObservationIgnored var contentDidChange: (() -> Void)?
+    /// A table or columns block changed height.
+    @ObservationIgnored var attachmentDidResize: ((BlockAttachment) -> Void)?
+    /// Leave a table or columns block for the text after it (or before it).
+    @ObservationIgnored var leaveAttachment: ((BlockAttachment, _ forward: Bool) -> Void)?
+    /// Sets up the editor of a column like the editor that holds it.
+    @ObservationIgnored var configureNested: ((BlockEditorController) -> Void)?
 
     init(baseURL: URL) {
         self.baseURL = baseURL
@@ -67,16 +77,40 @@ final class AttachmentContext {
 
 // MARK: Block attachments (image, file, divider, embed)
 
-/// The one character of an atomic block. Draws through a hosted SwiftUI view.
+/// The editing state of an atomic block that is edited inside its attachment (a table's
+/// cells, the blocks of each column). The attachment owns it, so it outlives recycled
+/// views and comes back with undo.
+@MainActor
+protocol LiveBlock: AnyObject {
+    var view: NSView { get }
+    func height(forWidth width: CGFloat) -> CGFloat
+    /// Writes the current state into a block read back from the text.
+    func write(into block: inout EditorBlock)
+    /// Puts the caret in the first (or last) editable place.
+    func focus(atEnd: Bool)
+}
+
+/// The one character of an atomic block. Draws through a hosted SwiftUI view, or the
+/// live view of a table or columns block.
 final class BlockAttachment: NSTextAttachment {
     let info: BlockInfo
     nonisolated(unsafe) weak var context: AttachmentContext?
+    nonisolated(unsafe) var live: (any LiveBlock)?
 
-    @MainActor init(info: BlockInfo, context: AttachmentContext) {
+    @MainActor init(info: BlockInfo, context: AttachmentContext, block: EditorBlock? = nil) {
         self.info = info
         self.context = context
         super.init(data: nil, ofType: nil)
         allowsTextAttachmentView = true
+        switch info.kind {
+        case .table:
+            let table = block?.table ?? TableContent(blockNote: info.origin?.origin.content["blocknote"]) ?? .blank()
+            live = TableBlockController(table: table, attrs: info.origin?.origin.attrs ?? [:], context: context, attachment: self)
+        case .columns:
+            live = ColumnsBlockController(columns: block?.columns ?? [], context: context, attachment: self)
+        default:
+            break
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -91,23 +125,70 @@ final class BlockAttachment: NSTextAttachment {
     @MainActor func height(forWidth width: CGFloat) -> CGFloat {
         let theme = context?.theme ?? EditorTheme()
         let origin = info.origin?.origin
+        if let live { return live.height(forWidth: width) }
         switch info.kind {
         case .divider:
             return 22 * theme.scale
         case .file:
             return 40 * theme.scale
         case .image:
-            guard let context, let string = origin?.attrs["url"]?.stringValue, let url = context.url(for: string),
-                  let image = context.image(for: url), image.size.width > 0
-            else { return 220 * theme.scale }
-            let preview = origin?.attrs["previewWidth"]?.intValue.map(CGFloat.init) ?? image.size.width
-            let shown = min(width, preview, image.size.width)
-            return min(480, shown * image.size.height / image.size.width)
+            let size = ImageLayout.size(attrs: origin?.attrs ?? [:], image: imageNow(origin), width: width, theme: theme)
+            return size.height + ImageLayout.captionHeight(attrs: origin?.attrs ?? [:], width: width, theme: theme)
         default:
             let view = NSHostingView(rootView: BlockEmbedView(info: info, context: context, width: width))
             view.frame.size.width = width
             return max(36, view.fittingSize.height)
         }
+    }
+
+    @MainActor private func imageNow(_ origin: BlockOrigin?) -> NSImage? {
+        guard let context, let string = origin?.attrs["url"]?.stringValue, let url = context.url(for: string) else { return nil }
+        return context.image(for: url)
+    }
+}
+
+/// Image sizing: the stored width and height (px) when there are some, so the layout
+/// doesn't jump when the picture arrives; otherwise the picture's own size. Never wider
+/// than the column, never taller than 480.
+enum ImageLayout {
+    @MainActor static func size(attrs: [String: JSONValue], image: NSImage?, width: CGFloat, theme: EditorTheme) -> CGSize {
+        func number(_ key: String) -> CGFloat? {
+            if case .number(let value)? = attrs[key], value > 0 { return CGFloat(value) }
+            return nil
+        }
+        let natural: CGSize? = {
+            if let w = number("width"), let h = number("height") { return CGSize(width: w, height: h) }
+            if let image, image.size.width > 0 {
+                if let w = number("width") { return CGSize(width: w, height: w * image.size.height / image.size.width) }
+                return image.size
+            }
+            return nil
+        }()
+        guard let natural, natural.width > 0 else { return CGSize(width: width, height: 220 * theme.scale) }
+        let preview = number("previewWidth") ?? natural.width
+        var shown = min(width, preview, natural.width)
+        var height = shown * natural.height / natural.width
+        if height > 480 {
+            height = 480
+            shown = height * natural.width / natural.height
+        }
+        return CGSize(width: shown, height: height)
+    }
+
+    @MainActor static func captionHeight(attrs: [String: JSONValue], width: CGFloat, theme: EditorTheme) -> CGFloat {
+        guard let caption = attrs["caption"]?.stringValue, !caption.isEmpty else { return 0 }
+        let font = NSFont.systemFont(ofSize: 12 * theme.scale)
+        let bounds = (caption as NSString).boundingRect(
+            with: CGSize(width: width, height: 200), options: [.usesLineFragmentOrigin],
+            attributes: [.font: font, .paragraphStyle: captionStyle(theme)])
+        return 6 * theme.scale + ceil(bounds.height)
+    }
+
+    static func captionStyle(_ theme: EditorTheme) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = 16 * theme.scale
+        style.maximumLineHeight = 16 * theme.scale
+        return style
     }
 }
 
@@ -116,6 +197,10 @@ final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
         nonisolated(unsafe) let provider = self
         MainActor.assumeIsolated {
             guard let attachment = provider.textAttachment as? BlockAttachment else { return }
+            if let live = attachment.live {
+                provider.view = live.view
+                return
+            }
             let hosting = NSHostingView(rootView: BlockEmbedView(info: attachment.info, context: attachment.context, width: nil))
             hosting.sizingOptions = []
             provider.view = hosting
@@ -152,15 +237,22 @@ struct BlockEmbedView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .image:
                 ImageBlockView(url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
-                               name: attrs["name"]?.stringValue ?? attrs["caption"]?.stringValue ?? "",
-                               context: context)
+                               attrs: attrs, context: context, width: width)
             case .file:
-                FileChip(name: fileName, url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) }, context: context)
+                FileChip(name: fileName, url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
+                         size: fileSize, context: context)
+            case .math:
+                MathBlockView(latex: origin?.content["latex"]?.stringValue ?? origin?.text ?? "")
             default:
                 EmbedSummary(origin: origin)
             }
         }
         .frame(width: width, alignment: .leading)
+    }
+
+    private var fileSize: String? {
+        guard case .number(let size)? = attrs["size"], size > 0 else { return nil }
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
     }
 
     private var fileName: String {
@@ -170,30 +262,121 @@ struct BlockEmbedView: View {
     }
 }
 
+/// An image at its stored size (never wider than the column), its caption below, and
+/// its alt text (OCR or a description) as the hover help and accessibility label.
 private struct ImageBlockView: View {
     let url: URL?
-    let name: String
+    let attrs: [String: JSONValue]
     let context: AttachmentContext?
+    let width: CGFloat?
+
+    private var alt: String { attrs["alt"]?.stringValue ?? "" }
+    private var caption: String { attrs["caption"]?.stringValue ?? "" }
+    private var name: String { attrs["name"]?.stringValue ?? "" }
+    private var label: String {
+        let text = [alt, caption, name].first { !$0.isEmpty } ?? ""
+        return text.isEmpty ? "Image" : text
+    }
 
     var body: some View {
-        if let url, let image = context?.images[url] {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .accessibilityLabel(name.isEmpty ? "Image" : name)
-                .contextMenu {
-                    Button("Open Image") { context?.openURL?(url) }
-                }
-        } else {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(nsColor: .quaternarySystemFill))
-                .overlay {
-                    Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary)
-                }
-                .accessibilityLabel(name.isEmpty ? "Image" : name)
+        GeometryReader { proxy in
+            content(width: width ?? proxy.size.width)
         }
+    }
+
+    @ViewBuilder private func content(width: CGFloat) -> some View {
+        let theme = context?.theme ?? EditorTheme()
+        let image = url.flatMap { context?.images[$0] }
+        let size: CGSize? = ImageLayout.size(attrs: attrs, image: image, width: width, theme: theme)
+        VStack(alignment: .leading, spacing: 6 * theme.scale) {
+            Group {
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .contextMenu {
+                            if let url { Button("Open Image") { context?.openURL?(url) } }
+                            if !alt.isEmpty {
+                                Button("Copy Text in Image") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(alt, forType: .string)
+                                }
+                            }
+                        }
+                } else {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(nsColor: .quaternarySystemFill))
+                        .overlay {
+                            Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary)
+                        }
+                }
+            }
+            .frame(width: size?.width, height: size?.height)
+            .help(alt.isEmpty ? name : alt)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isImage)
+            if !caption.isEmpty {
+                Text(caption)
+                    .font(.system(size: 12 * theme.scale))
+                    .lineSpacing(2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: size?.width ?? .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// A math block: the LaTeX set in a math style (symbols, raised and lowered parts),
+/// with the source on hover. Saved untouched.
+struct MathBlockView: View {
+    let latex: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "function")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.tertiary)
+            Text(MathText.attributed(latex, size: 19))
+                .textSelection(.enabled)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color(nsColor: .quaternarySystemFill).opacity(0.6)))
+        .help(latex)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Math: " + MathFormatter.plain(MathFormatter.format(latex)))
+        .frame(maxHeight: .infinity, alignment: .center)
+    }
+}
+
+enum MathText {
+    /// The formula in New York italic with raised and lowered pieces.
+    static func attributed(_ latex: String, size: CGFloat) -> AttributedString {
+        var output = AttributedString()
+        func append(_ pieces: [MathFormatter.Piece], size: CGFloat, offset: CGFloat) {
+            for piece in pieces {
+                switch piece {
+                case .text(let text):
+                    var run = AttributedString(text)
+                    run.swiftUI.font = .system(size: size, design: .serif).italic()
+                    run.swiftUI.baselineOffset = offset
+                    output += run
+                case .sup(let inner):
+                    append(inner, size: size * 0.72, offset: offset + size * 0.38)
+                case .sub(let inner):
+                    append(inner, size: size * 0.72, offset: offset - size * 0.2)
+                }
+            }
+        }
+        append(MathFormatter.format(latex), size: size, offset: 0)
+        return output
     }
 }
 
@@ -201,6 +384,7 @@ private struct ImageBlockView: View {
 private struct FileChip: View {
     let name: String
     let url: URL?
+    var size: String?
     let context: AttachmentContext?
     @State private var hovering = false
 
@@ -214,6 +398,10 @@ private struct FileChip: View {
                         .resizable().frame(width: 20, height: 20)
                     Text(name).font(.callout).lineLimit(1).truncationMode(.middle)
                         .foregroundStyle(.primary)
+                    if let size {
+                        Text(size).font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                            .fixedSize()
+                    }
                     Image(systemName: "arrow.up.forward").font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
                         .opacity(hovering ? 1 : 0)

@@ -22,7 +22,7 @@ public struct ShellCommands: Commands {
             Menu("Import") {
                 Button("Markdown Files…") { model.isImporterShown = true }
                     .keyboardShortcut("i", modifiers: [.command, .shift])
-                // Other importers (e.g. "Import from OneNote…") belong in this submenu.
+                Button("From OneNote…") { model.showOneNoteImport() }
             }
             Button("Export as Markdown…") { Task { await model.exportOpenNote() } }
                 .keyboardShortcut("e", modifiers: [.command, .shift])

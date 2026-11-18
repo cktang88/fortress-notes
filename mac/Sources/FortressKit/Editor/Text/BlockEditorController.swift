@@ -30,6 +30,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// Note search for `[[` completion.
     var searchNotes: ((String) async -> [LinkSuggestion])?
     var uploadFile: ((Data, String, String) async throws -> (url: String, name: String))?
+    /// A column's editor: told after its layout changed (a picture loaded), and when the
+    /// caret leaves its first or last line (true = forward).
+    var onRelayout: (() -> Void)?
+    var onLeave: ((Bool) -> Void)?
+    /// A column's editor inside a columns block, not the note's own text.
+    let isEmbedded: Bool
 
     private var isNormalizing = false
     private var isLoading = false
@@ -38,12 +44,19 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     private lazy var completion = LinkCompletion(controller: self)
     private lazy var blockHover = BlockHover(controller: self)
 
-    init(baseURL: URL) {
+    init(baseURL: URL, embedded: Bool = false) {
         textView = FortressTextView.make()
         scrollView = NSScrollView()
         context = AttachmentContext(baseURL: baseURL)
+        isEmbedded = embedded
         super.init()
-        scrollView.documentView = textView
+        if embedded {
+            textView.isEmbedded = true
+            textView.isVerticallyResizable = false
+            textView.autoresizingMask = []
+        } else {
+            scrollView.documentView = textView
+        }
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = true
@@ -57,6 +70,111 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         context.relayout = { [weak self] in self?.relayoutAttachments() }
         context.openURL = { [weak self] url in self?.open(url) }
+        context.openNote = { [weak self] id in self?.onOpenNote?(id, nil) }
+        context.contentDidChange = { [weak self] in
+            guard let self, !self.isLoading else { return }
+            self.onChange?()
+        }
+        context.attachmentDidResize = { [weak self] attachment in self?.relayout(attachment) }
+        context.leaveAttachment = { [weak self] attachment, forward in self?.leave(attachment, forward: forward) }
+        context.configureNested = { [weak self] child in self?.configure(nested: child) }
+    }
+
+    /// A column's editor forwards links, uploads and focus to this editor.
+    private func configure(nested child: BlockEditorController) {
+        child.theme = theme
+        child.onOpenNote = { [weak self] id, block in self?.onOpenNote?(id, block) }
+        child.onFocusBlock = { [weak self] id in self?.onFocusBlock?(id) }
+        child.searchNotes = { [weak self] query in
+            guard let search = self?.searchNotes else { return [] }
+            return await search(query)
+        }
+        child.uploadFile = { [weak self] data, name, type in
+            guard let upload = self?.uploadFile else { throw URLError(.cancelled) }
+            return try await upload(data, name, type)
+        }
+        child.context.resolveReference = { [weak self] id in
+            guard let resolve = self?.context.resolveReference else { return nil }
+            return await resolve(id)
+        }
+        child.context.referenceText = context.referenceText
+    }
+
+    // MARK: Tables and columns
+
+    private func range(of attachment: NSTextAttachment) -> NSRange? {
+        var found: NSRange?
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length), options: []) { value, range, stop in
+            if (value as AnyObject?) === attachment {
+                found = range
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
+    /// A table or columns block changed height: lay it (and what follows) out again.
+    private func relayout(_ attachment: BlockAttachment) {
+        guard let manager = textView.textLayoutManager, let range = range(of: attachment),
+              let textRange = textRange(for: NSRange(location: range.location, length: string.length - range.location))
+        else { relayoutAttachments(); return }
+        manager.invalidateLayout(for: textRange)
+        manager.textViewportLayoutController.layoutViewport()
+        textView.needsDisplay = true
+        onRelayout?()
+    }
+
+    /// Esc, Tab or an arrow at the edge of a table or columns: the caret goes to the
+    /// text after (or before) the block, making an empty paragraph if there is none.
+    private func leave(_ attachment: BlockAttachment, forward: Bool) {
+        guard let range = range(of: attachment) else { return }
+        let paragraph = paragraph(at: range.location)
+        textView.window?.makeFirstResponder(textView)
+        if forward {
+            if NSMaxRange(paragraph) >= string.length {
+                let info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
+                replace(NSRange(location: NSMaxRange(paragraph), length: 0), with: attributed("\n", info: BlockInfo(depth: info.depth)),
+                        selecting: NSRange(location: NSMaxRange(paragraph), length: 0))
+            } else {
+                textView.setSelectedRange(NSRange(location: NSMaxRange(paragraph), length: 0))
+            }
+        } else if paragraph.location > 0 {
+            let previous = self.paragraph(at: paragraph.location - 1)
+            textView.setSelectedRange(NSRange(location: NSMaxRange(contentRange(of: previous)), length: 0))
+        } else if isEmbedded {
+            onLeave?(false)
+        } else {
+            replace(NSRange(location: 0, length: 0), with: attributed("\n", info: BlockInfo()),
+                    selecting: NSRange(location: 0, length: 0))
+        }
+        textView.scrollRangeToVisible(textView.selectedRange())
+    }
+
+    /// Inserts an empty 3 × 3 table (with a header row) after the current block.
+    func insertTable() {
+        let at = NSMaxRange(paragraph(at: textView.selectedRange().location))
+        let depth = info(at: textView.selectedRange().location).depth
+        let table = DocumentText.paragraph(EditorBlock(kind: .table, depth: depth, table: .blank()), context: context)
+        replace(NSRange(location: min(at, string.length), length: 0), with: table,
+                selecting: NSRange(location: min(at, string.length), length: 0))
+        if let attachment = storage.attribute(.attachment, at: min(at, storage.length - 1), effectiveRange: nil) as? BlockAttachment {
+            Self.later { [weak attachment] in attachment?.live?.focus(atEnd: false) }
+        }
+    }
+
+    /// After the current layout pass (a run loop turn).
+    static func later(_ body: @escaping @MainActor () -> Void) {
+        RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { body() } }
+    }
+
+    /// The height of a column's text at `width` (embedded editors).
+    func contentHeight(forWidth width: CGFloat) -> CGFloat {
+        ceil(max(26 * theme.scale, textView.fittingTextHeight(width: width)))
+    }
+
+    func focusEnd() {
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: max(0, string.length - 1), length: 0))
     }
 
     var storage: NSTextStorage { textView.textStorage! }
@@ -182,6 +300,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard let manager = textView.textLayoutManager else { return }
         manager.invalidateLayout(for: manager.documentRange)
         textView.needsDisplay = true
+        onRelayout?()
     }
 
     // MARK: Paragraph helpers
@@ -407,6 +526,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         case #selector(NSResponder.insertBacktab(_:)): return insertTab(outdent: true)
         case #selector(NSResponder.deleteBackward(_:)): return deleteBackward()
         case #selector(NSResponder.deleteForward(_:)): return deleteForward()
+        case #selector(NSResponder.moveUp(_:)), #selector(NSResponder.moveDown(_:)):
+            return moveIntoBlock(forward: commandSelector == #selector(NSResponder.moveDown(_:)))
         default: return false
         }
     }
@@ -428,11 +549,46 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         format.addItem(.separator())
         format.addItem(withTitle: "Highlight", action: #selector(FortressTextView.fortressHighlight(_:)), keyEquivalent: "")
         format.addItem(withTitle: "Add Link…", action: #selector(FortressTextView.fortressAddLink(_:)), keyEquivalent: "")
+        format.addItem(withTitle: "Superscript", action: #selector(FortressTextView.fortressToggleSuperscript(_:)), keyEquivalent: "")
+        format.addItem(withTitle: "Subscript", action: #selector(FortressTextView.fortressToggleSubscript(_:)), keyEquivalent: "")
+        format.addItem(.separator())
+        format.addItem(withTitle: "Insert Table", action: #selector(FortressTextView.fortressInsertTable(_:)), keyEquivalent: "")
         let item = NSMenuItem(title: "Paragraph Style", action: nil, keyEquivalent: "")
         item.submenu = format
         menu.insertItem(item, at: 0)
         menu.insertItem(.separator(), at: 1)
         return menu
+    }
+
+    /// ↑/↓ next to a table or columns block goes into it; in a column, ↑ on the first line
+    /// or ↓ on the last leaves the column.
+    private func moveIntoBlock(forward: Bool) -> Bool {
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }
+        let current = paragraph(at: selection.location)
+        let onEdgeLine: Bool = {
+            let caret = textView.firstRect(forCharacterRange: NSRange(location: selection.location, length: 0), actualRange: nil)
+            let edgeLocation = forward ? NSMaxRange(contentRange(of: current)) : current.location
+            let edge = textView.firstRect(forCharacterRange: NSRange(location: edgeLocation, length: 0), actualRange: nil)
+            return abs(caret.midY - edge.midY) < 2
+        }()
+        guard onEdgeLine else { return false }
+        if let attachment = storage.attribute(.attachment, at: current.location, effectiveRange: nil) as? BlockAttachment,
+           let live = attachment.live {
+            // The caret sits on a table or columns block itself.
+            live.focus(atEnd: !forward)
+            return true
+        }
+        let neighbour = forward ? NSMaxRange(current) : current.location - 1
+        guard neighbour >= 0, neighbour < string.length else {
+            if isEmbedded { onLeave?(forward); return true }
+            return false
+        }
+        let next = paragraph(at: neighbour)
+        guard let attachment = storage.attribute(.attachment, at: next.location, effectiveRange: nil) as? BlockAttachment,
+              let live = attachment.live else { return false }
+        live.focus(atEnd: !forward)
+        return true
     }
 
     // MARK: Typing attributes
@@ -586,7 +742,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             cursor = NSMaxRange(next)
         }
         let previousDepth: Int? = first.location > 0 ? storage.blockInfo(at: paragraph(at: first.location - 1).location).map {
-            $0.kind == .embed ? $0.depth - 1 : $0.depth
+            $0.kind.holdsOwnChildren ? $0.depth - 1 : $0.depth
         } : nil
         if delta > 0 {
             guard let previousDepth, firstInfo.depth + delta <= previousDepth + 1 else { NSSound.beep(); return }
@@ -951,6 +1107,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         case ([.command], "e"): toggleMark(\.code)
         case ([.command, .shift], "x"): toggleMark(\.strike)
         case ([.command, .shift], "h"): toggleHighlight("yellow")
+        case ([.command, .control], "="), ([.command, .control], "+"): toggleMark(\.sup)
+        case ([.command, .control], "-"): toggleMark(\.sub)
+        case ([.command, .option], "t"): insertTable()
         case ([.command, .shift], "k"), ([.command], "l"): editLink()
         case ([.command, .option], "0"): setKind(.paragraph)
         case ([.command, .option], "1"): setKind(.heading1)
@@ -995,7 +1154,10 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     // MARK: Block info and provenance
 
-    func hover(at point: NSPoint?) { blockHover.hover(at: point) }
+    func hover(at point: NSPoint?) {
+        guard !isEmbedded else { return }
+        blockHover.hover(at: point)
+    }
 
     /// The paragraph under a point (text view coordinates) and its line area.
     func blockFrame(at point: CGPoint) -> (NSRange, CGRect)? {
@@ -1116,6 +1278,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             if block.kind.hasInlineText == false { block.origin = BlockCodec.decode(node).origin }
             return block
         }
+        // Columns travel without their blocks on this pasteboard; they aren't pasted.
+        blocks.removeAll { $0.kind == .columns }
+        guard !blocks.isEmpty else { return false }
         // One partial paragraph pastes inline, into the current paragraph.
         if blocks.count == 1, payload[0]["partial"]?.boolValue == true, blocks[0].kind.hasInlineText {
             let inline = DocumentText.inline(blocks[0].runs, info: current, context: context)

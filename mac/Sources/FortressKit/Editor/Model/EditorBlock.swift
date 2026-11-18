@@ -9,16 +9,22 @@ public enum BlockKind: String, Sendable, Hashable, CaseIterable {
     case paragraph, heading1, heading2, heading3, bullet, numbered, check, quote, code
     /// Atomic blocks: one attachment character, no inline text.
     case divider, image, file
+    /// Atomic blocks with their own editing inside the attachment: a table grid, side-by-side
+    /// columns (each with its own blocks), and math (shown, saved untouched).
+    case table, columns, math
     /// Any block type the editor doesn't edit (tables, columns, raw HTML, math, types
     /// added later…): shown read-only and saved back untouched.
     case embed
 
     public var hasInlineText: Bool {
         switch self {
-        case .divider, .image, .file, .embed: false
+        case .divider, .image, .file, .embed, .table, .columns, .math: false
         default: true
         }
     }
+
+    /// Keeps its children to itself: nothing in the main flow nests under it.
+    public var holdsOwnChildren: Bool { self == .embed || self == .columns }
 
     public var isList: Bool { self == .bullet || self == .numbered || self == .check }
 
@@ -52,6 +58,9 @@ public enum BlockKind: String, Sendable, Hashable, CaseIterable {
         case .divider: "divider"
         case .image: "image"
         case .file: "file"
+        case .table: "table"
+        case .columns: "columns"
+        case .math: "math"
         case .embed: "embed"
         }
     }
@@ -64,6 +73,8 @@ public struct InlineMarks: Hashable, Sendable {
     public var underline = false
     public var strike = false
     public var code = false
+    public var sup = false
+    public var sub = false
     /// A BlockNote color name ("red", "blue", …) or a hex color ("#B4532A").
     public var textColor: String?
     /// Background (highlight) color, same vocabulary as `textColor`.
@@ -76,8 +87,10 @@ public struct InlineMarks: Hashable, Sendable {
     public init(
         bold: Bool = false, italic: Bool = false, underline: Bool = false, strike: Bool = false,
         code: Bool = false, textColor: String? = nil, highlight: String? = nil, link: String? = nil,
-        extraStyles: [String: JSONValue] = [:]
+        sup: Bool = false, sub: Bool = false, extraStyles: [String: JSONValue] = [:]
     ) {
+        self.sup = sup
+        self.sub = sub
         self.bold = bold
         self.italic = italic
         self.underline = underline
@@ -177,12 +190,19 @@ public struct EditorBlock: Hashable, Sendable {
     public var origin: BlockOrigin?
     /// Provenance to record when this block is first saved (e.g. pasted from a web page).
     public var newProvenance: JSONValue?
+    /// A table's rows and cells (kind `.table`).
+    public var table: TableContent?
+    /// A columns block's columns, each with its blocks (kind `.columns`).
+    public var columns: [EditorColumn]?
 
     public init(
         id: String = EditorBlock.newId(), kind: BlockKind = .paragraph, depth: Int = 0,
         checked: Bool = false, language: String? = nil, runs: [InlineRun] = [],
-        origin: BlockOrigin? = nil, newProvenance: JSONValue? = nil
+        origin: BlockOrigin? = nil, newProvenance: JSONValue? = nil, table: TableContent? = nil,
+        columns: [EditorColumn]? = nil
     ) {
+        self.table = table
+        self.columns = columns
         self.newProvenance = newProvenance
         self.id = id
         self.kind = kind

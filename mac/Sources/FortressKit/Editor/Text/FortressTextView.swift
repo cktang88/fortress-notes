@@ -15,6 +15,8 @@ final class FortressTextView: NSTextView {
     var theme = EditorTheme() { didSet { layoutColumn() } }
     /// Measure in characters (DESIGN a.3: Narrow 60 / Comfortable 68 / Wide 80).
     var measureCharacters: CGFloat = 68 { didSet { layoutColumn() } }
+    /// A column's text inside a columns block: no header, no gutters.
+    var isEmbedded = false { didSet { layoutColumn() } }
     private var headerHeight: CGFloat = 0
 
     static func make() -> FortressTextView {
@@ -47,6 +49,7 @@ final class FortressTextView: NSTextView {
 
     /// The column: `min(available − 2×48, 68 characters)`, centered.
     var columnWidth: CGFloat {
+        if isEmbedded { return bounds.width }
         let font = theme.bodyFont()
         let sample = "abcdefghijklmnopqrstuvwxyz " as NSString
         let average = sample.size(withAttributes: [.font: font]).width / CGFloat(sample.length)
@@ -60,6 +63,10 @@ final class FortressTextView: NSTextView {
     }
 
     func layoutColumn() {
+        if isEmbedded {
+            if textContainerInset != .zero { textContainerInset = .zero }
+            return
+        }
         let width = columnWidth
         let side = max(48, ((bounds.width - width) / 2).rounded(.down))
         if let header {
@@ -176,6 +183,9 @@ final class FortressTextView: NSTextView {
     @objc func fortressToggleUnderline(_ sender: Any?) { controller?.toggleMark(\.underline) }
     @objc func fortressToggleStrikethrough(_ sender: Any?) { controller?.toggleMark(\.strike) }
     @objc func fortressToggleInlineCode(_ sender: Any?) { controller?.toggleMark(\.code) }
+    @objc func fortressToggleSuperscript(_ sender: Any?) { controller?.toggleMark(\.sup) }
+    @objc func fortressToggleSubscript(_ sender: Any?) { controller?.toggleMark(\.sub) }
+    @objc func fortressInsertTable(_ sender: Any?) { controller?.insertTable() }
     @objc func fortressHighlight(_ sender: Any?) { controller?.toggleHighlight("yellow") }
     @objc func fortressAddLink(_ sender: Any?) { controller?.editLink() }
     @objc func fortressBody(_ sender: Any?) { controller?.setKind(.paragraph) }
