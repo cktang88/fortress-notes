@@ -117,13 +117,8 @@ final class BlockAttachment: NSTextAttachment {
     nonisolated(unsafe) var live: (any LiveBlock)?
     /// Last measured (width, height) of a hosted embed or math view (measuring hosts a view).
     nonisolated(unsafe) private var measured: (width: CGFloat, height: CGFloat)?
-    /// See `view`.
+    /// See `blockView`.
     nonisolated(unsafe) private var shownView: NSView?
-    // EXPERIMENT (profiling): reuse, and how often views are made and moved.
-    nonisolated(unsafe) static var reusesViews = true
-    nonisolated(unsafe) static var viewsMade = 0
-    nonisolated(unsafe) static var viewsLoaded = 0
-    nonisolated(unsafe) static var hostingMoves = 0
 
     @MainActor init(info: BlockInfo, context: AttachmentContext, block: EditorBlock? = nil) {
         self.info = info
@@ -156,9 +151,9 @@ final class BlockAttachment: NSTextAttachment {
     /// are drawn by AppKit, because a hosting view re-renders its SwiftUI whenever it
     /// moves to a window (and TextKit's re-adding is such a move); the rarer kinds
     /// (files, math, embeds) keep one hosting view each.
-    @MainActor var view: NSView {
+    @MainActor var blockView: NSView {
+        if let live { return live.view }
         if let shownView { return shownView }
-        BlockAttachment.viewsMade += 1
         let view: NSView
         switch info.kind {
         case .image:
@@ -166,7 +161,7 @@ final class BlockAttachment: NSTextAttachment {
         case .divider:
             view = DividerAttachmentView()
         default:
-            let hosting = CountingHostingView(rootView: BlockEmbedView(info: info, context: context, width: nil))
+            let hosting = NSHostingView(rootView: BlockEmbedView(info: info, context: context, width: nil))
             hosting.sizingOptions = []
             view = hosting
         }
@@ -381,20 +376,7 @@ final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
         nonisolated(unsafe) let provider = self
         MainActor.assumeIsolated {
             guard let attachment = provider.textAttachment as? BlockAttachment else { return }
-            BlockAttachment.viewsLoaded += 1
-            if let live = attachment.live {
-                provider.view = live.view
-                return
-            }
-            if !BlockAttachment.reusesViews {
-                // EXPERIMENT: the old way (a new hosting view per load).
-                BlockAttachment.viewsMade += 1
-                let hosting = CountingHostingView(rootView: BlockEmbedView(info: attachment.info, context: attachment.context, width: nil))
-                hosting.sizingOptions = []
-                provider.view = hosting
-                return
-            }
-            provider.view = attachment.view
+            provider.view = attachment.blockView
         }
     }
 
@@ -411,15 +393,8 @@ final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
     }
 }
 
-// EXPERIMENT (profiling): counts window moves.
-final class CountingHostingView: NSHostingView<BlockEmbedView> {
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        BlockAttachment.hostingMoves += 1
-    }
-}
-
-/// The SwiftUI view inside a block attachment.
+/// The SwiftUI view inside a file, math or embed block's attachment (pictures and
+/// dividers are AppKit views: `BlockAttachment.blockView`).
 struct BlockEmbedView: View {
     let info: BlockInfo
     let context: AttachmentContext?
@@ -436,12 +411,6 @@ struct BlockEmbedView: View {
     @ViewBuilder private var themedBody: some View {
         Group {
             switch info.kind {
-            case .divider:
-                Rectangle().fill(ThemeStyle(.border)).frame(height: 1)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .image:
-                ImageBlockView(url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
-                               attrs: attrs, context: context, width: width)
             case .file:
                 FileChip(name: fileName, url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
                          size: fileSize, context: context)
@@ -463,74 +432,6 @@ struct BlockEmbedView: View {
         if let name = attrs["name"]?.stringValue, !name.isEmpty { return name }
         if let url = attrs["url"]?.stringValue { return (url as NSString).lastPathComponent }
         return "File"
-    }
-}
-
-/// An image at its stored size (never wider than the column), its caption below, and
-/// its alt text (OCR or a description) as the hover help and accessibility label.
-private struct ImageBlockView: View {
-    let url: URL?
-    let attrs: [String: JSONValue]
-    let context: AttachmentContext?
-    let width: CGFloat?
-
-    private var alt: String { attrs["alt"]?.stringValue ?? "" }
-    private var caption: String { attrs["caption"]?.stringValue ?? "" }
-    private var name: String { attrs["name"]?.stringValue ?? "" }
-    private var label: String {
-        let text = [alt, caption, name].first { !$0.isEmpty } ?? ""
-        return text.isEmpty ? "Image" : text
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            content(width: width ?? proxy.size.width)
-        }
-    }
-
-    @ViewBuilder private func content(width: CGFloat) -> some View {
-        let theme = context?.theme ?? EditorTheme()
-        let image = url.flatMap { context?.slot(for: $0).image }
-        let size: CGSize? = ImageLayout.size(attrs: attrs, image: image, width: width, theme: theme)
-        VStack(alignment: .leading, spacing: 6 * theme.scale) {
-            Group {
-                if let image {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .contextMenu {
-                            if let url { Button("Open Image") { context?.openURL?(url) } }
-                            if !alt.isEmpty {
-                                Button("Copy Text in Image") {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(alt, forType: .string)
-                                }
-                            }
-                        }
-                } else {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(ThemeStyle(.surface))
-                        .overlay {
-                            Image(systemName: "photo").font(.title2).foregroundStyle(.themeTertiary)
-                        }
-                }
-            }
-            .frame(width: size?.width, height: size?.height)
-            .help(alt.isEmpty ? name : alt)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(label)
-            .accessibilityAddTraits(.isImage)
-            if !caption.isEmpty {
-                Text(caption)
-                    .font(.system(size: 12 * theme.scale))
-                    .lineSpacing(2)
-                    .foregroundStyle(.themeSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: size?.width ?? .infinity, alignment: .leading)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

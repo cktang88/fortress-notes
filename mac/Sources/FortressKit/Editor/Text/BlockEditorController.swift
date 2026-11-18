@@ -306,8 +306,6 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         var read: [ReadBlock]? = []
     }
     private var loading: Loading?
-    // EXPERIMENT (profiling): the old chunked appends, for same-process A/B.
-    nonisolated(unsafe) static var appendsInChunks = false
 
     /// Builds the next chunk of a loading note (about a screen's worth of work per run
     /// loop turn, so typing and scrolling go on meanwhile); when all is built, shows it.
@@ -324,10 +322,6 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             }
             build(&state, count: count)
             loading = state
-            if Self.appendsInChunks, state.built < pendingBlocks.count, !textView.hasMarkedText() {
-                // EXPERIMENT: the old way (each chunk into the text as it is built).
-                showLoaded()
-            }
             // The next chunk, or (on a step of its own) showing them all.
             Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
         } else if textView.hasMarkedText() {
@@ -364,7 +358,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     /// Appends the built rest of a loading note after the text in one edit (not an edit
-    /// of the note: no undo, no save).
+    /// of the note: no undo, no save). (Takes what is built so far: `finishLoading` builds
+    /// the rest first.)
     private func showLoaded() {
         guard let state = loading else { return }
         loading = nil

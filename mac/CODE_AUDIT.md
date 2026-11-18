@@ -5,13 +5,13 @@ UX/HIG sections B–H, J, K, M and the color theme are audited separately). Each
 **pass**, **fail → fixed** (what changed, where), **fail → deferred** (why, and who/what it
 needs), or **n.a.**. Line numbers are as of branch `mac-code-audit`.
 
-Summary: 33 items. 16 pass, 14 failed and fixed (3 of them only in part: I3, I4, N1), 3 deferred (A2, A5, I7).
+Summary: 33 items. 16 pass, 14 failed and fixed (2 of them only in part: I4, N1), 3 deferred (A2, A5, I7).
 Strict concurrency is a build error now (`treatAllWarnings(as: .error)`, Swift 6 mode).
 
 | | Pass | Fixed | Deferred | n.a. |
 |---|---|---|---|---|
 | A Platform, Swift 6 | A3, A4 | A1 | A2, A5 | |
-| I Editor | I1, I2, I6 | I3 (part, see Performance), I4 (part), I5 | I7 | |
+| I Editor | I1, I2, I6 | I3 (see Performance), I4 (part), I5 | I7 | |
 | L Observation, perf, concurrency | L1, L2, L4, L5, L6, L7, L9, L11 | L3, L8, L10 | | |
 | N Localization | N4 | N1 (part), N2, N3, N5 | | |
 | O Distribution, privacy | O3, O5 | O1, O2, O4 | | |
@@ -214,7 +214,7 @@ security-scoped bookmark for the notes folder.
 
 ## Performance (I3)
 
-**I3 [M] typing latency — fail → root-caused, partly fixed, rest deferred.**
+**I3 [M] typing latency — fail → root-caused and fixed (branch `editor-typing`).**
 
 CI medians (debug build, GitHub macOS runners; the same commit varies up to 2× between
 runners, so only same-runner comparisons count):
@@ -246,12 +246,57 @@ same note loaded different ways (`KeystrokeProfile.chunkedAgainstWhole`, 3 round
 
 So the slowdown comes from the viewport-first open adding the rest of the note in many
 small `NSTextStorage.append` calls: every later edit's `insertText` (TextKit's own
-processing, not our normalizing, which stays ~0.15 ms) costs ~3× as much. It isn't spell
-checking, idle work or layout state (relayout doesn't undo it; one rewrite of the contents
-does). *Deferred:* the fix is a loading-strategy trade-off with the open budget (one
-rewrite costs ~400 ms; fewer, larger appends make longer turns, and `open.rest.longestTurn`
-is already over its 50 ms budget) — next step is geometric chunk sizes measured against
-both numbers, owned by the editor work.
+processing, not our normalizing, which stays ~0.15 ms) costs ~3× as much.
+
+**Root cause (branch `editor-typing`): cached text elements.** A sampled keystroke after a
+chunked load spends a third of `insertText` in `-[NSTextContentStorage
+processEditingForTextStorage:…]` → `__NSTextContentStorageEnumerateCachedElementsInElementIndexRange`
+→ `updateRangesForTextElement:locationDelta:`: on every edit the content storage shifts
+the range of each text element (paragraph) it has cached after the edit. Each small
+append left elements cached around the text it added, so after ~40 appends there is one
+per paragraph; one append caches nothing beyond the viewport. Checks, same process
+(`LoadingExperiments`, removed after use): the note opened whole and then every layout
+fragment enumerated once (which makes the elements) types as slowly as the chunked load
+(8.3–9.9 ms against 4.1–4.9); wrapping the appends in `performEditingTransaction` doesn't
+help (8.0–10.1 ms), nor does handing the layout manager its content manager again; a
+bare `NSTextStorage` built by 25 appends edits no slower than one built at once (so not
+attribute-run fragmentation); and the appends themselves cost 0.1–0.2 ms each.
+
+**Fix (`BlockEditorController.appendPendingBlocks`):** the rest of a long note is still
+*built* a chunk per run loop step (`DocumentText.build` is the expensive part, ~2–5 ms a
+chunk, and needs no text view), into an attributed string off screen, with its read-back
+cache made per chunk; once all is built it goes into the text in **one** append
+(~1.5 ms for 590,000 characters), on a step of its own. Saving sees the whole note
+meanwhile, as before (`pendingBlocks` until the append). Same-runner A/B, the old chunked
+appends against the fix in one process, 4 CI runs × 3 rounds (runner speed varies 2×):
+
+| | old (append per chunk) | fix (build per chunk, append once) | note opened whole |
+|---|---|---|---|
+| keystroke.middle median, run 1 | 6.7 / 7.4 / 8.6 ms | 4.1 / 3.8 / 4.3 ms | 3.5 / 4.0 / 4.8 ms |
+| run 4 | 10.1 / 11.9 / 12.3 ms | 6.3 / 6.6 / 6.2 ms | 5.1 / 6.5 / 5.3 ms |
+| of which insertText, run 4 | 6.6 / 7.7 / 7.7 ms | 3.6 / 3.8 / 3.4 ms | 2.6 / 3.6 / 2.9 ms |
+| longest loading turn (after the first), run 4 | 155 / 72 / 65 ms | 38 / 21 / 34 ms | (one 390–830 ms turn) |
+
+The first turn after an open (30–210 ms on these runners, the same before and after) is
+not loading: a sample of it alone is half AppKit's continuous spell check handling its
+results for the first screens (`NSTextCheckingController … _addAnnotations`), then the
+save baseline (`SyncedTree`, ~15%) and the window's first layout. The perf suite now
+prints it apart (`open.rest.firstTurn`) next to `open.rest.longestTurnAfterFirst`
+(budget 50 ms); `open.rest.longestTurn` still includes it.
+
+**Attachment views (fixed).** Each keystroke's viewport relayout re-adds the attachment
+views in the viewport (`_NSTextViewportElementView layout` → `addSubview` →
+`NSView _setWindow:` → `NSHostingView.viewDidMoveToWindow`, which rebuilds SwiftUI's
+focus loop and updates its graph: ~60% of a key's main-thread time with pictures on
+screen), and TextKit asked for a new view provider about every other key, each making a
+new `NSHostingView`. Now `BlockAttachment.blockView` is made once per attachment and
+reused by every provider; pictures (`ImageAttachmentView`) and dividers
+(`DividerAttachmentView`) are AppKit views that draw themselves (a hosting view
+re-renders on every move to a window, which TextKit's re-adding is); a picture redraws
+only when it arrives (`ImageSlot.whenLoaded`); files, math and embeds keep one hosting
+view each. Same runner, typing next to a picture: views made per key 0.55 → 0.03, hosting
+view moves per key 1.1 → 0, median 7.6 / 7.3 / 6.0 → 6.7 / 4.0 / 4.1 ms (run 1) and
+9.8 / 11.4 / 9.5 → 7.4 / 10.2 / 7.3 ms (run 4). Test: `AttachmentViewTests`.
 
 **Fixed along the way:** the editor read `NSTextStorage.string` dozens of times per key;
 bridging a mutable NSString to Swift copies it (`CFStringCreateCopy`), i.e. the whole
@@ -261,9 +306,3 @@ open gains above come from (`DocumentText.block`, numbering and restyle read the
 too). Added a "Keystroke" signpost interval in `FortressTextView.keyDown` for Instruments
 and the opt-in profiling suites `KeystrokeProfile` / `KeystrokeSample`
 (`KEYSTROKE_PROFILE=1`).
-
-Other layout cost seen in the sampled profile: each keystroke's viewport relayout re-adds
-the attachment views in the viewport (`_NSTextViewportElementView layout` →
-`addSubview` → `NSHostingView.viewDidMoveToWindow`) and re-renders their SwiftUI
-(about 60% of a key's main-thread time when pictures are on screen). Deferred with the
-above.

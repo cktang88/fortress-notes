@@ -10,15 +10,13 @@ import Testing
 @MainActor
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["KEYSTROKE_PROFILE"] == "1"))
 struct KeystrokeSample {
-    @Test(arguments: ["whole", "chunked"]) func sampleTyping(mode: String) throws {
+    @Test func sampleTyping() throws {
         let editor = PerfEditor(document: LongNote.document())
         editor.open()
         // (Finding a block loads the whole note first where loading is chunked.)
-        if mode == "chunked" { editor.settle() }
         _ = editor.range(ofBlock: editor.middleParagraph)
-        let base = ProcessInfo.processInfo.environment["KEYSTROKE_SAMPLE_OUT"]
-            ?? FileManager.default.temporaryDirectory.appendingPathComponent("keystroke-sample.txt").path
-        let output = URL(fileURLWithPath: (base as NSString).deletingPathExtension + "-\(mode).txt")
+        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["KEYSTROKE_SAMPLE_OUT"]
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("keystroke-sample.txt").path)
         try? FileManager.default.removeItem(at: output)
         let sampler = Process()
         sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
@@ -37,27 +35,6 @@ struct KeystrokeSample {
             typed += 1
         }
         sampler.waitUntilExit()
-        print("PROFILE \(mode) typed \(typed) keystrokes in 6 s: \(String(format: "%.2f", 6000 / Double(max(typed, 1)))) ms each")
-    }
-
-    /// Samples the run loop turns after an open (the rest of a long note loading).
-    @Test func sampleSettle() throws {
-        let base = ProcessInfo.processInfo.environment["KEYSTROKE_SAMPLE_OUT"]
-            ?? FileManager.default.temporaryDirectory.appendingPathComponent("keystroke-sample.txt").path
-        let output = URL(fileURLWithPath: (base as NSString).deletingPathExtension + "-settle.txt")
-        try? FileManager.default.removeItem(at: output)
-        let editor = PerfEditor(document: LongNote.document())
-        editor.open()
-        let sampler = Process()
-        sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
-        sampler.arguments = [String(getpid()), "3", "1", "-mayDie", "-file", output.path]
-        try sampler.run()
-        Thread.sleep(forTimeInterval: 1)
-        // Only the first turn after the open is sampled (the rest after the sampler ends).
-        let first = milliseconds { _ = RunLoop.main.run(mode: .default, before: Date()) }
-        Thread.sleep(forTimeInterval: 2.5)
-        sampler.waitUntilExit()
-        let rest = editor.settle()
-        print(String(format: "PROFILE settle first turn %.1f then longest %.1f turns %d", first, rest.longest, rest.turns))
+        print("PROFILE typed \(typed) keystrokes in 6 s: \(String(format: "%.2f", 6000 / Double(max(typed, 1)))) ms each")
     }
 }
