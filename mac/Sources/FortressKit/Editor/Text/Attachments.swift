@@ -4,17 +4,18 @@ import SwiftUI
 /// What attachments need from the editor: where media lives, loaded images, live block
 /// reference text, and a way to ask for relayout when something finishes loading.
 @MainActor
+@Observable
 final class AttachmentContext {
     let baseURL: URL
     var images: [URL: NSImage] = [:]
-    private var loading: Set<URL> = []
+    @ObservationIgnored private var loading: Set<URL> = []
     /// Current text of referenced blocks (block references are living).
     var referenceText: [String: String] = [:]
-    private var resolving: Set<String> = []
-    var resolveReference: ((String) async -> String?)?
-    var relayout: (() -> Void)?
-    var openURL: ((URL) -> Void)?
-    var theme = EditorTheme()
+    @ObservationIgnored private var resolving: Set<String> = []
+    @ObservationIgnored var resolveReference: ((String) async -> String?)?
+    @ObservationIgnored var relayout: (() -> Void)?
+    @ObservationIgnored var openURL: ((URL) -> Void)?
+    @ObservationIgnored var theme = EditorTheme()
 
     init(baseURL: URL) {
         self.baseURL = baseURL

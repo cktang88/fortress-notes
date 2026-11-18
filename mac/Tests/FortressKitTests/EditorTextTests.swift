@@ -166,6 +166,12 @@ private func settle() {
             let session = EditorSession(document: document)
             try snapshot(NoteEditorView(session: session).environment(model), named: name, appearance: appearance)
         }
+        // Scrolled to the code block: image, quote, code, divider, table, file chip.
+        for (name, appearance) in [("editor-lower-light", NSAppearance.Name.aqua), ("editor-lower-dark", .darkAqua)] {
+            let session = EditorSession(document: document)
+            try snapshot(NoteEditorView(session: session, focusBlockId: "01M7RICH000000000000000014").environment(model),
+                         named: name, appearance: appearance)
+        }
         let narrow = EditorSession(document: document)
         try snapshot(NoteEditorView(session: narrow).environment(model), named: "editor-narrow-light",
                      size: CGSize(width: 620, height: 660))

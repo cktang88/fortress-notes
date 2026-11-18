@@ -51,6 +51,20 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
         return first.typographicBounds
     }
 
+    /// The fragment's origin sits at the paragraph's head indent.
+    private var leading: CGFloat {
+        guard let info else { return 0 }
+        return theme.textIndent(kind: info.kind, depth: info.depth)
+    }
+
+    /// Vertical center of the first line's lowercase letters (where markers sit).
+    private var markerCenterY: CGFloat {
+        guard let info, let first = textLineFragments.first else { return lineRect.midY }
+        let font = theme.baseFont(for: info.kind)
+        let baseline = first.typographicBounds.minY + first.glyphOrigin.y - theme.baselineOffset(font: font, kind: info.kind)
+        return baseline - font.xHeight / 2
+    }
+
     private var contentRect: CGRect {
         textLineFragments.reduce(CGRect.null) { $0.union($1.typographicBounds) }
     }
@@ -62,8 +76,7 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
         case .code, .quote:
             bounds = bounds.union(decorationRect(info).insetBy(dx: -1, dy: -1))
         case .bullet, .numbered, .check:
-            let indent = theme.textIndent(kind: info.kind, depth: info.depth)
-            bounds = bounds.union(CGRect(x: indent - theme.markerWidth - 4, y: lineRect.minY, width: theme.markerWidth + 4, height: lineRect.height))
+            bounds = bounds.union(CGRect(x: -theme.markerWidth - 8, y: lineRect.minY - 4, width: theme.markerWidth + 8, height: lineRect.height + 8))
         default: break
         }
         return bounds
@@ -72,8 +85,8 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
     /// The code background / quote bar area, in fragment coordinates.
     private func decorationRect(_ info: BlockInfo) -> CGRect {
         let content = contentRect.isNull ? CGRect(x: 0, y: 0, width: 0, height: theme.lineHeight(for: info.kind)) : contentRect
-        let nesting = CGFloat(info.depth) * theme.indentStep
-        let width = layoutFragmentFrame.width - nesting
+        let nesting = CGFloat(info.depth) * theme.indentStep - leading
+        let width = layoutFragmentFrame.width + leading - CGFloat(info.depth) * theme.indentStep
         switch info.kind {
         case .code:
             return CGRect(x: nesting, y: content.minY - theme.codePadding, width: max(0, width),
@@ -87,9 +100,7 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
     func checkboxRect() -> CGRect? {
         guard let info, info.kind == .check else { return nil }
         let size = 17 * theme.scale
-        let indent = theme.textIndent(kind: info.kind, depth: info.depth)
-        let line = lineRect
-        return CGRect(x: indent - theme.markerWidth, y: line.midY - size / 2, width: size, height: size)
+        return CGRect(x: -theme.markerWidth, y: markerCenterY - size / 2, width: size, height: size)
     }
 
     override func draw(at point: CGPoint, in context: CGContext) {
@@ -105,8 +116,7 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
         NSGraphicsContext.current = graphics
         defer { NSGraphicsContext.restoreGraphicsState() }
 
-        let indent = theme.textIndent(kind: info.kind, depth: info.depth)
-        let line = lineRect.offsetBy(dx: point.x, dy: point.y)
+        let centerY = point.y + markerCenterY
         switch info.kind {
         case .code:
             let rect = decorationRect(info).offsetBy(dx: point.x, dy: point.y)
@@ -118,7 +128,7 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
             NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5).fill()
         case .bullet:
             let size: CGFloat = 5.5 * theme.scale
-            let center = CGPoint(x: point.x + indent - theme.markerWidth + 7 * theme.scale, y: line.midY)
+            let center = CGPoint(x: point.x - theme.markerWidth + 7 * theme.scale, y: centerY)
             let dot = CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
             NSColor.secondaryLabelColor.set()
             let path = NSBezierPath(ovalIn: dot)
@@ -133,8 +143,9 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
             let font = NSFont.monospacedDigitSystemFont(ofSize: theme.baseSize, weight: .regular)
             let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
             let size = label.size(withAttributes: attributes)
-            let x = point.x + indent - 6 * theme.scale - size.width
-            label.draw(at: CGPoint(x: x, y: line.midY - size.height / 2), withAttributes: attributes)
+            let x = point.x - 6 * theme.scale - size.width
+            let baseline = centerY + font.xHeight / 2
+            label.draw(at: CGPoint(x: x, y: baseline - font.ascender), withAttributes: attributes)
         case .check:
             guard let box = checkboxRect()?.offsetBy(dx: point.x, dy: point.y) else { break }
             let name = info.checked ? "checkmark.circle.fill" : "circle"

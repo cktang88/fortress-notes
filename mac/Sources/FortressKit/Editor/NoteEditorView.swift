@@ -123,7 +123,7 @@ struct BlockTextEditor: NSViewRepresentable {
         let header = NSHostingView(rootView: EditorHeader(
             session: session, model: model,
             onSubmitTitle: { [weak controller] in controller?.focusStart() },
-            onHeightChange: { [weak controller] in controller?.textView.headerDidChange() }))
+            onHeightChange: { [weak controller] height in controller?.textView.headerDidChange(height: height) }))
         header.sizingOptions = []
         controller.textView.header = header
 
@@ -214,7 +214,7 @@ struct EditorHeader: View {
     @Bindable var session: EditorSession
     let model: AppModel
     var onSubmitTitle: () -> Void
-    var onHeightChange: () -> Void
+    var onHeightChange: (CGFloat) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -231,7 +231,8 @@ struct EditorHeader: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in onHeightChange() }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeightChange($0) }
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 

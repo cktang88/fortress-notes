@@ -63,18 +63,21 @@ final class FortressTextView: NSTextView {
         let width = columnWidth
         let side = max(48, ((bounds.width - width) / 2).rounded(.down))
         if let header {
-            header.frame.size.width = width
-            let height = header.fittingSize.height
-            header.frame = CGRect(x: side, y: 36, width: width, height: height)
-            headerHeight = height
+            header.frame = CGRect(x: side, y: 36, width: width, height: max(reportedHeaderHeight, 40))
+            headerHeight = max(reportedHeaderHeight, 40)
         }
         let top = 36 + headerHeight + 12
         let inset = NSSize(width: side, height: top)
         if textContainerInset != inset { textContainerInset = inset }
     }
 
-    /// The header measured again (its title wrapped or a banner appeared).
-    func headerDidChange() { layoutColumn() }
+    /// The header's height as SwiftUI laid it out (its title wrapped, say).
+    private var reportedHeaderHeight: CGFloat = 80
+    func headerDidChange(height: CGFloat) {
+        guard abs(height - reportedHeaderHeight) > 0.5 else { return }
+        reportedHeaderHeight = height
+        layoutColumn()
+    }
 
     // MARK: Keys
 
