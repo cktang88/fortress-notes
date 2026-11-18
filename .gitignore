@@ -6,7 +6,7 @@ backend/.env
 
 # Notes are personal data — keep only the sample welcome note in the repo
 notes/*
-!notes/welcome.md
+!notes/Welcome to Fortress Notes.md
 notes/.fortress.sqlite3*
 
 # OS
