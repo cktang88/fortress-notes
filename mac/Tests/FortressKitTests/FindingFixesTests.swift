@@ -1,12 +1,6 @@
 import AppKit
 import Foundation
-final class Flag: Sendable {
-    private let value = Mutex(false)
-    var isOn: Bool {
-        get { value.withLock { $0 } }
-        set { value.withLock { $0 = newValue } }
-    }
-}
+import Synchronization
 import Testing
 
 @testable import FortressKit
@@ -106,7 +100,7 @@ import Testing
 @MainActor
 @Suite(.serialized) struct AskFixTests {
     /// Long answers: numbering is kept as sentences arrive and paragraphs close as they fill.
-    @Test func paragraphsCloseAndCitationsNumberIncrementally() {
+    @Test func paragraphsCloseAndCitationsNumberIncrementally() throws {
         var state = AskState()
         for index in 0..<60 {
             if let event = try? APIClient.askEvent(from: PerfData.sentenceLine(index)) { state.apply(event) }
@@ -121,7 +115,7 @@ import Testing
         let numbers = state.citations.map { state.number(of: $0) }
         #expect(numbers == Array(1...state.citations.count).map(Optional.some))
         let closed = state.paragraphs.dropLast()
-        state.apply(try! #require(APIClient.askEvent(from: PerfData.sentenceLine(60))))
+        state.apply(try #require(try APIClient.askEvent(from: PerfData.sentenceLine(60))))
         #expect(Array(state.paragraphs.prefix(closed.count)) == Array(closed))  // Append-only.
     }
 
@@ -257,7 +251,7 @@ import Testing
         CaptureDraftStore(defaults: UserDefaults(suiteName: "finding-tests-\(UUID().uuidString)")!)
     }
 
-    static let saved = Data(#"{"document_id": "d1", "title": "Call the dentist", "folder": "Inbox", "folder_id": null}"#.utf8)
+    nonisolated static let saved = Data(#"{"document_id": "d1", "title": "Call the dentist", "folder": "Inbox", "folder_id": null}"#.utf8)
 
     @Test func offlineCapturesWaitOnDiskAndAreSentLater() async throws {
         let online = Flag()
