@@ -93,6 +93,15 @@ public enum NoteListing {
         }
     }
 
+    /// The notes just before and after `id` in the list (next first: lists are read down).
+    public static func neighbours(of id: String, in ordered: [String]) -> [String] {
+        guard let index = ordered.firstIndex(of: id) else { return [] }
+        var result: [String] = []
+        if index + 1 < ordered.count { result.append(ordered[index + 1]) }
+        if index > 0 { result.append(ordered[index - 1]) }
+        return result
+    }
+
     public static func sorted(_ notes: [NavigationDocument], by sort: NoteSort) -> [NavigationDocument] {
         switch sort {
         case .edited:

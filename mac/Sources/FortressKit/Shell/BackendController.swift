@@ -203,6 +203,7 @@ public final class BackendController {
         }
         self.process = process
         stopping = false
+        exitedUnexpectedly = false
         state = .starting
         return true
     }
@@ -228,13 +229,54 @@ public final class BackendController {
         if process.isRunning { kill(process.processIdentifier, SIGKILL) }
     }
 
-    private func processExited(status: Int32) {
+    /// Whether the process this app started stopped by itself after it was running (a
+    /// crash, not a failed start): the app may start it again.
+    public private(set) var exitedUnexpectedly = false
+
+    func processExited(status: Int32) {
         process = nil
+        let wasRunning = state == .running
         if stopping {
             state = .idle
+            exitedUnexpectedly = false
         } else {
+            exitedUnexpectedly = wasRunning
             state = .failed("The backend stopped (exit code \(status)). See the log for details.")
+            if wasRunning { onUnexpectedExit?() }
         }
+    }
+
+    /// Called when the backend this app started stops by itself.
+    @ObservationIgnored public var onUnexpectedExit: (@MainActor () -> Void)?
+
+    /// The end of the backend's log.
+    public func logTail(bytes: Int = 4096) -> String {
+        guard let handle = try? FileHandle(forReadingFrom: logURL) else { return "" }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: size > UInt64(bytes) ? size - UInt64(bytes) : 0)
+        return String(decoding: (try? handle.readToEnd()) ?? Data(), as: UTF8.self)
+    }
+
+    /// Whether the last start failed because something already listens on the port.
+    public func logSaysPortInUse() -> Bool {
+        Self.isPortInUse(log: logTail())
+    }
+
+    static func isPortInUse(log: String) -> Bool {
+        let lastStart = log.range(of: "starting backend ---", options: .backwards).map { String(log[$0.upperBound...]) } ?? log
+        let text = lastStart.lowercased()
+        return text.contains("address already in use") || text.contains("errno 48") || text.contains("errno 98")
+    }
+
+    /// A Fortress backend was already serving the port: use it instead of ours.
+    public func adoptRunningServer() {
+        state = .idle
+        exitedUnexpectedly = false
+    }
+
+    public func markPortInUse() {
+        state = .failed("Another app is using port \(port). Quit it, or choose another address in Settings.")
     }
 
     private func openLog() -> FileHandle? {

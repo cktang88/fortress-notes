@@ -313,6 +313,11 @@ def _workspace_response(request: Request, name: str, build, *key_parts) -> Respo
         (settings.block_db_path, name, *key_parts),
     )
 
+# Batch reads and moves for the native app (app/batch.py).
+from .batch import router as batch_router  # noqa: E402
+
+app.include_router(batch_router)
+
 
 @app.get("/api/health")
 def health() -> dict:
