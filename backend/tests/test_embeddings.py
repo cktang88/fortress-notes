@@ -532,3 +532,33 @@ class NoteQueryClusteringTests(unittest.TestCase):
             # Cached per note text; typed queries live in their own cache.
             self.assertIs(embeddings.note_query(texts)[0], vectors)
             self.assertEqual(len(embeddings._cache.queries), 0)
+
+
+class LongQueryCalibrationTests(unittest.TestCase):
+    def test_estimated_scores_sit_on_the_exact_scale(self) -> None:
+        # The related cutoff compares scores with their median; the prefilter's
+        # estimates (a strided subset of query vectors) must not drag it down.
+        import statistics
+
+        import torch
+
+        torch.manual_seed(3)
+        topics = torch.nn.functional.normalize(torch.randn(12, 16), dim=-1)
+
+        def text_like(count: int):
+            return torch.nn.functional.normalize(
+                topics[torch.randint(0, 12, (count,))] + 0.5 * torch.randn(count, 16), dim=-1
+            )
+
+        index = embeddings._Index()
+        for i in range(3000):
+            index.put(f"b{i}", "h", "v", text_like(int(torch.randint(4, 40, (1,)))))
+        docs = [(f"b{i}", "v", "x") for i in range(3000)]
+        query = text_like(400)
+        exact = statistics.median(index.maxsim_some(query, [d[0] for d in docs]))
+        with patch.object(embeddings, "_cache", embeddings._Cache(index=index)):
+            calibrated = statistics.median(embeddings._score_indexed(query, docs, set()).values())
+            with patch.object(embeddings, "CALIBRATE", False):
+                raw = statistics.median(embeddings._score_indexed(query, docs, set()).values())
+        self.assertLess(abs(calibrated - exact) / exact, 0.02)
+        self.assertLess(abs(calibrated - exact), abs(raw - exact))

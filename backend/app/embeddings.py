@@ -74,6 +74,8 @@ SIM_CHUNK_ELEMENTS = 1 << 24
 LONG_QUERY_TOKENS = 96
 PREFILTER_TOKENS = 32
 PREFILTER_CANDIDATES = 600
+CALIBRATE = True
+CALIBRATION_SAMPLE = 256
 # Padded lengths: fine steps where most paragraphs are, so little compute is padding.
 _BUCKETS = (
     *range(4, 65, 4),
@@ -1013,14 +1015,29 @@ def _score_indexed(query_emb, docs, unscored: set[str], weights=None) -> dict[st
         estimate = dict(zip(ids, rough.tolist()))
         candidates = sorted(wanted, key=lambda block_id: -estimate[block_id])
         exact = candidates[:PREFILTER_CANDIDATES]
+        rest = candidates[PREFILTER_CANDIDATES:]
+        # A sample of the rest, scored exactly too, puts the estimates on the exact
+        # scale: the relevance cutoff compares against the median of all scores,
+        # and raw estimates sit well below exact scores.
+        sample = rest[:: max(1, len(rest) // CALIBRATION_SAMPLE)] if CALIBRATE else []
+        exact_scores = index.maxsim_some(query_emb, exact + sample, weights)
+        factor = 1.0
+        if sample:
+            ratios = sorted(
+                score / estimate[block_id]
+                for block_id, score in zip(sample, exact_scores[len(exact):])
+                if estimate[block_id] > 0
+            )
+            if ratios:
+                factor = ratios[len(ratios) // 2]
         # Paragraphs outside the shortlist keep the (scaled) prefilter estimate,
         # capped below the shortlist so the ranking stays exact at the top.
         floor = None
-        for block_id, score in zip(exact, index.maxsim_some(query_emb, exact, weights)):
+        for block_id, score in zip(exact, exact_scores):
             scores[block_id] = score
             floor = score if floor is None else min(floor, score)
-        for block_id in candidates[PREFILTER_CANDIDATES:]:
-            scores[block_id] = min(estimate[block_id], floor) if floor is not None else 0.0
+        for block_id in rest:
+            scores[block_id] = min(estimate[block_id] * factor, floor) if floor is not None else 0.0
         return scores
     ids, values = index.maxsim_all(query_emb, weights)
     all_scores = dict(zip(ids, values.tolist()))
