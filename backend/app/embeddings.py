@@ -446,10 +446,11 @@ def _timings(model) -> tuple[float, float]:
         return time.perf_counter() - started
 
     query = statistics.median(
-        timed(lambda: _encode_now(model, [_PROBE_QUERIES[0]], is_query=True)) for _ in range(5)
+        timed(lambda: _encode_now(model, [_PROBE_QUERIES[0]], is_query=True)) for _ in range(3)
     )
-    documents = statistics.median(
-        timed(lambda: _encode_now(model, _PROBE_DOCUMENTS, is_query=False)) for _ in range(3)
+    # Two rounds: the probe batch takes ~1-2 s on a slow CPU, and loading waits for this.
+    documents = min(
+        timed(lambda: _encode_now(model, _PROBE_DOCUMENTS, is_query=False)) for _ in range(2)
     )
     return query, documents
 
