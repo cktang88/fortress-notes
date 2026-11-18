@@ -3,7 +3,9 @@
 A fast, local notes app for the Mac. A native macOS app (`mac/`, SwiftUI + TextKit 2,
 Liquid Glass on macOS 26) over a local Python backend (`backend/`, FastAPI + SQLite).
 Your notes live in one SQLite database on your Mac; every note is also mirrored to a
-readable Markdown file.
+plain Markdown file, and the notes folder opens as an Obsidian vault. Fortress uses
+open standards (CommonMark, GFM, Obsidian Markdown, YAML front matter) rather than
+formats of its own: [docs/open-standards.md](docs/open-standards.md).
 
 <p align="center">
   <img src="docs/screenshots/library.png" width="720" alt="The main window in dark mode: Library and nested folders in the sidebar, the note list grouped by date">
@@ -232,7 +234,7 @@ flowchart LR
   [docs/block-model.md](docs/block-model.md). Edits are revision-checked block
   transactions; each is one undo step.
 - **Background work** runs in one manager (`backend/app/background.py`), one thread per
-  lane: Markdown mirrors (`NOTES_DIR/<id>.md`, write-only), OneNote import jobs, daily
+  lane: Markdown mirrors (`NOTES_DIR/<folder>/<Title>.md`, an Obsidian vault, write-only), OneNote import jobs, daily
   backups, OCR and ColBERT indexing. Low-priority lanes yield while a search is scoring.
 - **Search corpus** (`backend/app/corpus.py`): the searchable text of every paragraph,
   updated by deltas from SQLite's change log; search, related notes, Ask's grep and the
@@ -285,7 +287,7 @@ tools/
   fortress-onenote/   Rust OneNote converter (manifest format: SCHEMA.md)
   onenote-compare/    importer verification against one2html
 docs/                 block model, OneNote research, screenshots
-notes/                default NOTES_DIR (gitignored except welcome.md)
+notes/                default NOTES_DIR (gitignored except the welcome note)
 spec.md               backend spec: data model, API, OCR, provenance, OneNote import
 ```
 
@@ -295,6 +297,8 @@ spec.md               backend spec: data model, API, OCR, provenance, OneNote im
   living documents, OneNote import jobs.
 - [docs/block-model.md](docs/block-model.md): the block model contract (types, inline
   content, transactions, Markdown form).
+- [docs/open-standards.md](docs/open-standards.md): the open-standards policy and the
+  decision for every format Fortress reads or writes.
 - [mac/DESIGN.md](mac/DESIGN.md): the Mac app's design system and screen-by-screen spec.
 - [docs/onenote-import.md](docs/onenote-import.md): OneNote migration research and design.
 - [tools/fortress-onenote/README.md](tools/fortress-onenote/README.md) and
