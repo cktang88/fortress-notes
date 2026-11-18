@@ -603,9 +603,9 @@ def export_summary(md_html: str) -> dict:
                 self.pieces.append(data)
 
     parser = _Parser()
-    parser.feed(md_html)
+    # Inline equations are written as `$LaTeX$` code spans.
+    parser.feed(re.sub(r"<code>\$[^<]*\$</code>", " ", md_html))
     text = "".join(parser.pieces)
-    text = re.sub(r"\$[^$\n]+\$", " ", text)  # inline equations
     return {"words": words(text), "pre": parser.pre, "list_depth": parser.max_list_depth, "text": norm_text(text)}
 
 

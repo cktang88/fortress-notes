@@ -263,8 +263,14 @@ def check_ink(ref: Model, ours: Model):
 
 
 def check_tags(ref: Model, ours: Model):
-    return _multiset_check("tags", [" ".join(words(t))[:60] for _, t in ref.tags],
-                           [" ".join(words(t))[:60] for _, t in ours.tags], lambda i: f"tag on {i!r}")
+    """Every tagged paragraph keeps a tag. Extra tags are fine: one2html draws no icon
+    for some (no-icon tags, unknown shapes) that the importer keeps as labels."""
+
+    result = _multiset_check("tags", [" ".join(words(t))[:60] for _, t in ref.tags],
+                             [" ".join(words(t))[:60] for _, t in ours.tags], lambda i: f"tag on {i!r}")
+    if result["status"] == "fail" and not any(d.startswith("missing") for d in result["details"]):
+        result["status"] = "pass"
+    return result
 
 
 def check_align(ref: Model, ours: Model):

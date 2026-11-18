@@ -1097,6 +1097,16 @@ class CompareFindingsTests(_Base):
         self.assertIn("2. Step 2", markdown)
         self.assertIn("3. Step 3", markdown)
 
+    def test_markdown_export_restarts_numbering_where_onenote_does(self) -> None:
+        info = {"ordered": True, "style": "decimal", "marker": "%.", "restart": None}
+        tree = self.import_blocks([
+            {"type": "list_item", "indent": 0, "text": "Tips", "list": {**info, "restart": 3}},
+            {"type": "list_item", "indent": 0, "text": "More", "list": info},
+        ])
+        markdown = export_document_markdown(self.db, tree["id"])
+        self.assertIn("3. Tips", markdown)
+        self.assertIn("4. More", markdown)
+
     def test_markdown_export_keeps_nesting_and_never_makes_code_blocks(self) -> None:
         from markdown_it import MarkdownIt
 

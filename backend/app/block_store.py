@@ -1835,11 +1835,11 @@ def render_markdown(
 
     spaces = 2 * depth if indent is None else indent
     fragments: list[str] = []
-    number = 0
+    number: int | None = None
     for node in nodes:
         # Each item is written as "1. "; number consecutive ordered items, since a
         # provenance comment between items starts a new list in Markdown viewers.
-        number = number + 1 if _is_ordered_item(node) else 0
+        number = _next_number(node, number)
         fragments.extend(_render_node(node, spaces, document_provenance, number))
     return "\n\n".join(fragments)
 
@@ -1854,14 +1854,26 @@ def _is_ordered_item(node: dict) -> bool:
     )
 
 
-def _number_item(source: str, number: int) -> str:
-    if number > 1 and source.startswith("1. "):
+def _next_number(node: dict, previous: int | None) -> int | None:
+    """An ordered item's number: its ``list_start`` (an imported list restarting at
+    n), else one more than the previous ordered sibling. None for other blocks."""
+
+    if not _is_ordered_item(node):
+        return None
+    start = (node.get("attrs") or {}).get("list_start")
+    if isinstance(start, int) and not isinstance(start, bool) and 0 <= start < 10**9:
+        return start
+    return (previous or 0) + 1
+
+
+def _number_item(source: str, number: int | None) -> str:
+    if number is not None and number != 1 and source.startswith("1. "):
         return f"{number}. " + source[3:]
     return source
 
 
 def _render_node(
-    node: dict, indent: int, document_provenance: dict | None, number: int = 0
+    node: dict, indent: int, document_provenance: dict | None, number: int | None = None
 ) -> list[str]:
     def placed(source: str, block: dict) -> str:
         if source and document_provenance is not None:
@@ -1884,9 +1896,9 @@ def _render_node(
                 fragments.extend(_render_node(child, indent, document_provenance))
                 continue
             fragments.append(placed(_types.marker("column", child.get("attrs") or {}), child))
-            number = 0
+            number = None
             for grandchild in child.get("children", []):
-                number = number + 1 if _is_ordered_item(grandchild) else 0
+                number = _next_number(grandchild, number)
                 fragments.extend(_render_node(grandchild, indent, document_provenance, number))
         fragments.append(placed("<!-- /fortress:columns -->", {}))
         return fragments
