@@ -358,7 +358,7 @@ public final class BackendController {
         posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_addopen(&actions, 1, log.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
         posix_spawn_file_actions_adddup2(&actions, 1, 2)
-        posix_spawn_file_actions_addchdir_np(&actions, launch.workingDirectory.path)
+        posix_spawn_file_actions_addchdir(&actions, launch.workingDirectory.path)
 
         let argv = ([launch.executable.path] + launch.arguments).map { strdup($0) } + [nil]
         let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
