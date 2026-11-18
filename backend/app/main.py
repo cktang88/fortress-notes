@@ -25,6 +25,7 @@ from . import (
     embeddings,
     images,
     documents,
+    document_service,
     duplicates,
     http_cache,
     llm,
@@ -122,6 +123,8 @@ async def lifespan(_app: FastAPI):
         block_store.backfill_assets, settings.block_db_path, settings.assets_path
     )
     await asyncio.to_thread(block_store.ensure_fts_integrity, settings.block_db_path)
+    # Older data may hold notes with no blocks; reads never add the paragraph.
+    await asyncio.to_thread(block_store.ensure_editable_block, settings.block_db_path)
     backup_task = (
         asyncio.create_task(_backup_loop())
         if getattr(settings, "auto_backup_enabled", True)
@@ -213,66 +216,59 @@ async def unexpected_error(_request: Request, exc: Exception) -> JSONResponse:
 # Serve stored files at /media/<file> (immutable caching, ranges, real types).
 app.mount("/media", media.MediaFiles(directory=settings.assets_path), name="media")
 
-# Rendered bodies by validator: a repeated GET skips SQLite and JSON encoding.
-_document_cache = http_cache.ResponseCache(max_entries=256, max_bytes=64 * 1024 * 1024)
-_api_cache = http_cache.ResponseCache(max_entries=256, max_bytes=32 * 1024 * 1024)
+# Rendered note bodies and the one document ETag live in app/document_service.py
+# (shared with the batch read); it reads settings through main so tests that patch
+# ``main.settings`` reach it.
+document_service.use_settings(lambda: settings)
+_api_cache = document_service.responses
 
 
 def _clear_response_caches() -> None:
-    _document_cache.clear()
-    _api_cache.clear()
-
-
-def _document_body(document_id: str, validator: tuple | None = None) -> tuple[str, bytes] | None:
-    """(ETag, rendered tree) of a note, rendered at most once per validator."""
-
-    db = settings.block_db_path
-    key = (db, document_id)
-    if validator is not None:
-        tag = http_cache.etag("document", document_id, *validator)
-        body = _document_cache.get(key, tag)
-        if body is not None:
-            return tag, body
-    result = block_store.document_tree_with_validator(db, document_id)
-    if result is None:
-        return None
-    validator, tree = result
-    tag = http_cache.etag("document", document_id, *validator)
-    body = http_cache.render(tree)
-    _document_cache.put(key, tag, body)
-    return tag, body
+    document_service.clear_caches()
 
 
 def _document_response(request: Request, document_id: str) -> Response:
-    validator = block_store.document_validator(settings.block_db_path, document_id)
-    if validator is None:
+    """The note's tree, or 304 when ``If-None-Match`` has its ETag. Never writes."""
+
+    tag = document_service.current_etag(document_id)
+    if tag is None:
         raise HTTPException(404, "Block document not found")
-    tag = http_cache.etag("document", document_id, *validator)
     if http_cache.if_none_match(request.headers.get("if-none-match"), tag):
         return http_cache.not_modified(tag)
-    rendered = _document_body(document_id, validator)
+    rendered = document_service.body(document_id, tag)
     if rendered is None:
         raise HTTPException(404, "Block document not found")
     return http_cache.json_response(rendered[1], rendered[0])
 
 
-def _tree_response(
-    document_id: str, tree: dict, validator: tuple | None = None, cache: bool = True
-) -> Response:
-    """A tree a write just returned, rendered once (no jsonable_encoder pass).
+def _written_response(document_id: str, status_code: int = 200) -> Response:
+    """The note as it is now, after a write, with ``X-Document-ETag``.
 
-    With its validator (read in the write's own transaction) the body is
-    cached for the GETs that follow, and ``X-Document-ETag`` carries the ETag
-    ``GET /api/block-documents/{id}`` now answers 304 to.
+    The body and its ETag come from one read snapshot (never a tree from the
+    write paired with a validator read later), so a client may keep the body
+    under that ETag and revalidate it with ``If-None-Match``.
     """
 
-    body = http_cache.render(tree)
+    rendered = document_service.body(document_id)
+    if rendered is None:
+        raise HTTPException(404, "Block document not found")
+    response = http_cache.json_response(rendered[1], status_code=status_code)
+    response.headers["X-Document-ETag"] = rendered[0]
+    return response
+
+
+def _tree_response(
+    document_id: str, tree: dict, validator: tuple, cache: bool = True
+) -> Response:
+    """A tree (or metadata payload) a write returned with the validator it read.
+
+    ``X-Document-ETag`` is the ETag ``GET /api/block-documents/{id}`` now
+    answers 304 to; a full tree is cached for the GETs that follow.
+    """
+
+    tag, body = document_service.remember(document_id, tree, validator, cache=cache)
     response = http_cache.json_response(body)
-    if validator is not None:
-        tag = http_cache.etag("document", document_id, *validator)
-        if cache:
-            _document_cache.put((settings.block_db_path, document_id), tag, body)
-        response.headers["X-Document-ETag"] = tag
+    response.headers["X-Document-ETag"] = tag
     return response
 
 
@@ -382,22 +378,27 @@ def move_block_document(document_id: str, data: DocumentMove):
 @app.post("/api/block-documents", status_code=201)
 def create_block_document(data: NoteCreate):
     try:
-        return documents.create(data)
+        tree = documents.create(data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    return _written_response(tree["id"], status_code=201)
 
 
 @app.patch("/api/block-documents/{document_id}")
 def update_block_document(document_id: str, data: NoteUpdate):
-    """Change a document's title and/or status (the body changes through transactions)."""
+    """Change a document's title and/or status (the body changes through transactions).
+
+    Answers the metadata payload (``children`` empty, as ``?response=meta`` of a
+    transaction) with ``X-Document-ETag``; the note's content did not change.
+    """
 
     try:
-        documents.update(document_id, data)
+        meta, validator = documents.update(document_id, data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return block_store.document_tree(settings.block_db_path, document_id)
+    return _tree_response(document_id, meta, validator, cache=False)
 
 
 @app.delete("/api/block-documents/{document_id}", status_code=204)
@@ -411,14 +412,27 @@ def delete_block_document(document_id: str):
 
 @app.get("/api/block-documents/{document_id}")
 def get_block_document(document_id: str, request: Request):
-    """The note's block tree; ``If-None-Match`` with its ETag answers 304."""
+    """The note's block tree; ``If-None-Match`` with its ETag answers 304.
 
-    db = settings.block_db_path
-    # The editor needs a block to type into, even in a note that has none.
-    block_store.ensure_editable_block(db, document_id)
-    # Debounced, and skipped rather than waited for while a writer is busy.
-    block_store.mark_opened(db, document_id, wait=False)
+    A read only: opening is recorded by ``POST .../opened``, and the paragraph
+    an empty note needs is made when the note is created, imported or restored.
+    """
+
     return _document_response(request, document_id)
+
+
+@app.post("/api/block-documents/{document_id}/opened", status_code=204)
+def record_opened(document_id: str):
+    """The person opened the note (for "last opened"); the app sends it fire-and-forget.
+
+    Debounced per note and skipped rather than waited for while a writer holds
+    the database. Not part of the note's ETag.
+    """
+
+    if not block_store.document_exists(settings.block_db_path, document_id):
+        raise HTTPException(404, "Block document not found")
+    block_store.mark_opened(settings.block_db_path, document_id, wait=False)
+    return Response(status_code=204)
 
 
 @app.get("/api/block-documents/{document_id}/info")
@@ -802,9 +816,11 @@ def get_backlinks(document_id: str, request: Request, limit: int = Query(100, ge
 def apply_block_transaction(
     document_id: str,
     transaction: BlockTransaction,
-    response: str = Query("document", pattern="^(document|meta)$"),
+    response: str = Query("meta", pattern="^(document|meta)$"),
 ):
-    """Apply a transaction. ``?response=meta`` answers without ``children``."""
+    """Apply a transaction. Answers the metadata payload (``children`` empty) by
+    default, or the whole tree with ``?response=document``; ``X-Document-ETag``
+    either way."""
 
     try:
         validator: list = []
@@ -818,9 +834,9 @@ def apply_block_transaction(
             include_children=response == "document",
         )
         documents.schedule_mirror(document_id)
-        return _tree_response(
-            document_id, tree, validator[0] if validator else None, cache=response == "document"
-        )
+        if not validator:
+            return _written_response(document_id)
+        return _tree_response(document_id, tree, validator[0], cache=response == "document")
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -835,11 +851,11 @@ def apply_block_transaction(
 @app.post("/api/block-documents/{document_id}/undo")
 def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
     try:
-        tree = block_store.undo_transaction(
+        block_store.undo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
         documents.schedule_mirror(document_id)
-        return _tree_response(document_id, tree)
+        return _written_response(document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -851,11 +867,11 @@ def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
 @app.post("/api/block-documents/{document_id}/redo")
 def redo_block_transaction(document_id: str, request: BlockHistoryRequest):
     try:
-        tree = block_store.redo_transaction(
+        block_store.redo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
         documents.schedule_mirror(document_id)
-        return _tree_response(document_id, tree)
+        return _written_response(document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:

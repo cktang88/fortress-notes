@@ -140,19 +140,69 @@ class DocumentValidatorTests(ApiCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["resolved_links"]["documents"], {})
 
-    def test_opening_writes_last_opened_at_at_most_once_a_minute(self) -> None:
+    def test_metadata_changes_answer_metadata_without_building_the_tree(self) -> None:
+        note = self.create("Note", "one\n\ntwo")
+        url = f"/api/block-documents/{note['id']}"
+        with patch.object(block_store, "document_tree", side_effect=AssertionError("built")):
+            response = self.client.patch(url, json={"title": "Renamed", "status": "polished"})
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual((body["title"], body["status"], body["children"]), ("Renamed", "polished", []))
+        self.assertFalse(body["title_auto"])
+        full = self.client.get(url)
+        self.assertEqual(full.headers["etag"].replace("-gzip", ""), response.headers["x-document-etag"])
+        self.assertEqual(len(full.json()["children"]), 2)
+        cleared = self.client.patch(url, json={"title": ""}).json()
+        self.assertEqual((cleared["title"], cleared["title_auto"]), ("one", True))
+        self.assertEqual(self.client.patch(url, json={"body": "nope"}).status_code, 422)
+        self.assertEqual(
+            self.client.patch("/api/block-documents/missing", json={"title": "x"}).status_code, 404
+        )
+
+    def test_transactions_answer_metadata_unless_asked_for_the_document(self) -> None:
+        note = self.create("Note", "one")
+        block = note["children"][0]["id"]
+        url = f"/api/block-documents/{note['id']}/transactions"
+        meta = self.client.post(url, json={"base_revision": note["revision"], "operations": [
+            {"operation": "update", "block_id": block, "text": "two"}]})
+        self.assertEqual(meta.json()["children"], [])
+        full = self.client.post(url + "?response=document", json={
+            "base_revision": meta.json()["revision"],
+            "operations": [{"operation": "update", "block_id": block, "text": "three"}]})
+        self.assertEqual(full.json()["children"][0]["text"], "three")
+        got = self.client.get(f"/api/block-documents/{note['id']}", headers={
+            "If-None-Match": full.headers["x-document-etag"]})
+        self.assertEqual(got.status_code, 304)
+
+    def test_reading_never_writes_and_opening_keeps_the_etag(self) -> None:
         note = self.create("Note", "x")
         url = f"/api/block-documents/{note['id']}"
+        state = block_store.change_state(self.db)
         first = self.client.get(url)
-        opened = first.json()["last_opened_at"]
-        self.assertIsNotNone(opened)
+        self.assertNotIn("last_opened_at", first.json())
+        self.assertEqual(block_store.change_state(self.db), state)  # a GET wrote nothing
+        block_store._opened_marks.clear()
+        self.assertEqual(self.client.post(f"{url}/opened").status_code, 204)
+        self.assertEqual(self.revalidate(url, first.headers["etag"]), 304)
+        info = self.client.get(f"{url}/info").json()
+        self.assertIsNotNone(info["last_opened_at"])
+        self.assertEqual(self.client.post("/api/block-documents/missing/opened").status_code, 404)
+
+    def test_opening_is_recorded_at_most_once_a_minute(self) -> None:
+        note = self.create("Note", "x")
+        url = f"/api/block-documents/{note['id']}"
+        block_store._opened_marks.clear()
+        self.client.post(f"{url}/opened")
+        opened = self.client.get(f"{url}/info").json()["last_opened_at"]
         with patch.object(block_store, "_now", return_value="2099-01-01T00:00:00+00:00"):
-            self.assertEqual(self.revalidate(url, first.headers["etag"]), 304)
+            self.client.post(f"{url}/opened")
+            self.assertEqual(self.client.get(f"{url}/info").json()["last_opened_at"], opened)
             later = time.monotonic() + block_store.OPEN_MARK_INTERVAL_S + 1
             with patch.object(block_store.time, "monotonic", return_value=later):
-                reopened = self.client.get(url, headers={"If-None-Match": first.headers["etag"]})
-        self.assertEqual(reopened.status_code, 200)
-        self.assertEqual(reopened.json()["last_opened_at"], "2099-01-01T00:00:00+00:00")
+                self.client.post(f"{url}/opened")
+        self.assertEqual(
+            self.client.get(f"{url}/info").json()["last_opened_at"], "2099-01-01T00:00:00+00:00"
+        )
 
     def test_opening_does_not_wait_for_a_busy_writer(self) -> None:
         note = self.create("Note", "x")
@@ -161,9 +211,11 @@ class DocumentValidatorTests(ApiCase):
             writer.execute("BEGIN IMMEDIATE")
             started = time.perf_counter()
             response = self.client.get(f"/api/block-documents/{note['id']}")
+            opened = self.client.post(f"/api/block-documents/{note['id']}/opened")
             elapsed = time.perf_counter() - started
             writer.rollback()
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(opened.status_code, 204)  # skipped, not waited for
         self.assertLess(elapsed, 1.0)  # the busy timeout is 5 s
 
     def test_missing_document_is_404_json(self) -> None:

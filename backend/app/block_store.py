@@ -1015,9 +1015,8 @@ def create_document(
             )
 
 
-# Opening a note writes last_opened_at, but at most once a minute per note: a
-# write on every read would serialize reads behind writers and change the
-# note's validator (ETag) on every GET.
+# ``POST .../opened`` writes last_opened_at, at most once a minute per note (the
+# app sends one per note it shows). It is not part of the note's ETag.
 OPEN_MARK_INTERVAL_S = 60.0
 _opened_marks: dict[tuple[Path, str], float] = {}
 _opened_lock = threading.Lock()
@@ -1096,15 +1095,15 @@ def document_exists(path: Path, document_id: str) -> bool:
 def _document_validator(connection: sqlite3.Connection, document_id: str) -> tuple | None:
     """What a document payload depends on, as a tuple that changes when it does.
 
-    Its own rows (``change_seq``), ``last_opened_at``, and the newest change of
-    every note or block it links to (their titles and text are in
+    Its own rows (``change_seq``) and the newest change of every note or block
+    it links to (their titles and text are in
     ``resolved_links`` and ``[[id|Title]]`` labels). ``change_seq`` values grow
     globally, so a change to any link target raises the maximum; a link that
     appears or disappears changes this note's own rows.
     """
 
     row = connection.execute(
-        """SELECT change_log.epoch, documents.change_seq, documents.last_opened_at,
+        """SELECT change_log.epoch, documents.change_seq,
                   (SELECT MAX(target.change_seq)
                      FROM blocks AS source
                      JOIN document_refs AS refs ON refs.source_block_id = source.id
@@ -1122,10 +1121,8 @@ def _document_validator(connection: sqlite3.Connection, document_id: str) -> tup
     ).fetchone()
     if row is None:
         return None
-    return (
-        row["epoch"], row["change_seq"], row["document_targets"], row["block_targets"],
-        row["last_opened_at"],
-    )
+    # Not last_opened_at: opening a note (a read) never changes its ETag.
+    return (row["epoch"], row["change_seq"], row["document_targets"], row["block_targets"])
 
 
 def document_validator(path: Path, document_id: str) -> tuple | None:
@@ -1162,37 +1159,39 @@ def document_info_validator(path: Path, document_id: str) -> tuple | None:
     return None if row is None else tuple(row)
 
 
-def ensure_editable_block(path: Path, document_id: str) -> bool:
-    """Give a live document with no blocks one empty paragraph; True if one was added.
+def ensure_editable_block(path: Path, document_id: str | None = None) -> int:
+    """Give live documents with no blocks one empty paragraph; how many got one.
 
-    The editor always shows a paragraph to type into, so it needs a stable ID the
-    server knows (an empty import, or a note emptied by move-into and restored,
-    has none). The content is unchanged - an empty paragraph exports as nothing -
-    so the revision and history stay as they are.
+    One document, or every live document when ``document_id`` is None (startup
+    repairs older data). Called where a note can end up empty - create, import,
+    restore - never on a read. The editor needs a paragraph with a stable ID the
+    server knows; the content is unchanged (an empty paragraph exports as
+    nothing), so the revision and history stay as they are.
     """
 
     initialize(path)
     with connection_scope(path) as connection:
         if not _needs_editable_block(connection, document_id):
-            return False
+            return 0
     with connection_scope(path, immediate=True) as connection:
-        if not _needs_editable_block(connection, document_id):
-            return False
+        ids = _needs_editable_block(connection, document_id)
         now = _now()
-        _insert_blocks(connection, document_id, "", now, now, ensure_empty_paragraph=True)
-    return True
+        for empty_id in ids:
+            _insert_blocks(connection, empty_id, "", now, now, ensure_empty_paragraph=True)
+    return len(ids)
 
 
-def _needs_editable_block(connection: sqlite3.Connection, document_id: str) -> bool:
-    return (
-        connection.execute(
-            """SELECT 1 FROM documents
-                WHERE id = ? AND deleted_at IS NULL
-                  AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.document_id = documents.id)""",
-            (document_id,),
-        ).fetchone()
-        is not None
-    )
+def _needs_editable_block(connection: sqlite3.Connection, document_id: str | None) -> list[str]:
+    only = "" if document_id is None else "AND id = ?"
+    return [
+        row[0]
+        for row in connection.execute(
+            f"""SELECT id FROM documents
+                 WHERE deleted_at IS NULL {only}
+                   AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.document_id = documents.id)""",
+            () if document_id is None else (document_id,),
+        )
+    ]
 
 
 def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, object]]:
@@ -2381,7 +2380,6 @@ def _document_tree(
         "can_undo": bool(history_state["can_undo"]),
         "can_redo": bool(history_state["can_redo"]),
         "provenance": document_provenance,
-        "last_opened_at": document["last_opened_at"],
         # Current titles/text of every note and block this document links to.
         "resolved_links": links,
         "children": roots,

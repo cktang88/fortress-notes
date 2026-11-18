@@ -48,7 +48,7 @@ class EmptyDocumentTests(unittest.TestCase):
         block = document["children"][0]
         self.assertEqual((block["type"], block["text"]), ("paragraph", ""))
         response = self.client.post(
-            f"/api/block-documents/{document_id}/transactions",
+            f"/api/block-documents/{document_id}/transactions?response=document",
             json={
                 "base_revision": document["revision"],
                 "operations": [{"operation": "update", "block_id": block["id"], "text": text}],
@@ -83,6 +83,18 @@ class EmptyDocumentTests(unittest.TestCase):
         restored = self.client.post(f"/api/trash/{source['id']}/restore")
         self.assertEqual(restored.status_code, 200, restored.text)
         self.open_and_type(source["id"], "Fresh start")
+
+    def test_older_empty_notes_get_their_paragraph_at_startup_not_on_read(self) -> None:
+        from app import block_store, main
+
+        db = self.settings.block_db_path
+        block_store.create_document(db, "legacy", "Legacy", "rough", "", "t", "t")
+        state = block_store.change_state(db)
+        self.assertEqual(self.client.get("/api/block-documents/legacy").json()["children"], [])
+        self.assertEqual(block_store.change_state(db), state)  # reads never write
+        with TestClient(main.app):
+            pass  # startup repairs it
+        self.open_and_type("legacy", "Typed after a restart")
 
     def test_an_empty_note_still_exports_as_empty(self) -> None:
         from app.portability import export_document_markdown

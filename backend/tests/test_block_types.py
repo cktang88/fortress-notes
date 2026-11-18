@@ -253,13 +253,13 @@ class BlockTypeStoreTests(unittest.TestCase):
             documents, "get_settings", lambda: settings
         ), TestClient(main.app) as client:
             tree = client.get("/api/block-documents/doc").json()
-            bad = client.post("/api/block-documents/doc/transactions", json={
+            bad = client.post("/api/block-documents/doc/transactions?response=document", json={
                 "base_revision": tree["revision"],
                 "operations": [{"operation": "insert", "type": "table",
                                 "content": {"blocknote": {"rows": [{"cells": "nope"}]}}}],
             })
             self.assertEqual(bad.status_code, 422, bad.text)
-            good = client.post("/api/block-documents/doc/transactions", json={
+            good = client.post("/api/block-documents/doc/transactions?response=document", json={
                 "base_revision": tree["revision"],
                 "operations": [{"operation": "insert", "type": "table",
                                 "content": {"blocknote": {"rows": [{"cells": [

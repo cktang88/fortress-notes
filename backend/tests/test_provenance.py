@@ -75,7 +75,7 @@ class ProvenanceStoreTests(unittest.TestCase):
             tree["children"][0]["provenance"], {"source": "manual", "inherited": True}
         )
         self.assertIsNone(tree["children"][0]["revision"])
-        self.assertIsNone(tree["last_opened_at"])
+        self.assertNotIn("last_opened_at", tree)  # in /info; not part of the note's ETag
 
     def test_editor_inserts_are_manual_or_what_the_client_says_and_survive_undo(self) -> None:
         create_document(self.db, "doc", "Doc", "rough", "One", "t", "t",
@@ -624,7 +624,12 @@ class ProvenanceApiTests(unittest.TestCase):
         ).json()
         tree = self.client.get(f"/api/block-documents/{captured['document_id']}").json()
         self.assertEqual(tree["provenance"], {"source": "capture", "source_url": "https://example.com/x"})
-        self.assertIsNotNone(tree["last_opened_at"])
+        self.assertEqual(
+            self.client.post(f"/api/block-documents/{captured['document_id']}/opened").status_code,
+            204,
+        )
+        info = self.client.get(f"/api/block-documents/{captured['document_id']}/info").json()
+        self.assertIsNotNone(info["last_opened_at"])
         navigation = self.client.get("/api/navigation").json()
         self.assertEqual(navigation["recent"][0]["source"], "capture")
 

@@ -51,7 +51,7 @@ class BlockApiFlowTests(unittest.TestCase):
                     original_text = block["text"]
 
                     edited = client.post(
-                        f"/api/block-documents/{source['id']}/transactions",
+                        f"/api/block-documents/{source['id']}/transactions?response=document",
                         json={
                             "base_revision": source["revision"],
                             "operations": [
@@ -93,7 +93,7 @@ class BlockApiFlowTests(unittest.TestCase):
                     self.assertIn("Edited searchable phrase", exported.text)
 
                     malformed = client.post(
-                        f"/api/block-documents/{source['id']}/transactions",
+                        f"/api/block-documents/{source['id']}/transactions?response=document",
                         json={"base_revision": 1, "operations": [{"operation": "nonsense"}]},
                     )
                     self.assertEqual(malformed.status_code, 422)
