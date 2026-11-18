@@ -391,6 +391,13 @@ def scoring_state(corpus) -> object | None:
     if model is None:
         return None
     if _cache.synced_corpus is not corpus:
+        synced = _cache.synced_corpus
+        if not (
+            isinstance(corpus, corpus_store.Corpus)
+            and isinstance(synced, corpus_store.Corpus)
+            and corpus_store.changed_between(synced, corpus) is not None
+        ):
+            return None  # a full pass (cold start): the background indexer's job
         with _index_lock:
             _load_store()
             missing = _sync(corpus)

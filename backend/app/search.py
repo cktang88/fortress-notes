@@ -181,6 +181,8 @@ def _results(matches: dict[str, tuple[float, str, str]], k: int) -> list[Related
         key=lambda item: (-item[1][0], item[0]),
     )
     # Summaries only for the notes that can make the list (every one is active).
+    if not ranked:
+        return []
     summaries = documents.summaries([nid for nid, _match in ranked[: k * 2]])
     results = [
         RelatedResult(

@@ -294,3 +294,241 @@ class NoteQueryTests(unittest.TestCase):
         # Title (2 tokens) + saved (3) + new (2), in note order, blank paragraphs skipped.
         self.assertEqual(tuple(joined.shape), (7, 2))
         self.assertEqual(float(joined[2:5].sum()), 0.0)
+
+
+class _RacyModel:
+    """Mimics PyLate: every call sets a shared max length, then reads it back later.
+
+    Two threads encoding at once would cut documents to the query length.
+    """
+
+    def __init__(self) -> None:
+        self.max_seq_length = 0
+
+    def _ids(self, texts, is_query):
+        import time
+
+        self.max_seq_length = 4 if is_query else 64
+        time.sleep(0.002)  # tokenizing: plenty of time for another thread to run
+        return [text.split()[: self.max_seq_length] for text in texts]
+
+    def tokenize(self, texts, *, is_query):
+        return {"input_ids": self._ids(texts, is_query)}
+
+    def encode(self, texts, *, is_query, **_kwargs):
+        import numpy as np
+
+        out = []
+        for words in self._ids(texts, is_query):
+            vectors = []
+            for word in words:
+                seed = int.from_bytes(word.encode()[:8].ljust(8, b"\0"), "little") % 2**32
+                vector = np.random.default_rng(seed).standard_normal(8).astype(np.float32)
+                vectors.append(vector / np.linalg.norm(vector))
+            out.append(np.stack(vectors))
+        return out
+
+
+class EncoderTests(unittest.TestCase):
+    def test_concurrent_query_and_document_encodes_match_sequential_ones(self) -> None:
+        import threading
+
+        import torch
+
+        model = _RacyModel()
+        documents = [" ".join(f"d{i}w{j}" for j in range(40)) for i in range(48)]
+        queries = [f"q{i} a b c d e f" for i in range(30)]
+        settings = type("Settings", (), {"embeddings_enabled": True})()
+        with patch.object(embeddings, "get_settings", return_value=settings), patch.object(
+            embeddings, "_cache", embeddings._Cache()
+        ):
+            want_docs = embeddings._encode(model, documents, is_query=False)
+            want_queries = [embeddings._encode(model, [q], is_query=True)[0] for q in queries]
+            want_lengths = embeddings._encoder.run(
+                lambda: [len(ids) for ids in model.tokenize(documents, is_query=False)["input_ids"]], 0
+            )
+            got_docs, got_queries, got_lengths = [], [], []
+
+            def index() -> None:
+                for _ in range(3):
+                    got_docs.append(embeddings._encode(model, documents, is_query=False))
+
+            def ask() -> None:
+                for query in queries:
+                    got_queries.append(embeddings._encode(model, [query], is_query=True)[0])
+
+            with patch.object(embeddings, "_get_model", return_value=model):
+
+                def count() -> None:
+                    for _ in range(10):
+                        got_lengths.append(embeddings.tokenized_lengths(documents, is_query=False))
+
+                threads = [threading.Thread(target=f) for f in (index, ask, ask, count)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+        self.assertEqual(len(got_docs), 3)
+        for run in got_docs:
+            for got, want in zip(run, want_docs):
+                self.assertEqual(tuple(got.shape), (40, 8))
+                self.assertTrue(torch.equal(got, want))
+        self.assertEqual(len(got_queries), 2 * len(queries))
+        for position, got in enumerate(got_queries):
+            # Two askers interleave; each query's encoding equals its sequential one.
+            self.assertTrue(any(torch.equal(got, want) for want in want_queries), position)
+        self.assertEqual(got_lengths, [want_lengths] * 10)
+
+    def test_searches_run_ahead_of_queued_background_work(self) -> None:
+        import threading
+
+        encoder = embeddings._Encoder()
+        release = threading.Event()
+        order: list[str] = []
+        started = threading.Event()
+
+        def blocker() -> None:
+            started.set()
+            release.wait(5)
+
+        threads = [threading.Thread(target=encoder.run, args=(blocker, embeddings._BACKGROUND))]
+        threads[0].start()
+        started.wait(5)
+        for name, priority in (("index 1", 1), ("index 2", 1), ("search", 0)):
+            thread = threading.Thread(
+                target=encoder.run, args=(lambda name=name: order.append(name), priority)
+            )
+            thread.start()
+            threads.append(thread)
+            while encoder._queue.qsize() < len(threads) - 1:
+                pass
+        release.set()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(order, ["search", "index 1", "index 2"])
+
+    def test_errors_reach_the_caller(self) -> None:
+        def fail():
+            raise ValueError("bad batch")
+
+        with self.assertRaises(ValueError):
+            embeddings._Encoder().run(fail, 0)
+
+
+class ModelLoadingTests(unittest.TestCase):
+    def test_requests_fall_back_to_keywords_while_the_model_loads(self) -> None:
+        import sys
+        import threading
+        import types
+
+        loading = threading.Event()
+        release = threading.Event()
+
+        class SlowColBERT:
+            def __init__(self, **_kwargs) -> None:
+                loading.set()
+                release.wait(5)
+
+            def encode(self, texts, **_kwargs):
+                return [[[1.0]] for _ in texts]
+
+        fake_pylate = types.ModuleType("pylate")
+        fake_pylate.models = types.SimpleNamespace(ColBERT=SlowColBERT)
+        settings = type(
+            "Settings", (), {"embeddings_enabled": True, "colbert_model": "fake", "block_db_path": None}
+        )()
+        docs = [("a", "v1", "kyoto temples"), ("b", "v1", "bread starter")]
+        with patch.dict(sys.modules, {"pylate": fake_pylate}), patch.object(
+            embeddings, "_cache", embeddings._Cache()
+        ), patch.object(embeddings, "get_settings", return_value=settings):
+            # Nothing loads the model on a request's behalf.
+            self.assertIsNone(embeddings.model_if_ready())
+            self.assertFalse(loading.is_set())
+            loader = threading.Thread(target=embeddings.load_model)
+            loader.start()
+            self.assertTrue(loading.wait(5))
+            # While the background loader holds the model lock, requests still answer.
+            self.assertFalse(embeddings.available())
+            self.assertEqual(
+                embeddings.score_documents("kyoto", docs), {"a": 1.0, "b": 0.0}
+            )
+            self.assertIsNone(embeddings.scoring_state([]))
+            self.assertIsNone(embeddings.tokenized_lengths(["kyoto"]))
+            release.set()
+            loader.join(5)
+            self.assertTrue(embeddings.available())
+
+
+class NoteQueryClusteringTests(unittest.TestCase):
+    def test_long_notes_are_bounded_and_keep_their_token_weight(self) -> None:
+        import torch
+
+        torch.manual_seed(0)
+        vectors = torch.nn.functional.normalize(torch.randn(3000, 16), dim=-1)
+        centroids, weights = embeddings._cluster(vectors, 128)
+        self.assertLessEqual(centroids.shape[0], 128)
+        self.assertEqual(float(weights.sum()), 3000.0)
+        short, none = embeddings._cluster(vectors[:100], 128)
+        self.assertIs(none, None)
+        self.assertTrue(torch.equal(short, vectors[:100]))
+
+    def test_weighted_maxsim_is_close_to_the_full_note_and_never_above_it(self) -> None:
+        import torch
+
+        torch.manual_seed(1)
+        index = embeddings._Index()
+        for i in range(200):
+            index.put(f"b{i}", "h", "v", torch.nn.functional.normalize(torch.randn(20, 16), dim=-1))
+        # A long note: 40 paragraphs drawn around a few topics.
+        topics = torch.nn.functional.normalize(torch.randn(6, 16), dim=-1)
+        note = torch.nn.functional.normalize(
+            topics[torch.randint(0, 6, (2400,))] + 0.3 * torch.randn(2400, 16), dim=-1
+        )
+        ids = [f"b{i}" for i in range(200)]
+        exact = index.maxsim_some(note, ids)
+        centroids, weights = embeddings._cluster(note, 64)
+        approx = index.maxsim_some(centroids, ids, weights)
+        for a, e in zip(approx, exact):
+            self.assertLessEqual(a, e + 1e-3)
+        ranked = lambda scores: sorted(range(200), key=lambda i: -scores[i])[:10]  # noqa: E731
+        self.assertGreaterEqual(len(set(ranked(exact)) & set(ranked(approx))), 8)
+
+    def test_chunked_maxsim_matches_one_pass(self) -> None:
+        import torch
+
+        torch.manual_seed(2)
+        index = embeddings._Index()
+        for i in range(300):
+            length = int(torch.randint(3, 60, (1,)))
+            index.put(f"b{i}", "h", "v", torch.nn.functional.normalize(torch.randn(length, 16), dim=-1))
+        query = torch.nn.functional.normalize(torch.randn(50, 16), dim=-1)
+        weights = torch.rand(50)
+        ids = [f"b{i}" for i in range(300)]
+        whole_ids, whole = index.maxsim_all(query, weights)
+        some = index.maxsim_some(query, ids)
+        with patch.object(embeddings, "SIM_CHUNK_ELEMENTS", 1000):
+            chunked_ids, chunked = index.maxsim_all(query, weights)
+            self.assertEqual(chunked_ids, whole_ids)
+            self.assertTrue(torch.allclose(chunked, whole, atol=1e-4))
+            for a, b in zip(index.maxsim_some(query, ids), some):
+                self.assertAlmostEqual(a, b, places=4)
+
+    def test_a_long_note_is_queried_with_bounded_vectors(self) -> None:
+        import torch
+
+        def fake_encode(_model, texts, *, is_query):
+            return [torch.nn.functional.normalize(torch.randn(32, 8), dim=-1) for _ in texts]
+
+        texts = [f"paragraph {i}" for i in range(300)]
+        with patch.object(embeddings, "_get_model", return_value=object()), patch.object(
+            embeddings, "_encode", side_effect=fake_encode
+        ), patch.object(embeddings, "_saved_query", return_value=None), patch.object(
+            embeddings, "_cache", embeddings._Cache()
+        ):
+            vectors, weights, tokens = embeddings.note_query(texts)
+            self.assertLessEqual(vectors.shape[0], embeddings.NOTE_QUERY_VECTORS)
+            self.assertEqual(tokens, 300 * 32)
+            self.assertEqual(float(weights.sum()), tokens)
+            # Cached per note text; typed queries live in their own cache.
+            self.assertIs(embeddings.note_query(texts)[0], vectors)
+            self.assertEqual(len(embeddings._cache.queries), 0)
