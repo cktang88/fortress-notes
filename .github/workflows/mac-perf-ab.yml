@@ -1,4 +1,4 @@
-# TEMPORARY (mac-code-audit): A/B of keystroke latency across commits on one runner.
+# TEMPORARY (mac-code-audit): A/B of keystroke latency across commits on one runner (run 2).
 name: mac perf A/B
 on:
   push:
