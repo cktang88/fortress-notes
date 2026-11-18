@@ -231,6 +231,16 @@ class ExternalReaderTests(_Workspace):
                 "SELECT model FROM ocr_results WHERE content_hash = ?", (first,)))
         self.assertEqual(models, sorted([ocr.MODEL, VISION]))
 
+    def test_an_empty_vision_reading_never_erases_text_the_cpu_found(self) -> None:
+        _p, digest = self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
+        self.assertEqual(self.cpu_reads("Quarterly totals"), 1)
+        ocr.store_external(self.db, digest, VISION, status="done", text="  ")
+        self.assertEqual(self.asset_texts()["01JAAAAAAAAAAAAAAAAAAAAAAA.png"], "Quarterly totals")
+        self.assertEqual(ocr.asset_status(self.db, [digest])[digest]["model"], ocr.MODEL)
+        # Vision finding text again takes over.
+        ocr.store_external(self.db, digest, "apple-vision/27", status="done", text="Quarterly totals 2026")
+        self.assertEqual(self.asset_texts()["01JAAAAAAAAAAAAAAAAAAAAAAA.png"], "Quarterly totals 2026")
+
     def test_cpu_never_reads_what_vision_read_even_for_a_new_cpu_model(self) -> None:
         _p, digest = self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
         ocr.store_external(self.db, digest, VISION, status="done", text="vision text")

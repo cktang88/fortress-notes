@@ -216,7 +216,9 @@ def read_asset(path: Path, mime_type: str) -> Result:
 
 # --- Which reading wins -------------------------------------------------------------------
 #
-# One rule: an asset's text is that of its best-ranked finished ("done") result. The
+# One rule: an asset's text is that of its best finished ("done") result: a reading that
+# found text beats one that found none (so an empty Vision pass never erases text the
+# CPU model found), then the best-ranked model, then the newest. The
 # Mac app reads pictures and PDFs with Apple Vision (more scripts, handwriting) and
 # sends its results here (:func:`store_external`); they outrank this process's own
 # model, which outranks results of earlier versions of it. Results of one external
@@ -249,6 +251,12 @@ def rank(model: str) -> int:
     if model == MODEL:
         return 1
     return EXTERNAL_FAMILIES.get(family(model), 0)
+
+
+def preference(row) -> tuple:
+    """Sort key for finished readings: found text, then model rank, then newest."""
+
+    return (bool(row["has_text"]), rank(row["model"]), row["updated_at"])
 
 
 def is_external_model(model: str) -> bool:
@@ -373,11 +381,13 @@ def _mark(db_path: Path, content_hash: str, model: str | None = None, **fields) 
 
 def _best_done(connection, content_hash: str) -> dict | None:
     rows = connection.execute(
-        "SELECT * FROM ocr_results WHERE content_hash = ? AND status = 'done'", (content_hash,)
+        "SELECT *, trim(text) <> '' AS has_text FROM ocr_results"
+        " WHERE content_hash = ? AND status = 'done'",
+        (content_hash,),
     ).fetchall()
     if not rows:
         return None
-    return dict(max(rows, key=lambda row: (rank(row["model"]), row["updated_at"])))
+    return dict(max(rows, key=preference))
 
 
 def _publish(db_path: Path, content_hash: str) -> None:
@@ -545,7 +555,8 @@ def asset_status(db_path: Path, content_hashes: list[str]) -> dict[str, dict[str
     placeholders = ",".join("?" for _ in content_hashes)
     with block_store.connection_scope(db_path) as connection:
         rows = connection.execute(
-            f"""SELECT content_hash, model, status, method, pages, error, updated_at
+            f"""SELECT content_hash, model, status, method, pages, error, updated_at,
+                       trim(text) <> '' AS has_text
                   FROM ocr_results WHERE content_hash IN ({placeholders})""",
             content_hashes,
         ).fetchall()
@@ -558,7 +569,7 @@ def asset_status(db_path: Path, content_hashes: list[str]) -> dict[str, dict[str
         done = [row for row in found if row["status"] == "done" and rank(row["model"]) > 0]
         own = next((row for row in found if row["model"] == MODEL), None)
         if done:
-            result[content_hash] = max(done, key=lambda row: (rank(row["model"]), row["updated_at"]))
+            result[content_hash] = max(done, key=preference)
         elif own is not None:
             result[content_hash] = own
         else:
