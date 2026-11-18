@@ -1877,9 +1877,18 @@ def _node_markdown(node: dict) -> str:
     content = node.get("content", {})
     if isinstance(content, dict):
         markdown = content.get("markdown")
+        native = content.get("blocknote")
+        if (
+            isinstance(markdown, str)
+            and node.get("type") in _types.TEXT_TYPES
+            and _types.has_extended_styles(native)
+            and not _types.has_inline_mark_html(markdown)
+        ):
+            # Saved by the web editor before marks were exported: its Markdown
+            # dropped colours/underline, so write the runs instead.
+            return _types.text_block_markdown(node["type"], node.get("attrs") or {}, native)
         if isinstance(markdown, str):
             return markdown
-        native = content.get("blocknote")
         if isinstance(native, str):
             return native
         try:

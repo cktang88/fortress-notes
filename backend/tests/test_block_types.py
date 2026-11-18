@@ -451,6 +451,33 @@ class BlockTypeStoreTests(unittest.TestCase):
         self.assertEqual(resolved["children"][0]["text"], "k\tv3")
         self.assertEqual(resolved["children"][0]["attrs"], {"borders": True})
 
+    def test_spec_example_imports_and_round_trips(self) -> None:
+        blocks = source_blocks([
+            {"id": "{P1}", "type": "heading", "level": 2, "inline": [{"text": "Plan", "u": 1}]},
+            {"id": "{P2}", "text": "plain paragraph"},
+            {"id": "{P3}", "type": "list", "checked": True, "inline": [{"text": "done", "s": 1}]},
+            {"id": "{T1}", "type": "table", "borders": True, "column_widths": [96, None],
+             "header_rows": 0, "rows": [["a", {"inline": [{"text": "b", "i": 1}], "background": "#DEEAF6",
+                                               "blocks": [{"type": "list", "text": "in cell"},
+                                                          {"type": "table", "rows": [["x"]]}]}]]},
+            {"id": "{O1}", "type": "columns", "columns": [
+                {"id": "{O1a}", "width": 0.5, "blocks": [{"text": "left"}]},
+                {"id": "{O1b}", "width": 0.5, "blocks": [{"type": "image", "url": "/media/i.png",
+                                                           "alt": "OCR", "width": 300}]}]},
+            {"id": "{F1}", "type": "file", "url": "/media/f.pdf", "name": "a.pdf", "size": 1,
+             "mime": "application/pdf"},
+            {"id": "{M1}", "type": "math", "latex": "a^2"},
+        ])
+        result = upsert_document_from_source(self.db, source="onenote_import", external_id="SPEC",
+                                             title="Spec", blocks=blocks)
+        tree = document_tree(self.db, result.document_id)
+        self.assertEqual([n["type"] for n in tree["children"]],
+                         ["heading", "paragraph", "list", "table", "columns", "file", "math"])
+        self.assertEqual([n["text"] for n in tree["children"]],
+                         ["Plan", "plain paragraph", "done", "a\tb in cell x", "", "a.pdf", "a^2"])
+        self.assertEqual(tree["children"][0]["content"]["markdown"], "## <u>Plan</u>")
+        self.roundtrip(result.document_id)
+
     def test_source_block_helper_rejects_garbage(self) -> None:
         with self.assertRaises(BlockShapeError):
             source_block({"type": "table", "rows": [["ok"], "bad row"]})
