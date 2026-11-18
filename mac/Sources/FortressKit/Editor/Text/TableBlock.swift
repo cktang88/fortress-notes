@@ -1000,17 +1000,23 @@ final class TableAccessibilityElement: NSAccessibilityElement {
     }
 
     override func accessibilityFrame() -> NSRect {
-        MainActor.assumeIsolated { controller?.screenFrame(row: row, column: column) ?? .zero }
+        nonisolated(unsafe) let controller = controller
+        let row = row, column = column
+        return MainActor.assumeIsolated { controller?.screenFrame(row: row, column: column) ?? .zero }
     }
 
     override func accessibilityValue() -> Any? {
+        nonisolated(unsafe) let controller = controller
         guard let column else { return nil }
+        let row = row
         let value: String? = MainActor.assumeIsolated { controller?.accessibilityValue(row: row, column: column) }
         return value
     }
 
     override func accessibilityPerformPress() -> Bool {
+        nonisolated(unsafe) let controller = controller
         guard let column else { return false }
+        let row = row
         return MainActor.assumeIsolated {
             controller?.focus(row: row, column: column, atEnd: true)
             return controller != nil
@@ -1018,7 +1024,9 @@ final class TableAccessibilityElement: NSAccessibilityElement {
     }
 
     override func setAccessibilityFocused(_ focused: Bool) {
+        nonisolated(unsafe) let controller = controller
         guard focused, let column else { return }
+        let row = row
         MainActor.assumeIsolated { controller?.focus(row: row, column: column, atEnd: true) }
     }
 }
