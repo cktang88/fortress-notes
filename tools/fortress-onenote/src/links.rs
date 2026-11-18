@@ -31,8 +31,7 @@ fn decode(s: &str) -> String {
 pub fn is_onenote_link(href: &str) -> bool {
     let lower = href.trim().to_ascii_lowercase();
     lower.starts_with("onenote:")
-        || ((lower.contains(".one#") || lower.contains(".one%23"))
-            && lower.contains("page-id="))
+        || ((lower.contains(".one#") || lower.contains(".one%23")) && lower.contains("page-id="))
 }
 
 /// Extract the value of `key=` from the `&`-separated fragment part.
@@ -42,11 +41,7 @@ fn param<'a>(fragment: &'a str, key: &str) -> Option<&'a str> {
     while let Some(pos) = lower[search_from..].find(key) {
         let abs = search_from + pos;
         // Must start a parameter: preceded by '&', '#', '?' or start.
-        let ok = abs == 0
-            || matches!(
-                fragment.as_bytes()[abs - 1],
-                b'&' | b'#' | b'?' | b';'
-            );
+        let ok = abs == 0 || matches!(fragment.as_bytes()[abs - 1], b'&' | b'#' | b'?' | b';');
         if ok {
             let rest = &fragment[abs + key.len()..];
             let end = rest.find('&').unwrap_or(rest.len());
@@ -182,7 +177,10 @@ mod tests {
             Some("{99999999-8888-7777-6666-555555555555}")
         );
         assert_eq!(l.page_title.as_deref(), Some("Weekly"));
-        assert_eq!(l.section_file.as_deref(), Some(r"D:\Notes\Work\Meetings.one"));
+        assert_eq!(
+            l.section_file.as_deref(),
+            Some(r"D:\Notes\Work\Meetings.one")
+        );
     }
 
     #[test]

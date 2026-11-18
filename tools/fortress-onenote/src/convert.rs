@@ -215,8 +215,7 @@ impl PageCtx<'_, '_> {
             .map(|s| s.to_ascii_lowercase());
         let heading_level = style_id.as_deref().and_then(|s| {
             let b = s.as_bytes();
-            (b.len() == 2 && b[0] == b'h' && (b'1'..=b'6').contains(&b[1]))
-                .then(|| b[1] - b'0')
+            (b.len() == 2 && b[0] == b'h' && (b'1'..=b'6').contains(&b[1])).then(|| b[1] - b'0')
         });
         let conv = richtext::convert(
             rt,
@@ -382,7 +381,11 @@ impl PageCtx<'_, '_> {
             && p.data_status() == FileDataStatus::Available
         {
             let hint = p.extension().and_then(assets::sanitize_ext);
-            if let Ok(Some(a)) = self.nb.assets.put_reader(&mut p.read(), hint.as_deref(), false) {
+            if let Ok(Some(a)) = self
+                .nb
+                .assets
+                .put_reader(&mut p.read(), hint.as_deref(), false)
+            {
                 original_asset = asset.take();
                 asset = Some(a);
             }
@@ -450,13 +453,15 @@ impl PageCtx<'_, '_> {
         let status = f.data_status();
         let mut asset = None;
         if status == FileDataStatus::Available {
-            match self
-                .nb
-                .assets
-                .put_reader(&mut f.read(), Some(ext.as_deref().unwrap_or("bin")), true)
-            {
+            match self.nb.assets.put_reader(
+                &mut f.read(),
+                Some(ext.as_deref().unwrap_or("bin")),
+                true,
+            ) {
                 Ok(a) => asset = a,
-                Err(e) => self.warn(format!("attachment {filename:?} could not be written: {e:#}")),
+                Err(e) => self.warn(format!(
+                    "attachment {filename:?} could not be written: {e:#}"
+                )),
             }
         }
         if asset.is_none() {
@@ -488,9 +493,7 @@ impl PageCtx<'_, '_> {
             .as_ref()
             .and_then(|a| self.nb.assets.assets.get(a))
             .map(|a| a.mime.clone())
-            .unwrap_or_else(|| {
-                assets::mime_for_ext(ext.as_deref().unwrap_or("")).to_string()
-            });
+            .unwrap_or_else(|| assets::mime_for_ext(ext.as_deref().unwrap_or("")).to_string());
         Block::File {
             common: BlockCommon {
                 indent,
@@ -588,9 +591,7 @@ fn list_info(l: &List) -> ListInfo {
             ("Wingdings 2", Some('\u{ae}')) => "◆".to_string(),
             ("Wingdings 3", Some('}')) => "▶".to_string(),
             ("Symbol", Some('\u{b7}')) | (_, None) => "•".to_string(),
-            (f, Some(c)) if f.starts_with("Wingdings") || (c as u32) >= 0xF000 => {
-                "•".to_string()
-            }
+            (f, Some(c)) if f.starts_with("Wingdings") || (c as u32) >= 0xF000 => "•".to_string(),
             _ => raw,
         };
         ListInfo {
@@ -837,10 +838,7 @@ fn convert_page(
                 while i + 1 < contents.len() && matches!(contents[i + 1], PageContent::Ink(_)) {
                     i += 1;
                 }
-                let inks: Vec<&Ink> = contents[start..=i]
-                    .iter()
-                    .filter_map(|c| c.ink())
-                    .collect();
+                let inks: Vec<&Ink> = contents[start..=i].iter().filter_map(|c| c.ink()).collect();
                 let unit = 48.0 * ink::INK_UNITS_PER_PX;
                 let parts: Vec<(&Ink, (f32, f32))> = inks
                     .iter()
@@ -1070,7 +1068,9 @@ fn convert_section(
 // ---- failures -------------------------------------------------------------------
 
 pub fn classify_failure(err: &str, file: Option<&Path>) -> (String, String) {
-    let size = file.and_then(|f| std::fs::metadata(f).ok()).map(|m| m.len());
+    let size = file
+        .and_then(|f| std::fs::metadata(f).ok())
+        .map(|m| m.len());
     let e = err.to_ascii_lowercase();
     if size == Some(0) {
         return (
@@ -1103,7 +1103,12 @@ pub fn classify_failure(err: &str, file: Option<&Path>) -> (String, String) {
     )
 }
 
-fn failed(path: Vec<String>, file: Option<String>, abs: Option<&Path>, err: String) -> FailedSection {
+fn failed(
+    path: Vec<String>,
+    file: Option<String>,
+    abs: Option<&Path>,
+    err: String,
+) -> FailedSection {
     let (reason, hint) = classify_failure(&err, abs);
     FailedSection {
         path,
@@ -1209,7 +1214,10 @@ pub fn convert_notebook(
             name,
             rel,
         } => {
-            log(&format!("sections in {}", if rel.is_empty() { "." } else { rel }));
+            log(&format!(
+                "sections in {}",
+                if rel.is_empty() { "." } else { rel }
+            ));
             let base = vec![name.clone()];
             let mut children = Vec::new();
             for f in sections {
@@ -1253,33 +1261,35 @@ pub fn convert_notebook(
             name,
             rel,
         } => {
-            log(&format!("notebook {}", if rel.is_empty() { name } else { rel }));
+            log(&format!(
+                "notebook {}",
+                if rel.is_empty() { name } else { rel }
+            ));
             let base = vec![name.clone()];
             // 1. Structure from the table of contents.
-            let (skel, identity, color) =
-                match parse_best_toc(&parser, toc, root) {
-                    Ok(n) => {
-                        let s = skeleton(n.entries());
-                        absorb_notebook_warnings(
-                            &mut nb,
-                            n.report().warnings(),
-                            &base,
-                            Some(root),
-                            rel,
-                        );
-                        (Some(s), Some(n.file_identity().to_string()), n.color())
-                    }
-                    Err(e) => {
-                        nb.report.warnings.push(Warning {
+            let (skel, identity, color) = match parse_best_toc(&parser, toc, root) {
+                Ok(n) => {
+                    let s = skeleton(n.entries());
+                    absorb_notebook_warnings(
+                        &mut nb,
+                        n.report().warnings(),
+                        &base,
+                        Some(root),
+                        rel,
+                    );
+                    (Some(s), Some(n.file_identity().to_string()), n.color())
+                }
+                Err(e) => {
+                    nb.report.warnings.push(Warning {
                             message: format!(
                                 "table of contents could not be read ({e}); sections are listed by folder"
                             ),
                             page_id: None,
                             page_title: None,
                         });
-                        (None, None, None)
-                    }
-                };
+                    (None, None, None)
+                }
+            };
             // Sub-folders with their own TOC that the notebook does not list
             // as section groups are separate notebooks (e.g. a notebook
             // folder that also holds other notebooks).
@@ -1347,16 +1357,28 @@ pub fn convert_notebook(
                 match parser.parse_section(TypedPath::derive(&typed(&f))) {
                     Ok(s) => {
                         let ident = s.file_identity().to_string();
-                        let sec =
-                            convert_section(&mut nb, &s, &parent, Some(ident.clone()), Some(&frel), true);
-                        parsed.entry(ident).or_default().push(Parsed { dir, section: sec });
+                        let sec = convert_section(
+                            &mut nb,
+                            &s,
+                            &parent,
+                            Some(ident.clone()),
+                            Some(&frel),
+                            true,
+                        );
+                        parsed
+                            .entry(ident)
+                            .or_default()
+                            .push(Parsed { dir, section: sec });
                     }
                     Err(e) => {
                         let mut p = parent.clone();
                         p.push(file_stem(&f));
-                        nb.report
-                            .failed_sections
-                            .push(failed(p, Some(frel), Some(&f), format!("{e}")));
+                        nb.report.failed_sections.push(failed(
+                            p,
+                            Some(frel),
+                            Some(&f),
+                            format!("{e}"),
+                        ));
                     }
                 }
             }
@@ -1500,9 +1522,12 @@ fn absorb_notebook_warnings(
             let mut path = base.to_vec();
             path.push(name.trim_end_matches(".one").to_string());
             let _ = rel;
-            nb.report
-                .failed_sections
-                .push(failed(path, Some(file.to_string()), None, err.to_string()));
+            nb.report.failed_sections.push(failed(
+                path,
+                Some(file.to_string()),
+                None,
+                err.to_string(),
+            ));
         } else {
             nb.report.warnings.push(Warning {
                 message: msg.to_string(),
@@ -1513,7 +1538,11 @@ fn absorb_notebook_warnings(
     }
 }
 
-fn package_entries(nb: &mut NotebookCtx, entries: &[SectionEntry], parent: &[String]) -> Vec<Entry> {
+fn package_entries(
+    nb: &mut NotebookCtx,
+    entries: &[SectionEntry],
+    parent: &[String],
+) -> Vec<Entry> {
     entries
         .iter()
         .map(|e| match e {
@@ -1658,7 +1687,12 @@ pub fn dedupe_ids(nbs: &mut [Notebook]) {
             }
         }
     }
-    fn entries(seen: &mut HashSet<String>, pages: &mut HashSet<String>, es: &mut [Entry], salt: &str) {
+    fn entries(
+        seen: &mut HashSet<String>,
+        pages: &mut HashSet<String>,
+        es: &mut [Entry],
+        salt: &str,
+    ) {
         for (i, e) in es.iter_mut().enumerate() {
             match e {
                 Entry::SectionGroup(g) => {
@@ -1701,7 +1735,6 @@ pub fn dedupe_ids(nbs: &mut [Notebook]) {
 pub fn finalize(nb: &mut Notebook) {
     nb.report.counts.section_groups = count_groups(&nb.children);
 }
-
 
 #[cfg(test)]
 mod tests {

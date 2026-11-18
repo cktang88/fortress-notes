@@ -33,10 +33,7 @@ fn render_group(eq: Equation) -> anyhow::Result<String> {
         0 => Ok("<mi></mi>".to_string()),
         1 => match &eq[0] {
             MathOp::Text(text) => Ok(format!("<mrow>{}</mrow>", render_text(text.clone())?)),
-            _ => eq
-                .into_iter()
-                .map(render_op)
-                .collect::<anyhow::Result<_>>(),
+            _ => eq.into_iter().map(render_op).collect::<anyhow::Result<_>>(),
         },
         _ => Ok(format!("<mrow>{}</mrow>", render_eq(eq)?)),
     }
@@ -674,11 +671,7 @@ fn render_radical(degree: Equation, body: Equation) -> anyhow::Result<String> {
     ))
 }
 
-fn render_slashed_fraction(
-    num: Equation,
-    den: Equation,
-    linear: bool,
-) -> anyhow::Result<String> {
+fn render_slashed_fraction(num: Equation, den: Equation, linear: bool) -> anyhow::Result<String> {
     if linear {
         return Ok(format!(
             "{}<mo>⁄</mo>{}",

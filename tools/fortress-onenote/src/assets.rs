@@ -44,7 +44,9 @@ pub fn display_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let cleaned: String = base
         .chars()
-        .filter(|c| !c.is_control() && !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
+        .filter(|c| {
+            !c.is_control() && !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+        })
         .collect();
     let cleaned = cleaned.trim().trim_matches('.').trim();
     let mut out: String = cleaned.chars().take(200).collect();
@@ -71,8 +73,7 @@ pub fn sniff(head: &[u8]) -> Option<(&'static str, &'static str)> {
         Some(("webp", "image/webp"))
     } else if starts(b"%PDF") {
         Some(("pdf", "application/pdf"))
-    } else if starts(&[0x01, 0x00, 0x00, 0x00]) && head.len() >= 44 && &head[40..44] == b" EMF"
-    {
+    } else if starts(&[0x01, 0x00, 0x00, 0x00]) && head.len() >= 44 && &head[40..44] == b" EMF" {
         Some(("emf", "image/emf"))
     } else if starts(&[0xD7, 0xCD, 0xC6, 0x9A]) {
         Some(("wmf", "image/wmf"))
@@ -101,10 +102,7 @@ const ZIP_BASED: &[&str] = &[
 /// Whether an asset name is an image type browsers display natively.
 pub fn is_web_image(asset: &str) -> bool {
     let ext = asset.rsplit('.').next().unwrap_or("");
-    matches!(
-        ext,
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp"
-    )
+    matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp")
 }
 
 /// MIME type for a (sanitised) extension.

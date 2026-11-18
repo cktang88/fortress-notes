@@ -191,13 +191,11 @@ fn run_bounds(indices: &[usize], len16: usize) -> Vec<(usize, usize)> {
     out
 }
 
-static FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("\u{FDDF}HYPERLINK\\s+\"([^\"]*)\"").expect("valid field regex")
-});
+static FIELD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("\u{FDDF}HYPERLINK\\s+\"([^\"]*)\"").expect("valid field regex"));
 
-static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)\b(?:https?://|www\.)[^\s<>"]+"#).expect("valid url regex")
-});
+static URL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)\b(?:https?://|www\.)[^\s<>"]+"#).expect("valid url regex"));
 
 /// Core conversion: split `text` into runs at UTF-16 `indices`, drop hidden
 /// runs, and emit marks with code-point offsets into the visible text.
@@ -389,7 +387,9 @@ pub fn convert_runs(
         } else {
             bounds[ri]
         };
-        let is_display = fmt_of(ri).map(|f| f.hyperlink && !f.hidden).unwrap_or(false);
+        let is_display = fmt_of(ri)
+            .map(|f| f.hyperlink && !f.hidden)
+            .unwrap_or(false);
         let covered = links.iter().any(|l| l.start < end && l.end > start);
         if is_display && !covered && end > start {
             links.push(Link16 {
@@ -398,7 +398,9 @@ pub fn convert_runs(
                 end,
             });
         } else if !covered {
-            out.notes.push(format!("hyperlink field without display text dropped: {url}"));
+            out.notes.push(format!(
+                "hyperlink field without display text dropped: {url}"
+            ));
         }
     }
     for link in links {
@@ -550,19 +552,43 @@ pub fn citation_url(rich: &Rich) -> Option<String> {
             return Some(c[2].to_string());
         }
     }
-    // "Pasted from https://..." without brackets but fully linked.
-    let lower = text.to_ascii_lowercase();
-    if lower.starts_with("pasted from ") || lower.starts_with("from ") {
-        let rest = text.split_once(' ').map(|x| x.1).unwrap_or("");
-        let rest = rest.trim_start_matches("from ").trim();
-        if (rest.starts_with("http://") || rest.starts_with("https://"))
-            && !rest.contains(char::is_whitespace)
-        {
-            return Some(rest.to_string());
+    // Without angle brackets only well-known labels count
+    // ("Clipped from: https://..." is written by the OneNote Web Clipper).
+    let lower = text.to_lowercase();
+    for label in SOURCE_LABELS {
+        if let Some(rest) = lower.strip_prefix(label) {
+            let rest = rest.trim_start_matches([':', ' ', '\u{a0}']);
+            let offset = text.len() - rest.len();
+            let Some(url) = text.get(offset..).map(str::trim) else {
+                continue;
+            };
+            if (url.starts_with("http://") || url.starts_with("https://"))
+                && !url.contains(char::is_whitespace)
+            {
+                return Some(url.to_string());
+            }
         }
     }
     None
 }
+
+/// Lower-case labels OneNote and its clippers put before a source URL.
+const SOURCE_LABELS: &[&str] = &[
+    "clipped from",
+    "pasted from",
+    "from",
+    "source",
+    "eingefügt aus",
+    "quelle",
+    "collé à partir de",
+    "à partir de l’adresse",
+    "à partir de l'adresse",
+    "source :",
+    "pegado desde",
+    "copiado de",
+    "incollato da",
+    "geplakt vanuit",
+];
 
 #[cfg(test)]
 mod tests {
@@ -643,6 +669,11 @@ mod tests {
             citation_url(&r("Pasted from https://example.com/x")).as_deref(),
             Some("https://example.com/x")
         );
+        assert_eq!(
+            citation_url(&r("Clipped from: https://cdn.example/a%20b.pdf")).as_deref(),
+            Some("https://cdn.example/a%20b.pdf")
+        );
+        assert_eq!(citation_url(&r("See also: https://example.com/")), None);
         assert_eq!(
             citation_url(&r(
                 "I read this whole long sentence about soups somewhere <https://x.y/>"
@@ -832,7 +863,12 @@ mod tests {
     #[test]
     fn color_formatting() {
         assert_eq!(
-            color_hex(Some(ColorRef::Manual { r: 255, g: 0, b: 16 })).as_deref(),
+            color_hex(Some(ColorRef::Manual {
+                r: 255,
+                g: 0,
+                b: 16
+            }))
+            .as_deref(),
             Some("#FF0010")
         );
         assert_eq!(color_hex(Some(ColorRef::Auto)), None);

@@ -200,7 +200,11 @@ pub fn extract_zip(zip_path: &Path, dest: &Path, report: &mut InputReport) -> Re
         target.push(base);
         // Never overwrite: on case-insensitive file systems two entries can
         // collide; keep the first.
-        let mut out = match OpenOptions::new().write(true).create_new(true).open(&target) {
+        let mut out = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 report
@@ -393,7 +397,6 @@ pub fn discover(root: &Path, report: &mut InputReport) -> Vec<NotebookSource> {
     }
     out
 }
-
 
 fn stem(p: &Path) -> String {
     p.file_stem()

@@ -290,10 +290,7 @@ mod tests {
     fn tiny_offsets_do_not_create_columns() {
         // Second outline is slightly indented and starts right where the
         // estimated height of the first ends: stacked, not columns.
-        let boxes = [
-            bx("a", 1.0, 1.0, 12.0, 3.0),
-            bx("b", 1.05, 3.9, 12.0, 2.0),
-        ];
+        let boxes = [bx("a", 1.0, 1.0, 12.0, 3.0), bx("b", 1.05, 3.9, 12.0, 2.0)];
         assert_eq!(run(&boxes), "a,b");
         // Just touching vertically, horizontally disjoint: still rows.
         let boxes = [bx("a", 0.0, 0.0, 4.0, 2.0), bx("b", 6.0, 1.9, 4.0, 2.0)];
