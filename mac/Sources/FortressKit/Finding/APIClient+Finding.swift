@@ -104,9 +104,12 @@ public struct DocumentInfo: Decodable, Hashable, Sendable {
     public var blocksBySource: [String: Int]?
     public var sync: Sync?
     public var conflicts: [Conflict]?
+    /// Text read from each picture and PDF of the note (OCR), not part of its body.
+    public var pictureText: [PictureText]?
 
     enum CodingKeys: String, CodingKey {
         case id, title, revision, provenance, counts, sync, conflicts
+        case pictureText = "picture_text"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case lastOpenedAt = "last_opened_at"

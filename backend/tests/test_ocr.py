@@ -515,6 +515,13 @@ class VisionTextIsSearchableTests(OcrTextIsSearchableTests):
         status = self.client.get("/api/ocr").json()
         self.assertEqual(status["external"], {"model": VISION, "queued": 0, "done": 1, "failed": 0})
 
+    def test_the_whole_text_by_content_hash(self) -> None:
+        digest = hashlib.sha256(b"\x89PNG fake screenshot").hexdigest()
+        reading = self.client.get(f"/api/ocr/{digest}").json()
+        self.assertEqual(reading["model"], VISION)
+        self.assertTrue(reading["text"].endswith("Посадочный талон"))
+        self.assertEqual(self.client.get(f"/api/ocr/{'0' * 64}").status_code, 404)
+
     def test_bad_requests(self) -> None:
         digest = hashlib.sha256(b"\x89PNG fake screenshot").hexdigest()
         self.assertEqual(self.client.put(f"/api/ocr/{'0' * 64}", json={"model": VISION, "text": "x"}).status_code, 404)

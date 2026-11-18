@@ -330,6 +330,16 @@ def ocr_pending(
     }
 
 
+@app.get("/api/ocr/{content_hash}")
+def ocr_reading(content_hash: str) -> dict:
+    """All the text read from a picture or PDF (the note's info carries only its start)."""
+
+    found = ocr.reading(_db(), content_hash)
+    if found is None:
+        raise HTTPException(404, "No text has been read from that picture yet")
+    return found
+
+
 @app.put("/api/ocr/{content_hash}")
 def ocr_store(content_hash: str, result: ExternalOcrResult) -> dict:
     """Store an external reader's text for a picture or PDF (by content hash). Its text

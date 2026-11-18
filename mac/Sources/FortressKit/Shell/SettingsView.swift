@@ -23,6 +23,7 @@ public struct SettingsView: View {
 struct BackendSettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var isChoosingFolder = false
+    @AppStorage(PictureTextReader.enabledKey) private var readsPictureText = true
 
     var body: some View {
         @Bindable var backend = model.backend
@@ -82,6 +83,15 @@ struct BackendSettingsView: View {
                 Text("Starting the Backend")
             } footer: {
                 Text("When nothing answers at launch, Fortress starts the backend from this folder and stops it when you quit.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Read text in pictures and PDFs on this Mac", isOn: $readsPictureText)
+            } header: {
+                Text("Text in Pictures")
+            } footer: {
+                Text("Apple Vision reads the words in pasted pictures, scans and PDFs (handwriting and most scripts included) so search and Ask find them. It runs in the background and never changes your notes.")
                     .foregroundStyle(.secondary)
             }
 

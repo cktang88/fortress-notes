@@ -484,6 +484,17 @@ def store_external(
     return {"status": "done", "model": model, "text_chars": len(text)}
 
 
+def reading(db_path: Path, content_hash: str) -> dict[str, object] | None:
+    """The reading whose text an asset uses (all of it), or None before any."""
+
+    block_store.initialize(db_path)
+    with block_store.connection_scope(db_path) as connection:
+        best = _best_done(connection, content_hash)
+    if best is None:
+        return None
+    return {key: best[key] for key in ("content_hash", "model", "status", "text", "method", "pages", "updated_at")}
+
+
 def status_counts(db_path: Path) -> dict[str, object]:
     block_store.initialize(db_path)
     reader = external_reader()
