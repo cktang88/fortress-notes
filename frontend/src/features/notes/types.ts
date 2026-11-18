@@ -77,7 +77,36 @@ export interface BlockNode {
   text: string;
   created_at: string;
   updated_at: string;
+  /** Where the block came from; `inherited` when it is the note's own provenance. */
+  provenance?: Provenance;
+  /** The note revision that last changed this block (null: unchanged since created). */
+  revision?: number | null;
   children: BlockNode[];
+}
+
+/** Where a note or block came from (backend `app/provenance.py`, spec §7a). */
+export interface Provenance {
+  source: string;
+  external_id?: string;
+  source_path?: string;
+  source_url?: string;
+  source_created_at?: string;
+  source_modified_at?: string;
+  imported_at?: string;
+  synced_at?: string;
+  importer?: { name?: string; version?: string };
+  origin?: {
+    operation: "move_into" | "duplicate" | "split";
+    document_id?: string;
+    document_title?: string;
+    block_id?: string;
+    at?: string;
+  };
+  extra?: Record<string, unknown>;
+  inherited?: boolean;
+  conflict?: Record<string, unknown>;
+  source_removed?: boolean;
+  backfilled?: boolean;
 }
 
 export interface BlockDocument {
@@ -92,6 +121,16 @@ export interface BlockDocument {
   tags: string[];
   created_at: string;
   updated_at: string;
+  provenance?: Provenance;
+  last_opened_at?: string | null;
+  /** Current titles/text of every note and block this note links to. */
+  resolved_links?: {
+    documents: Record<string, { title: string }>;
+    blocks: Record<
+      string,
+      { document_id: string; document_title: string; type: string; text: string }
+    >;
+  };
   children: BlockNode[];
 }
 
@@ -123,6 +162,8 @@ export interface BlockOperation {
   /** Split offset into `text` as a JavaScript string index (UTF-16 units). */
   split_at?: number;
   expected_updated_at?: string;
+  /** insert/update: where the content came from (e.g. `{source: "paste"}`). */
+  provenance?: Provenance;
 }
 
 export interface SearchResult {

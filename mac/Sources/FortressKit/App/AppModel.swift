@@ -19,7 +19,8 @@ public enum LibraryScope: Hashable, Sendable {
 @MainActor
 @Observable
 public final class AppModel {
-    public let api: APIClient
+    /// Replaced when the backend address changes in Settings.
+    public var api: APIClient
 
     public var navigation = NavigationResponse(items: [], recent: [])
     public var scope: LibraryScope = .all
@@ -41,6 +42,37 @@ public final class AppModel {
     public init(api: APIClient = APIClient()) {
         self.api = api
     }
+
+    // MARK: Shell
+    // State owned by the Shell area (window, sidebar, note list, sheets). Actions live in
+    // Shell/AppModel+Shell.swift.
+
+    /// Starts and stops a local backend when it isn't already running.
+    public let backend = BackendController()
+    /// The transient capsule at the bottom of the window ("Moved to Trash · Undo").
+    public var toast: Toast?
+    /// Notes in the Trash, loaded when the Trash is shown.
+    public var trash: [TrashedDocument] = []
+    /// The selected note while the Trash is shown (trashed notes don't open in the editor).
+    public var selectedTrashId: String?
+    public var backups: [Backup] = []
+    public var isBackupsShown = false
+    public var isImporterShown = false
+    /// Markdown files waiting for the import sheet, with the folder they go into.
+    public var pendingImport: MarkdownImportRequest?
+    /// A note's Markdown ready for the save panel.
+    public var pendingExport: MarkdownFile?
+    /// The folder whose name is being edited inline in the sidebar.
+    public var renamingFolderId: String?
+    /// Hides the sidebar and note list so only the note shows.
+    public var isFocusMode = false
+    /// Bumped when the note list hands keyboard focus to the editor (↩ on a row).
+    /// The editor can watch it with `.onChange` and take focus.
+    public var editorFocusRequest = 0
+    /// Whether the sidebar tree has loaded once (so empty states don't flash at launch).
+    public var hasLoadedNavigation = false
+    /// Set false (snapshots, previews) to skip contacting the backend when a window opens.
+    public var connectsOnAppear = true
 
     /// The note open in the editor, if any.
     public var openNoteId: String? {

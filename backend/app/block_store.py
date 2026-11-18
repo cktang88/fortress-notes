@@ -13,7 +13,7 @@ import re
 import sqlite3
 import threading
 from contextlib import closing, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,9 +22,10 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 from ulid import ULID
 
+from . import provenance as _provenance
 from .models import BlockOperation, BlockReviewContextKind
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 DB_FILENAME = ".fortress.sqlite3"
 
 _TASK_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]\s+")
@@ -63,6 +64,8 @@ class ImportedBlock:
     source: str
     attrs: dict[str, object] = field(default_factory=dict)
     children: list["ImportedBlock"] = field(default_factory=list)
+    # Restored from a ``<!-- fortress:block {...} -->`` line in imported Markdown.
+    provenance: dict[str, object] | None = None
 
 
 _SCHEMA = """
@@ -77,7 +80,10 @@ CREATE TABLE IF NOT EXISTS folders (
     name TEXT NOT NULL,
     position INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    source_kind TEXT,
+    source_external_id TEXT,
+    source_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -91,7 +97,12 @@ CREATE TABLE IF NOT EXISTS documents (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     revision INTEGER NOT NULL DEFAULT 0,
-    title_auto INTEGER NOT NULL DEFAULT 0
+    title_auto INTEGER NOT NULL DEFAULT 0,
+    provenance_json TEXT NOT NULL DEFAULT '{}',
+    source_kind TEXT NOT NULL DEFAULT 'manual',
+    source_external_id TEXT,
+    sync_json TEXT NOT NULL DEFAULT '{}',
+    last_opened_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS folders_parent_position ON folders(parent_id, position);
@@ -107,6 +118,8 @@ CREATE TABLE IF NOT EXISTS blocks (
     text TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    provenance_json TEXT,
+    revision INTEGER,
     UNIQUE (document_id, parent_id, position)
 );
 
@@ -291,6 +304,7 @@ _MIGRATIONS = {
     );
     """,
     12: "",
+    13: "",
     11: """
     CREATE TABLE IF NOT EXISTS saved_searches (
         id TEXT PRIMARY KEY,
@@ -384,6 +398,17 @@ def _initialize(path: Path) -> None:
         # no folder_id until that migration runs), so fresh databases get it here.
         connection.execute(
             "CREATE INDEX IF NOT EXISTS documents_folder_position ON documents(folder_id, position)"
+        )
+        # Re-imports find "the note this source page became" by its source key.
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS documents_source_key
+                   ON documents(source_kind, source_external_id)
+                WHERE source_external_id IS NOT NULL"""
+        )
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS folders_source_key
+                   ON folders(source_kind, source_external_id)
+                WHERE source_external_id IS NOT NULL"""
         )
 
 
@@ -578,7 +603,74 @@ def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
             connection.execute(
                 "ALTER TABLE documents ADD COLUMN title_auto INTEGER NOT NULL DEFAULT 0"
             )
+    if version == 13:
+        _migrate_provenance(connection)
     connection.executescript(_MIGRATIONS[version])
+
+
+def _add_columns(connection: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+    for name, definition in columns.items():
+        if name not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
+def _migrate_provenance(connection: sqlite3.Connection) -> None:
+    """Version 13: provenance on documents, blocks and folders, plus block revisions.
+
+    Existing notes are backfilled with the best guess available (marked
+    ``backfilled``): notes in the top-level Uncategorized folder came from quick
+    capture, notes whose file sits in an import backup came from Markdown import,
+    and everything else was written by hand. Blocks keep NULL provenance, which
+    means "same as the document".
+    """
+
+    _add_columns(
+        connection,
+        "documents",
+        {
+            "provenance_json": "TEXT NOT NULL DEFAULT '{}'",
+            "source_kind": "TEXT NOT NULL DEFAULT 'manual'",
+            "source_external_id": "TEXT",
+            "sync_json": "TEXT NOT NULL DEFAULT '{}'",
+            "last_opened_at": "TEXT",
+        },
+    )
+    _add_columns(connection, "blocks", {"provenance_json": "TEXT", "revision": "INTEGER"})
+    _add_columns(
+        connection,
+        "folders",
+        {"source_kind": "TEXT", "source_external_id": "TEXT", "source_name": "TEXT"},
+    )
+    imported_ids: set[str] = set()
+    database_file = next(
+        (row["file"] for row in connection.execute("PRAGMA database_list") if row["name"] == "main"),
+        "",
+    )
+    if database_file:
+        backups_root = Path(database_file).parent / ".fortress-import-backups"
+        if backups_root.is_dir():
+            imported_ids = {path.stem for path in backups_root.glob("*/*.md")}
+    capture_folders = {
+        row["id"]
+        for row in connection.execute(
+            "SELECT id FROM folders WHERE parent_id IS NULL AND name = 'Uncategorized'"
+        )
+    }
+    rows = connection.execute(
+        "SELECT id, folder_id, created_at FROM documents WHERE provenance_json = '{}'"
+    ).fetchall()
+    for row in rows:
+        if row["folder_id"] in capture_folders:
+            kind = "capture"
+        elif row["id"] in imported_ids:
+            kind = "markdown_import"
+        else:
+            kind = "manual"
+        connection.execute(
+            "UPDATE documents SET provenance_json = ?, source_kind = ? WHERE id = ?",
+            (_provenance.dumps({"source": kind, "backfilled": True}), kind, row["id"]),
+        )
 
 
 def is_ready(path: Path) -> bool:
@@ -619,9 +711,45 @@ def bootstrap_markdown(notes_path: Path, path: Path) -> int:
                 post.content,
                 created_at,
                 updated_at,
+                provenance=_markdown_import_provenance(
+                    post.metadata, note_path.name, now
+                ),
             )
             imported += 1
     return imported
+
+
+MARKDOWN_IMPORTER = {"name": "fortress-markdown", "version": "1"}
+
+
+def _markdown_import_provenance(
+    metadata: dict, source_path: str, now: str
+) -> dict[str, object]:
+    """Provenance for a note read from a Markdown file.
+
+    Our own export writes the note's provenance as front matter; it is restored
+    as it was (so export -> import -> export is stable). Any other file is a
+    ``markdown_import``.
+    """
+
+    exported = metadata.get("provenance")
+    if isinstance(exported, dict):
+        try:
+            restored = _provenance.normalize(exported, trusted=True)
+        except _provenance.ProvenanceError:
+            restored = {}
+        if restored:
+            return restored
+    value: dict[str, object] = {
+        "source": "markdown_import",
+        "source_path": source_path,
+        "imported_at": now,
+        "importer": dict(MARKDOWN_IMPORTER),
+    }
+    for key, name in (("created_at", "source_created_at"), ("updated_at", "source_modified_at")):
+        if metadata.get(key) is not None:
+            value[name] = _iso(metadata[key])
+    return value
 
 
 def create_document(
@@ -635,6 +763,7 @@ def create_document(
     updated_at: object,
     ensure_empty_paragraph: bool = False,
     folder_id: str | None = None,
+    provenance: dict[str, object] | None = None,
 ) -> None:
     """Create the block representation for a newly created compatibility note."""
 
@@ -655,6 +784,7 @@ def create_document(
             _iso(created_at),
             _iso(updated_at),
             ensure_empty_paragraph,
+            provenance,
         )
         if folder_id is not None:
             position = _document_insert_position(connection, folder_id, None)
@@ -662,6 +792,17 @@ def create_document(
                 "UPDATE documents SET folder_id = ?, position = ? WHERE id = ?",
                 (folder_id, position, document_id),
             )
+
+
+def mark_opened(path: Path, document_id: str) -> None:
+    """Remember when a note was last opened (metadata only: no revision, no edit time)."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        connection.execute(
+            "UPDATE documents SET last_opened_at = ? WHERE id = ? AND deleted_at IS NULL",
+            (_now(), document_id),
+        )
 
 
 def ensure_editable_block(path: Path, document_id: str) -> bool:
@@ -705,7 +846,7 @@ def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, o
     with connection_scope(path) as connection:
         rows = connection.execute(
             f"""SELECT id, title, status, tags_json, folder_id, position,
-                      created_at, updated_at,
+                      created_at, updated_at, source_kind,
                       COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
                                 ORDER BY parent_id, position, id LIMIT 1), '') AS snippet
                  FROM documents
@@ -721,6 +862,7 @@ def create_block_document(
     folder_id: str | None = None,
     created_at: object | None = None,
     title_auto: bool = False,
+    provenance: dict[str, object] | None = None,
 ) -> dict:
     """Create a document; with ``title_auto`` its title follows its first line."""
 
@@ -731,6 +873,7 @@ def create_block_document(
         _iso(created_at) if created_at is not None else now, now,
         ensure_empty_paragraph=True,
         folder_id=folder_id,
+        provenance=provenance,
     )
     if title_auto:
         with connection_scope(path) as connection:
@@ -979,7 +1122,7 @@ def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
         ).fetchall()
         documents = connection.execute(
             """SELECT id, title, status, tags_json, folder_id, position,
-                      created_at, updated_at,
+                      created_at, updated_at, source_kind,
                       COALESCE((
                           SELECT text FROM blocks
                            WHERE blocks.document_id = documents.id
@@ -991,7 +1134,7 @@ def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
         ).fetchall()
         recent = connection.execute(
             """SELECT id, title, status, tags_json, folder_id, position,
-                      created_at, updated_at,
+                      created_at, updated_at, source_kind,
                       COALESCE((
                           SELECT text FROM blocks
                            WHERE blocks.document_id = documents.id
@@ -1448,6 +1591,7 @@ def _insert_document(
     created_at: str,
     updated_at: str,
     ensure_empty_paragraph: bool = False,
+    provenance: dict[str, object] | None = None,
 ) -> None:
     position = connection.execute(
         """SELECT COALESCE(MAX(position) + 1, 0)
@@ -1461,8 +1605,51 @@ def _insert_document(
                ) VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?)""",
         (document_id, title, status, json.dumps(tags), position, created_at, updated_at),
     )
+    _set_document_provenance(
+        connection, document_id, _unclaimed_source_key(connection, provenance or {"source": "manual"})
+    )
     _insert_blocks(
         connection, document_id, body, created_at, updated_at, ensure_empty_paragraph
+    )
+
+
+def _unclaimed_source_key(
+    connection: sqlite3.Connection, value: dict[str, object]
+) -> dict[str, object]:
+    """``value``, minus its source id when another note already holds that key.
+
+    Importing a copy (e.g. our own Markdown export of a OneNote page, into the
+    same workspace) must not take over the original's identity for re-imports.
+    """
+
+    external_id = value.get("external_id")
+    if not external_id or connection.execute(
+        "SELECT 1 FROM documents WHERE source_kind = ? AND source_external_id = ?",
+        (value.get("source", _provenance.DEFAULT_SOURCE), external_id),
+    ).fetchone() is None:
+        return value
+    copy = {key: item for key, item in value.items() if key != "external_id"}
+    extra = copy.get("extra") if isinstance(copy.get("extra"), dict) else {}
+    copy["extra"] = {**extra, "copy_of_external_id": external_id}
+    return copy
+
+
+def _set_document_provenance(
+    connection: sqlite3.Connection, document_id: str, value: dict[str, object]
+) -> None:
+    """Store a document's provenance and the source key re-imports look it up by."""
+
+    value = {**value}
+    value.setdefault("source", _provenance.DEFAULT_SOURCE)
+    connection.execute(
+        """UPDATE documents SET provenance_json = ?, source_kind = ?, source_external_id = ?
+            WHERE id = ?""",
+        (
+            _provenance.dumps(value),
+            value["source"],
+            value.get("external_id") or None,
+            document_id,
+        ),
     )
 
 
@@ -1478,6 +1665,8 @@ def _navigation_document(row: sqlite3.Row) -> dict[str, object]:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "snippet": row["snippet"][:160],
+        # Where the note came from ("manual", "capture", "onenote_import", ...).
+        "source": row["source_kind"] if "source_kind" in row.keys() else "manual",
     }
 
 
@@ -1493,8 +1682,8 @@ def _insert_blocks(
         connection.execute(
             """INSERT INTO blocks(
                    id, document_id, parent_id, position, type, attrs_json,
-                   content_json, text, created_at, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   content_json, text, created_at, updated_at, provenance_json
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 block.id,
                 document_id,
@@ -1506,6 +1695,7 @@ def _insert_blocks(
                 block.source,
                 created_at,
                 updated_at,
+                _provenance.dumps(block.provenance),
             ),
         )
         connection.execute(
@@ -1614,14 +1804,26 @@ def _replace_references(
             )
 
 
-def render_markdown(nodes: list[dict], depth: int = 0) -> str:
-    """Render a block tree as portable Markdown (block IDs are not included)."""
+def render_markdown(
+    nodes: list[dict], depth: int = 0, document_provenance: dict | None = None
+) -> str:
+    """Render a block tree as portable Markdown (block IDs are not included).
+
+    With ``document_provenance``, a block whose provenance differs from the
+    document's gets it on a ``<!-- fortress:block {...} -->`` line right before it,
+    which Markdown import reads back.
+    """
 
     fragments: list[str] = []
     for node in nodes:
         source = _node_markdown(node)
         if node["type"] == "divider" and not source:
             source = "---"
+        if source and document_provenance is not None:
+            own = node.get("provenance")
+            if isinstance(own, dict) and own and not own.get("inherited"):
+                if own != {"source": document_provenance.get("source", "manual")}:
+                    source = f"{_provenance.comment(own)}\n{source}"
         if depth and source:
             prefix = "  " * depth
             source = "\n".join(
@@ -1631,7 +1833,7 @@ def render_markdown(nodes: list[dict], depth: int = 0) -> str:
             fragments.append(source)
         children = node.get("children", [])
         if children:
-            rendered_children = render_markdown(children, depth + 1)
+            rendered_children = render_markdown(children, depth + 1, document_provenance)
             if rendered_children:
                 fragments.append(rendered_children)
     return "\n\n".join(fragments)
@@ -1688,11 +1890,15 @@ def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | N
     ).fetchone()
     rows = connection.execute(
         """SELECT id, document_id, parent_id, position, type, attrs_json,
-                  content_json, text, created_at, updated_at
+                  content_json, text, created_at, updated_at, provenance_json, revision
              FROM blocks WHERE document_id = ?
              ORDER BY parent_id, position""",
         (document_id,),
     ).fetchall()
+    document_provenance = _provenance.document_provenance(
+        document["provenance_json"], document["source_kind"]
+    )
+    links = _resolved_links(connection, document_id)
     user_attr_rows = connection.execute(
         """SELECT attrs.block_id, attrs.name, attrs.value
              FROM block_user_attrs AS attrs
@@ -1718,10 +1924,20 @@ def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | N
             "text": row["text"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            # Where this block came from; ``inherited`` when it is the document's.
+            "provenance": _provenance.effective_block_provenance(
+                row["provenance_json"], document_provenance
+            ),
+            # The document revision that last changed this block (null: never since
+            # it was created or imported).
+            "revision": row["revision"],
             "children": [],
         }
         for row in rows
     }
+    if links["documents"]:
+        for node in nodes.values():
+            _refresh_link_labels(node, links)
     roots: list[dict] = []
     for node in nodes.values():
         parent = nodes.get(node["parent_id"])
@@ -1737,8 +1953,112 @@ def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | N
         "title_auto": bool(document["title_auto"]),
         "can_undo": bool(history_state["can_undo"]),
         "can_redo": bool(history_state["can_redo"]),
+        "provenance": document_provenance,
+        "last_opened_at": document["last_opened_at"],
+        # Current titles/text of every note and block this document links to.
+        "resolved_links": links,
         "children": roots,
     }
+
+
+def _resolved_links(connection: sqlite3.Connection, document_id: str) -> dict[str, dict]:
+    """Live link targets of a document's blocks, keyed by ID (two queries)."""
+
+    documents = {
+        row["id"]: {"title": row["title"]}
+        for row in connection.execute(
+            """SELECT DISTINCT target.id, target.title
+                 FROM document_refs AS refs
+                 JOIN blocks AS source ON source.id = refs.source_block_id
+                 JOIN documents AS target ON target.id = refs.target_document_id
+                WHERE source.document_id = ? AND target.deleted_at IS NULL""",
+            (document_id,),
+        )
+    }
+    blocks = {
+        row["id"]: {
+            "document_id": row["document_id"],
+            "document_title": row["title"],
+            "type": row["type"],
+            "text": row["text"],
+        }
+        for row in connection.execute(
+            """SELECT DISTINCT target.id, target.document_id, target.type, target.text,
+                             target_doc.title
+                 FROM block_refs AS refs
+                 JOIN blocks AS source ON source.id = refs.source_block_id
+                 JOIN blocks AS target ON target.id = refs.target_block_id
+                 JOIN documents AS target_doc ON target_doc.id = target.document_id
+                WHERE source.document_id = ? AND target_doc.deleted_at IS NULL""",
+            (document_id,),
+        )
+    }
+    return {"documents": documents, "blocks": blocks}
+
+
+def _link_label(title: str) -> str:
+    """A title as the label of a ``[[id|label]]`` link (same rule as the editor)."""
+
+    return re.sub(r"\s+", " ", re.sub(r"[|\]]", " ", title)).strip()
+
+
+def _refresh_link_labels(node: dict, links: dict[str, dict]) -> None:
+    """Show links with their targets' current titles (stored labels go stale on rename).
+
+    Only the served copy changes: ``[[id|Old]]`` becomes ``[[id|Current]]``, and a
+    link's visible text is updated when it was the old label (a custom link text is
+    kept). Block references keep their stored label, which may be custom; their
+    current text is in ``resolved_links["blocks"]``.
+    """
+
+    documents = links["documents"]
+
+    def document_label(match: re.Match) -> str:
+        target = documents.get(match.group(1))
+        if target is None or match.group(2) is None:
+            return match.group(0)
+        label = _link_label(str(target["title"]))
+        return f"[[{match.group(1)}|{label}]]" if label else match.group(0)
+
+    def rewrite(value: str) -> str:
+        if "[[" in value:
+            value = _DOCUMENT_REF_RE.sub(document_label, value)
+        return value
+
+    def visit(value: object) -> object:
+        if isinstance(value, str):
+            return rewrite(value)
+        if isinstance(value, list):
+            return [visit(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if value.get("type") == "link" and isinstance(value.get("href"), str):
+            old_href = value["href"]
+            match = _DOCUMENT_REF_RE.fullmatch(old_href.strip())
+            new_href = rewrite(old_href)
+            if match and new_href != old_href:
+                old_label = (match.group(2) or "").strip()
+                new_match = _DOCUMENT_REF_RE.fullmatch(new_href.strip())
+                new_label = new_match.group(2) if new_match else old_label
+                content = value.get("content")
+                if isinstance(content, str) and content.strip() == old_label:
+                    content = new_label
+                elif (
+                    isinstance(content, list)
+                    and len(content) == 1
+                    and isinstance(content[0], dict)
+                    and isinstance(content[0].get("text"), str)
+                    and content[0]["text"].strip() == old_label
+                ):
+                    content = [{**content[0], "text": new_label}]
+                return {**value, "href": new_href, "content": content}
+            return value
+        return {key: visit(item) for key, item in value.items()}
+
+    if "[[" in node["text"]:
+        node["text"] = rewrite(node["text"])
+    if "[[" in json.dumps(node["content"]):
+        node["content"] = visit(node["content"])
 
 
 def document_subtree(path: Path, document_id: str, block_id: str | None = None) -> dict | None:
@@ -1958,6 +2278,15 @@ def apply_transaction(
                     ],
                 }
             )
+        # Every block this transaction wrote carries its timestamp: record the
+        # revision that last changed it (also in the redo snapshots).
+        connection.execute(
+            "UPDATE blocks SET revision = ? WHERE document_id = ? AND updated_at = ?",
+            (base_revision + 1, document_id, now),
+        )
+        for patch in patches:
+            for entry in patch["after"]:
+                _stamp_snapshot_revision(entry["snapshot"], now, base_revision + 1)
         _rebuild_document_references(connection, document_id)
         _rebuild_document_assets(connection, document_id)
         connection.execute(
@@ -1979,6 +2308,15 @@ def apply_transaction(
                 (transaction_id, document_id, request_hash, now),
             )
     return tree
+
+
+def _stamp_snapshot_revision(node: dict | None, now: str, revision: int) -> None:
+    if node is None:
+        return
+    if node.get("updated_at") == now:
+        node["revision"] = revision
+    for child in node.get("children", []):
+        _stamp_snapshot_revision(child, now, revision)
 
 
 def _history_target_ids(
@@ -2044,6 +2382,8 @@ def _block_snapshot(
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "user_attrs": user_attrs.get(row["id"], {}),
+            "provenance": _provenance.loads(row["provenance_json"]) or None,
+            "revision": row["revision"],
             "children": [],
         }
         for row in rows
@@ -2120,10 +2460,11 @@ def _restore_shallow_snapshot(
         )
     connection.execute(
         """UPDATE blocks SET type = ?, attrs_json = ?, content_json = ?, text = ?,
-           created_at = ?, updated_at = ? WHERE id = ?""",
+           created_at = ?, updated_at = ?, provenance_json = ?, revision = ? WHERE id = ?""",
         (
             node["type"], json.dumps(node["attrs"]), json.dumps(node["content"]),
-            node["text"], node["created_at"], node["updated_at"], node["id"],
+            node["text"], node["created_at"], node["updated_at"],
+            _provenance.dumps(node.get("provenance")), node.get("revision"), node["id"],
         ),
     )
     _replace_attrs(connection, node["id"], node["attrs"])
@@ -2141,11 +2482,13 @@ def _insert_snapshot(
     attrs = node["attrs"]
     connection.execute(
         """INSERT INTO blocks(id, document_id, parent_id, position, type, attrs_json,
-           content_json, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           content_json, text, created_at, updated_at, provenance_json, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             node["id"], document_id, parent_id, position, node["type"],
             json.dumps(attrs), json.dumps(node["content"]), node["text"],
             node["created_at"], node["updated_at"],
+            _provenance.dumps(node.get("provenance")), node.get("revision"),
         ),
     )
     _replace_attrs(connection, node["id"], attrs)
@@ -2255,15 +2598,21 @@ def _apply_operation(
         if operation.content is None and operation.text is not None and isinstance(content, dict):
             if isinstance(content.get("markdown"), str):
                 content = {**content, "markdown": operation.text}
+        provenance_json = (
+            row["provenance_json"]
+            if operation.provenance is None
+            else _provenance.dumps(_provenance.normalize(operation.provenance))
+        )
         connection.execute(
             """UPDATE blocks SET type = ?, attrs_json = ?, content_json = ?, text = ?,
-                      updated_at = ? WHERE id = ?""",
+                      updated_at = ?, provenance_json = ? WHERE id = ?""",
             (
                 operation.type if operation.type is not None else row["type"],
                 json.dumps(attrs),
                 json.dumps(content),
                 text,
                 now,
+                provenance_json,
                 operation.block_id,
             ),
         )
@@ -2320,11 +2669,18 @@ def _insert_block(
     attrs = operation.attrs or {}
     content = operation.content or {}
     text = operation.text or ""
+    # A block added in the editor was written here, unless the client says it was
+    # pasted, clipped from the web, written by Ask, ...
+    block_provenance = (
+        _provenance.normalize(operation.provenance)
+        if operation.provenance is not None
+        else {"source": "manual"}
+    )
     connection.execute(
         """INSERT INTO blocks(
                id, document_id, parent_id, position, type, attrs_json, content_json,
-               text, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               text, created_at, updated_at, provenance_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             block_id,
             document_id,
@@ -2336,6 +2692,7 @@ def _insert_block(
             text,
             now,
             now,
+            _provenance.dumps(block_provenance),
         ),
     )
     _replace_attrs(connection, block_id, attrs)
@@ -2417,16 +2774,24 @@ def _duplicate_block(connection: sqlite3.Connection, document_id: str, row: sqli
     position = row["position"] + 1 if operation.position is None else operation.position
     _shift_positions(connection, document_id, parent_id, position, 1)
     id_map: dict[str, str] = {}
+    document_provenance = _document_provenance(connection, document_id)
     for source in _subtree_rows(connection, row["id"]):
         new_id = _new_ulid()
         id_map[source["id"]] = new_id
         new_parent = id_map.get(source["parent_id"], parent_id)
         new_position = position if source["id"] == row["id"] else source["position"]
+        copied_provenance = _provenance.derived_copy(
+            _provenance.materialize(source["provenance_json"], document_provenance),
+            {"operation": "duplicate", "document_id": document_id,
+             "block_id": source["id"], "at": now},
+        )
         connection.execute(
             """INSERT INTO blocks(id, document_id, parent_id, position, type, attrs_json,
-               content_json, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               content_json, text, created_at, updated_at, provenance_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (new_id, document_id, new_parent, new_position, source["type"], source["attrs_json"],
-             source["content_json"], source["text"], now, now),
+             source["content_json"], source["text"], now, now,
+             _provenance.dumps(copied_provenance)),
         )
         _replace_attrs(connection, new_id, json.loads(source["attrs_json"]))
         source_user_attrs = connection.execute(
@@ -2453,11 +2818,17 @@ def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.
     _refresh_fts(connection, row["id"], document_id, first)
     _shift_positions(connection, document_id, row["parent_id"], row["position"] + 1, 1)
     new_id = _new_ulid()
+    split_provenance = _provenance.derived_copy(
+        _provenance.materialize(row["provenance_json"], _document_provenance(connection, document_id)),
+        {"operation": "split", "document_id": document_id, "block_id": row["id"], "at": now},
+    )
     connection.execute(
         """INSERT INTO blocks(id, document_id, parent_id, position, type, attrs_json,
-           content_json, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           content_json, text, created_at, updated_at, provenance_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (new_id, document_id, row["parent_id"], row["position"] + 1, row["type"],
-         row["attrs_json"], json.dumps({"markdown": second}), second, now, now),
+         row["attrs_json"], json.dumps({"markdown": second}), second, now, now,
+         _provenance.dumps(split_provenance)),
     )
     _replace_attrs(connection, new_id, json.loads(row["attrs_json"]))
     _refresh_fts(connection, new_id, document_id, second)
@@ -2497,6 +2868,15 @@ def _merge_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.
                        (merged, json.dumps({"markdown": merged}), now, row["id"]))
     _refresh_fts(connection, row["id"], document_id, merged)
     _delete_block(connection, document_id, next_row)
+
+
+def _document_provenance(connection: sqlite3.Connection, document_id: str) -> dict:
+    row = connection.execute(
+        "SELECT provenance_json, source_kind FROM documents WHERE id = ?", (document_id,)
+    ).fetchone()
+    if row is None:
+        return {"source": _provenance.DEFAULT_SOURCE}
+    return _provenance.document_provenance(row["provenance_json"], row["source_kind"])
 
 
 def _validate_parent(
@@ -2645,14 +3025,25 @@ def _parse_sequence(
     """Blocks from ``tokens[index:]``; ``indent`` is the enclosing list item's content column."""
 
     blocks: list[ImportedBlock] = []
+    pending_provenance: dict[str, object] | None = None
     while index < len(tokens):
         token = tokens[index]
         if stop and token.type == stop and token.nesting == -1:
             return blocks, index + 1
         if token.type in {"bullet_list_open", "ordered_list_open"}:
             nested, index = _parse_list(tokens, lines, index, indent)
+            if nested and pending_provenance is not None:
+                nested[0] = replace(nested[0], provenance=pending_provenance)
+                pending_provenance = None
             blocks.extend(nested)
             continue
+        if token.type == "html_block":
+            # Our own export writes a block's provenance on the line before it.
+            restored = _provenance.parse_comment(token.content)
+            if restored is not None:
+                pending_provenance = restored
+                index += 1
+                continue
         if token.type == "heading_open":
             block, index = _parse_inline_block(tokens, lines, index, "heading", indent)
         elif token.type == "paragraph_open":
@@ -2678,6 +3069,9 @@ def _parse_sequence(
         else:
             index += 1
             continue
+        if pending_provenance is not None:
+            block = replace(block, provenance=pending_provenance)
+            pending_provenance = None
         blocks.append(block)
     return blocks, index
 
