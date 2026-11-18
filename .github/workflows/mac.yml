@@ -2,7 +2,7 @@ name: macOS app
 
 on:
   push:
-    paths: ["mac/**", "backend/app/batch.py", ".github/workflows/mac.yml"]
+    paths: ["mac/**", "backend/app/batch.py", "backend/app/auth.py", ".github/workflows/mac.yml"]
   workflow_dispatch:
 
 jobs:
@@ -18,6 +18,11 @@ jobs:
         run: swift build
       - name: Test and render snapshots
         run: SNAPSHOT_DIR="$PWD/snapshots" swift test
+      # Finding's timing and request-count measurements, alone on the machine
+      # (prints "PERF <name>: <value>" lines; see Tests/FortressKitTests/FindingPerfTests.swift).
+      - name: Finding performance
+        if: success() || failure()
+        run: FINDING_PERF=1 swift test --filter FindingPerf
       - name: Upload snapshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -32,6 +37,10 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 40
     steps:
+      - name: Make the backend token
+        # The backend requires it (backend/app/auth.py); the seed script and the tests
+        # send it (BackendAuth takes FORTRESS_TOKEN from the environment).
+        run: echo "FORTRESS_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
       - name: Start the backend
@@ -41,6 +50,9 @@ jobs:
           NOTES_DIR=$(mktemp -d) EMBEDDINGS_ENABLED=false VISION_ENABLED=false OPENROUTER_API_KEY= \
             nohup .venv/bin/uvicorn app.main:app --port 8000 > "$RUNNER_TEMP/backend.log" 2>&1 &
           for i in $(seq 1 120); do curl -sf http://127.0.0.1:8000/api/health && break; sleep 1; done
+          # Without the token the API refuses; with it, it answers.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/navigation)" = 401
+          curl -sf -H "X-Fortress-Token: $FORTRESS_TOKEN" http://127.0.0.1:8000/api/navigation > /dev/null
       - name: Seed notes
         run: python3 mac/Scripts/seed_backend.py http://127.0.0.1:8000 300
       - name: Integration tests

@@ -161,6 +161,13 @@ pub fn convert(rt: &RichText, opts: Options) -> Converted {
             .collect();
         obj_offset += last - first;
         let rendered = math::render(&segments, out.all_math);
+        if rendered.latex.is_none() && rendered.mathml.is_none() {
+            let raw: String = out.rich.text.chars().skip(s).take(e - s).collect();
+            out.notes.push(format!(
+                "equation {:?} could not be converted to LaTeX or MathML; only its linear text is kept",
+                raw.chars().take(80).collect::<String>()
+            ));
+        }
         if out.all_math && out.math.is_none() {
             let raw: String = out.rich.text.chars().skip(s).take(e - s).collect();
             out.math = Some((raw, rendered.latex.clone(), rendered.mathml.clone()));
@@ -176,6 +183,21 @@ pub fn convert(rt: &RichText, opts: Options) -> Converted {
     }
     out.rich.marks = merge_marks(std::mem::take(&mut out.rich.marks));
     out
+}
+
+/// Characters that are never text: C0/C1 control characters other than tab
+/// and line feed (NUL, BEL, ESC, form feed…) and the noncharacters
+/// U+xFFFE/U+xFFFF become U+FFFD, so the text is safe for XML, HTML and
+/// databases. One character is replaced by one, so offsets are unchanged.
+/// Bidirectional controls (U+202A–U+202E, U+2066–U+2069) are kept: they are
+/// legitimate in right-to-left text.
+pub fn clean_char(c: char) -> char {
+    let nonchar = (c as u32) & 0xFFFE == 0xFFFE;
+    if (c.is_control() && c != '\t' && c != '\n') || nonchar {
+        '\u{FFFD}'
+    } else {
+        c
+    }
 }
 
 /// UTF-16 [start, end) of each run. Run k ends at `indices[k]`; the last run
@@ -244,7 +266,7 @@ pub fn convert_runs(
         if !marker && !fmt_of(ri).map(|f| f.hidden).unwrap_or(false) {
             let ch = match ch {
                 '\u{000B}' | '\r' => '\n',
-                c => c,
+                c => clean_char(c),
             };
             chars.push((ch, ri));
         }
@@ -592,6 +614,27 @@ const SOURCE_LABELS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn control_characters_are_replaced_one_for_one() {
+        for c in [
+            '\u{0}',
+            '\u{7}',
+            '\u{1B}',
+            '\u{C}',
+            '\u{7F}',
+            '\u{85}',
+            '\u{FFFE}',
+            '\u{FFFF}',
+            '\u{1FFFF}',
+        ] {
+            assert_eq!(clean_char(c), '\u{FFFD}', "{c:?}");
+        }
+        for c in ['\t', '\n', 'a', 'é', '\u{202E}', '\u{200D}', '😀'] {
+            assert_eq!(clean_char(c), c, "{c:?}");
+        }
+    }
+
     use super::*;
 
     fn m(start: usize, end: usize, kind: MarkKind) -> Mark {

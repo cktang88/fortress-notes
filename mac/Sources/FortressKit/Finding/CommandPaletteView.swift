@@ -10,6 +10,8 @@ struct CommandPaletteView: View {
     @Environment(AppModel.self) private var model
     @State private var selectedID: String?
     @State private var isShown = false
+    /// Folded titles (built once per sidebar change) and the last query's sections.
+    @State private var cache = PaletteCache()
     @FocusState private var isFieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -51,12 +53,10 @@ struct CommandPaletteView: View {
         .accessibilityAddTraits(.isModal)
     }
 
+    /// Ranked locally from the sidebar tree: no network per keystroke, and nothing at all
+    /// when only the hover or selection changed.
     private var sections: [PaletteSection] {
-        let notes = PaletteCatalog.notes(in: model.navigation)
-        let recent = model.navigation.recent.map { document in
-            PaletteNote(id: document.id, title: document.title, folder: notes.first { $0.id == document.id }?.folder)
-        }
-        return PaletteCatalog.sections(for: model.paletteQuery, notes: notes, recent: recent)
+        cache.sections(for: model.paletteQuery, navigation: model.navigation)
     }
 
     private func currentSelection(in items: [PaletteItem]) -> String? {

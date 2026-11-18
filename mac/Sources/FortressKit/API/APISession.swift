@@ -54,6 +54,8 @@ extension APIClient {
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
+        // The backend wants this launch's token on every request (BackendAuth).
+        configuration.httpAdditionalHeaders = BackendAuth.headers
         return configuration
     }
 

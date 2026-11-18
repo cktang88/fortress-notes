@@ -1,0 +1,90 @@
+# Vendored copy of onenote_parser 2.1.0 (MPL-2.0) with fortress-onenote
+# hardening patches; see ../PATCHES.md. Normalised from the crates.io
+# package: binaries, examples and dev-dependencies removed.
+
+[package]
+edition = "2024"
+rust-version = "1.85"
+name = "onenote_parser"
+version = "2.1.0"
+authors = ["Markus Siemens <markus@m-siemens.de>"]
+build = false
+exclude = [
+    "/tests",
+    "/benches",
+]
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "A parser for Microsoft OneNote® files"
+readme = "README.md"
+keywords = [
+    "onenote",
+    "parser",
+]
+categories = ["parser-implementations"]
+license = "MPL-2.0"
+repository = "https://github.com/msiemens/onenote.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+backtrace = []
+default = ["native-fs"]
+native-fs = []
+onepkg = ["dep:cab"]
+
+[lib]
+name = "onenote_parser"
+path = "src/lib.rs"
+
+[dependencies.bytes]
+version = "1.11"
+
+[dependencies.cab]
+version = "0.6"
+optional = true
+
+[dependencies.encoding_rs]
+version = "0.8"
+
+[dependencies.enum-primitive-derive]
+version = "0.3"
+
+[dependencies.itertools]
+version = "0.14"
+
+[dependencies.log]
+version = "0.4"
+
+[dependencies.lru]
+version = "0.18"
+
+[dependencies.num-traits]
+version = "0.2"
+
+[dependencies.onenote_parser-macros]
+version = "=2.1.0"
+
+[dependencies.sanitize-filename]
+version = "0.6"
+
+[dependencies.thiserror]
+version = "2.0"
+
+[dependencies.time]
+version = "0.3"
+features = ["macros"]
+
+[dependencies.typed-path]
+version = "0.12.3"
+
+[dependencies.uuid]
+version = "1.19"
+
+[dependencies.widestring]
+version = "1.2"
+

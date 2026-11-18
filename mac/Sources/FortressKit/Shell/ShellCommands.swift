@@ -89,6 +89,6 @@ public final class FortressAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
-        model.backend.stop(waitUpTo: 3)
+        model.backend.terminateForQuit()
     }
 }
