@@ -803,18 +803,30 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         defer { EditorMetrics.restyle += EditorMetrics.since(restyleStart) }
         guard let first = touched.first, let last = touched.last else { return }
         let whole = NSUnionRange(first, last)
-        if touched.count >= 16, uniform, let info = touchedInfo, Self.isPlainAndStyled(storage, whole) {
-            // Many paragraphs of one kind with no marks (pasted lines): one style for all,
-            // set in one go instead of paragraph by paragraph (25,000 pasted lines took a
-            // second to style one at a time).
-            let attributes = theme.cachedAttributes(info: info, marks: InlineMarks())
-            for key in EditorTheme.presentationKeys where attributes[key] == nil {
-                storage.removeAttribute(key, range: whole)
-            }
-            storage.addAttributes(attributes, range: whole)
+        if touched.count >= 16, uniform, let info = touchedInfo, Self.isPlainAndStyled(storage, whole),
+           Self.has(theme.cachedAttributes(info: info, marks: InlineMarks()), throughout: whole, in: storage) {
+            // Many paragraphs of one kind with no marks (pasted lines) already styled as
+            // that kind (they came with the typing attributes): nothing to restyle.
+            // Styling them paragraph by paragraph took a second for 25,000 lines.
         } else {
             for paragraph in touched { theme.restyle(storage, range: paragraph) }
         }
+    }
+
+    /// Whether every presentation attribute in `range` is the one in `attributes` (and
+    /// none it lacks is set), checked a key at a time over the whole range.
+    private static func has(_ attributes: [NSAttributedString.Key: Any], throughout range: NSRange, in storage: NSTextStorage) -> Bool {
+        for key in EditorTheme.presentationKeys {
+            var effective = NSRange()
+            let value = storage.attribute(key, at: range.location, longestEffectiveRange: &effective, in: range)
+            guard effective == range else { return false }
+            switch (value, attributes[key]) {
+            case (nil, nil): continue
+            case (let found?, let expected?): if !(found as AnyObject).isEqual(expected) { return false }
+            default: return false
+            }
+        }
+        return true
     }
 
     /// No marks, nodes or attachments anywhere in `range`, and all of it styled by the

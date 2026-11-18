@@ -255,10 +255,17 @@ final class PerfEditor {
         var blocks: [EditorBlock] = []
         // Decoding runs off the main thread (EditorSession.decode); timed on its own.
         let decode = milliseconds { blocks = BlockCodec.flatten(document.children, resolved: document.resolvedLinks) }
+        var stages: [(String, Double)] = []
         let open = milliseconds {
-            editor = PerfEditor(document: document, decoded: blocks)
-            editor.open()
+            stages.append(("makeEditor", milliseconds { editor = PerfEditor(document: document, decoded: blocks) }))
+            stages.append(("loadText", milliseconds { editor.controller.load(editor.session.initialBlocks) }))
+            stages.append(("readBack", milliseconds { editor.session.resetBase(to: editor.controller.currentBlocks()) }))
+            stages.append(("layout", milliseconds { editor.layoutViewport() }))
         }
+        for (name, time) in stages { PerfLog.record("open.firstPaint.part.\(name)", time) }
+        let controller = editor.controller
+        let session = editor.session
+        session.currentBlocks = { controller.currentBlocks() }
         PerfLog.record("open.decode(off main)", decode)
         PerfLog.record("open.firstPaint(2000 blocks, 100 images, 20 tables 50x8, 10 columns, 3x50k)", open, budget: 150)
         PerfLog.record("open.firstPaint+decode", open + decode, budget: 150)
@@ -298,7 +305,7 @@ final class PerfEditor {
             let other = PerfEditor(document: document, decoded: blocks)
             other.open()
         }
-        PerfLog.record("open.warm", again, budget: 150)
+        PerfLog.record("open.warm(firstPaint, second note in the process)", again, budget: 150)
     }
 
     @Test func keystrokeLatency() throws {

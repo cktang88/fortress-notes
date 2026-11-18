@@ -157,7 +157,15 @@ private func nodes(_ block: EditorBlock) -> Int { block.runs.filter { $0.node !=
         let (editor, window, live) = try table()
         live.focus(row: 0, column: 0, atEnd: true)
         let cell = try #require(live.editor)
+        // Undo while the cell is being edited.
+        cell.insertText(" x", replacementRange: cell.selectedRange())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        window.undoManager?.undo()
+        #expect(live.table.cell(row: 0, column: 0)?.plainText == "R0C0", "undo in the cell: \(window.undoManager?.canUndo ?? false)")
+        cell.setSelectedRange(NSRange(location: cell.string.utf16.count, length: 0))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         cell.insertText(" edited", replacementRange: cell.selectedRange())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         // Leave the table: the cell is drawn again, from its new text.
         window.makeFirstResponder(editor.textView)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
@@ -293,5 +301,12 @@ private func nodes(_ block: EditorBlock) -> Int { block.runs.filter { $0.node !=
         blocks[table].table?.setRuns([InlineRun("cell again")], row: 1, column: 1); check("table cell again")
         blocks[table].table?.rows[2].cells[0].attrs["background"] = .string("red"); check("cell colour")
         blocks[table].table?.insertRow(at: 1); check("row added")
+        // From a baseline that never made the table's rows (as a note's baseline is).
+        base = SyncedTree(blocks, reusing: nil, lazily: true)
+        blocks[table].table?.setRuns([InlineRun("from a baseline")], row: 0, column: 0); check("cell text, lazy baseline")
+        blocks[table].table?.rows[0].cells[1].attrs["align"] = .string("right"); check("cell attr after")
+        base = SyncedTree(blocks, reusing: nil, lazily: true)
+        blocks[table].table?.rows[0].cells[2].attrs["align"] = .string("center"); blocks[5].runs = [InlineRun("x")]
+        check("cell attr and text, lazy baseline")
     }
 }

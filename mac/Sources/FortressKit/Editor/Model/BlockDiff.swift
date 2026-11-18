@@ -92,9 +92,13 @@ public struct SyncedTree: Hashable, Sendable {
             tree.sources[block.id] = source
             tree.fields[block.id] = lazily ? nil : source.fields
             if block.kind == .table, let table = block.table {
-                if let oldTable = old.table, let inner = previous.tableTree(block.id),
+                if let oldTable = old.table, let inner = previous.tables[block.id],
                    let patched = patchingTable(inner, from: oldTable, to: table, lazily: lazily) {
                     tree.tables[block.id] = patched
+                } else if previous.tables[block.id] == nil, let oldTable = old.table, BlockDiff.sameShape(oldTable, table) {
+                    // Never made (a baseline's): still not needed; the cells' updates come
+                    // from comparing the two tables (`BlockDiff.updates`).
+                    tree.tables[block.id] = nil
                 } else {
                     tree.tables[block.id] = Builder(previous: previous, lazily: lazily).table(table, id: block.id, unchanged: false)
                 }
@@ -134,10 +138,10 @@ public struct SyncedTree: Hashable, Sendable {
     /// A table's rows and cells as a tree: kept, or made now from the table's block (a
     /// baseline leaves them until a table changes: 20 tables of 400 cells are 24,000
     /// nodes nobody needs when a paragraph is edited).
-    func tableTree(_ id: String) -> SyncedTree? {
+    func tableTree(_ id: String, lazily: Bool = true) -> SyncedTree? {
         if let kept = tables[id] { return kept }
         guard case .block(let block)? = sources[id], block.kind == .table, let table = block.table else { return nil }
-        return Builder(previous: nil, lazily: true).table(table, id: id, unchanged: false, always: true)
+        return Builder(previous: nil, lazily: lazily).table(table, id: id, unchanged: false, always: true)
     }
 
     /// A node's fields, encoding them now if they were left for later.
@@ -353,6 +357,51 @@ public enum BlockDiff {
                 } else {
                     operations += Self.operations(from: before, to: rows, root: id)
                 }
+            } else if case .block(let old)? = base.sources[id], case .block(let new)? = result.sources[id],
+                      let oldTable = old.table, let newTable = new.table {
+                guard let cells = cellUpdates(from: oldTable, to: newTable) else { return nil }
+                operations += cells
+            }
+        }
+        return operations
+    }
+
+    /// Whether two versions of a table have the same rows and cells (only their text,
+    /// colours or alignment may differ).
+    static func sameShape(_ old: TableContent, _ new: TableContent) -> Bool {
+        guard old.rows.count == new.rows.count else { return false }
+        for (oldRow, row) in zip(old.rows, new.rows) {
+            guard oldRow.id == row.id, oldRow.cells.count == row.cells.count else { return false }
+            for (oldCell, cell) in zip(oldRow.cells, row.cells) where oldCell != cell {
+                guard oldCell.id == cell.id, oldCell.paragraphId == cell.paragraphId, oldCell.nested == cell.nested,
+                      (oldCell.paragraphFields == nil) == (cell.paragraphFields == nil) else { return false }
+            }
+        }
+        return true
+    }
+
+    /// Updates for the rows, cells and cell paragraphs that differ between two tables of
+    /// the same shape, in document order (what the trees' diff would give).
+    private static func cellUpdates(from old: TableContent, to new: TableContent) -> [BlockOperation]? {
+        guard sameShape(old, new) else { return nil }
+        var operations: [BlockOperation] = []
+        func update(_ id: String, _ before: BlockFields?, _ after: BlockFields?) {
+            guard let before, let after, before != after else { return }
+            var update = BlockOperation(operation: .update, blockId: id)
+            let patch = attrsPatch(from: before.attrs, to: after.attrs)
+            if !patch.isEmpty { update.attrs = patch }
+            if before.content != after.content { update.content = after.content }
+            if update.attrs != nil || update.content != nil { operations.append(update) }
+        }
+        for (oldRow, row) in zip(old.rows, new.rows) {
+            if oldRow.attrs != row.attrs {
+                update(row.id, BlockFields(type: "table_row", attrs: oldRow.attrs), BlockFields(type: "table_row", attrs: row.attrs))
+            }
+            for (oldCell, cell) in zip(oldRow.cells, row.cells) where oldCell != cell {
+                if oldCell.attrs != cell.attrs {
+                    update(cell.id, BlockFields(type: "table_cell", attrs: oldCell.attrs), BlockFields(type: "table_cell", attrs: cell.attrs))
+                }
+                update(cell.paragraphId, oldCell.paragraphFields, cell.paragraphFields)
             }
         }
         return operations
@@ -457,7 +506,7 @@ public enum BlockDiff {
                 parent.updateValue(targetParent, forKey: id)
             }
             // A table's rows and cells: only when the table changed (or is new).
-            if let rows = result.tables[id] {
+            if let rows = result.tables[id] ?? (base.sources[id] != result.sources[id] ? result.tableTree(id, lazily: false) : nil) {
                 let isNew = replaced.contains(id) || base.parent[id] == nil
                 if isNew || base.sources[id] != result.sources[id] {
                     operations += Self.operations(from: isNew ? SyncedTree() : base.tableTree(id) ?? SyncedTree(), to: rows, root: id)
