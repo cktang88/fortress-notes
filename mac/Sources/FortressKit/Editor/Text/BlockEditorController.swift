@@ -597,7 +597,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     private func flash(_ range: NSRange) {
         guard let manager = textView.textLayoutManager, let textRange = textRange(for: range) else { return }
-        let color = NSColor.themeSelection
+        let color = NSColor.themeAccent.withAlphaComponent(0.12)
         manager.addRenderingAttribute(.backgroundColor, value: color, for: textRange)
         Task { @MainActor [weak manager] in
             try? await Task.sleep(for: .milliseconds(1200))
