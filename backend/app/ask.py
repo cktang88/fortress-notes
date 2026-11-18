@@ -129,6 +129,16 @@ def _window(text: str, terms: list[str]) -> str:
     return text[start : start + SOURCE_CHARS]
 
 
+def _with_asset_text(row: dict[str, object]) -> str:
+    """A paragraph's text plus the text read from its pictures and PDFs (OCR)."""
+
+    text = str(row.get("text") or "")
+    asset_text = str(row.get("asset_text") or "").strip()
+    if not asset_text:
+        return text
+    return f"{text}\n\n[Text in attached picture/PDF]\n{asset_text}".lstrip()
+
+
 class _Sources:
     """Numbered passages shown to the model, deduplicated by block."""
 
@@ -141,7 +151,7 @@ class _Sources:
         added = []
         for row in rows:
             block_id = str(row["id"])
-            text = str(row.get("text") or "")
+            text = _with_asset_text(row)
             if block_id in self._block_ids or not text.strip():
                 continue
             self._block_ids.add(block_id)
@@ -298,6 +308,9 @@ def read_note(name: str) -> list[dict[str, object]]:
             visit(node["children"])
 
     visit(tree["children"])
+    details = block_query.block_details(db_path, [str(row["id"]) for row in rows])
+    for row in rows:
+        row["asset_text"] = details.get(str(row["id"]), {}).get("asset_text", "")
     return rows
 
 

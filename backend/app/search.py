@@ -231,7 +231,9 @@ def unified_search(
         # note covers every query word across its title and text ("hotel <name>": the
         # name in the title, "hotel" in the paragraph). Boost by the share it covers.
         if wanted:
-            words = block_query.query_tokens(f"{row['document_title']} {row['text']}")
+            words = block_query.query_tokens(
+                f"{row['document_title']} {row['text']} {row['asset_text']}"
+            )
             covered = sum(1 for token in wanted if any(w.startswith(token) for w in words))
             fused[block_id] *= 1.0 + _COVERAGE_WEIGHT * covered / len(wanted)
     results: list[dict[str, object]] = []
@@ -243,6 +245,11 @@ def unified_search(
             continue
         per_document[document_id] = per_document.get(document_id, 0) + 1
         snippet, highlights = _snippet(str(row["text"]), tokens)
+        if not highlights and row["asset_text"]:
+            # Matched by the text read from a picture/PDF: show that passage instead.
+            in_asset, asset_highlights = _snippet(str(row["asset_text"]), tokens)
+            if asset_highlights or not snippet:
+                snippet, highlights = in_asset, asset_highlights
         results.append(
             {
                 "block_id": block_id,

@@ -209,6 +209,22 @@ CREATE TABLE IF NOT EXISTS block_assets (
         REFERENCES assets(content_hash, media_name) ON DELETE CASCADE
 );
 
+-- Text read from image/PDF assets (app/ocr.py), one row per content and model;
+-- assets lacking a finished row for the current model are its queue.
+CREATE TABLE IF NOT EXISTS ocr_results (
+    content_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+    text TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL DEFAULT '',
+    pages INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    duration_ms INTEGER,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (content_hash, model)
+);
+
 CREATE TABLE IF NOT EXISTS transaction_receipts (
     transaction_id TEXT PRIMARY KEY,
     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -596,6 +612,16 @@ _CHANGE_TRIGGERS = {
         "AFTER DELETE ON document_history", _bump("OLD.document_id")
     ),
 }
+# A picture's OCR state and text show in the info of every note that contains it.
+for _event, _row in (("insert", "NEW"), ("update", "NEW")):
+    _CHANGE_TRIGGERS[f"ocr_results_changed_{_event}"] = (
+        f"AFTER {_event.upper()} ON ocr_results",
+        _bump(
+            "SELECT blocks.document_id FROM block_assets"
+            " JOIN blocks ON blocks.id = block_assets.block_id"
+            f" WHERE block_assets.content_hash = {_row}.content_hash"
+        ),
+    )
 for _table, _column in (
     ("block_user_attrs", "block_id"),
     ("block_refs", "source_block_id"),
@@ -722,7 +748,9 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
     """Register older generated media files and migrate their text sidecars.
 
     Only ULID-named upload files with a supported media extension are considered.
-    Existing asset rows and hash sidecars are preserved, making startup retries safe.
+    A ``<id>.txt`` sidecar (written by the OCR before ``ocr.py``) fills an empty
+    row's text until the OCR queue reads the file again. Existing rows are
+    preserved, making startup retries safe.
     """
     initialize(db_path)
     if not assets_path.is_dir():
@@ -791,13 +819,6 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
                     registered_at,
                 ),
             )
-            if text:
-                hash_sidecar = assets_path / f"{content_hash}.txt"
-                if not hash_sidecar.exists() and not hash_sidecar.is_symlink():
-                    try:
-                        hash_sidecar.write_text(text, encoding="utf-8")
-                    except OSError:
-                        pass
             registered += 1
         if changed:
             document_ids = connection.execute("SELECT id FROM documents").fetchall()

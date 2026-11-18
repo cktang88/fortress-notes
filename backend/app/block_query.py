@@ -188,7 +188,11 @@ def allowed_block_ids(path: Path, filters: BlockSearchFilters | None) -> set[str
 
 
 def block_details(path: Path, block_ids: list[str]) -> dict[str, dict[str, object]]:
-    """Display details for active blocks, keyed by block ID."""
+    """Display details for active blocks, keyed by block ID.
+
+    ``asset_text`` is the text read from the block's pictures and PDFs (OCR or a
+    PDF's text layer): searchable and quotable, but not part of the note body.
+    """
 
     if not block_ids:
         return {}
@@ -197,7 +201,14 @@ def block_details(path: Path, block_ids: list[str]) -> dict[str, dict[str, objec
     with connection_scope(path) as connection:
         rows = connection.execute(
             f"""SELECT blocks.id, blocks.document_id, blocks.type, blocks.text,
-                       blocks.updated_at, documents.title AS document_title
+                       blocks.updated_at, documents.title AS document_title,
+                       COALESCE((
+                           SELECT group_concat(assets.text, char(10))
+                             FROM block_assets
+                             JOIN assets USING (content_hash, media_name)
+                            WHERE block_assets.block_id = blocks.id
+                              AND trim(assets.text) <> ''
+                       ), '') AS asset_text
                   FROM blocks JOIN documents ON documents.id = blocks.document_id
                  WHERE blocks.id IN ({placeholders}) AND documents.deleted_at IS NULL""",
             block_ids,
