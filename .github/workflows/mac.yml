@@ -37,7 +37,7 @@ jobs:
       - name: Start the backend
         working-directory: backend
         run: |
-          uv sync --frozen
+          uv sync --frozen --python 3.13
           NOTES_DIR=$(mktemp -d) EMBEDDINGS_ENABLED=false VISION_ENABLED=false OPENROUTER_API_KEY= \
             nohup .venv/bin/uvicorn app.main:app --port 8000 > "$RUNNER_TEMP/backend.log" 2>&1 &
           for i in $(seq 1 120); do curl -sf http://127.0.0.1:8000/api/health && break; sleep 1; done
