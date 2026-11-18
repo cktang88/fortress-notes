@@ -52,7 +52,7 @@ final class AttachmentContext {
             return image
         }
         Task {
-            if let (data, _) = try? await URLSession.shared.data(from: url), let image = NSImage(data: data) {
+            if let (data, _) = try? await APIClient.sharedSession.data(from: url), let image = NSImage(data: data) {
                 images[url] = image
                 relayout?()
             }

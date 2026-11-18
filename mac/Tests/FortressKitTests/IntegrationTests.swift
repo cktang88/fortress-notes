@@ -168,6 +168,20 @@ struct IntegrationTests {
         report("30 selections 2 ms apart, then settle", "after", requests: api.store.stats.requests,
                timing: Timing(samples: [clock.now - start]))
     }
+    @Test func backendRequiresThisLaunchsToken() async throws {
+        let api = APIClient(baseURL: Self.baseURL!)
+        #expect(try await api.healthInstance() == BackendAuth.instanceID)
+        _ = try await api.navigation(recentLimit: 1)
+        // Without the token (a session without BackendAuth.headers): refused.
+        let bare = URLSession(configuration: .ephemeral)
+        let (_, response) = try await bare.data(from: Self.baseURL!.appending(path: "api/navigation"))
+        #expect((response as? HTTPURLResponse)?.statusCode == 401)
+        var browser = URLRequest(url: Self.baseURL!.appending(path: "api/backups"))
+        browser.httpMethod = "POST"
+        browser.setValue("https://evil.example", forHTTPHeaderField: "Origin")
+        let (_, refused) = try await APIClient.sharedSession.data(for: browser)
+        #expect((refused as? HTTPURLResponse)?.statusCode == 403)
+    }
 }
 
 /// The backend the integration tests use (`FORTRESS_INTEGRATION_URL`), if any.

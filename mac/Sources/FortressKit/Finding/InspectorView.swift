@@ -4,16 +4,21 @@ import SwiftUI
 /// "Seen before" for the block being written, related notes and backlinks.
 struct InspectorView: View {
     @Environment(AppModel.self) private var model
+    @State private var inspector = InspectorModel()
 
-    @State private var info = NoteInfo()
-    @State private var seenBefore: [RelatedResult] = []
-    @State private var related: [RelatedResult] = []
-    @State private var backlinks: [Backlink] = []
-    @State private var loadedNoteId: String?
+    private var info: NoteInfo { inspector.info }
+    private var seenBefore: [RelatedResult] { inspector.seenBefore }
+    private var related: [RelatedResult] { inspector.related }
+    private var backlinks: [Backlink] { inspector.backlinks }
 
     var body: some View {
+        let noteId = model.openNoteId
+        // Cheap per render: one walk of the sidebar tree that stops at the note.
+        let revision = noteId.flatMap { NoteInfo.updatedAt(of: $0, in: model.navigation) }
+        let focus = FocusKey(blockId: model.focusedBlockId,
+                             version: model.focusedBlockId.flatMap { model.savedBlockVersions[$0] })
         Group {
-            if let noteId = model.openNoteId {
+            if noteId != nil {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         InfoSection(info: info, provenance: info.provenance)
@@ -27,13 +32,6 @@ struct InspectorView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .animation(.smooth(duration: 0.25), value: seenBefore)
                 }
-                .task(id: noteId) { await loadNote(noteId) }
-                .task(id: InfoKey(noteId: noteId, edited: editedStamp(noteId))) {
-                    await loadInfo(noteId)
-                }
-                .task(id: SeenKey(noteId: noteId, blockId: model.focusedBlockId)) {
-                    await loadSeenBefore(noteId: noteId, blockId: model.focusedBlockId)
-                }
             } else {
                 ContentUnavailableView(
                     "No Note Selected", systemImage: "sidebar.trailing",
@@ -41,71 +39,26 @@ struct InspectorView: View {
                     .controlSize(.small)
             }
         }
+        .onChange(of: NoteKey(noteId: noteId, revision: revision), initial: true) { _, key in
+            let navigation = model.navigation
+            inspector.show(noteId: key.noteId, revision: key.revision,
+                           fallback: key.noteId.map { NoteInfo.from(navigation: navigation, documentId: $0) } ?? NoteInfo(),
+                           api: model.api)
+            inspector.focus(blockId: model.focusedBlockId, version: focus.version, api: model.api)
+        }
+        .onChange(of: focus, initial: true) { _, focus in
+            inspector.focus(blockId: focus.blockId, version: focus.version, api: model.api)
+        }
     }
 
-    private struct InfoKey: Hashable {
-        var noteId: String
-        var edited: String?
+    private struct NoteKey: Equatable {
+        var noteId: String?
+        var revision: String?
     }
 
-    private func editedStamp(_ noteId: String) -> String? {
-        NoteInfo.from(navigation: model.navigation, documentId: noteId).updatedAt?.ISO8601Format()
-    }
-
-    private struct SeenKey: Hashable {
-        var noteId: String
+    private struct FocusKey: Equatable {
         var blockId: String?
-    }
-
-    // MARK: Loading
-
-    private func loadNote(_ noteId: String) async {
-        if loadedNoteId != noteId {
-            info = NoteInfo.from(navigation: model.navigation, documentId: noteId)
-            related = []
-            backlinks = []
-            seenBefore = []
-            loadedNoteId = noteId
-        }
-        let api = model.api
-        async let relatedNotes = try? api.related(documentId: noteId, count: 8)
-        async let links = try? api.backlinks(documentId: noteId)
-        let (loadedRelated, loadedLinks) = await (relatedNotes, links)
-        guard !Task.isCancelled else { return }
-        related = loadedRelated ?? []
-        backlinks = loadedLinks ?? []
-    }
-
-    /// Dates, provenance and counts from `…/info`; refetched (quietly, after a pause)
-    /// whenever the note is edited. Falls back to counting the document itself.
-    private func loadInfo(_ noteId: String) async {
-        if info.words != nil { try? await Task.sleep(for: .milliseconds(800)) }
-        guard !Task.isCancelled else { return }
-        let api = model.api
-        do {
-            let loaded = try await api.documentInfo(id: noteId)
-            guard !Task.isCancelled, model.openNoteId == noteId else { return }
-            info = NoteInfo(loaded)
-        } catch {
-            guard let document = try? await api.document(id: noteId), !Task.isCancelled else { return }
-            var fallback = NoteInfo.from(navigation: model.navigation, documentId: noteId)
-            fallback.add(document)
-            fallback.backlinksIn = Set(backlinks.map(\.sourceDocumentId)).count
-            info = fallback
-        }
-    }
-
-    /// Passages like the block being written; refreshed 400 ms after the caret settles.
-    private func loadSeenBefore(noteId: String, blockId: String?) async {
-        guard let blockId else {
-            seenBefore = []
-            return
-        }
-        try? await Task.sleep(for: .milliseconds(400))
-        guard !Task.isCancelled else { return }
-        let results = (try? await model.api.related(documentId: noteId, blockId: blockId, count: 3)) ?? []
-        guard !Task.isCancelled else { return }
-        seenBefore = results.filter { $0.matchedBlockId != nil && !$0.matchedBlockText.isEmpty }
+        var version: Int?
     }
 
     // MARK: Sections
@@ -125,7 +78,11 @@ struct InspectorView: View {
 
     private var relatedSection: some View {
         InspectorSection(title: "Related notes", symbol: "point.3.connected.trianglepath.dotted") {
-            if related.isEmpty {
+            if related.isEmpty, let error = inspector.loadError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+            } else if related.isEmpty {
                 Text("Notes on the same subject show up here as you write.")
                     .font(.callout)
                     .foregroundStyle(.tertiary)

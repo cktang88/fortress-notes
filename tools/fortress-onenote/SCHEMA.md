@@ -37,6 +37,8 @@ manifests simply lack them.
 | File identities | lower-case UUID without braces (`file_identity`). |
 | Assets | Referenced by name `<sha256>.<ext>`; look the name up in the top-level `assets` map. Identical content is stored once. Names never derive from file names in the notebook. |
 | Untrusted strings | `filename`, `original_name`, titles and all text come from the user's files. Use them for display only, never as paths. |
+| Control characters | In block text and page titles, control characters other than tab and line feed (NUL, BEL, ESC, form feed, C1 controls) and the noncharacters U+xFFFE/U+xFFFF are replaced by U+FFFD (one for one, offsets unchanged). Bidirectional controls (U+202A–U+202E, U+2066–U+2069), zero-width characters and very long strings are kept as written: escape text for its destination. |
+| Links | `href`, `hyperlink`, embed `url` and `onenote.section_file` are kept exactly as stored and may hold any scheme (`javascript:`, `vbscript:`, `data:`, `file:`, UNC `\\host\share`, `ms-word:` …), multi-kilobyte URLs, and absolute or `..` paths. Allow-list schemes before making them clickable; never open `section_file` as a path (resolve OneNote links by `page_id`/`section_id`). |
 
 ## Top level
 
@@ -68,7 +70,7 @@ their own (sanitised) extension.
 | `name` | string | Folder name of the notebook (OneNote web export and OneDrive name the folder after the notebook), package name for `.onepkg`. |
 | `color` | string \| null | |
 | `source_kind` | string | `onetoc2`, `onepkg`, or `loose_sections` (`.one` files without a table of contents). |
-| `source_path` | string | Notebook folder relative to the input (`/`-separated; `""` = input root). |
+| `source_path` | string | Notebook folder relative to the input (`/`-separated; `""` = input root); for `.onepkg`, the package file. Files inside a package are reported as `<package>/<path in package>`. |
 | `children` | [Entry] | In OneNote's table-of-contents order. |
 | `report` | NotebookReport | |
 
@@ -79,8 +81,10 @@ their own (sanitised) extension.
 
 `path` is the display path (`[notebook, group…, section]`). `in_toc` is false
 for sections found on disk but not listed in the notebook's table of contents
-(OneDrive downloads often ship an empty `.onetoc2`); they are placed by folder
-and come after listed entries. Section groups synthesised from folders have
+(OneDrive downloads often ship an empty `.onetoc2`), and for all sections of a
+`.onepkg` that has no `.onetoc2`; they are placed by folder and come after
+listed entries. Table-of-contents entries are matched to files by name
+(ignoring case when there is no exact match). Section groups synthesised from folders have
 `file_identity: null`.
 
 ## Page
@@ -175,10 +179,17 @@ vertical tab/CR normalised to `\n`) and `marks` (*omitted when empty*).
 | `code` | `text` (plain). OneNote "Code" style or all-monospace (Consolas, Courier…) paragraphs; consecutive code paragraphs at the same indent are merged with `\n`. |
 | `math` | Paragraph that is only an equation: `text` (OneNote's linear form, markers removed), `latex` (string \| null, `\[…\]`), `mathml` (string \| null). Inline equations are `math` marks instead. |
 | `table` | `row_count`, `col_count`, `column_widths` ([number], geometry units), `borders_visible` bool, `rows`: [{`cells`: [{`background`: colour \| null, `blocks`: [Block]}]}]. Cells hold any blocks, including nested tables. OneNote has no merged cells. |
-| `image` | `asset` (string \| null), `data_status` (`available` \| `missing` \| `invalid`), `alt_text` (string \| null — usually OneNote's OCR text), `width`/`height` (geometry units \| null), `hyperlink` (string \| null), `is_printout_page` bool, `printout_page_number` (int \| null, as stored; may be 0-based), `is_background` bool, `original_name` (sanitised display name \| null), `original_asset` (string \| null: the original when `asset` is OneNote's browser-friendly fallback picture, e.g. for EMF images or XPS printout pages). |
+| `image` | `asset` (string \| null), `data_status` (`available` \| `missing` \| `invalid` \| `empty`; see below), `alt_text` (string \| null — usually OneNote's OCR text), `width`/`height` (geometry units \| null), `hyperlink` (string \| null), `is_printout_page` bool, `printout_page_number` (int \| null, as stored; may be 0-based), `is_background` bool, `original_name` (sanitised display name \| null), `original_asset` (string \| null: the original when `asset` is OneNote's browser-friendly fallback picture, e.g. for EMF images or XPS printout pages). |
 | `embed` | Online video/iframe: `url`, `thumbnail_asset` (string \| null). |
-| `file` | Attachment: `asset` (string \| null), `filename` (sanitised display name), `extension` (string \| null), `mime`, `size` (bytes as recorded), `data_status` (`available` \| `missing` \| `invalid`), `media_kind` (`audio` \| `video` \| `other` — OneNote recordings are audio/video), `icon_asset` (string \| null). |
+| `file` | Attachment: `asset` (string \| null), `filename` (sanitised display name), `extension` (string \| null), `mime`, `size` (bytes as recorded), `data_status` (`available` \| `missing` \| `invalid` \| `empty`), `media_kind` (`audio` \| `video` \| `other` — OneNote recordings are audio/video), `icon_asset` (string \| null). |
 | `ink` | Drawing/handwriting rendered to SVG: `asset` (string \| null, `image/svg+xml`), `recognized_text` (string \| null), `width`, `height` (geometry units), `stroke_count`. |
+
+`data_status` of images and attachments, identical in the block and in
+`report.missing_data`: `available` — `asset` holds the data; `missing` —
+the export does not contain the data (`asset` null); `invalid` — OneNote
+marked the data invalid (`asset` null), or, for an image, the bytes are not
+a picture format (`asset` then holds the raw bytes as `.bin`); `empty` —
+zero bytes (`asset` null).
 
 A PDF/XPS printout appears as a `file` block (the document, when OneNote
 kept it) plus `image` blocks with `is_printout_page: true` (one per page, OCR
@@ -188,12 +199,20 @@ Horizontal rules do not exist in OneNote and are never emitted.
 
 **ListInfo**: `{"ordered": bool, "style": "decimal|upper_roman|lower_roman|upper_alpha|lower_alpha|bullet", "marker": string, "restart": int|null}`.
 For ordered lists `marker` is the pattern with `%` for the number (`"%."`,
-`"(%)"`); for bullets it is the bullet character (Wingdings bullets are
+`"(%)"`, `"Step %:"`; a pattern may repeat `%`); numbering formats other
+than roman numerals and letters (e.g. Chinese counting) are reported as
+`decimal`. For bullets it is the bullet character (Wingdings bullets are
 mapped to Unicode). `restart` is the explicit start number if numbering
 restarts.
 
 **Tag** (note tag): `{"label": string, "shape": snake_case icon name (e.g. "blue_check_box", "yellow_star", "no_icon"), "checkable": bool, "completed": bool, "completed_at": string|null, "highlight_color": colour|null, "text_color": colour|null}`.
-Labels are what the user sees (localised, custom tags included).
+Labels are what the user sees (localised, custom tags included), as stored:
+they may be empty (some writers store none for built-in shapes; then
+`report.tags_by_label` counts the tag under its `shape`), very long, contain
+markup-like text or trailing spaces. `completed`/`completed_at` are only set
+for checkable tags (check boxes): writers also store a completion status on
+stars, flags and other non-checkable tags, which is ignored. A paragraph may
+carry several tags; each keeps its own definition.
 
 ### Marks
 
@@ -246,7 +265,8 @@ matches them to the converted content per page:
 Anything ambiguous (two paragraphs with identical text on a page, a merged
 code block's later lines, the second embed of one picture) gets no id, and an
 id is never given to two blocks of a page. Table cells and items have no ids
-(their blocks do). Sections inside a `.onepkg` are not on disk and get no ids.
+(their blocks do). Sections inside a `.onepkg` are unpacked first and get ids like
+any other.
 On the public samples about 90 % of text blocks get an `object_id`, and
 the ids are identical across two downloads of the same section. Importers
 must fall back to their own keys (e.g. a content hash) when a block has no
@@ -274,8 +294,12 @@ must fall back to their own keys (e.g. a content hash) when a block has no
 ```
 
 `counts.blocks` and the per-type counts include blocks inside table cells.
-Failed sections typically are password-protected, damaged, or empty
-(not synced) files; their pages are absent from the tree.
+Failed sections typically are password-protected, OneNote 2007, damaged,
+truncated or empty (not synced) files, or sections the table of contents
+lists whose file is missing from the export (`error` starts with `table of
+contents entry`); their pages are absent from the tree. A section in which
+only some pages or objects are damaged is not failed: the damaged parts are
+skipped and named in `warnings` (`skipped a damaged …`).
 
 **Warning**: `{"message": string, "page_id": string|null, "page_title": string|null}`.
 

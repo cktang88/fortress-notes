@@ -125,7 +125,7 @@ struct ConnectionUnavailableView: View {
 
     private var description: String {
         let backend = model.backend
-        let address = backend.baseURL.host().map { host in backend.baseURL.port.map { "\(host):\($0)" } ?? host } ?? backend.urlString
+        let address = backend.serverURL.host().map { host in backend.serverURL.port.map { "\(host):\($0)" } ?? host } ?? backend.urlString
         if case .failed(let reason) = backend.state { return reason }
         if backend.canStart { return "Nothing is answering at \(address). Start the backend here, or run it yourself and retry." }
         if backend.isLocal { return "Nothing is answering at \(address). Start the backend, or choose its folder in Settings so Fortress can start it for you." }

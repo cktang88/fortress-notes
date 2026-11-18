@@ -5,6 +5,7 @@ Standard library only, so it runs before (or without) the backend's virtualenv.
 """
 
 import json
+import os
 import sys
 import urllib.request
 
@@ -13,7 +14,8 @@ def post(base: str, path: str, payload: dict) -> dict:
     request = urllib.request.Request(
         base + path,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        # The backend's token (backend/app/auth.py), when it was started with one.
+        headers={"Content-Type": "application/json", "X-Fortress-Token": os.environ.get("FORTRESS_TOKEN", "")},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=60) as response:

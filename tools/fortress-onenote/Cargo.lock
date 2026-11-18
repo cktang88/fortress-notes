@@ -65,8 +65,6 @@ checksum = "776dfebd015e2d8732c684a2c71003674ccb49457b539b9e82151ba38e96dd7c"
 [[package]]
 name = "cab"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "171228650e6721d5acc0868a462cd864f49ac5f64e4a42cde270406e64e404d2"
 dependencies = [
  "byteorder",
  "flate2",
@@ -229,6 +227,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "bitflags",
+ "cab",
  "enum-primitive-derive",
  "finl_unicode",
  "hex",
@@ -432,11 +431,8 @@ dependencies = [
 [[package]]
 name = "onenote_parser"
 version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb37f8419671b12472a214dd12d100fef0c8bd44c81e9936266c0d71d7bb4977"
 dependencies = [
  "bytes",
- "cab",
  "encoding_rs",
  "enum-primitive-derive",
  "itertools 0.14.0",

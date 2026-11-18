@@ -3,7 +3,10 @@
 //! Vendored from one2html v2.0.1 (`src/page/math`), Copyright 2020 Markus
 //! Siemens, MIT licence (see `LICENSES/one2html-MIT.txt`). Changes: error
 //! type switched to `anyhow`, logging replaced by a no-op macro, renderer entry
-//! points adapted to this crate.
+//! points adapted to this crate; the lexer finds structure marks anywhere in a
+//! run and takes separator/end types from the open object (equations written
+//! by other tools), and missing matrix brackets / equation-array column
+//! counts get defaults.
 #![allow(clippy::all)]
 
 macro_rules! math_warn {
