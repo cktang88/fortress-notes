@@ -84,8 +84,13 @@ public struct BackendLaunch: Hashable, Sendable {
     }
 }
 
-/// Owns the backend address and, when the backend isn't running, a backend process the
-/// app starts itself (and stops on quit).
+/// Owns the backend address and, when Settings let the app start the backend, the
+/// backend process this launch started (and stops when it quits).
+///
+/// The process gets this launch's token (`BackendAuth`) and the app's pid (it stops
+/// itself if the app dies), runs in its own process group so stopping it also stops
+/// what it started (uvicorn under `uv run`, a OneNote converter), and is watched from a
+/// background thread: nothing here blocks the main actor.
 @MainActor
 @Observable
 public final class BackendController {
@@ -112,9 +117,17 @@ public final class BackendController {
         didSet { defaults.set(startsAutomatically, forKey: Keys.autoStart) }
     }
 
+    /// The port of the backend this launch started (the one in Settings when it was
+    /// free, else one the system picked). Kept after the process exits, so reconnecting
+    /// and restarting look in the same place.
+    public private(set) var activePort: Int?
+
     @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private var process: Process?
+    /// The process group leader this app started (its pid is the group id).
+    @ObservationIgnored private var pid: pid_t?
     @ObservationIgnored private var stopping = false
+    @ObservationIgnored public var logURL: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appending(path: "Library/Logs/Fortress Notes/backend.log")
 
     private enum Keys {
         static let url = "backendURL"
@@ -145,6 +158,13 @@ public final class BackendController {
         return url
     }
 
+    /// Where the app sends requests: the backend this launch started, else the address
+    /// from Settings.
+    public var serverURL: URL {
+        guard let activePort else { return baseURL }
+        return URL(string: "http://127.0.0.1:\(activePort)")!
+    }
+
     public var port: Int { baseURL.port ?? (baseURL.scheme == "https" ? 443 : 80) }
 
     /// Only a backend on this Mac can be started from here.
@@ -160,51 +180,72 @@ public final class BackendController {
 
     public var canStart: Bool { launch != nil && !isProcessRunning }
 
-    public var isProcessRunning: Bool { process?.isRunning == true }
+    public var isProcessRunning: Bool { pid != nil }
 
-    public var logURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/Fortress Notes/backend.log")
+    /// The started backend's process group (its leader's pid), while it runs.
+    var processGroup: pid_t? { pid }
+
+    /// Whether the app talks only to a backend it started: then a server that answers
+    /// with another instance id (another launch's, another user's, anything else on
+    /// the port) is never used.
+    public var ownsServer: Bool { activePort != nil }
+
+    /// Whether `instance` (a health answer's `X-Fortress-Instance`) is a server the app
+    /// may use: its own backend, or anything at the Settings address when the app
+    /// started none (a backend run by hand, without a token).
+    public func accepts(instance: String?) -> Bool {
+        !ownsServer || instance == BackendAuth.instanceID
     }
 
-    /// Starts the backend; `state` becomes `.starting` until `markReachable()`.
+    /// Starts the backend on the port from Settings when it's free, else on one the
+    /// system picks; `state` becomes `.starting` until `markReachable()`.
     @discardableResult
     public func start() -> Bool {
         guard !isProcessRunning else { return true }
-        guard let launch else {
+        guard isLocal, !folderPath.isEmpty, launch != nil else {
             state = .failed(folderPath.isEmpty
                 ? "Choose the Fortress folder in Settings to start the backend."
                 : "No backend found in \((folderPath as NSString).abbreviatingWithTildeInPath).")
             return false
         }
-        let process = Process()
-        process.executableURL = launch.executable
-        process.arguments = launch.arguments
-        process.currentDirectoryURL = launch.workingDirectory
+        let chosen = Self.isPortFree(port) ? port : (Self.freePort() ?? port)
+        let folder = URL(fileURLWithPath: (folderPath as NSString).expandingTildeInPath)
+        guard let launch = BackendLaunch.make(folder: folder, port: chosen, home: NSHomeDirectory()) else { return false }
+        return start(launch, port: chosen)
+    }
+
+    /// Starts `launch` (which serves on `port`) in its own process group.
+    @discardableResult
+    func start(_ launch: BackendLaunch, port: Int) -> Bool {
+        guard !isProcessRunning else { return true }
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = launch.path
         environment["PYTHONUNBUFFERED"] = "1"
+        environment[BackendAuth.tokenEnvironment] = BackendAuth.token
+        environment["FORTRESS_PARENT_PID"] = String(getpid())
         if let converter = launch.onenoteConverter, environment["FORTRESS_ONENOTE_BIN"] == nil {
             environment["FORTRESS_ONENOTE_BIN"] = converter.path
         }
-        process.environment = environment
-        if let log = openLog() {
-            process.standardOutput = log
-            process.standardError = log
-        }
-        process.terminationHandler = { [weak self] finished in
-            let status = finished.terminationStatus
-            Task { @MainActor in self?.processExited(status: status) }
-        }
+        prepareLog()
+        let pid: pid_t
         do {
-            try process.run()
+            pid = try Self.spawn(launch, environment: environment, log: logURL)
         } catch {
             state = .failed("Couldn't start the backend: \(error.localizedDescription)")
             return false
         }
-        self.process = process
+        self.pid = pid
+        activePort = port
         stopping = false
         exitedUnexpectedly = false
         state = .starting
+        // Reap it on a background thread (waitpid blocks) and report back here.
+        Thread.detachNewThread { [weak self] in
+            var status: Int32 = 0
+            while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+            let code = status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
+            Task { @MainActor in self?.processExited(pid: pid, status: code) }
+        }
         return true
     }
 
@@ -217,24 +258,37 @@ public final class BackendController {
         if state == .starting { state = .failed(message) }
     }
 
-    /// Stops the backend this app started, waiting briefly for it to exit.
-    public func stop(waitUpTo seconds: TimeInterval = 0) {
-        guard let process, process.isRunning else { return }
+    /// Stops the backend this app started: SIGTERM to its process group, then SIGKILL
+    /// to whatever is left after `gracePeriod`. Waits without blocking the main actor.
+    public func stop(gracePeriod: Duration = .seconds(3)) async {
+        guard let pid else { return }
         stopping = true
-        process.terminate()
-        let deadline = Date().addingTimeInterval(seconds)
-        while process.isRunning && Date() < deadline {
-            usleep(50_000)
+        kill(-pid, SIGTERM)
+        let deadline = ContinuousClock.now + gracePeriod
+        while self.pid == pid, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
         }
-        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        // Also what outlived the leader (uvicorn under a killed `uv`, a converter).
+        kill(-pid, SIGKILL)
+    }
+
+    /// The app is quitting: ask the backend's group to stop and return at once. It
+    /// shuts down by itself, and it stops itself (hard, if it must) once the app is gone.
+    public func terminateForQuit() {
+        guard let pid else { return }
+        stopping = true
+        kill(-pid, SIGTERM)
     }
 
     /// Whether the process this app started stopped by itself after it was running (a
     /// crash, not a failed start): the app may start it again.
     public private(set) var exitedUnexpectedly = false
 
-    func processExited(status: Int32) {
-        process = nil
+    func processExited(pid exited: pid_t, status: Int32) {
+        guard pid == exited else { return }
+        pid = nil
+        // Nothing the backend started outlives it.
+        kill(-exited, SIGKILL)
         let wasRunning = state == .running
         if stopping {
             state = .idle
@@ -269,23 +323,86 @@ public final class BackendController {
         return text.contains("address already in use") || text.contains("errno 48") || text.contains("errno 98")
     }
 
-    /// A Fortress backend was already serving the port: use it instead of ours.
-    public func adoptRunningServer() {
-        state = .idle
-        exitedUnexpectedly = false
-    }
-
-    public func markPortInUse() {
-        state = .failed("Another app is using port \(port). Quit it, or choose another address in Settings.")
-    }
-
-    private func openLog() -> FileHandle? {
+    private func prepareLog() {
         let manager = FileManager.default
         try? manager.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !manager.fileExists(atPath: logURL.path) { manager.createFile(atPath: logURL.path, contents: nil) }
-        guard let handle = try? FileHandle(forWritingTo: logURL) else { return nil }
+        guard let handle = try? FileHandle(forWritingTo: logURL) else { return }
+        defer { try? handle.close() }
         handle.seekToEndOfFile()
         handle.write(Data("\n--- \(Date().formatted(.iso8601)) starting backend ---\n".utf8))
-        return handle
+    }
+
+    // MARK: Process and ports
+
+    /// posix_spawn (Foundation's Process can't start a process group): the child leads
+    /// a new group, gets default signal handling, /dev/null for input, the log for
+    /// output, and none of the app's other file descriptors.
+    nonisolated static func spawn(_ launch: BackendLaunch, environment: [String: String], log: URL) throws -> pid_t {
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT))
+        posix_spawnattr_setpgroup(&attributes, 0)
+        var noSignals = sigset_t()
+        sigemptyset(&noSignals)
+        posix_spawnattr_setsigmask(&attributes, &noSignals)
+        var defaulted = sigset_t()
+        sigemptyset(&defaulted)
+        for signal in [SIGTERM, SIGINT, SIGHUP, SIGPIPE, SIGCHLD] { sigaddset(&defaulted, signal) }
+        posix_spawnattr_setsigdefault(&attributes, &defaulted)
+
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, 1, log.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+        posix_spawn_file_actions_adddup2(&actions, 1, 2)
+        posix_spawn_file_actions_addchdir_np(&actions, launch.workingDirectory.path)
+
+        let argv = ([launch.executable.path] + launch.arguments).map { strdup($0) } + [nil]
+        let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            argv.forEach { free($0) }
+            envp.forEach { free($0) }
+        }
+        var pid: pid_t = 0
+        let result = posix_spawn(&pid, launch.executable.path, &actions, &attributes, argv, envp)
+        guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: result) ?? .EIO) }
+        return pid
+    }
+
+    /// Whether nothing listens on 127.0.0.1:`port`.
+    nonisolated static func isPortFree(_ port: Int) -> Bool {
+        guard let port = UInt16(exactly: port), port > 0 else { return false }
+        return bindLoopback(port: port) != nil
+    }
+
+    /// A port the system says is free now.
+    nonisolated static func freePort() -> Int? {
+        bindLoopback(port: 0)
+    }
+
+    /// Binds 127.0.0.1:`port` (as uvicorn will, with SO_REUSEADDR) and closes again;
+    /// the port it got, or nil when it's taken.
+    private nonisolated static func bindLoopback(port: UInt16) -> Int? {
+        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard socket >= 0 else { return nil }
+        defer { close(socket) }
+        var reuse: Int32 = 1
+        setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
+                bind(socket, address, length) == 0 && getsockname(socket, address, &length) == 0
+            }
+        }
+        guard bound else { return nil }
+        return Int(UInt16(bigEndian: address.sin_port))
     }
 }

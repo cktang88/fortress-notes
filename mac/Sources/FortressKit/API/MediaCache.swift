@@ -33,6 +33,7 @@ public final class MediaCache: Sendable {
         configuration.waitsForConnectivity = false
         configuration.timeoutIntervalForRequest = RequestKind.document.timeout
         configuration.requestCachePolicy = .useProtocolCachePolicy
+        configuration.httpAdditionalHeaders = BackendAuth.headers
         let folder = directory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appending(path: "Fortress Notes/Media")
         configuration.urlCache = URLCache(memoryCapacity: 16 << 20, diskCapacity: diskBytes, directory: folder)
