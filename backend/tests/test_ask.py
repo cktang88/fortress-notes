@@ -449,6 +449,50 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertIn(window, body)  # a verbatim slice, so quotes from it are real
         self.assertEqual(ask._window("short", ["ferry"]), "short")
 
+    def test_a_tool_round_adds_at_most_its_character_budget(self) -> None:
+        from app import ask
+
+        sources = ask._Sources()
+        rows = [
+            {"id": f"b{i}", "document_id": "d", "document_title": "Long", "text": "word " * 120}
+            for i in range(40)
+        ]
+        added = sources.add(rows, 2000)
+        self.assertEqual(len(added), 3)  # 600 characters each
+        self.assertLessEqual(sum(len(sources.by_id[s]["text"]) for s in added), 2000)
+        # The rest stays available to a later look.
+        self.assertEqual(len(sources.add(rows[3:], 600)), 1)
+        # A single passage over the budget is still shown (cut to its window).
+        self.assertEqual(len(ask._Sources().add([{**rows[0], "text": "x " * 2000}], 10)), 1)
+
+    def test_closing_the_stream_cancels_the_model_call(self) -> None:
+        import asyncio
+
+        from app import ask, llm
+
+        cancelled = asyncio.Event()
+
+        async def slow_stream(*args, **kwargs):
+            yield '{"action": "answer", "sentences": [{"text": "Alfama.", "citations": [{"id": "S1", "quote": "hotel in Alfama"}]},'
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            yield "]}"
+
+        async def run() -> dict:
+            stream = ask.ask_stream("Which hotel in Lisbon?")
+            first = await anext(stream)
+            await stream.aclose()  # what the server does when the client goes away
+            await asyncio.wait_for(cancelled.wait(), 2)
+            return first
+
+        with patch.object(llm, "chat_json_stream", slow_stream):
+            first = asyncio.run(run())
+        self.assertEqual(first["type"], "sentence")
+        self.assertTrue(cancelled.is_set())
+
     def test_read_tool_returns_a_whole_note(self) -> None:
         from app import ask
 

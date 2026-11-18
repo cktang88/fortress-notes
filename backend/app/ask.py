@@ -48,6 +48,9 @@ TOOL_HITS = 8
 # Characters of a paragraph shown to the model: a window around the matched words.
 SOURCE_CHARS = 700
 NOTE_BLOCKS = 40
+# Characters of new passages one grep or read may add to the prompt (~2k tokens):
+# a long note read whole would otherwise slow every later model call.
+TOOL_CHARS = 8000
 # Total time one grep over every note may take (the model's regex can backtrack badly).
 GREP_SECONDS = 0.3
 
@@ -131,13 +134,20 @@ class _Sources:
         self._block_ids: set[str] = set()
         self.terms = terms or []
 
-    def add(self, rows: list[dict[str, object]]) -> list[str]:
+    def add(self, rows: list[dict[str, object]], budget: int | None = None) -> list[str]:
+        """Number the new passages; stop once they hold ``budget`` characters."""
+
         added = []
+        used = 0
         for row in rows:
             block_id = str(row["id"])
             text = _with_asset_text(row)
             if block_id in self._block_ids or not text.strip():
                 continue
+            shown = _window(text, self.terms)
+            if budget is not None and added and used + len(shown) > budget:
+                break
+            used += len(shown)
             self._block_ids.add(block_id)
             source_id = f"S{len(self.by_id) + 1}"
             self.by_id[source_id] = {
@@ -145,7 +155,7 @@ class _Sources:
                 "document_id": row["document_id"],
                 "document_title": row["document_title"],
                 "updated_at": row.get("updated_at", ""),
-                "text": _window(text, self.terms),
+                "text": shown,
             }
             added.append(source_id)
         return added
@@ -455,7 +465,7 @@ async def _run(question: str, emit: Emit) -> dict[str, object]:
         ):
             # "Not found" with other wording to try: grep it locally (milliseconds) and,
             # only if that turns up new passages, give the model one last look.
-            added = sources.add(await asyncio.to_thread(grep_blocks, retry))
+            added = sources.add(await asyncio.to_thread(grep_blocks, retry), TOOL_CHARS)
             steps.append({"action": "grep", "detail": retry})
             await emit({"type": "step", "step": steps[-1]})
             if added:
@@ -468,14 +478,14 @@ async def _run(question: str, emit: Emit) -> dict[str, object]:
             return _answer(data, sources, steps, started, shown)
         if action == "grep" and isinstance(data.get("pattern"), str):
             pattern = data["pattern"]
-            added = sources.add(await asyncio.to_thread(grep_blocks, pattern))
+            added = sources.add(await asyncio.to_thread(grep_blocks, pattern), TOOL_CHARS)
             steps.append({"action": "grep", "detail": pattern})
             await emit({"type": "step", "step": steps[-1]})
             found = sources.payload(added) if added else "[] (no new matches)"
             transcript += f'\n\nYou searched for /{pattern}/. New sources:\n{found}'
         elif action == "read" and isinstance(data.get("note"), str):
             note = data["note"]
-            added = sources.add(await asyncio.to_thread(read_note, note))
+            added = sources.add(await asyncio.to_thread(read_note, note), TOOL_CHARS)
             steps.append({"action": "read", "detail": note})
             await emit({"type": "step", "step": steps[-1]})
             found = sources.payload(added) if added else "[] (no such note, or nothing new)"

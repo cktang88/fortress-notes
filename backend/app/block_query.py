@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from . import textutil
@@ -209,6 +210,11 @@ def block_details(path: Path, block_ids: list[str]) -> dict[str, dict[str, objec
     return {row["id"]: dict(row) for row in rows}
 
 
+@lru_cache(maxsize=1 << 14)
+def _title_words(title: str) -> tuple[str, ...]:
+    return tuple(textutil.words(title))
+
+
 def title_matches(path: Path, query: str, limit: int = 20) -> list[dict[str, object]]:
     """Documents with title words starting with query words (most words first).
 
@@ -222,30 +228,28 @@ def title_matches(path: Path, query: str, limit: int = 20) -> list[dict[str, obj
         return []
     initialize(path)
     with connection_scope(path) as connection:
-        rows = connection.execute(
-            """SELECT documents.id AS document_id, documents.title, documents.updated_at,
-                      (SELECT blocks.id FROM blocks
-                        WHERE blocks.document_id = documents.id
-                          AND blocks.parent_id IS NULL
-                        ORDER BY blocks.order_key LIMIT 1) AS block_id
-                 FROM documents
-                WHERE documents.deleted_at IS NULL"""
-        ).fetchall()
-    matches = []
-    for row in rows:
-        if not row["block_id"]:
-            continue
-        words = query_tokens(str(row["title"] or ""))
-        hits = sum(1 for token in tokens if any(word.startswith(token) for word in words))
-        if hits:
-            matches.append(
-                {
-                    "document_id": row["document_id"],
-                    "hits": hits,
-                    "updated_at": row["updated_at"],
-                    "block_id": row["block_id"],
-                }
-            )
+        # Titles are matched here (word lists cached per title); only the notes that
+        # match need their first block looked up.
+        matches = []
+        for row in connection.execute(
+            "SELECT id, title, updated_at FROM documents WHERE deleted_at IS NULL"
+        ):
+            words = _title_words(str(row["title"] or ""))
+            hits = sum(1 for token in tokens if any(word.startswith(token) for word in words))
+            if hits:
+                matches.append(
+                    {"document_id": row["id"], "hits": hits, "updated_at": row["updated_at"]}
+                )
+        for match in matches:
+            first = connection.execute(
+                # Written to match the blocks_sibling_order index.
+                """SELECT id FROM blocks
+                    WHERE document_id = ? AND COALESCE(parent_id, '') = ''
+                    ORDER BY order_key LIMIT 1""",
+                (match["document_id"],),
+            ).fetchone()
+            match["block_id"] = first["id"] if first else None
+    matches = [match for match in matches if match["block_id"]]
     matches.sort(key=lambda match: str(match["updated_at"]), reverse=True)
     matches.sort(key=lambda match: -int(match["hits"]))
     return matches[:limit]
