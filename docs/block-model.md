@@ -349,9 +349,16 @@ transaction:
   `numberedListItem` → `numbered_item`; `checkListItem` → `check_item`; `list`
   → by `attrs.checked`/`attrs.ordered`; `codeBlock` → `code`; `thematic_break`,
   `hr` → `divider`; `blockquote` → `quote`; `audio`, `video`, `pdf` → `file`;
-  BlockNote `styles` → marks, image `previewWidth` → `width`); Markdown-only blocks are parsed into
-  canonical content (a heading's `#`, a list item's marker, a code fence, a
-  sole image, `$$` math); `raw` HTML becomes `html` blocks;
+  BlockNote `styles` → marks, image `previewWidth` → `width`, `mathPlaceholder`
+  → empty `math`). BlockNote's default props (`textColor`/`backgroundColor:
+  "default"`, `textAlignment: "left"`, `isToggleable: false`, `showPreview: true`,
+  empty `caption`/`name`/`url`, code `language: "text"`) are dropped; other
+  BlockNote props stay as snake_case extension attrs (`text_alignment`, ...).
+  Markdown-only blocks are parsed into canonical content (a heading's `#`, a
+  list item's marker, a code fence, a sole image, `$$` math), but the stored type
+  wins where the Markdown lost its syntax (a code block without its fence keeps
+  its text verbatim, a quote or callout without `>` stays a container, a check
+  item keeps its `checked`); `raw` HTML becomes `html` blocks;
 - blockquotes become quote containers (and the blocks a quote swallowed by the
   old importer bug are dropped, since they were duplicates of the blocks after
   it); inline quotes/callouts become containers with a paragraph;

@@ -36,8 +36,31 @@ _REF_RE = re.compile(
 )
 # Attributes the old shapes used that the canonical type says another way.
 _CONSUMED_ATTRS = {"ordered", "checked", "level", "language", "previewWidth", "latex"}
-# BlockNote's default block props (no information).
-_BLOCKNOTE_DEFAULTS = {"textAlignment": "left", "textColor": "default", "backgroundColor": "default"}
+# BlockNote's default block props (no information): the web editor saved every prop
+# of a block, so every heading had ``isToggleable: false`` and every image
+# ``showPreview: true``, ``caption: ""`` (and, before a file was chosen, ``url: ""``).
+_BLOCKNOTE_DEFAULTS = {
+    "textAlignment": "left", "textColor": "default", "backgroundColor": "default",
+    "isToggleable": False, "showPreview": True, "caption": "", "name": "", "url": "",
+}
+
+
+def _is_blocknote_default(key: str, value: object) -> bool:
+    if key not in _BLOCKNOTE_DEFAULTS:
+        return False
+    default = _BLOCKNOTE_DEFAULTS[key]
+    # (``0 == False``: only a bool matches a bool default.)
+    return type(value) is type(default) and value == default
+
+
+def _level(value: object) -> int | None:
+    """A heading level 1-6 (the Mac app's JSON numbers may read as ``2.0``)."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not value.is_integer():  # (also NaN and infinities)
+        return None
+    return int(value) if 1 <= value <= 6 else None
 
 
 def canonical_type(name: str, attrs: dict[str, Any] | None = None) -> str:
@@ -181,7 +204,7 @@ def attrs(type_name: str, raw: object) -> dict[str, Any]:
         return result
     declared = schema.block_type(type_name).attrs
     for key, value in raw.items():
-        if value is None or _BLOCKNOTE_DEFAULTS.get(key) == value:
+        if value is None or _is_blocknote_default(key, value):
             continue
         if key in _CONSUMED_ATTRS and key not in declared:
             continue
@@ -191,12 +214,16 @@ def attrs(type_name: str, raw: object) -> dict[str, Any]:
     if type_name == "callout" and "emoji" in result:
         result.setdefault("icon", result.pop("emoji"))
     if type_name == "heading":
-        level = raw.get("level")
-        result["level"] = level if isinstance(level, int) and 1 <= level <= 6 else 1
+        result["level"] = _level(raw.get("level")) or 1
     if type_name == "check_item":
         result["checked"] = raw.get("checked") is True
-    if type_name == "code" and isinstance(raw.get("language"), str) and raw["language"]:
-        result["language"] = raw["language"]
+    if type_name == "code":
+        language = raw.get("language")
+        # BlockNote's code block says "text" for no language.
+        if isinstance(language, str) and language and language != "text":
+            result["language"] = language
+        else:
+            result.pop("language", None)
     clean: dict[str, Any] = {}
     for key, value in result.items():
         try:
@@ -299,7 +326,11 @@ def _convert(kind, type_name, old_attrs, content, runs, markdown, text) -> list[
     if kind in ("image", "file"):
         return [spec(kind, attrs(kind, old_attrs))]
     if kind == "math":
-        latex = content.get("latex", old_attrs.get("latex", ""))
+        latex = content.get("latex", old_attrs.get("latex"))
+        if not isinstance(latex, str) and isinstance(markdown, str):
+            parsed = parse_markdown(markdown) if markdown.strip() else []
+            if parsed and parsed[0].type == "math" and parsed[0].payload:
+                latex = parsed[0].payload.get("latex")
         payload = {"latex": latex if isinstance(latex, str) else ""}
         if isinstance(content.get("mathml"), str):
             payload["mathml"] = content["mathml"]
@@ -324,33 +355,49 @@ def _convert(kind, type_name, old_attrs, content, runs, markdown, text) -> list[
     return _from_markdown(kind, old_attrs, markdown, text)
 
 
+_LIST_TYPES = ("bullet_item", "numbered_item", "check_item")
+
+
 def _from_markdown(kind: str, old_attrs: dict, markdown: object, text: str) -> list[BlockSpec]:
-    """A Markdown-only stored block (imported before the canonical model)."""
+    """A Markdown-only stored block (imported before the canonical model).
+
+    The stored type wins over what its text happens to look like: the old API
+    replaced a block's Markdown with its plain ``text`` on a text-only update, so a
+    heading or list item may have lost its marker, a code block its fence and a
+    quote its ``>``.
+    """
 
     source = markdown if isinstance(markdown, str) else str(text or "")
     blocks = parse_markdown(source) if source.strip() else []
+    if kind == "code" and not (len(blocks) == 1 and blocks[0].type == "code"):
+        # Not a fence: the text is the code, verbatim.
+        return [spec("code", attrs("code", old_attrs), [text_node(source)] if source else [])]
     if kind == "quote" and blocks and blocks[0].type == "quote":
         # The old importer stored the rest of the note inside a quote's
         # Markdown (duplicating the blocks after it): keep the quote only.
         blocks = blocks[:1]
+    if kind in ("quote", "callout") and not (blocks and blocks[0].type == kind):
+        return legalize([spec(kind, attrs(kind, old_attrs), children=blocks)])
     if not blocks:
         empty_kind = kind if kind in schema.TEXT_TYPES else "paragraph"
         blocks = [spec(empty_kind, attrs(empty_kind, old_attrs))]
     first = blocks[0]
-    if first.type in schema.TEXT_TYPES and kind in schema.TEXT_TYPES and first.type != kind:
-        if kind == "heading" or (kind in ("bullet_item", "numbered_item", "check_item")
-                                 and first.type == "paragraph"):
-            # The stored type wins over what its text happens to look like.
-            first.attrs = schema.retype_attrs(first.type, kind, first.attrs)
-            first.type = kind
-            if kind == "code":
-                first.content = schema.plain_content(first.content)
+    if first.type in schema.TEXT_TYPES and first.type != kind and (
+        kind == "heading" or (kind in _LIST_TYPES and first.type not in _LIST_TYPES)
+    ):
+        first.attrs = schema.retype_attrs(first.type, kind, first.attrs)
+        if first.type == "code":
+            first.content = [text_node(source.strip("\n"))] if source.strip() else []
+        first.type = kind
+        if kind == "check_item":
+            # The marker that said whether it was done went with the Markdown.
+            first.attrs = {**first.attrs, "checked": old_attrs.get("checked") is True}
     extra = {key: value for key, value in attrs(first.type, old_attrs).items()
              if key not in schema.block_type(first.type).attrs}
     if extra or first.type in ("heading", "check_item"):
         merged = {**first.attrs, **extra}
-        if first.type == "heading" and isinstance(old_attrs.get("level"), int):
-            merged["level"] = attrs("heading", old_attrs)["level"]
+        if first.type == "heading" and _level(old_attrs.get("level")):
+            merged["level"] = _level(old_attrs.get("level"))
         first.attrs = schema.normalize_attrs(first.type, merged)
     for block in blocks:
         block.id = None
