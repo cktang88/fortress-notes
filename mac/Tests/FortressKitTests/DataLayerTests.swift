@@ -483,10 +483,12 @@ final class Counter: Sendable {
     var value: Int { state.withLock { $0 } }
 }
 
-/// Polls until `condition` holds (CI machines are busy: fixed sleeps race), up to 10 s.
+/// Polls until `condition` holds (CI machines are busy: fixed sleeps race), up to 30 s.
+/// The limit only matters on failure: a passing condition returns as soon as it holds,
+/// and the snapshot suites can keep the main actor busy for over 10 s on CI.
 @MainActor
 func waitUntil(_ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(10)
+    let deadline = ContinuousClock.now + .seconds(30)
     while !condition() {
         try #require(ContinuousClock.now < deadline, "timed out waiting")
         try await Task.sleep(for: .milliseconds(5))
