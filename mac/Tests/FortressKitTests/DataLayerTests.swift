@@ -20,7 +20,8 @@ import Testing
     /// Bug: opening a note with the inspector shown fetched it twice (the editor and the
     /// inspector each call `document(id:)`), and fast re-renders fetched it again.
     @Test func concurrentReadsOfOneNoteShareOneRequest() async throws {
-        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 0.05) }
+        // Long enough that all three start while the first is in flight, even on a busy runner.
+        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 2) }
         // A long max age: on a busy CI machine (other suites hold the main thread while
         // they render) this test has taken over 30 s, the default, and the last read
         // then revalidated, which is right but not what this test is about.
