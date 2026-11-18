@@ -34,11 +34,6 @@ public final class AppModel {
     /// Whether the backend answered the last request.
     public var isConnected = true
 
-    // MARK: Editor
-
-    /// The block holding the caret in the open note (published by the editor).
-    public var focusedBlockId: String?
-
     public init(api: APIClient = APIClient()) {
         self.api = api
     }

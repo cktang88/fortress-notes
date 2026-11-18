@@ -93,7 +93,7 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
             return CGRect(x: nesting, y: content.minY - theme.codePadding, width: max(0, width),
                           height: content.height + 2 * theme.codePadding)
         default:
-            return CGRect(x: nesting + 1, y: content.minY + 3, width: 3, height: max(0, content.height - 6))
+            return CGRect(x: nesting + 1, y: content.minY + 1, width: 3, height: max(0, content.height - 2))
         }
     }
 
