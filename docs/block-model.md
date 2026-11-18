@@ -1,7 +1,7 @@
 # Block model (the contract)
 
 This document is the single contract between the backend and every client (the
-Mac app, importers, and the Markdown mirror). The backend implements it in
+Mac app, importers, and Markdown import/export and the mirror). The backend implements it in
 `backend/app/block_schema.py` (the type registry and inline content),
 `backend/app/order_keys.py` (sibling order), `backend/app/block_markdown.py`
 (Markdown in and out) and `backend/app/block_store.py` (storage and
@@ -18,7 +18,8 @@ The principles:
   backlinks, search indexes, asset links, sibling order keys. Clients never send
   them, and the server ignores them if they do.
 - **Unknown types, illegal nesting and cross-category type changes are
-  rejected** (HTTP 400). Nothing is stored that the registry doesn't describe.
+  rejected** (HTTP 422, with the reason in `detail`). Nothing is stored that
+  the registry doesn't describe.
 
 ## 1. A block
 
@@ -160,7 +161,11 @@ serves):
 - Empty text nodes are dropped; neighbouring text nodes with equal marks are
   merged; neighbouring links with the same `href` are merged.
 - A link's `content` holds only text nodes and is never empty. `href` must be
-  non-empty.
+  non-empty and must not use the `javascript:`, `vbscript:` or `data:` scheme
+  (refused on write; such links read from Markdown, HTML or old data stay text).
+- `"\n"` inside a text node is a line break within the block. Markdown soft
+  breaks (a single newline inside a paragraph) are read as line breaks too, as
+  Obsidian and Bear show them; they are written back as hard breaks.
 - `docLink` and `blockRef` carry no label: their visible label is the target's
   current title / text, from `resolved_links`. A link to a trashed or missing
   target renders as a broken link; it is kept.
@@ -177,7 +182,7 @@ serves):
 | operation | fields |
 |---|---|
 | `insert` | `block_id`? (ULID/UUID; server generates one if omitted), placement (below), `type` (required), `attrs`?, `content`?, `payload`?, `user_attrs`?, `provenance`? |
-| `update` | `block_id`, and any of: `type`, `attrs` (PATCH), `content` (replaces the inline content), `payload` (replaces it), `user_attrs` (PATCH), `provenance` (merge) |
+| `update` | `block_id`, and at least one of: `type`, `attrs` (PATCH), `content` (replaces the inline content), `payload` (replaces it), `user_attrs` (PATCH), `provenance` (merge); an update naming none of them is refused (422) |
 | `move` | `block_id`, placement |
 | `delete` | `block_id` (deletes the whole subtree) |
 
@@ -185,7 +190,8 @@ serves):
 or `before_id` (right before it), or neither (append as the last child of
 `parent_id`; `parent_id` omitted or null means the top level). With `after_id`/
 `before_id` the parent is that block's parent; a `parent_id` sent alongside must
-agree. The server assigns the order key; clients never send one.
+agree. Give one of `after_id`/`before_id`, not both. The server assigns the
+order key; clients never send one.
 
 **PATCH semantics** (`attrs`, `user_attrs` on update): keys present are set, a
 key set to `null` is deleted, keys not mentioned are kept. On insert, `attrs` is
@@ -242,14 +248,26 @@ Re-import (sync) state lives in its own `block_sync` table, never in
 provenance: `source_hash` (hash of the canonical block the source last wrote),
 `dismissed_hash`, `conflict` (the source's version of a locally edited block)
 and `source_removed`. Re-imports compare canonical content (type, attrs,
-content, payload), never Markdown. The note info endpoint reports conflicts and
-removed blocks.
+content, payload), never Markdown. A note's own sync state (the source's title
+and folder, the external ids it last listed, `source_removed_at` when the page
+disappeared from its source) lives in `documents.sync_json`.
+
+`GET /api/block-documents/{id}/info` reports it: `sync` (with
+`source_removed_at`, `blocks_edited_here`, `blocks_removed_in_source`) and
+`conflicts`, where a block conflict is
+`{"kind": "block", "block_id", "local_text", "source_text", "source": {type,
+attrs, content, payload}, "detected_at", "source_modified_at"}` (`source_text`
+is the derived text of the source's version). `POST
+.../blocks/{block_id}/source-conflict` with `{"keep": "source"|"local"}`
+settles one: `source` applies the source's version, `local` silences that
+source version (a later, different one is reported again).
 
 ## 7. Markdown
 
 Markdown is an interchange format, rendered from the canonical blocks; it is
-never stored. Every block carries its id in a Fortress comment, so a mirror or
-export read back keeps block ids (and with them links and backlinks):
+never stored. Every block carries its id in a Fortress comment, so an export
+(or mirror file) imported again keeps block ids (and with them links and
+backlinks). The mirror is written from the database and never read back into it.
 
 - Text blocks: a trailing inline comment, `## Plans <!-- fortress:block {"id":"01J…"} -->`.
 - Other blocks: a comment on the line before, `<!-- fortress:block {"id":"01J…"} -->`.
@@ -265,15 +283,22 @@ export read back keeps block ids (and with them links and backlinks):
   `[[<document id>]]`; block references `((<block id>))`.
 - Tables: a GFM table when the table has one header row, every cell holds one
   paragraph (or nothing) and there are no spans, colours or widths; otherwise an
-  HTML `<table>` whose rows, cells and cell blocks carry `data-id` attributes.
-  The GFM form lists row and cell ids in its comment.
+  HTML `<table>` whose rows, cells and cell blocks carry their comment's JSON
+  in a `data-block` attribute. The GFM form lists row and cell ids in its
+  comment (`"rows"`).
 - Columns: `<!-- fortress:columns {…} -->`, `<!-- fortress:column {…} -->` …
   `<!-- /fortress:columns -->` around the column contents.
 - Images: `<img src="…" alt="…" width="…">`; files: a comment with the file's
   attrs followed by a `[name](url)` link line.
+- An empty paragraph (no content, no children) is written as nothing: Markdown
+  has no empty paragraph, and a blank line is just spacing.
+- A list item's children are indented by its bullet's width (`- `, `1. `); a
+  task's `[ ] ` is part of the item's text and doesn't count.
 
-Reading Markdown (import, `PUT /api/notes` body, capture, mirrors read by the
-importer) produces canonical blocks directly. An id from a comment is reused when
+Reading Markdown (import, uploads, capture, new notes created with a body,
+importer sources) produces canonical blocks directly. Only `<table>`, `<img>`
+and Fortress `div[data-type]` HTML is read structurally; any other HTML block
+becomes an `html` block. An id from a comment is reused when
 it isn't already taken by another block in the workspace; otherwise a new id is
 made. Comments written by older versions (`<!-- fortress:block {provenance} -->`,
 `<!-- fortress:file {...} -->`) are still read.
@@ -302,7 +327,8 @@ the boundary only (nothing below is stored):
   (`superscript`, `subscript`, `textColor`, `backgroundColor`, `strikethrough`)
   map to marks; link nodes with href `[[id|Title]]` become `docLink`, href
   `(( id ))` becomes `blockRef`; `[[id]]`/`((id))` typed as text become nodes.
-  `content.markdown`, `text` and `expected_updated_at` are ignored.
+  `content.markdown`, `text` and `expected_updated_at` are ignored (so an
+  update must still carry `content`, `type` or `attrs`).
   `content: {"latex": …}` on math is read as the payload. Image `previewWidth`
   maps to `width`.
 - An inline `quote` or `callout` insert/update with runs becomes the container
