@@ -22,6 +22,7 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 from ulid import ULID
 
+from . import block_types as _types
 from . import provenance as _provenance
 from .models import BlockOperation, BlockReviewContextKind
 
@@ -66,6 +67,16 @@ class ImportedBlock:
     children: list["ImportedBlock"] = field(default_factory=list)
     # Restored from a ``<!-- fortress:block {...} -->`` line in imported Markdown.
     provenance: dict[str, object] | None = None
+    # Structured content (tables, images, rich text, ...) and its searchable text;
+    # None means the plain ``{"markdown": source}`` with ``source`` as the text.
+    content: dict[str, object] | None = None
+    text: str | None = None
+
+    def stored_content(self) -> dict[str, object]:
+        return self.content if self.content is not None else {"markdown": self.source}
+
+    def stored_text(self) -> str:
+        return self.text if self.text is not None else self.source
 
 
 _SCHEMA = """
@@ -1691,16 +1702,17 @@ def _insert_blocks(
                 position,
                 block.type,
                 json.dumps(block.attrs),
-                json.dumps({"markdown": block.source}),
-                block.source,
+                json.dumps(block.stored_content()),
+                block.stored_text(),
                 created_at,
                 updated_at,
                 _provenance.dumps(block.provenance),
             ),
         )
+        _replace_attrs(connection, block.id, block.attrs)
         connection.execute(
             "INSERT INTO blocks_fts(block_id, document_id, text) VALUES (?, ?, ?)",
-            (block.id, document_id, block.source),
+            (block.id, document_id, block.stored_text()),
         )
         for child_position, child in enumerate(block.children):
             insert(child, block.id, child_position)
@@ -1811,16 +1823,20 @@ def render_markdown(
 
     With ``document_provenance``, a block whose provenance differs from the
     document's gets it on a ``<!-- fortress:block {...} -->`` line right before it,
-    which Markdown import reads back.
+    which Markdown import reads back. A ``columns`` layout is written as its
+    columns one after another between ``<!-- fortress:columns -->`` markers.
     """
 
     fragments: list[str] = []
     for node in nodes:
-        source = _node_markdown(node)
-        if node["type"] == "divider" and not source:
-            source = "---"
+        fragments.extend(_render_node(node, depth, document_provenance))
+    return "\n\n".join(fragments)
+
+
+def _render_node(node: dict, depth: int, document_provenance: dict | None) -> list[str]:
+    def placed(source: str, block: dict) -> str:
         if source and document_provenance is not None:
-            own = node.get("provenance")
+            own = block.get("provenance")
             if isinstance(own, dict) and own and not own.get("inherited"):
                 if own != {"source": document_provenance.get("source", "manual")}:
                     source = f"{_provenance.comment(own)}\n{source}"
@@ -1829,14 +1845,32 @@ def render_markdown(
             source = "\n".join(
                 f"{prefix}{line}" if line else line for line in source.split("\n")
             )
-        if source:
-            fragments.append(source)
-        children = node.get("children", [])
-        if children:
-            rendered_children = render_markdown(children, depth + 1, document_provenance)
-            if rendered_children:
-                fragments.append(rendered_children)
-    return "\n\n".join(fragments)
+        return source
+
+    children = node.get("children", [])
+    if node["type"] == "columns":
+        fragments = [placed(_types.marker("columns", node.get("attrs") or {}), node)]
+        for child in children:
+            if child["type"] != "column":
+                fragments.extend(_render_node(child, depth, document_provenance))
+                continue
+            fragments.append(placed(_types.marker("column", child.get("attrs") or {}), child))
+            for grandchild in child.get("children", []):
+                fragments.extend(_render_node(grandchild, depth, document_provenance))
+        fragments.append(placed("<!-- /fortress:columns -->", {}))
+        return fragments
+    source = _node_markdown(node)
+    if node["type"] == "divider" and not source:
+        source = "---"
+    fragments = []
+    source = placed(source, node)
+    if source:
+        fragments.append(source)
+    if children:
+        rendered_children = render_markdown(children, depth + 1, document_provenance)
+        if rendered_children:
+            fragments.append(rendered_children)
+    return fragments
 
 
 def _node_markdown(node: dict) -> str:
@@ -1848,6 +1882,11 @@ def _node_markdown(node: dict) -> str:
         native = content.get("blocknote")
         if isinstance(native, str):
             return native
+        try:
+            if node.get("type") in _types.STRUCTURED_TYPES or isinstance(native, list):
+                return _types.block_markdown(node["type"], node.get("attrs") or {}, content)
+        except (_types.BlockShapeError, KeyError, TypeError):
+            pass
         if isinstance(native, list):
             return _inline_text(native)
     return str(node.get("text", ""))
@@ -2598,6 +2637,17 @@ def _apply_operation(
         if operation.content is None and operation.text is not None and isinstance(content, dict):
             if isinstance(content.get("markdown"), str):
                 content = {**content, "markdown": operation.text}
+        block_type = operation.type if operation.type is not None else row["type"]
+        if operation.type is not None and operation.type != row["type"]:
+            _check_layout(connection, document_id, block_type, row["parent_id"], row["id"])
+        if (
+            operation.text is None
+            and operation.content is not None
+            and isinstance(content, dict)
+            and isinstance(content.get("blocknote"), list)
+        ):
+            text = None  # derived from the new runs
+        attrs, content, text = _types.normalize_block(block_type, attrs, content, text)
         provenance_json = (
             row["provenance_json"]
             if operation.provenance is None
@@ -2607,7 +2657,7 @@ def _apply_operation(
             """UPDATE blocks SET type = ?, attrs_json = ?, content_json = ?, text = ?,
                       updated_at = ?, provenance_json = ? WHERE id = ?""",
             (
-                operation.type if operation.type is not None else row["type"],
+                block_type,
                 json.dumps(attrs),
                 json.dumps(content),
                 text,
@@ -2620,6 +2670,16 @@ def _apply_operation(
         _refresh_fts(connection, operation.block_id, document_id, text)
     elif operation.operation == "set_attrs":
         attrs = operation.attrs if operation.attrs is not None else {}
+        if row["type"] in _types.STRUCTURED_TYPES:
+            # An image's size or a file's name changes its Markdown and text too.
+            attrs, content, text = _types.normalize_block(
+                row["type"], attrs, json.loads(row["content_json"]), row["text"]
+            )
+            connection.execute(
+                "UPDATE blocks SET content_json = ?, text = ? WHERE id = ?",
+                (json.dumps(content), text, operation.block_id),
+            )
+            _refresh_fts(connection, operation.block_id, document_id, text)
         connection.execute(
             "UPDATE blocks SET attrs_json = ?, updated_at = ? WHERE id = ?",
             (json.dumps(attrs), now, operation.block_id),
@@ -2662,13 +2722,15 @@ def _insert_block(
         raise ValueError(f"block already exists: {block_id}")
     parent_id = operation.parent_id
     _validate_parent(connection, document_id, parent_id)
+    block_type = operation.type or "paragraph"
+    _check_layout(connection, document_id, block_type, parent_id)
+    attrs, content, text = _types.normalize_block(
+        block_type, operation.attrs or {}, operation.content or {}, operation.text
+    )
     position = _next_position(connection, document_id, parent_id)
     if operation.position is not None:
         position = operation.position
         _shift_positions(connection, document_id, parent_id, position, 1)
-    attrs = operation.attrs or {}
-    content = operation.content or {}
-    text = operation.text or ""
     # A block added in the editor was written here, unless the client says it was
     # pasted, clipped from the web, written by Ask, ...
     block_provenance = (
@@ -2686,7 +2748,7 @@ def _insert_block(
             document_id,
             parent_id,
             position,
-            operation.type or "paragraph",
+            block_type,
             json.dumps(attrs),
             json.dumps(content),
             text,
@@ -2717,6 +2779,7 @@ def _move_block(
     _validate_parent(connection, document_id, parent_id)
     if parent_id == row["id"] or _is_descendant(connection, row["id"], parent_id):
         raise ValueError("cannot move a block into itself or its descendant")
+    _check_layout(connection, document_id, row["type"], parent_id)
     old_parent = row["parent_id"]
     old_position = row["position"]
     # Vacate the unique sibling slot before closing the gap in the old list;
@@ -2807,6 +2870,8 @@ def _duplicate_block(connection: sqlite3.Connection, document_id: str, row: sqli
 
 def _split_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.Row,
                  operation: BlockOperation, now: str) -> str:
+    if row["type"] in _types.STRUCTURED_TYPES:
+        raise ValueError(f"cannot split a {row['type']} block")
     offset = _code_point_offset(row["text"], operation.split_at)
     if offset is None:
         raise ValueError("split requires split_at within block text")
@@ -2861,6 +2926,8 @@ def _merge_block(connection: sqlite3.Connection, document_id: str, row: sqlite3.
     ).fetchone()
     if next_row is None:
         raise ValueError("cannot merge the last sibling")
+    if row["type"] in _types.STRUCTURED_TYPES or next_row["type"] in _types.STRUCTURED_TYPES:
+        raise ValueError("only text blocks can be merged")
     if len(_subtree_rows(connection, row["id"])) > 1 or len(_subtree_rows(connection, next_row["id"])) > 1:
         raise ValueError("cannot merge blocks with children")
     merged = row["text"] + next_row["text"]
@@ -2877,6 +2944,33 @@ def _document_provenance(connection: sqlite3.Connection, document_id: str) -> di
     if row is None:
         return {"source": _provenance.DEFAULT_SOURCE}
     return _provenance.document_provenance(row["provenance_json"], row["source_kind"])
+
+
+def _check_layout(
+    connection: sqlite3.Connection,
+    document_id: str,
+    block_type: str,
+    parent_id: str | None,
+    block_id: str | None = None,
+) -> None:
+    """A ``columns`` block holds only ``column`` blocks, and a column sits only in one."""
+
+    parent_type = None
+    if parent_id is not None:
+        row = connection.execute(
+            "SELECT type FROM blocks WHERE id = ? AND document_id = ?", (parent_id, document_id)
+        ).fetchone()
+        parent_type = row["type"] if row else None
+    if parent_type == "columns" and block_type != "column":
+        raise ValueError("a columns block can only hold column blocks")
+    if block_type == "column" and parent_type != "columns":
+        raise ValueError("a column block must be inside a columns block")
+    if block_id is not None and block_type != "columns":
+        child = connection.execute(
+            "SELECT 1 FROM blocks WHERE parent_id = ? AND type = 'column' LIMIT 1", (block_id,)
+        ).fetchone()
+        if child is not None:
+            raise ValueError("a block holding columns must stay a columns block")
 
 
 def _validate_parent(
@@ -3014,9 +3108,122 @@ def _parse_blocks(body: str) -> list[ImportedBlock]:
     # form feeds and other separators, which would shift every token's line map.
     body = body.replace("\r\n", "\n").replace("\r", "\n")
     lines = body.split("\n")
-    tokens = MarkdownIt("commonmark").parse(body)
+    tokens = _BLOCK_MARKDOWN.parse(body)
     blocks, _ = _parse_sequence(tokens, lines, 0)
     return blocks
+
+
+# CommonMark plus GFM tables (which become structured ``table`` blocks).
+_BLOCK_MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
+
+
+def _fold_layout(blocks: list[ImportedBlock]) -> list[ImportedBlock]:
+    """Turn ``<!-- fortress:columns -->`` markers and what follows into columns blocks."""
+
+    result: list[ImportedBlock] = []
+    open_layouts: list[list] = []  # [columns block, current column or None]
+
+    def target() -> list[ImportedBlock]:
+        if not open_layouts:
+            return result
+        layout = open_layouts[-1]
+        if layout[1] is None:
+            layout[1] = ImportedBlock(_new_ulid(), "column", "", {}, [], content={}, text="")
+            layout[0].children.append(layout[1])
+        return layout[1].children
+
+    for block in blocks:
+        if block.type != "__marker":
+            target().append(block)
+            continue
+        kind, value = block.attrs["kind"], block.attrs["value"]
+        if kind == "columns":
+            columns = ImportedBlock(
+                _new_ulid(), "columns", "", value, [], block.provenance, content={}, text=""
+            )
+            target().append(columns)
+            open_layouts.append([columns, None])
+        elif kind == "column" and open_layouts:
+            try:
+                attrs, _, _ = _types.normalize_block("column", value, {}, None)
+            except _types.BlockShapeError:
+                attrs = {}
+            column = ImportedBlock(
+                _new_ulid(), "column", "", attrs, [], block.provenance, content={}, text=""
+            )
+            open_layouts[-1][0].children.append(column)
+            open_layouts[-1][1] = column
+        elif kind == "/columns" and open_layouts:
+            open_layouts.pop()
+    return result
+
+
+def _structured_block(
+    block_type: str, source: str, attrs: dict, content: dict | None = None
+) -> ImportedBlock | None:
+    """A table/image/file/math block read from Markdown, or None if it is not valid."""
+
+    try:
+        attrs, content, text = _types.normalize_block(block_type, attrs, content or {}, None)
+    except _types.BlockShapeError:
+        return None
+    return ImportedBlock(
+        _new_ulid(), block_type, str(content.get("markdown", source)), attrs,
+        content=content, text=text,
+    )
+
+
+def _text_block(
+    block_type: str, source: str, inline: str | None, attrs: dict | None = None
+) -> ImportedBlock:
+    """A text block; one with underline/colour/... HTML also gets its rich runs."""
+
+    attrs = attrs or {}
+    if inline is not None and _types.has_inline_mark_html(inline):
+        runs = _types.inline_from_markdown(inline)
+        if runs is not None:
+            return ImportedBlock(
+                _new_ulid(), block_type, source, attrs,
+                content={"markdown": source, "blocknote": runs},
+                text=_types.strip_inline_html(source),
+            )
+    return ImportedBlock(_new_ulid(), block_type, source, attrs)
+
+
+def _parse_table(tokens: list[Token], lines: list[str], index: int, indent: int):
+    """A GFM table token run as a structured table block."""
+
+    open_token = tokens[index]
+    source = _token_source(lines, open_token, indent)
+    rows: list[dict] = []
+    header_rows = 0
+    row: list[dict] | None = None
+    in_head = False
+    index += 1
+    while index < len(tokens) and tokens[index].type != "table_close":
+        token = tokens[index]
+        if token.type == "thead_open":
+            in_head = True
+        elif token.type == "thead_close":
+            in_head = False
+        elif token.type == "tr_open":
+            row = []
+        elif token.type == "tr_close" and row is not None:
+            rows.append({"cells": row})
+            header_rows += 1 if in_head else 0
+            row = None
+        elif token.type in {"th_open", "td_open"} and row is not None:
+            style = str(token.attrGet("style") or "")
+            align = style.partition("text-align:")[2].strip()
+            inline = tokens[index + 1].content if tokens[index + 1].type == "inline" else ""
+            runs = _types.inline_from_markdown(inline)
+            props = {"textAlignment": align} if align in {"center", "right"} else {}
+            row.append({"type": "tableCell", "props": props,
+                        "content": runs if runs is not None else inline})
+        index += 1
+    table = {"headerRows": header_rows, "rows": rows}
+    block = _structured_block("table", source, {}, {"blocknote": table}) if rows else None
+    return block or ImportedBlock(_new_ulid(), "raw", source), index + 1
 
 
 def _parse_sequence(
@@ -3026,10 +3233,13 @@ def _parse_sequence(
 
     blocks: list[ImportedBlock] = []
     pending_provenance: dict[str, object] | None = None
+    pending_file: tuple[dict, dict | None] | None = None
     while index < len(tokens):
         token = tokens[index]
         if stop and token.type == stop and token.nesting == -1:
-            return blocks, index + 1
+            if pending_file is not None:
+                blocks.append(_file_block(*pending_file))
+            return _fold_layout(blocks), index + 1
         if token.type in {"bullet_list_open", "ordered_list_open"}:
             nested, index = _parse_list(tokens, lines, index, indent)
             if nested and pending_provenance is not None:
@@ -3037,6 +3247,7 @@ def _parse_sequence(
                 pending_provenance = None
             blocks.extend(nested)
             continue
+        block: ImportedBlock | None = None
         if token.type == "html_block":
             # Our own export writes a block's provenance on the line before it.
             restored = _provenance.parse_comment(token.content)
@@ -3044,10 +3255,43 @@ def _parse_sequence(
                 pending_provenance = restored
                 index += 1
                 continue
-        if token.type == "heading_open":
+            marker = _types.parse_marker(token.content)
+            if marker is not None and marker[0] == "file":
+                pending_file = (marker[1], pending_provenance)
+                pending_provenance = None
+                index += 1
+                continue
+            if marker is not None:
+                block = ImportedBlock(
+                    _new_ulid(), "__marker", "", {"kind": marker[0], "value": marker[1]}
+                )
+                index += 1
+            else:
+                source = _token_source(lines, token, indent)
+                stripped = source.lstrip()
+                if stripped[:6].lower() == "<table":
+                    parsed = _types.table_from_html(source)
+                    if parsed is not None:
+                        block = _structured_block(
+                            "table", source, parsed[0], {"blocknote": parsed[1]}
+                        )
+                elif stripped[:4].lower() == "<img":
+                    image = _types.image_from_html(source)
+                    if image is not None:
+                        block = _structured_block("image", source, image)
+                if block is not None:
+                    index += 1
+        if block is not None:
+            pass
+        elif token.type == "table_open":
+            block, index = _parse_table(tokens, lines, index, indent)
+        elif token.type == "heading_open":
             block, index = _parse_inline_block(tokens, lines, index, "heading", indent)
         elif token.type == "paragraph_open":
             block, index = _parse_inline_block(tokens, lines, index, "paragraph", indent)
+            latex = _types.math_from_markdown(block.source)
+            if latex is not None:
+                block = _structured_block("math", block.source, {}, {"latex": latex}) or block
         elif token.type == "blockquote_open":
             block, index = _parse_container_block(
                 tokens, lines, index, "blockquote_close", "quote", indent
@@ -3063,17 +3307,36 @@ def _parse_sequence(
         elif token.type == "hr":
             block = ImportedBlock(_new_ulid(), "thematic_break", _token_source(lines, token, indent))
             index += 1
-        elif token.type in {"html_block", "table_open"}:
+        elif token.type == "html_block":
             block = ImportedBlock(_new_ulid(), "raw", _token_source(lines, token, indent))
             index += 1
         else:
             index += 1
             continue
+        if pending_file is not None:
+            file_block = _file_block(*pending_file)
+            pending_file = None
+            if block.type == "paragraph":
+                # The paragraph after the marker is the link a Markdown reader sees.
+                if pending_provenance is not None and file_block.provenance is None:
+                    file_block = replace(file_block, provenance=pending_provenance)
+                pending_provenance = None
+                blocks.append(file_block)
+                continue
+            blocks.append(file_block)
         if pending_provenance is not None:
             block = replace(block, provenance=pending_provenance)
             pending_provenance = None
         blocks.append(block)
-    return blocks, index
+    if pending_file is not None:
+        blocks.append(_file_block(*pending_file))
+    return _fold_layout(blocks), index
+
+
+def _file_block(attrs: dict, provenance: dict | None) -> ImportedBlock:
+    block = _structured_block("file", "", attrs) or _structured_block("file", "", {})
+    assert block is not None
+    return replace(block, provenance=provenance)
 
 
 def _parse_list(
@@ -3124,14 +3387,32 @@ def _parse_list_item(
         # The block on the marker line is the item's own text.
         first = children.pop(0)
         source = first.source
+        rich = first.content if first.type == "paragraph" else None
         if first.type == "paragraph":
             task = _TASK_RE.match(source)
             if task:
                 attrs["checked"] = task.group(1).lower() == "x"
+                if rich is not None:
+                    rich = {**rich, "blocknote": _strip_task_marker(rich.get("blocknote"))}
+        if rich is not None:
+            return (
+                ImportedBlock(_new_ulid(), "list", source, attrs, children,
+                              content=rich, text=first.text),
+                index,
+            )
     if not source:
         # Only the marker: the item's content is all in its children.
         source = f"{open_token.info}{open_token.markup}" if ordered else open_token.markup
     return ImportedBlock(_new_ulid(), "list", source, attrs, children), index
+
+
+def _strip_task_marker(runs: object) -> object:
+    if isinstance(runs, list) and runs and isinstance(runs[0], dict):
+        first = runs[0]
+        if first.get("type") == "text":
+            text = re.sub(r"^\[[ xX]\]\s+", "", str(first.get("text", "")))
+            return ([{**first, "text": text}] if text else []) + runs[1:]
+    return runs
 
 
 def _parse_inline_block(
@@ -3139,10 +3420,19 @@ def _parse_inline_block(
 ) -> tuple[ImportedBlock, int]:
     open_token = tokens[index]
     source = _token_source(lines, open_token, indent)
+    inline = (
+        tokens[index + 1].content
+        if index + 1 < len(tokens) and tokens[index + 1].type == "inline"
+        else None
+    )
     index += 1
     while index < len(tokens) and tokens[index].type != f"{block_type}_close":
         index += 1
-    return ImportedBlock(_new_ulid(), block_type, source), min(index + 1, len(tokens))
+    block = _text_block(block_type, source, inline)
+    if block.content is not None and block_type == "heading" and open_token.tag[1:].isdigit():
+        # Rich headings are rendered from their runs, which need the level.
+        block = replace(block, attrs={"level": int(open_token.tag[1:])})
+    return block, min(index + 1, len(tokens))
 
 
 def _parse_container_block(

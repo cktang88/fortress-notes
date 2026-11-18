@@ -36,6 +36,7 @@ from .portability import (
     import_markdown_if_empty,
     preview_markdown_directory,
 )
+from .block_types import BlockShapeError
 from .config import get_settings
 from . import link_checks
 from .models import (
@@ -696,6 +697,9 @@ def apply_block_transaction(document_id: str, transaction: BlockTransaction):
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
         raise HTTPException(409, exc.detail()) from exc
+    except BlockShapeError as exc:
+        # A table/image/... whose content is not a documented shape (spec §2a).
+        raise HTTPException(422, str(exc)) from exc
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(409, str(exc)) from exc
 
