@@ -1235,13 +1235,20 @@ class CompareFindingsTests(_Base):
             {"type": "image", "indent": 0, "asset": "../" + PNG_NAME, "data_status": "available", "alt_text": "",
              "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
              "is_background": False, "original_name": None, "original_asset": None},
+            {"type": "image", "indent": 0, "asset": None, "data_status": "empty", "alt_text": "",
+             "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
+             "is_background": False, "original_name": "zero.png", "original_asset": None},
+            {"type": "file", "indent": 0, "asset": None, "filename": "zero.txt", "extension": "txt",
+             "mime": "text/plain", "size": 0, "data_status": "empty", "media_kind": "other", "icon_asset": None},
         ])
+        self.assertIn("Empty image", tree["children"][5]["text"])
+        self.assertIn("Empty file", tree["children"][6]["attrs"]["caption"])
         names = [child["attrs"].get("name") for child in tree["children"][:3]]
         self.assertEqual(names[0], "evil.exe")
         self.assertEqual(names[1], "attachment")
         self.assertTrue(names[2].endswith(".pdf") and len(names[2]) <= onenote_import.MAX_FILE_NAME, len(names[2]))
         # Neither the asset outside the export nor a non content-addressed name is copied.
-        self.assertTrue(all(child["type"] == "paragraph" for child in tree["children"][3:]))
+        self.assertTrue(all(child["type"] == "paragraph" for child in tree["children"][3:5]))
         self.assertIn("Image missing", tree["children"][3]["text"])
         for path in self.settings.assets_path.iterdir():
             self.assertRegex(path.name, r"^[0-9a-f]{64}\.[a-z0-9]+$")

@@ -97,7 +97,8 @@ class FortressNotes:
 
 _GENERATED_SUFFIXES = ("/subpages", "/ink_text")
 # Placeholders the importer writes for content whose data is not in the export.
-_GENERATED_LABELS = ("Image missing from the OneNote export",)
+_GENERATED_LABELS = ("Image missing from the OneNote export", "Empty image (no data) in the OneNote export",
+                     "Image OneNote marked as damaged")
 
 
 def _external_id(block: dict) -> str:

@@ -865,7 +865,10 @@ def _image(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
     name = block.get("original_name")
     if url is None:
         ctx.count("images_missing")
-        label = f"Image missing from the OneNote export{f' ({name})' if name else ''}"
+        status = block.get("data_status")
+        what = {"empty": "Empty image (no data) in the OneNote export",
+                "invalid": "Image OneNote marked as damaged"}.get(status, "Image missing from the OneNote export")
+        label = f"{what}{f' ({name})' if name else ''}"
         return {"type": "paragraph", "inline": [{"text": label, "i": 1}] + ([{"text": f"\n{alt}"}] if alt else [])}
     if url.rsplit(".", 1)[-1].lower() not in _IMAGE_EXTENSIONS:
         # The bytes are not a picture (damaged data, or a format browsers cannot show):
@@ -930,7 +933,9 @@ def _file(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
     url = ctx.importer.asset_url(block.get("asset"))
     if url is None:
         ctx.count("files_missing")
-        result["caption"] = "File missing from the OneNote export"
+        result["caption"] = {"empty": "Empty file (no data) in the OneNote export",
+                             "invalid": "File OneNote marked as damaged"}.get(
+            block.get("data_status"), "File missing from the OneNote export")
     else:
         result["url"] = url
     if isinstance(block.get("size"), int) and block["size"] > 0:
