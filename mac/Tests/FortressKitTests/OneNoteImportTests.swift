@@ -100,7 +100,7 @@ enum OneNoteFixtures {
         #expect(result.pages == 147)
         #expect(result.problemCount == 3)
         #expect(OneNoteImport.headline(result) == "Imported 2 notebooks")
-        #expect(OneNoteImport.summary(result) == "147 pages · 36 images · 9 files · 12 tables · in 42 s")
+        #expect(OneNoteImport.summary(result) == "147 pages · 36 images · 9 files · 12 tables · in 42 sec")
     }
 
     @Test func recognisesAMissingConverter() throws {
@@ -138,7 +138,11 @@ enum OneNoteFixtures {
 
     @Test func wordsDurations() {
         #expect(OneNoteImport.durationText(400) == "under a second")
-        #expect(OneNoteImport.durationText(41_870) == "42 s")
-        #expect(OneNoteImport.durationText(125_000) == "2 min 5 s")
+        #expect(OneNoteImport.durationText(41_870) == "42 sec")
+        #expect(OneNoteImport.durationText(125_000) == "2 min, 5 sec")
+        // Counts agree with their noun (automatic grammar agreement, not an appended "s").
+        #expect(OneNoteImport.plural(1, "page") == "1 page")
+        #expect(OneNoteImport.plural(1_204, "image") == "1,204 images")
+        #expect(OneNoteImport.pageCount(.init(pagesTotal: 1, pagesDone: 1, current: nil)) == "1 of 1 page")
     }
 }

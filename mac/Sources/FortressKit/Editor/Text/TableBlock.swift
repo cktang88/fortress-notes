@@ -194,7 +194,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         view.column = column
         view.cellTheme = cellTheme(row: row, column: column)
         view.delegate = self
-        view.setAccessibilityLabel("Row \(row + 1), column \(column + 1)")
+        view.setAccessibilityLabel(String(localized: "Row \(row + 1), column \(column + 1)"))
         isLoadingCell = true
         view.textStorage?.setAttributedString(texts[row][column])
         isLoadingCell = false
@@ -1027,7 +1027,7 @@ final class TableAccessibilityElement: NSAccessibilityElement {
         super.init()
         if let column {
             setAccessibilityRole(.cell)
-            setAccessibilityLabel("Row \(row + 1), column \(column + 1)")
+            setAccessibilityLabel(String(localized: "Row \(row + 1), column \(column + 1)"))
             setAccessibilityRowIndexRange(NSRange(location: row, length: 1))
             setAccessibilityColumnIndexRange(NSRange(location: column, length: 1))
         } else {

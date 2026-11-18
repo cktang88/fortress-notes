@@ -111,13 +111,13 @@ public final class EditorSession {
         Self.register(self)
     }
 
-    /// The note's blocks, decoded off the main thread (a long note's tree takes a while).
-    nonisolated static func decode(_ document: BlockDocument) async -> [EditorBlock] {
-        await Task.detached(priority: .userInitiated) {
-            let interval = Signposts.begin("Decode note")
-            defer { Signposts.end("Decode note", interval) }
-            return BlockCodec.flatten(document.children, resolved: document.resolvedLinks)
-        }.value
+    /// The note's blocks, decoded off the main thread (a long note's tree takes a while):
+    /// `@concurrent` runs it on the global executor, keeping the caller's priority and
+    /// cancellation (an unstructured detached task kept neither).
+    @concurrent nonisolated static func decode(_ document: BlockDocument) async -> [EditorBlock] {
+        let interval = Signposts.begin("Decode note")
+        defer { Signposts.end("Decode note", interval) }
+        return BlockCodec.flatten(document.children, resolved: document.resolvedLinks)
     }
 
     public var hasUnsavedChanges: Bool { dirty || inFlight || isDiffing || unsent != nil }

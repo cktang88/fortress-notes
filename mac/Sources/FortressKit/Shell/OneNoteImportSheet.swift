@@ -489,7 +489,7 @@ private struct NotebookCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 4)
                 } label: {
-                    Text(OneNoteImport.plural(notebook.warnings.count, "note") + " from the converter")
+                    Text("\(OneNoteImport.plural(notebook.warnings.count, "note")) from the converter")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -565,11 +565,11 @@ private struct LinksCard: View {
 
     private var linksLine: String {
         var parts: [String] = []
-        if links.rewritten > 0 { parts.append("\(OneNoteImport.plural(links.rewritten, "link")) now open the imported note.") }
+        if links.rewritten > 0 { parts.append(String(localized: "\(OneNoteImport.plural(links.rewritten, "link")) now open the imported note.")) }
         if !links.unresolved.isEmpty {
             let count = links.unresolved.count
-            parts.append(count == 1 ? "1 link points to a page that wasn't in this export; it was kept as is."
-                                    : "\(count) links point to pages that weren't in this export; they were kept as is.")
+            parts.append(count == 1 ? String(localized: "1 link points to a page that wasn't in this export; it was kept as is.")
+                                    : String(localized: "\(count) links point to pages that weren't in this export; they were kept as is."))
         }
         return parts.joined(separator: " ")
     }

@@ -218,6 +218,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             let generation = loadGeneration
             Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
         }
+        // Touching `layoutManager` or inserting an NSTextTable anywhere silently switches
+        // the view to TextKit 1 (and every later open to the slow path): catch it in debug.
+        assert(textView.textLayoutManager != nil, "The editor fell back to TextKit 1")
     }
 
     /// A text block just shown is what reading it back gives (unless building the text
@@ -1674,7 +1677,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                 do {
                     let data: Data
                     if let file = source.url {
-                        data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: file, options: .mappedIfSafe) }.value
+                        data = try await Self.read(file)
                     } else {
                         data = source.data ?? Data()
                     }
@@ -1703,16 +1706,19 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         return true
     }
 
-    /// An image's pixel size from its header (no decoding).
-    nonisolated static func pixelSize(of data: Data) async -> CGSize? {
-        await Task.detached(priority: .utility) { () -> CGSize? in
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
-                  let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
-            let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
-            return orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
-        }.value
+    /// A dropped or pasted file's bytes, read off the main thread.
+    @concurrent nonisolated static func read(_ file: URL) async throws -> Data {
+        try Data(contentsOf: file, options: .mappedIfSafe)
+    }
+
+    /// An image's pixel size from its header (no decoding), off the main thread.
+    @concurrent nonisolated static func pixelSize(of data: Data) async -> CGSize? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        return orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
     }
 
     // MARK: Copying blocks within and between notes

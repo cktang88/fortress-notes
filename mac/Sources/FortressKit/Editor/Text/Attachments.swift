@@ -384,7 +384,7 @@ struct MathBlockView: View {
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color(nsColor: .quaternarySystemFill).opacity(0.6)))
         .help(latex)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Math: " + MathFormatter.plain(MathFormatter.format(latex)))
+        .accessibilityLabel("Math: \(MathFormatter.plain(MathFormatter.format(latex)))")
         .frame(maxHeight: .infinity, alignment: .center)
     }
 }
