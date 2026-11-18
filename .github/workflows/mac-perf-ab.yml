@@ -1,5 +1,5 @@
-# TEMPORARY (mac-code-audit): where keystroke time goes, before (2780045) and now (HEAD),
-# sampled on one runner. Removed before merging.
+# TEMPORARY (mac-code-audit): what makes a keystroke slower once a long note has loaded
+# (chunked load, run-loop idle work, spell checking). Removed before merging.
 name: mac perf A/B
 on:
   push:
@@ -8,25 +8,11 @@ on:
 jobs:
   ab:
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: mac
     steps:
       - uses: actions/checkout@v5
-        with: { fetch-depth: 0 }
-      - name: Build both
-        run: |
-          for c in 2780045 HEAD; do
-            d="$RUNNER_TEMP/ab-$c"
-            git worktree add --detach "$d" "$c"
-            cp mac/Tests/FortressKitTests/KeystrokeSample.swift "$d/mac/Tests/FortressKitTests/"
-            (cd "$d/mac" && swift build --build-tests 2>&1 | grep -E "error:|Build complete" | tail -5) || echo "build failed: $c"
-          done
-      - name: Sample typing
-        run: |
-          for c in 2780045 HEAD; do
-            out="$RUNNER_TEMP/sample-$c.txt"
-            (cd "$RUNNER_TEMP/ab-$c/mac" && KEYSTROKE_PROFILE=1 KEYSTROKE_SAMPLE_OUT="$out" swift test --skip-build --filter "KeystrokeSample|KeystrokeProfile" 2>&1 | grep -E "PROFILE|✘|error" || true)
-            echo "===== $c: heaviest frames (top of stack)"
-            sed -n '/Sort by top of stack/,$p' "$out" | head -45
-            echo "===== $c: main thread call graph, nodes with >= 150 samples"
-            awk '/Call graph:/{f=1} /Total number in stack/{f=0} f' "$out" | awk '{for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) { if ($i+0 >= 150) print; break }}' | cut -c1-230 | head -400
-          done
+      - run: swift build --build-tests
+      - run: KEYSTROKE_PROFILE=1 swift test --skip-build --filter "KeystrokeProfile" 2>&1 | grep -E "PROFILE|✘|error"

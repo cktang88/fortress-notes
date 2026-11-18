@@ -30,18 +30,43 @@ struct KeystrokeProfile {
         return (times.sorted()[times.count / 2], inserts.sorted()[inserts.count / 2])
     }
 
+    /// Spins the run loop for `seconds` (what the app does between keys: idle work such
+    /// as spell checking and attachment loading gets its turn).
+    private func idle(_ seconds: TimeInterval) {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end { _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+    }
+
     @Test func chunkedAgainstWhole() {
         for round in 0..<3 {
+            var results: [(String, (median: Double, insert: Double))] = []
             let chunked = PerfEditor(document: LongNote.document())
             chunked.open()
             chunked.settle()
-            let a = typeInMiddle(chunked, count: 40)
+            results.append(("chunked+settle", typeInMiddle(chunked, count: 40)))
             let whole = PerfEditor(document: LongNote.document())
             whole.open()
             whole.controller.finishLoading()
-            let b = typeInMiddle(whole, count: 40)
-            print(String(format: "PROFILE round %d chunked median %.2f (insert %.2f) whole median %.2f (insert %.2f)",
-                         round, a.median, a.insert, b.median, b.insert))
+            results.append(("whole,noRunLoop", typeInMiddle(whole, count: 40)))
+            let wholeIdle = PerfEditor(document: LongNote.document())
+            wholeIdle.open()
+            wholeIdle.controller.finishLoading()
+            idle(1)
+            results.append(("whole+idle1s", typeInMiddle(wholeIdle, count: 40)))
+            let noSpelling = PerfEditor(document: LongNote.document())
+            noSpelling.controller.textView.isContinuousSpellCheckingEnabled = false
+            noSpelling.open()
+            noSpelling.settle()
+            idle(1)
+            results.append(("chunked+settle+idle,noSpellcheck", typeInMiddle(noSpelling, count: 40)))
+            let spelling = PerfEditor(document: LongNote.document())
+            spelling.open()
+            spelling.settle()
+            idle(1)
+            results.append(("chunked+settle+idle", typeInMiddle(spelling, count: 40)))
+            for (name, result) in results {
+                print(String(format: "PROFILE round %d %@ median %.2f insert %.2f", round, name, result.median, result.insert))
+            }
         }
     }
 }
