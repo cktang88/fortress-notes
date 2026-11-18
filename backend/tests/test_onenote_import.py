@@ -1262,6 +1262,16 @@ class CompareFindingsTests(_Base):
         self.assertIn("not a picture", warnings)
         self.assertIn("no LaTeX", warnings)
 
+    def test_notebook_with_no_pages_and_no_failures_is_reported(self) -> None:
+        # A .onepkg of OneNote 2007 sections converts to an empty notebook with no failure.
+        self.manifest["notebooks"].append({
+            "id": "nb-2", "file_identity": "nb-2", "name": "Personal", "color": None, "source_kind": "onepkg",
+            "source_path": "Personal.onepkg", "children": [], "report": {}})
+        result = self.run_import(self.manifest)
+        work, personal = result["notebooks"]
+        self.assertFalse(any("No pages were found" in w for w in work["warnings"]))
+        self.assertTrue(any("No pages were found" in w for w in personal["warnings"]))
+
     def test_clean_text(self) -> None:
         self.assertEqual(onenote_import._clean("form\x0cfeed bell\x07 nul\x00 a\r\nb‮RTL"),
                          "form feed bell nul a\nb‮RTL")

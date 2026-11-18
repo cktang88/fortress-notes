@@ -1278,6 +1278,7 @@ class _Importer:
                 },
             }
             notebook_info.append(info)
+            planned = len(plan)
             for segments, section in _sections(notebook.get("children") or [], [nb_segment]):
                 folder = sources.ensure_folder_path(self.db_path, SOURCE, segments, parent_id=self.folder_id)
                 info["folder_keys"].update(key for key, _ in segments)
@@ -1291,6 +1292,13 @@ class _Importer:
                         link = _norm_guid(page.get("link_target_id"))
                         if link:
                             self.manifest_pages.add(link)
+            if len(plan) == planned and not entry["failed_sections"]:
+                # The converter reported nothing wrong but found no page (a package of
+                # OneNote 2007 sections, a table of contents naming missing sections...).
+                entry["warnings"].append(
+                    "No pages were found in this notebook although no section was reported as failed. "
+                    "If it has pages in OneNote, open it in OneNote 2016 or later (which upgrades old "
+                    "sections), export it again, or import its folder of .one files.")
 
         self._existing_targets()
         total = len(plan)
