@@ -33,6 +33,10 @@ public struct SyncedTree: Hashable, Sendable {
     /// What each node's fields are encoded from, so the next diff re-encodes only the
     /// nodes that changed (an unchanged block shares its storage and compares in O(1)).
     var sources: [String: NodeSource] = [:]
+    /// Each table's rows, cells and cell blocks, as a tree of their own (its top level
+    /// is the table's children): an unchanged table is carried over whole and skipped
+    /// by the diff, so 8,000 cells cost nothing when one paragraph is edited.
+    public var tables: [String: SyncedTree] = [:]
 
     public init() {}
 
@@ -61,7 +65,7 @@ public struct SyncedTree: Hashable, Sendable {
     }
 
     public static func == (lhs: SyncedTree, rhs: SyncedTree) -> Bool {
-        lhs.parent == rhs.parent && lhs.children == rhs.children && lhs.fields == rhs.fields
+        lhs.parent == rhs.parent && lhs.children == rhs.children && lhs.fields == rhs.fields && lhs.tables == rhs.tables
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -73,18 +77,41 @@ public struct SyncedTree: Hashable, Sendable {
         let previous: SyncedTree?
         let lazily: Bool
 
-        /// Adds one node. Its fields carry over when its source is unchanged.
-        func node(_ id: String, under parentId: String?, _ source: NodeSource, into tree: inout SyncedTree) {
+        /// Adds one node. Its fields carry over when its source is unchanged (reported).
+        @discardableResult
+        func node(_ id: String, under parentId: String?, _ source: NodeSource, into tree: inout SyncedTree) -> Bool {
             tree.parent.updateValue(parentId, forKey: id)
             tree.children[parentId, default: []].append(id)
             if tree.children[id] == nil { tree.children[id] = [] }
+            var unchanged = false
             if let previous, let old = previous.sources[id], old == source {
+                unchanged = true
                 if let known = previous.fields[id] { tree.fields[id] = known }
             } else if !lazily, let fields = source.fields {
                 tree.fields[id] = fields
             }
             tree.sources[id] = source
             tree.order.append(id)
+            return unchanged
+        }
+
+        /// A table's own tree: carried over when the table is unchanged.
+        func table(_ table: TableContent, id: String, unchanged: Bool) -> SyncedTree {
+            if unchanged, let kept = previous?.tables[id] { return kept }
+            var tree = SyncedTree()
+            tree.children[nil] = []
+            let inner = Builder(previous: previous?.tables[id], lazily: lazily)
+            for row in table.rows {
+                inner.node(row.id, under: nil, .fixed(BlockFields(type: "table_row", attrs: row.attrs)), into: &tree)
+                for cell in row.cells {
+                    inner.node(cell.id, under: row.id, .fixed(BlockFields(type: "table_cell", attrs: cell.attrs)), into: &tree)
+                    if cell.paragraphFields != nil {
+                        inner.node(cell.paragraphId, under: cell.id, .cellParagraph(cell), into: &tree)
+                    }
+                    for nested in cell.nested { inner.verbatim(nested, under: cell.id, into: &tree) }
+                }
+            }
+            return tree
         }
 
         /// A flat run of blocks under `root`. Quote lines go into their container; a
@@ -114,18 +141,9 @@ public struct SyncedTree: Hashable, Sendable {
                     index = end
                     continue
                 }
-                node(item.block.id, under: parentId, .block(item.block), into: &tree)
+                let unchanged = node(item.block.id, under: parentId, .block(item.block), into: &tree)
                 if item.block.kind == .table, let table = item.block.table {
-                    for row in table.rows {
-                        node(row.id, under: item.block.id, .fixed(BlockFields(type: "table_row", attrs: row.attrs)), into: &tree)
-                        for cell in row.cells {
-                            node(cell.id, under: row.id, .fixed(BlockFields(type: "table_cell", attrs: cell.attrs)), into: &tree)
-                            if cell.paragraphFields != nil {
-                                node(cell.paragraphId, under: cell.id, .cellParagraph(cell), into: &tree)
-                            }
-                            for nested in cell.nested { verbatim(nested, under: cell.id, into: &tree) }
-                        }
-                    }
+                    tree.tables[item.block.id] = self.table(table, id: item.block.id, unchanged: unchanged)
                 }
                 if item.block.kind == .columns, let columns = item.block.columns {
                     for column in columns {
@@ -219,6 +237,12 @@ public enum BlockDiff {
     /// Operations from `base` to `target`, and the tree the server will then hold.
     public static func operations(from base: SyncedTree, to target: [EditorBlock]) -> (operations: [BlockOperation], result: SyncedTree) {
         let result = SyncedTree(target, reusing: base)
+        return (operations(from: base, to: result, root: nil), result)
+    }
+
+    /// Operations from one tree to another; `root` is the block their top level sits
+    /// under (a table's, for its rows), nil for the note.
+    static func operations(from base: SyncedTree, to result: SyncedTree, root: String?) -> [BlockOperation] {
         var children = base.children
         var parent = base.parent
         if children[nil] == nil { children[nil] = [] }
@@ -283,7 +307,7 @@ public enum BlockDiff {
                     children[currentParent]?.removeAll { $0 == id }
                     siblings = children[targetParent] ?? []
                     operations.append(placed(BlockOperation(operation: .move, blockId: id), position: position,
-                                             siblings: siblings, parent: targetParent))
+                                             siblings: siblings, parent: targetParent ?? root))
                     children[targetParent, default: []].insert(id, at: min(position, siblings.count))
                     parent.updateValue(targetParent, forKey: id)
                 }
@@ -306,11 +330,18 @@ public enum BlockDiff {
                     content: fields.content == .null ? nil : fields.content, payload: fields.payload,
                     provenance: result.sources[id]?.newProvenance)
                 if insert.attrs?.isEmpty == true { insert.attrs = nil }
-                insert = placed(insert, position: position, siblings: siblings, parent: targetParent)
+                insert = placed(insert, position: position, siblings: siblings, parent: targetParent ?? root)
                 operations.append(insert)
                 children[targetParent, default: []].insert(id, at: min(position, siblings.count))
                 children[id] = []
                 parent.updateValue(targetParent, forKey: id)
+            }
+            // A table's rows and cells: only when the table changed (or is new).
+            if let rows = result.tables[id] {
+                let isNew = replaced.contains(id) || base.parent[id] == nil
+                if isNew || base.sources[id] != result.sources[id] {
+                    operations += Self.operations(from: isNew ? SyncedTree() : base.tables[id] ?? SyncedTree(), to: rows, root: id)
+                }
             }
         }
         removed.subtract(replaced)
@@ -327,7 +358,7 @@ public enum BlockDiff {
                 operations.append(BlockOperation(operation: .delete, blockId: id))
             }
         }
-        return (operations, result)
+        return operations
     }
 
     /// Placement for a block going to `position` among `siblings` (the parent's children

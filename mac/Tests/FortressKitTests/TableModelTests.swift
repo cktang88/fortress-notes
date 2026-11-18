@@ -78,7 +78,8 @@ private func specTable() throws -> TableContent { try #require(TableContent(node
         let fields = BlockCodec.encode(blocks[0])
         #expect(fields == BlockFields(tableNode()))
         let tree = SyncedTree(blocks)
-        #expect(tree.order == ["t1", "r0", "c00", "c00p", "c01", "c01p", "r1", "c10", "c10p", "c11", "c11p", "n1", "p"])
+        #expect(tree.order == ["t1", "p"])
+        #expect(tree.tables["t1"]?.order == ["r0", "c00", "c00p", "c01", "c01p", "r1", "c10", "c10p", "c11", "c11p", "n1"])
         let (operations, _) = BlockDiff.operations(from: tree, to: blocks)
         #expect(operations.isEmpty)
     }
