@@ -144,8 +144,8 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         for (r, row) in cells.enumerated() {
             var rowHeight = theme.lineHeight(for: .paragraph) * 0.875 + 2 * padding.height
             for (c, cell) in row.enumerated() {
-                let frame = cellFrame(row: r, column: c)
-                let inner = max(20, frame.width - 2 * padding.width)
+                let span = horizontalSpan(row: r, column: c)
+                let inner = max(20, span.width - 2 * padding.width)
                 var height = textHeight(cell, width: inner)
                 if let extra = nested[r][c] {
                     extra.frame.size.width = inner
@@ -182,17 +182,23 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
 
     /// The cell's rectangle (spans counted from the cells before it in the row).
     func cellFrame(row: Int, column: Int) -> CGRect {
-        guard table.rows.indices.contains(row), rowEdges.count > row + 1 else { return .zero }
+        guard rowEdges.count > row + 1 else { return .zero }
+        let span = horizontalSpan(row: row, column: column)
+        return CGRect(x: span.x, y: rowEdges[row], width: span.width, height: rowEdges[row + 1] - rowEdges[row])
+    }
+
+    /// Where a cell sits across the table (known before row heights are).
+    func horizontalSpan(row: Int, column: Int) -> (x: CGFloat, width: CGFloat) {
+        guard table.rows.indices.contains(row) else { return (0, 0) }
         let cellsInRow = table.rows[row].cells
         let start = cellsInRow.prefix(column).reduce(0) { $0 + $1.colspan }
         let span = column < cellsInRow.count ? cellsInRow[column].colspan : 1
         let lastEdge = columnEdges.count - 1
-        guard lastEdge > 0 else { return .zero }
+        guard lastEdge > 0 else { return (0, 0) }
         let x0 = columnEdges[min(start, lastEdge)]
         // The last cell of a short row reaches the table's right edge.
         let end = column == cellsInRow.count - 1 ? lastEdge : min(start + span, lastEdge)
-        let x1 = columnEdges[end]
-        return CGRect(x: x0, y: rowEdges[row], width: max(0, x1 - x0), height: rowEdges[row + 1] - rowEdges[row])
+        return (x0, max(0, columnEdges[end] - x0))
     }
 
     private func placeViews() {
