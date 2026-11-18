@@ -20,6 +20,8 @@ dependencies = [
     "onnxruntime>=1.24.0",
     "pypdfium2>=5.0.0",
     "regex>=2026.9.29",
+    # ColBERT on the GPU of Apple Silicon Macs (app/colbert_mlx.py); nowhere else.
+    "mlx>=0.32.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [tool.uv]

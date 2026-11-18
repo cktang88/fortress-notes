@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # "auto" runs ColBERT in bfloat16 on CPUs with native support (AVX512-BF16/AMX):
     # several times faster and within ~0.3% of float32 scores. Or "float32"/"bfloat16".
     embeddings_precision: str = "auto"
+    # Apple Silicon: "auto" also loads a GPU encoder (MLX, else torch MPS) and uses it
+    # for queries and/or indexing only where it measures faster than the CPU on this
+    # machine and matches the CPU's encodings (app/embeddings.py); any GPU error moves
+    # back to the CPU. "cpu" never uses the GPU; "mlx" or "mps" use that one for both
+    # (still checked against the CPU) whenever it works.
+    embeddings_device: str = "auto"
     # Threads torch may use for one encode. 0 = half the cores, at most 4. Measured on
     # 4 cores (query encode / 16-paragraph batch): 1 thread 141 ms / 2.2 s, 2 threads
     # 77 ms / 1.3 s, 4 threads 69 ms / 1.0 s; with two other busy processes (OCR,

@@ -8,7 +8,7 @@ Compares, each configuration in its own process (clean first-call and memory num
   median per image, how many graph nodes CoreML took, and text equality / word
   recall against the ground truth and the CPU's output.
 * ColBERT (lightonai/Agent-ModernColBERT via PyLate): CPU vs torch MPS
-  (fp32/fp16/bf16) vs MLX (mlx-embeddings' ModernBERT + the ColBERT projection), for
+  (fp32/fp16/bf16) vs MLX (the app's encoder, app/colbert_mlx.py), for
   one query encode, one paragraph-as-query encode and a 64-paragraph batch. Reports
   token cosine and ranking agreement against CPU float32.
 
@@ -471,39 +471,8 @@ def run_colbert(config: str, reps: int, out_dir: Path) -> dict:
         _sync(device)
         return out
 
-    try:
-        t = time.perf_counter()
-        encode(["warm up"], True)
-        result["first_query_ms"] = _ms(time.perf_counter() - t)
-        t = time.perf_counter()
-        encode(["warm up the documents"], False)
-        result["first_doc_ms"] = _ms(time.perf_counter() - t)
-        times = []
-        for rep in range(max(3, reps)):
-            for query in QUERIES:
-                t = time.perf_counter()
-                encode([query], True)
-                times.append(time.perf_counter() - t)
-        result["query_ms"] = _ms(statistics.median(times))
-        times = []
-        for _ in range(max(5, reps * 2)):
-            t = time.perf_counter()
-            encode([para_query], True)
-            times.append(time.perf_counter() - t)
-        result["paragraph_query_ms"] = _ms(statistics.median(times))
-        for batch_size in (16, 64):
-            times = []
-            for rep in range(reps + 1):
-                t = time.perf_counter()
-                docs = encode(paragraphs, False, batch_size)
-                if rep:
-                    times.append(time.perf_counter() - t)
-                else:
-                    result[f"batch64_bs{batch_size}_first_ms"] = _ms(time.perf_counter() - t)
-            result[f"batch64_bs{batch_size}_ms"] = _ms(statistics.median(times))
-        queries = encode(QUERIES + [para_query], True)
-    except Exception as error:  # noqa: BLE001
-        result["error"] = f"encode: {type(error).__name__}: {error}"[:500]
+    docs, queries = _time_encoder(encode, result, paragraphs, para_query, reps)
+    if docs is None:
         return result
     if device == "mps":
         result["mps_driver_mb"] = round(torch.mps.driver_allocated_memory() / 2**20, 1)
@@ -512,74 +481,9 @@ def run_colbert(config: str, reps: int, out_dir: Path) -> dict:
     return result
 
 
-def _save_embeddings(path: Path, queries, docs) -> None:
-    import numpy as np
-
-    arrays = {f"q{i}": np.asarray(q, dtype=np.float32) for i, q in enumerate(queries)}
-    arrays.update({f"d{i}": np.asarray(d, dtype=np.float32) for i, d in enumerate(docs)})
-    np.savez(path, **arrays)
-
-
-def _run_mlx(result, precision, paragraphs, para_query, reps, out_dir) -> dict:
-    import numpy as np
-    import torch
-
-    try:
-        import mlx.core as mx
-        from mlx_embeddings.utils import load as mlx_load
-    except Exception as error:  # noqa: BLE001
-        result["error"] = f"mlx import: {type(error).__name__}: {error}"[:300]
-        return result
-    from huggingface_hub import snapshot_download
-    from pylate import models
-
-    result["mlx_device"] = str(mx.default_device())
-    mdtype = {"fp32": mx.float32, "fp16": mx.float16, "bf16": mx.bfloat16}[precision]
-    started = time.perf_counter()
-    try:
-        ref = models.ColBERT(model_name_or_path="lightonai/Agent-ModernColBERT", device="cpu")
-        snapshot = Path(snapshot_download("lightonai/Agent-ModernColBERT"))
-        # The transformer alone (mlx-embeddings would also pick up 1_Dense's weights).
-        path = Path(tempfile.mkdtemp(prefix="mlx-modernbert-"))
-        for item in snapshot.iterdir():
-            if item.is_file():
-                (path / item.name).symlink_to(item.resolve())
-        mlx_model, _tok = mlx_load(str(path))
-        if mdtype != mx.float32:
-            mlx_model.set_dtype(mdtype)
-        dense = ref[1].linear
-        weight = mx.array(dense.weight.detach().float().numpy()).astype(mdtype)
-        bias = (mx.array(dense.bias.detach().float().numpy()).astype(mdtype)
-                if dense.bias is not None else None)
-        mx.eval(mlx_model.parameters())
-    except Exception as error:  # noqa: BLE001
-        result["error"] = f"mlx load: {type(error).__name__}: {error}"[:500]
-        return result
-    result["load_ms"] = _ms(time.perf_counter() - started)
-
-    def encode(texts, is_query, batch_size=16):
-        out = []
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start:start + batch_size]
-            features = ref.tokenize(batch, is_query=is_query)
-            ids = features["input_ids"]
-            mask = features["attention_mask"]
-            hidden = mlx_model.model(mx.array(ids.numpy()), attention_mask=mx.array(mask.numpy()))
-            hidden = hidden["last_hidden_state"] if isinstance(hidden, dict) else hidden[0]
-            proj = hidden @ weight.T
-            if bias is not None:
-                proj = proj + bias
-            proj = proj.astype(mx.float32)
-            proj = proj / mx.maximum(mx.linalg.norm(proj, axis=-1, keepdims=True), 1e-12)
-            mx.eval(proj)
-            array = np.array(proj)
-            if is_query:
-                keep = mask.bool()
-            else:
-                keep = torch.logical_and(ref.skiplist_mask(ids, ref.skiplist), mask.bool())
-            for row in range(len(batch)):
-                out.append(torch.from_numpy(array[row][keep[row].numpy()]))
-        return out
+def _time_encoder(encode, result, paragraphs, para_query, reps):
+    """First-call, query, paragraph-as-query and 64-paragraph timings into ``result``;
+    returns (document encodings, query encodings) or (None, None) on an error."""
 
     try:
         t = time.perf_counter()
@@ -601,6 +505,7 @@ def _run_mlx(result, precision, paragraphs, para_query, reps, out_dir) -> dict:
             encode([para_query], True)
             times.append(time.perf_counter() - t)
         result["paragraph_query_ms"] = _ms(statistics.median(times))
+        docs = None
         for batch_size in (16, 64):
             times = []
             for rep in range(reps + 1):
@@ -611,9 +516,51 @@ def _run_mlx(result, precision, paragraphs, para_query, reps, out_dir) -> dict:
                 else:
                     result[f"batch64_bs{batch_size}_first_ms"] = _ms(time.perf_counter() - t)
             result[f"batch64_bs{batch_size}_ms"] = _ms(statistics.median(times))
-        queries = encode(QUERIES + [para_query], True)
+        return docs, encode(QUERIES + [para_query], True)
     except Exception as error:  # noqa: BLE001
-        result["error"] = f"mlx encode: {type(error).__name__}: {error}"[:500]
+        result["error"] = f"encode: {type(error).__name__}: {error}"[:500]
+        return None, None
+
+
+def _save_embeddings(path: Path, queries, docs) -> None:
+    import numpy as np
+
+    arrays = {f"q{i}": np.asarray(q, dtype=np.float32) for i, q in enumerate(queries)}
+    arrays.update({f"d{i}": np.asarray(d, dtype=np.float32) for i, d in enumerate(docs)})
+    np.savez(path, **arrays)
+
+
+def _run_mlx(result, precision, paragraphs, para_query, reps, out_dir) -> dict:
+    """The app's own MLX encoder (app/colbert_mlx.py)."""
+
+    from pylate import models
+
+    from app import colbert_mlx
+
+    try:
+        import mlx.core as mx
+
+        result["mlx_device"] = str(mx.default_device())
+        result["metal"] = bool(mx.metal.is_available())
+    except Exception as error:  # noqa: BLE001
+        result["error"] = f"mlx import: {type(error).__name__}: {error}"[:300]
+        return result
+    started = time.perf_counter()
+    try:
+        ref = models.ColBERT(model_name_or_path="lightonai/Agent-ModernColBERT", device="cpu")
+        ref.eval()
+        name = {"fp32": "float32", "fp16": "float16", "bf16": "bfloat16"}[precision]
+        model = colbert_mlx.load(ref, "lightonai/Agent-ModernColBERT", name)
+    except Exception as error:  # noqa: BLE001
+        result["error"] = f"mlx load: {type(error).__name__}: {error}"[:500]
+        return result
+    result["load_ms"] = _ms(time.perf_counter() - started)
+
+    def encode(texts, is_query, batch_size=16):
+        return model.encode(texts, is_query=is_query, batch_size=batch_size)
+
+    docs, queries = _time_encoder(encode, result, paragraphs, para_query, reps)
+    if docs is None:
         return result
     try:
         result["mlx_peak_mb"] = round(mx.get_peak_memory() / 2**20, 1)
@@ -735,17 +682,26 @@ def app_probe() -> dict:
 
     import torch
 
+    import io
+    import logging
+
     out: dict = {}
+    log = io.StringIO()
+    handler = logging.StreamHandler(log)
+    logging.getLogger("fortress").addHandler(handler)
+    logging.getLogger("fortress").setLevel(logging.INFO)
     tmp = tempfile.mkdtemp(prefix="probe-notes-")
     os.environ.setdefault("NOTES_DIR", tmp)
     from app import embeddings
 
+    started = time.perf_counter()
     model = embeddings.load_model()
+    out["load_ms"] = _ms(time.perf_counter() - started)
     if model is None:
-        return {"error": "model failed to load"}
+        return {"error": "model failed to load", "log": log.getvalue()[-2000:]}
     out["model_device"] = str(next(model.parameters()).device)
     out["dtype"] = str(embeddings._cache.dtype)
-    out["accel"] = getattr(embeddings._cache, "device", None)
+    out["devices"] = embeddings.device_info()
     try:
         q = embeddings._encode(model, ["probe query"], is_query=True)[0]
         out["query_tensor_device"] = str(q.device)
@@ -756,8 +712,18 @@ def app_probe() -> dict:
         out["maxsim_ok"] = bool(len(ids) == 1)
         embeddings._to_bytes(d)
         out["persist_ok"] = True
+        times = []
+        for query in QUERIES:
+            t = time.perf_counter()
+            embeddings._encode(model, [query], is_query=True)
+            times.append(time.perf_counter() - t)
+        out["app_query_ms"] = _ms(statistics.median(times))
+        t = time.perf_counter()
+        embeddings._encode(model, make_paragraphs(), is_query=False)
+        out["app_index_64_paragraphs_ms"] = _ms(time.perf_counter() - t)
     except Exception as error:  # noqa: BLE001
         out["error"] = f"{type(error).__name__}: {error}"[:300]
+    out["log"] = log.getvalue()[-2000:]
     return out
 
 

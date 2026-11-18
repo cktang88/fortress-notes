@@ -5,7 +5,7 @@ on:
   push:
     branches: [apple-accel]
     paths: ["backend/scripts/bench_accel.py", "backend/app/ocr.py", "backend/app/embeddings.py",
-            ".github/workflows/accel-bench.yml"]
+            "backend/app/colbert_mlx.py", ".github/workflows/accel-bench.yml"]
 
 jobs:
   bench:
@@ -25,17 +25,16 @@ jobs:
         run: uv sync --frozen --python 3.13
       - name: Fetch the ColBERT model
         run: .venv/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('lightonai/Agent-ModernColBERT')"
-      - name: Bench (CPU, CoreML EP, MPS)
+      - name: Embedding tests on macOS (MLX parity on the GPU, routing)
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: |
+          .venv/bin/python -m unittest discover -s tests -p test_colbert_mlx.py -v
+          .venv/bin/python -m unittest discover -s tests -p test_embeddings.py
+      - name: Bench ColBERT (CPU, MLX, MPS) and the app's own choice
         run: |
           .venv/bin/python scripts/bench_accel.py all --out "$RUNNER_TEMP/accel" --reps 5 --tag main \
-            --ocr-configs cpu,cpu_allcores,coreml_mlprogram_all,coreml_mlprogram_all+cached,coreml_mlprogram_gpu,coreml_mlprogram_gpu+cached,coreml_mlprogram_ne \
-            --colbert-configs cpu_fp32,cpu_fp32_allcores,mps_fp16
-      - name: Bench MLX
-        if: success() || failure()
-        run: |
-          uv pip install --python .venv/bin/python mlx mlx-embeddings
-          .venv/bin/python scripts/bench_accel.py all --out "$RUNNER_TEMP/accel" --reps 5 --tag mlx \
-            --ocr-configs "" --colbert-configs mlx_fp32,mlx_fp16,mlx_bf16
+            --ocr-configs "" --colbert-configs cpu_fp32,cpu_fp32_allcores,mlx_fp32,mlx_fp16,mps_fp16
       - uses: actions/upload-artifact@v4
         if: always()
         with:
