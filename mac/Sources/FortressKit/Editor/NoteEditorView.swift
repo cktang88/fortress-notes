@@ -348,7 +348,7 @@ enum EditorUpload {
         body.append(data)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         request.httpBody = body
-        let (responseData, response) = try await URLSession.shared.data(for: request)
+        let (responseData, response) = try await APIClient.sharedSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw APIError(status: http.statusCode, message: HTTPURLResponse.localizedString(forStatusCode: http.statusCode))
         }
