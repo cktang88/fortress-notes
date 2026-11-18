@@ -193,6 +193,9 @@ merging apply to text blocks only.
 - `search.py` — full-text search + orchestration of embedding search & related notes.
 - `llm.py` — OpenRouter chat completion (`z-ai/glm-5.3-flash`) for note review.
 - `main.py` — FastAPI app, routes, CORS.
+- `http_cache.py` — ETags, `If-None-Match` → 304, rendered-body caches, API gzip.
+- `media.py` — `/media` file serving (immutable caching, ranges, content types).
+- `batch.py` — batch reads and moves for the native app.
 - `onenote_import.py` — OneNote importer: runs `fortress-onenote`, imports its manifest as living documents, import jobs (§7b).
 
 ### API
@@ -210,7 +213,10 @@ merging apply to text blocks only.
 | `POST` | `/api/notes/{id}/review` | `?kind=factcheck\|clarify\|object` | `ReviewResponse` |
 | `POST` | `/api/block-documents/{id}/link-checks` | — | `{links: [{url, status, checked_at, block_ids}]}` |
 | `POST` | `/api/images` | multipart `file` | `{url, text}` (saves image, runs caption+OCR) |
-| `GET` | `/media/{file}` | — | image bytes (StaticFiles) |
+| `GET` | `/media/{file}` | — | stored file bytes (ranges, immutable caching; see below) |
+| `POST` | `/api/batch/block-documents` | `{ids: [≤50], known: {id: revision}}` | `{documents: [tree], unchanged: [id], missing: [id]}`; does not mark notes opened |
+| `POST` | `/api/batch/move` | `{documents: [{id, folder_id}], folders: [{id, parent_id}]}` | `{folders, documents}` (counts moved) |
+| `POST` | `/api/block-documents/{id}/transactions` | `BlockTransaction`, `?response=document\|meta` | document tree (`meta`: without `children`); header `X-Document-ETag` |
 | `GET` | `/api/trash` | — | trashed documents, newest first |
 | `POST` | `/api/trash/{id}/restore` | — | `{id, folder_id, position}` (also rewrites the Markdown mirror) |
 | `DELETE` | `/api/trash/{id}` · `/api/trash` | — | delete one forever · empty the trash |
@@ -227,6 +233,49 @@ merging apply to text blocks only.
 | `GET` | `/api/import/onenote/{job_id}` | — | import job (§7b) |
 | `GET` | `/api/import/onenote` | `?limit=20` | recent import jobs, newest first |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
+
+### HTTP caching, compression, errors
+
+- **Validators.** These GETs carry a strong `ETag` and `Cache-Control: no-cache`
+  (keep, but revalidate); a request whose `If-None-Match` matches gets `304` with no
+  body:
+  - `GET /api/block-documents/{id}` — changes with anything in the payload: the note's
+    own rows (blocks, user attrs, links, history, title/status/provenance/...),
+    `last_opened_at`, and every linked note or block (titles and text in
+    `resolved_links`, `[[id|Title]]` labels).
+  - `GET /api/navigation` (per `recent_limit`), `GET /api/trash`,
+    `GET /api/block-documents/{id}/info`, `GET /api/block-documents/{id}/backlinks`
+    — change with any change in the workspace (they show other notes).
+  - `GET /api/backups` — changes with the snapshot list.
+
+  The server tracks changes with SQLite triggers (`change_log.seq`, an `epoch` renewed
+  by every restore, and `documents.change_seq`), so writes from any code path — and
+  restores — invalidate validators. Other API responses also get
+  `Cache-Control: no-cache` unless they set their own (the Ask stream: `no-store`).
+- **Opening is cheap.** `GET /api/block-documents/{id}` sets `last_opened_at` at most
+  once a minute per note, and skips (does not wait for) the write while another
+  writer holds the database. A transaction response carries `X-Document-ETag`, the
+  ETag the next GET of that note answers 304 to, and primes the server's cache.
+- **Server caches.** Rendered bodies are cached per validator (documents: 256 entries
+  / 64 MB; others: 256 / 32 MB), so repeated GETs skip SQLite and JSON encoding.
+- **gzip.** `/api` responses of 1 KB or more are gzipped when the client sends
+  `Accept-Encoding: gzip` (`Vary: Accept-Encoding`). A gzipped response's ETag gets a
+  `-gzip` suffix (`"abc-gzip"`); `If-None-Match` accepts either form. Never
+  compressed: the Ask NDJSON stream (stays unbuffered), media, octet-stream, PDF and
+  SQLite downloads.
+- **Media.** `/media/<name>` files named by a ULID (uploads) or SHA-256 (imports) never
+  change: `Cache-Control: public, max-age=31536000, immutable`, `ETag` = the SHA-256
+  for content-addressed names (else size/mtime), `Last-Modified`, `Accept-Ranges`
+  (`Range` → 206), explicit `Content-Type` (e.g. `.m4a` `audio/mp4`, `.webm`
+  `audio/webm`), `X-Content-Type-Options: nosniff`. Text sidecars (`<id>.txt`) are
+  `no-cache`. Uploads (`/api/images`, `/api/files`) stream to disk while hashing.
+- **Errors** are JSON `{"detail": ...}`: unknown routes 404, a database still locked
+  after the 5 s busy timeout `503` with `Retry-After: 1`, anything unexpected `500`
+  `{"detail": "Internal server error"}`.
+- **SQLite.** WAL, `synchronous=NORMAL`, 16 MB page cache, 256 MB mmap, 5 s busy
+  timeout, one pooled connection per worker thread (prepared statements reused).
+  FTS rows share their block's rowid, so an edit re-indexes only the blocks it wrote.
+  Markdown mirrors of edited notes are written in the background (coalesced, 0.5 s).
 
 ### Late-interaction search (PyLate)
 - Model: `lightonai/Agent-ModernColBERT` (configurable).
@@ -356,7 +405,7 @@ was created with). Provenance is never part of block text, FTS or embeddings.
 ```
 
 - **Document payload** (`GET /api/block-documents/{id}` and every tree response) adds
-  `provenance`, `last_opened_at` (set when that GET runs) and
+  `provenance`, `last_opened_at` (set when that GET runs, at most once a minute) and
   `resolved_links: {documents: {id: {title}}, blocks: {id: {document_id, document_title, type, text}}}`.
   `[[id|Title]]` links are served with the target's current title (stored text is
   untouched). Each block adds `provenance` (its own, or the note's with

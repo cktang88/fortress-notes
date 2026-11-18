@@ -12,7 +12,8 @@ import json
 import re
 import sqlite3
 import threading
-from contextlib import closing, contextmanager
+import time
+from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -329,32 +330,107 @@ _MIGRATIONS = {
 }
 
 _ready_paths: set[Path] = set()
+# Databases whose schema is current, keyed by the path as given, with the file
+# identity checked (a deleted or replaced file is initialized again).
+_ready_files: dict[Path, tuple[Path, tuple[int, int], int]] = {}
 # Creating or migrating a database is check-then-write; concurrent first use from
 # several threads would otherwise race (duplicate version rows, lock errors).
 _initialize_lock = threading.Lock()
 UNSET = object()
+
+# Per-connection settings. WAL lets readers run while one writer commits;
+# synchronous=NORMAL is durable across application crashes in WAL mode (a power
+# loss can drop the last commits, never corrupt). The page cache and memory map
+# keep hot pages (navigation, open notes) out of read() calls.
+_PRAGMAS = (
+    "PRAGMA foreign_keys = ON",
+    "PRAGMA busy_timeout = 5000",
+    "PRAGMA synchronous = NORMAL",
+    "PRAGMA cache_size = -16000",
+    "PRAGMA mmap_size = 268435456",
+    "PRAGMA temp_store = MEMORY",
+)
+# Idle connections kept per thread and database. Request handlers run on a small,
+# reused thread pool, so each worker thread keeps its own warm connection (with
+# its prepared-statement cache) instead of opening one per request.
+_POOL_SIZE = 2
+
+
+class _Idle(list):
+    """A thread's idle connections to one database; closed when the thread ends."""
+
+    def __del__(self) -> None:
+        for connection, _identity in self:
+            with suppress(Exception):
+                connection.close()
+
+
+_pool = threading.local()
 
 
 def database_path(notes_path: Path) -> Path:
     return notes_path / DB_FILENAME
 
 
+def _file_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path, timeout=5.0)
+    connection = sqlite3.connect(path, timeout=5.0, cached_statements=256)
     try:
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        for pragma in _PRAGMAS[:2]:
+            connection.execute(pragma)
         # Switching modes needs an exclusive lock and fails at once ("database is
         # locked") while another connection is open, so only switch when needed.
         if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
             connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = FULL")
+        for pragma in _PRAGMAS[2:]:
+            connection.execute(pragma)
     except BaseException:
         connection.close()
         raise
     return connection
+
+
+def _checkout(path: Path) -> tuple[sqlite3.Connection, tuple[int, int] | None]:
+    idle: dict = getattr(_pool, "idle", None) or {}
+    _pool.idle = idle
+    entries = idle.get(path)
+    identity = _file_identity(path)
+    while entries:
+        connection, opened_identity = entries.pop()
+        # The file was replaced or deleted since: that connection would read
+        # (and write) the old one.
+        if identity is not None and opened_identity == identity:
+            return connection, identity
+        connection.close()
+    connection = connect(path)
+    return connection, identity or _file_identity(path)
+
+
+def _checkin(path: Path, connection: sqlite3.Connection, identity) -> None:
+    entries = _pool.idle.get(path)
+    if entries is None:
+        entries = _pool.idle[path] = _Idle()
+    if connection.in_transaction or len(entries) >= _POOL_SIZE or identity is None:
+        connection.close()
+        return
+    entries.append((connection, identity))
+
+
+def close_pooled_connections() -> None:
+    """Close this thread's idle connections (tests that delete databases)."""
+
+    for entries in (getattr(_pool, "idle", None) or {}).values():
+        while entries:
+            entries.pop()[0].close()
 
 
 @contextmanager
@@ -363,22 +439,57 @@ def connection_scope(path: Path, immediate: bool = False):
 
     Writes that read sibling positions before shifting them need ``immediate``:
     otherwise two requests can read the same positions before either writes.
+    The connection is this thread's pooled one (a nested scope gets its own).
     """
 
-    connection = connect(path)
+    connection, identity = _checkout(path)
     try:
         with connection:
             if immediate:
                 connection.execute("BEGIN IMMEDIATE")
             yield connection
     finally:
-        connection.close()
+        # ``with connection`` committed or rolled back; one still inside a
+        # transaction (a failed rollback) is closed rather than reused.
+        _checkin(path, connection, identity)
 
 
-def initialize(path: Path) -> None:
+@contextmanager
+def read_scope(path: Path):
+    """A pooled connection holding one read snapshot for several queries."""
+
+    with connection_scope(path) as connection:
+        connection.execute("BEGIN")
+        yield connection
+
+
+def initialize(path: Path, force: bool = False) -> None:
+    """Create or migrate the schema; a cheap check once a file is current.
+
+    The check is the file's identity (a deleted or replaced file starts over)
+    and SQLite's schema cookie (anything else that changed the schema, e.g. an
+    older snapshot copied over it, runs the migrations again).
+    """
+
+    if not force:
+        ready = _ready_files.get(path)
+        if ready is not None and ready[1] == _file_identity(path):
+            if _schema_cookie(path) == ready[2]:
+                return
     with _initialize_lock:
         _initialize(path)
+    identity = _file_identity(path)
+    if identity is not None:
+        _ready_files[path] = (path.resolve(), identity, _schema_cookie(path))
     _ready_paths.add(path.resolve())
+
+
+def _schema_cookie(path: Path) -> int:
+    connection, identity = _checkout(path)
+    try:
+        return int(connection.execute("PRAGMA schema_version").fetchone()[0])
+    finally:
+        _checkin(path, connection, identity)
 
 
 def _initialize(path: Path) -> None:
@@ -421,6 +532,129 @@ def _initialize(path: Path) -> None:
                    ON folders(source_kind, source_external_id)
                 WHERE source_external_id IS NOT NULL"""
         )
+        connection.executescript(_PERFORMANCE_INDEXES)
+        _ensure_change_tracking(connection)
+        if not _fts_rowids_aligned(connection):
+            _rebuild_fts(connection)
+
+
+# Lookups that EXPLAIN QUERY PLAN showed as full scans: backlinks (by target),
+# the foreign-key checks of every block delete (children by parent_id, refs by
+# target), asset links by media name, and a purge's receipts.
+_PERFORMANCE_INDEXES = """
+CREATE INDEX IF NOT EXISTS block_refs_target ON block_refs(target_block_id);
+CREATE INDEX IF NOT EXISTS document_refs_target ON document_refs(target_document_id);
+CREATE INDEX IF NOT EXISTS blocks_parent ON blocks(parent_id);
+CREATE INDEX IF NOT EXISTS assets_media_name ON assets(media_name);
+CREATE INDEX IF NOT EXISTS block_assets_asset ON block_assets(content_hash, media_name);
+CREATE INDEX IF NOT EXISTS transaction_receipts_document ON transaction_receipts(document_id);
+"""
+
+# Change tracking for HTTP validators (ETags) and server-side response caches.
+# ``change_log.seq`` grows with every change to anything a cached response
+# shows; ``documents.change_seq`` is the seq of the last change to that note's
+# own rows (blocks, user attrs, links, history, the document row). ``epoch``
+# changes when a backup is restored, so validators from before never match.
+# last_opened_at is deliberately not tracked: it is metadata of a read.
+_DOCUMENT_COLUMNS = (
+    "title, status, tags_json, folder_id, position, deleted_at, created_at, updated_at, "
+    "revision, title_auto, provenance_json, source_kind, source_external_id, sync_json"
+)
+
+
+def _bump(document_expr: str | None) -> str:
+    sql = "UPDATE change_log SET seq = seq + 1 WHERE id = 1;"
+    if document_expr:
+        sql += (
+            " UPDATE documents SET change_seq = (SELECT seq FROM change_log WHERE id = 1)"
+            f" WHERE id IN ({document_expr});"
+        )
+    return sql
+
+
+_CHANGE_TRIGGERS = {
+    "blocks_changed_insert": ("AFTER INSERT ON blocks", _bump("NEW.document_id")),
+    "blocks_changed_update": (
+        "AFTER UPDATE ON blocks", _bump("NEW.document_id, OLD.document_id")
+    ),
+    "blocks_changed_delete": ("AFTER DELETE ON blocks", _bump("OLD.document_id")),
+    "documents_changed_insert": ("AFTER INSERT ON documents", _bump("NEW.id")),
+    "documents_changed_update": (
+        f"AFTER UPDATE OF {_DOCUMENT_COLUMNS} ON documents", _bump("NEW.id")
+    ),
+    "documents_changed_delete": ("AFTER DELETE ON documents", _bump(None)),
+    "folders_changed_insert": ("AFTER INSERT ON folders", _bump(None)),
+    "folders_changed_update": ("AFTER UPDATE ON folders", _bump(None)),
+    "folders_changed_delete": ("AFTER DELETE ON folders", _bump(None)),
+    "document_history_changed_insert": (
+        "AFTER INSERT ON document_history", _bump("NEW.document_id")
+    ),
+    "document_history_changed_update": (
+        "AFTER UPDATE ON document_history", _bump("NEW.document_id")
+    ),
+    "document_history_changed_delete": (
+        "AFTER DELETE ON document_history", _bump("OLD.document_id")
+    ),
+}
+for _table, _column in (
+    ("block_user_attrs", "block_id"),
+    ("block_refs", "source_block_id"),
+    ("document_refs", "source_block_id"),
+):
+    for _event, _row in (("insert", "NEW"), ("update", "NEW"), ("delete", "OLD")):
+        _CHANGE_TRIGGERS[f"{_table}_changed_{_event}"] = (
+            f"AFTER {_event.upper()} ON {_table}",
+            _bump(f"SELECT document_id FROM blocks WHERE id = {_row}.{_column}"),
+        )
+
+
+def _ensure_change_tracking(connection: sqlite3.Connection) -> None:
+    _add_columns(connection, "documents", {"change_seq": "INTEGER NOT NULL DEFAULT 0"})
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS change_log (
+               id INTEGER PRIMARY KEY CHECK (id = 1),
+               seq INTEGER NOT NULL,
+               epoch TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        "INSERT OR IGNORE INTO change_log(id, seq, epoch)"
+        " VALUES (1, 0, lower(hex(randomblob(8))))"
+    )
+    for name, (event, body) in _CHANGE_TRIGGERS.items():
+        connection.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {event} BEGIN {body} END")
+
+
+def _fts_rowids_aligned(connection: sqlite3.Connection) -> bool:
+    """Whether every FTS row has its block's rowid (``_fts_insert`` relies on it).
+
+    Databases indexed before that rule get their FTS rebuilt once.
+    """
+
+    return connection.execute(
+        """SELECT 1 FROM blocks_fts LEFT JOIN blocks ON blocks.rowid = blocks_fts.rowid
+            WHERE blocks.id IS NOT blocks_fts.block_id LIMIT 1"""
+    ).fetchone() is None
+
+
+def new_change_epoch(path: Path) -> None:
+    """Invalidate every validator handed out so far (e.g. after a restore)."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        connection.execute(
+            "UPDATE change_log SET seq = seq + 1, epoch = lower(hex(randomblob(8)))"
+            " WHERE id = 1"
+        )
+
+
+def change_state(path: Path) -> tuple[str, int]:
+    """(epoch, seq): changes whenever anything a cached response shows changes."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        row = connection.execute("SELECT epoch, seq FROM change_log WHERE id = 1").fetchone()
+    return str(row["epoch"]), int(row["seq"])
 
 
 def register_asset(db_path: Path, asset_path: Path, content_hash: str, mime_type: str) -> None:
@@ -494,7 +728,14 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
     if not assets_path.is_dir():
         return 0
     registered = 0
+    changed = False
     with connection_scope(db_path) as connection:
+        # Registered files are not read again (this runs at every startup, and
+        # attachments can be large): only a sidecar text an empty row lacks.
+        known = {
+            row["media_name"]: (row["content_hash"], row["text"])
+            for row in connection.execute("SELECT media_name, content_hash, text FROM assets")
+        }
         for asset_path in sorted(assets_path.iterdir()):
             mime_type = _MIME_BY_EXTENSION.get(asset_path.suffix.lower())
             if (
@@ -504,12 +745,11 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
                 or not asset_path.is_file()
             ):
                 continue
-            try:
-                data = asset_path.read_bytes()
-            except OSError:
-                continue
-            content_hash = hashlib.sha256(data).hexdigest()
             old_sidecar = asset_path.with_suffix(".txt")
+            existing = known.get(asset_path.name)
+            if existing is not None and (existing[1] or not old_sidecar.is_file()):
+                registered += 1
+                continue
             try:
                 text = (
                     old_sidecar.read_text(encoding="utf-8")
@@ -518,6 +758,17 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
                 )
             except (OSError, UnicodeError):
                 text = ""
+            if existing is not None:
+                content_hash = existing[0]
+                if not text:
+                    registered += 1
+                    continue
+            else:
+                try:
+                    content_hash = _file_sha256(asset_path)
+                except OSError:
+                    continue
+            changed = True
             registered_at = _now()
             connection.execute(
                 """INSERT INTO assets(
@@ -548,11 +799,21 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
                     except OSError:
                         pass
             registered += 1
-        document_ids = connection.execute("SELECT id FROM documents").fetchall()
-        for row in document_ids:
-            _rebuild_document_assets(connection, row["id"])
-    rebuild_fts(db_path)
+        if changed:
+            document_ids = connection.execute("SELECT id FROM documents").fetchall()
+            for row in document_ids:
+                _rebuild_document_assets(connection, row["id"])
+    if changed:
+        rebuild_fts(db_path)
     return registered
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
@@ -805,15 +1066,151 @@ def create_document(
             )
 
 
-def mark_opened(path: Path, document_id: str) -> None:
-    """Remember when a note was last opened (metadata only: no revision, no edit time)."""
+# Opening a note writes last_opened_at, but at most once a minute per note: a
+# write on every read would serialize reads behind writers and change the
+# note's validator (ETag) on every GET.
+OPEN_MARK_INTERVAL_S = 60.0
+_opened_marks: dict[tuple[Path, str], float] = {}
+_opened_lock = threading.Lock()
+
+
+def mark_opened(path: Path, document_id: str, *, wait: bool = True) -> bool:
+    """Remember when a note was last opened (metadata only: no revision, no edit time).
+
+    Debounced per note (``OPEN_MARK_INTERVAL_S``). With ``wait=False`` the write
+    is skipped, not waited for, while another writer holds the database (the
+    next open tries again). Returns whether it wrote.
+    """
+
+    key = (path, document_id)
+    now = time.monotonic()
+    with _opened_lock:
+        last = _opened_marks.get(key)
+        if last is not None and now - last < OPEN_MARK_INTERVAL_S:
+            return False
+    initialize(path)
+    try:
+        with connection_scope(path) as connection:
+            if not wait:
+                connection.execute("PRAGMA busy_timeout = 0")
+            try:
+                connection.execute(
+                    "UPDATE documents SET last_opened_at = ? WHERE id = ? AND deleted_at IS NULL",
+                    (_now(), document_id),
+                )
+            finally:
+                if not wait:
+                    connection.execute("PRAGMA busy_timeout = 5000")
+    except sqlite3.OperationalError:
+        if wait:
+            raise
+        return False
+    with _opened_lock:
+        if len(_opened_marks) > 10_000:
+            _opened_marks.clear()
+        _opened_marks[key] = now
+    return True
+
+
+def document_title(path: Path, document_id: str) -> str | None:
+    """A live document's title (None if missing or trashed)."""
 
     initialize(path)
     with connection_scope(path) as connection:
-        connection.execute(
-            "UPDATE documents SET last_opened_at = ? WHERE id = ? AND deleted_at IS NULL",
-            (_now(), document_id),
-        )
+        row = connection.execute(
+            "SELECT title FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
+        ).fetchone()
+    return None if row is None else str(row["title"])
+
+
+def block_text(path: Path, document_id: str, block_id: str) -> str | None:
+    """One block's stored text (None if the block is not in that live document)."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        row = connection.execute(
+            """SELECT blocks.text FROM blocks JOIN documents ON documents.id = blocks.document_id
+                WHERE blocks.id = ? AND blocks.document_id = ? AND documents.deleted_at IS NULL""",
+            (block_id, document_id),
+        ).fetchone()
+    return None if row is None else str(row["text"])
+
+
+def document_exists(path: Path, document_id: str) -> bool:
+    initialize(path)
+    with connection_scope(path) as connection:
+        return connection.execute(
+            "SELECT 1 FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
+        ).fetchone() is not None
+
+
+def _document_validator(connection: sqlite3.Connection, document_id: str) -> tuple | None:
+    """What a document payload depends on, as a tuple that changes when it does.
+
+    Its own rows (``change_seq``), ``last_opened_at``, and the newest change of
+    every note or block it links to (their titles and text are in
+    ``resolved_links`` and ``[[id|Title]]`` labels). ``change_seq`` values grow
+    globally, so a change to any link target raises the maximum; a link that
+    appears or disappears changes this note's own rows.
+    """
+
+    row = connection.execute(
+        """SELECT change_log.epoch, documents.change_seq, documents.last_opened_at,
+                  (SELECT MAX(target.change_seq)
+                     FROM blocks AS source
+                     JOIN document_refs AS refs ON refs.source_block_id = source.id
+                     JOIN documents AS target ON target.id = refs.target_document_id
+                    WHERE source.document_id = documents.id) AS document_targets,
+                  (SELECT MAX(target_doc.change_seq)
+                     FROM blocks AS source
+                     JOIN block_refs AS refs ON refs.source_block_id = source.id
+                     JOIN blocks AS target ON target.id = refs.target_block_id
+                     JOIN documents AS target_doc ON target_doc.id = target.document_id
+                    WHERE source.document_id = documents.id) AS block_targets
+             FROM documents, change_log
+            WHERE documents.id = ? AND documents.deleted_at IS NULL AND change_log.id = 1""",
+        (document_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return (
+        row["epoch"], row["change_seq"], row["document_targets"], row["block_targets"],
+        row["last_opened_at"],
+    )
+
+
+def document_validator(path: Path, document_id: str) -> tuple | None:
+    """The document's validator (see ``_document_validator``); None if missing."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        return _document_validator(connection, document_id)
+
+
+def document_tree_with_validator(path: Path, document_id: str) -> tuple[tuple, dict] | None:
+    """The tree and its validator, read from one snapshot."""
+
+    initialize(path)
+    with read_scope(path) as connection:
+        validator = _document_validator(connection, document_id)
+        if validator is None:
+            return None
+        tree = _document_tree(connection, document_id)
+    return (validator, tree) if tree is not None else None
+
+
+def document_info_validator(path: Path, document_id: str) -> tuple | None:
+    """Info and backlinks show other notes too: the workspace change state."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        row = connection.execute(
+            """SELECT change_log.epoch, change_log.seq, documents.last_opened_at
+                 FROM documents, change_log
+                WHERE documents.id = ? AND documents.deleted_at IS NULL AND change_log.id = 1""",
+            (document_id,),
+        ).fetchone()
+    return None if row is None else tuple(row)
 
 
 def ensure_editable_block(path: Path, document_id: str) -> bool:
@@ -1303,27 +1700,25 @@ def check_integrity(path: Path) -> bool:
 
 
 def fts_is_consistent(path: Path) -> bool:
-    """Check that FTS contains exactly the active canonical blocks."""
+    """Check that FTS contains exactly the active canonical blocks.
+
+    ``blocks_fts.block_id`` is UNINDEXED, so a SQL join on it scans the whole FTS
+    table once per block (minutes on a large workspace). Comparing the two ID
+    lists is linear.
+    """
 
     initialize(path)
-    with connection_scope(path) as connection:
-        missing = connection.execute(
-            """SELECT 1
-                 FROM blocks
-                 JOIN documents ON documents.id = blocks.document_id
-                 LEFT JOIN blocks_fts ON blocks_fts.block_id = blocks.id
-                WHERE documents.deleted_at IS NULL AND blocks_fts.block_id IS NULL
-                LIMIT 1"""
-        ).fetchone()
-        stale = connection.execute(
-            """SELECT 1
-                 FROM blocks_fts
-                 LEFT JOIN blocks ON blocks.id = blocks_fts.block_id
-                 LEFT JOIN documents ON documents.id = blocks_fts.document_id
-                WHERE blocks.id IS NULL OR documents.deleted_at IS NOT NULL
-                LIMIT 1"""
-        ).fetchone()
-    return missing is None and stale is None
+    with read_scope(path) as connection:
+        # Each FTS row also has its block's rowid (see ``_fts_insert``).
+        active = dict(
+            connection.execute(
+                """SELECT blocks.rowid, blocks.id FROM blocks
+                     JOIN documents ON documents.id = blocks.document_id
+                    WHERE documents.deleted_at IS NULL"""
+            ).fetchall()
+        )
+        indexed = dict(connection.execute("SELECT rowid, block_id FROM blocks_fts").fetchall())
+    return active == indexed
 
 
 def rebuild_fts(path: Path) -> None:
@@ -1331,25 +1726,29 @@ def rebuild_fts(path: Path) -> None:
 
     initialize(path)
     with connection_scope(path) as connection:
-        connection.execute("DELETE FROM blocks_fts")
-        connection.execute(
-            """INSERT INTO blocks_fts(block_id, document_id, text)
-                 SELECT blocks.id, blocks.document_id,
-                        blocks.text || CASE WHEN COALESCE((
-                            SELECT group_concat(assets.text, char(10))
-                              FROM block_assets
-                              JOIN assets USING (content_hash, media_name)
-                             WHERE block_assets.block_id = blocks.id
-                        ), '') = '' THEN '' ELSE char(10) || (
-                            SELECT group_concat(assets.text, char(10))
-                              FROM block_assets
-                              JOIN assets USING (content_hash, media_name)
-                             WHERE block_assets.block_id = blocks.id
-                        ) END
-                   FROM blocks
-                   JOIN documents ON documents.id = blocks.document_id
-                  WHERE documents.deleted_at IS NULL"""
-        )
+        _rebuild_fts(connection)
+
+
+def _rebuild_fts(connection: sqlite3.Connection) -> None:
+    connection.execute("DELETE FROM blocks_fts")
+    connection.execute(
+        """INSERT INTO blocks_fts(rowid, block_id, document_id, text)
+             SELECT blocks.rowid, blocks.id, blocks.document_id,
+                    blocks.text || CASE WHEN COALESCE((
+                        SELECT group_concat(assets.text, char(10))
+                          FROM block_assets
+                          JOIN assets USING (content_hash, media_name)
+                         WHERE block_assets.block_id = blocks.id
+                    ), '') = '' THEN '' ELSE char(10) || (
+                        SELECT group_concat(assets.text, char(10))
+                          FROM block_assets
+                          JOIN assets USING (content_hash, media_name)
+                         WHERE block_assets.block_id = blocks.id
+                    ) END
+               FROM blocks
+               JOIN documents ON documents.id = blocks.document_id
+              WHERE documents.deleted_at IS NULL"""
+    )
 
 
 _corpus_cache: dict[Path, tuple[tuple, list[tuple[str, str, str, str]]]] = {}
@@ -1710,10 +2109,7 @@ def _insert_blocks(
             ),
         )
         _replace_attrs(connection, block.id, block.attrs)
-        connection.execute(
-            "INSERT INTO blocks_fts(block_id, document_id, text) VALUES (?, ?, ?)",
-            (block.id, document_id, block.stored_text()),
-        )
+        _fts_insert(connection, block.id, document_id, block.stored_text())
         for child_position, child in enumerate(block.children):
             insert(child, block.id, child_position)
 
@@ -1752,6 +2148,57 @@ def _rebuild_document_assets(connection: sqlite3.Connection, document_id: str) -
                 (row["id"], media_name),
             )
         _refresh_fts(connection, row["id"], document_id, row["text"], replace=False)
+
+
+def _refresh_written_blocks(
+    connection: sqlite3.Connection, document_id: str, now: str
+) -> None:
+    """Links, asset links and search text of the blocks one transaction wrote.
+
+    Every block a transaction inserts or changes carries its timestamp
+    (``updated_at = now``); deleted blocks took their rows with them (cascades,
+    ``_delete_block``). Blocks elsewhere in the note that mention a block ID
+    this transaction created get their links refreshed too (a reference typed
+    before its target existed, e.g. restored by a paste). This replaces
+    rebuilding every block of the note on each edit (hundreds of milliseconds
+    for a 2,000-block note).
+    """
+
+    rows = connection.execute(
+        """SELECT id, attrs_json, content_json, text FROM blocks
+            WHERE document_id = ? AND updated_at = ?""",
+        (document_id, now),
+    ).fetchall()
+    written = {row["id"] for row in rows}
+    created = [
+        row["id"]
+        for row in connection.execute(
+            "SELECT id FROM blocks WHERE document_id = ? AND created_at = ?",
+            (document_id, now),
+        )
+    ]
+    mentioning: set[str] = set()
+    for block_id in created:
+        mentioning.update(
+            row["id"]
+            for row in connection.execute(
+                """SELECT id FROM blocks WHERE document_id = ?
+                      AND (instr(text, ?) > 0 OR instr(content_json, ?) > 0)""",
+                (document_id, block_id, block_id),
+            )
+        )
+    for block_id in written | mentioning:
+        _replace_references(connection, block_id, document_id)
+    for row in rows:
+        connection.execute("DELETE FROM block_assets WHERE block_id = ?", (row["id"],))
+        serialized = f"{row['attrs_json']}\n{row['content_json']}"
+        for media_name in set(_MEDIA_REF_RE.findall(serialized)):
+            connection.execute(
+                """INSERT OR IGNORE INTO block_assets(block_id, content_hash, media_name)
+                   SELECT ?, content_hash, media_name FROM assets WHERE media_name = ?""",
+                (row["id"], media_name),
+            )
+        _refresh_fts(connection, row["id"], document_id, row["text"])
 
 
 def _rebuild_document_references(connection: sqlite3.Connection, document_id: str) -> None:
@@ -1924,7 +2371,16 @@ def document_tree(path: Path, document_id: str) -> dict | None:
         return _document_tree(connection, document_id)
 
 
-def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | None:
+def _loads_object(raw: str) -> object:
+    # Most blocks have no attrs and many no structured content: skip the parser.
+    return {} if raw == "{}" else json.loads(raw)
+
+
+def _document_tree(
+    connection: sqlite3.Connection, document_id: str, include_children: bool = True
+) -> dict | None:
+    """The document payload; without ``include_children`` only its metadata."""
+
     document = connection.execute(
         "SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
     ).fetchone()
@@ -1942,7 +2398,7 @@ def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | N
              FROM blocks WHERE document_id = ?
              ORDER BY parent_id, position""",
         (document_id,),
-    ).fetchall()
+    ).fetchall() if include_children else []
     document_provenance = _provenance.document_provenance(
         document["provenance_json"], document["source_kind"]
     )
@@ -1953,7 +2409,7 @@ def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | N
              JOIN blocks ON blocks.id = attrs.block_id
             WHERE blocks.document_id = ?""",
         (document_id,),
-    ).fetchall()
+    ).fetchall() if include_children else []
     user_attrs_by_block: dict[str, dict[str, object]] = {}
     for row in user_attr_rows:
         user_attrs_by_block.setdefault(row["block_id"], {})[row["name"]] = json.loads(
@@ -1966,9 +2422,9 @@ def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | N
             "parent_id": row["parent_id"],
             "position": row["position"],
             "type": row["type"],
-            "attrs": json.loads(row["attrs_json"]),
+            "attrs": _loads_object(row["attrs_json"]),
             "user_attrs": user_attrs_by_block.get(row["id"], {}),
-            "content": json.loads(row["content_json"]),
+            "content": _loads_object(row["content_json"]),
             "text": row["text"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -2251,8 +2707,17 @@ def apply_transaction(
     operations: list[BlockOperation],
     base_revision: int,
     transaction_id: str | None = None,
+    validator_out: list | None = None,
+    include_children: bool = True,
 ) -> dict:
-    """Apply operations for ``base_revision`` atomically and return the new tree."""
+    """Apply operations for ``base_revision`` atomically and return the new tree.
+
+    ``validator_out`` (a list) receives the new tree's validator, read in the
+    same transaction (see ``_document_validator``). Without
+    ``include_children`` the result is the document's metadata only (revision,
+    can_undo, resolved_links, ...): an editor that already shows its edit
+    skips rebuilding and downloading a large note on every keystroke.
+    """
 
     initialize(path)
     now = _now()
@@ -2275,9 +2740,11 @@ def apply_transaction(
             if receipt is not None:
                 if receipt["document_id"] != document_id or receipt["request_hash"] != request_hash:
                     raise ValueError("transaction_id was already used for a different request")
-                tree = _document_tree(connection, document_id)
+                tree = _document_tree(connection, document_id, include_children)
                 if tree is None:
                     raise KeyError("document not found")
+                if validator_out is not None:
+                    validator_out.append(_document_validator(connection, document_id))
                 return tree
         document = connection.execute(
             "SELECT revision FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
@@ -2335,8 +2802,7 @@ def apply_transaction(
         for patch in patches:
             for entry in patch["after"]:
                 _stamp_snapshot_revision(entry["snapshot"], now, base_revision + 1)
-        _rebuild_document_references(connection, document_id)
-        _rebuild_document_assets(connection, document_id)
+        _refresh_written_blocks(connection, document_id, now)
         connection.execute(
             "UPDATE documents SET updated_at = ?, revision = revision + 1 WHERE id = ?",
             (now, document_id),
@@ -2347,9 +2813,11 @@ def apply_transaction(
                VALUES (?, ?, ?, ?)""",
             (document_id, base_revision + 1, json.dumps(patches), now),
         )
-        tree = _document_tree(connection, document_id)
+        tree = _document_tree(connection, document_id, include_children)
         if tree is None:  # pragma: no cover - protected by the transaction above
             raise KeyError("document not found")
+        if validator_out is not None:
+            validator_out.append(_document_validator(connection, document_id))
         if transaction_id is not None:
             connection.execute(
                 "INSERT INTO transaction_receipts(transaction_id, document_id, request_hash, created_at) VALUES (?, ?, ?, ?)",
@@ -2819,13 +3287,13 @@ def _delete_block(
     connection: sqlite3.Connection, document_id: str, row: sqlite3.Row
 ) -> None:
     connection.execute(
-        """DELETE FROM blocks_fts WHERE block_id IN (
-               WITH RECURSIVE descendants(id) AS (
-                   SELECT id FROM blocks WHERE id = ?
+        """DELETE FROM blocks_fts WHERE rowid IN (
+               WITH RECURSIVE descendants(id, row) AS (
+                   SELECT id, rowid FROM blocks WHERE id = ?
                    UNION ALL
-                   SELECT blocks.id FROM blocks JOIN descendants
+                   SELECT blocks.id, blocks.rowid FROM blocks JOIN descendants
                      ON blocks.parent_id = descendants.id
-               ) SELECT id FROM descendants
+               ) SELECT row FROM descendants
            )""",
         (row["id"],),
     )
@@ -3110,11 +3578,24 @@ def _refresh_fts(
         (block_id,),
     ).fetchall()
     indexed_text = "\n\n".join([text, *(row["text"] for row in asset_texts)])
-    if replace:
-        connection.execute("DELETE FROM blocks_fts WHERE block_id = ?", (block_id,))
+    # (``replace`` is implied: the row with the block's rowid is replaced.)
+    _fts_insert(connection, block_id, document_id, indexed_text)
+
+
+def _fts_insert(
+    connection: sqlite3.Connection, block_id: str, document_id: str, text: str
+) -> None:
+    """Index a block's text in the FTS row that has the block's own rowid.
+
+    ``blocks_fts.block_id`` is UNINDEXED: finding a block's row by it scans the
+    whole table (milliseconds per lookup on a large workspace, on every edit).
+    Keyed by the block's rowid, replacing or deleting it is one B-tree lookup.
+    """
+
     connection.execute(
-        "INSERT INTO blocks_fts(block_id, document_id, text) VALUES (?, ?, ?)",
-        (block_id, document_id, indexed_text),
+        """INSERT OR REPLACE INTO blocks_fts(rowid, block_id, document_id, text)
+           SELECT rowid, ?, ?, ? FROM blocks WHERE id = ?""",
+        (block_id, document_id, text, block_id),
     )
 
 

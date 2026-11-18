@@ -1,17 +1,21 @@
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
+import os
 import shutil
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import RequestResponseEndpoint
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import (
     ask as ask_notes,
@@ -23,7 +27,9 @@ from . import (
     images,
     documents,
     duplicates,
+    http_cache,
     llm,
+    media,
     onenote_import,
     search,
     sources,
@@ -151,6 +157,7 @@ async def lifespan(_app: FastAPI):
                 running.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await running
+        await asyncio.to_thread(documents.flush_mirrors)
 
 
 app = FastAPI(title="Fortress Notes", lifespan=lifespan)
@@ -163,29 +170,152 @@ app.add_middleware(
 )
 
 
-@app.middleware("http")
-async def secure_uploaded_files(
-    request: Request, call_next: RequestResponseEndpoint
+class ResponseHeadersMiddleware:
+    """Headers every response of a kind needs (plain ASGI: no body buffering).
+
+    API responses default to ``Cache-Control: no-cache`` (keep, but revalidate;
+    GETs carry ETags). Stored files are never sniffed, ``.bin`` downloads as an
+    attachment and imported SVG ink never runs scripts when opened directly.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path: str = scope["path"]
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(raw=message.setdefault("headers", []))
+                if path.startswith("/api/"):
+                    if "cache-control" not in headers:
+                        headers["Cache-Control"] = http_cache.API_CACHE_CONTROL
+                elif path.startswith("/media/"):
+                    headers["X-Content-Type-Options"] = "nosniff"
+                    if path.endswith(".bin"):
+                        headers["Content-Disposition"] = "attachment"
+                    if path.endswith(".svg"):
+                        headers["Content-Security-Policy"] = (
+                            "sandbox; default-src 'none'; style-src 'unsafe-inline'"
+                        )
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+app.add_middleware(ResponseHeadersMiddleware)
+# gzip API JSON of 1 KB or more (not the Ask stream, not media).
+app.add_middleware(http_cache.ApiCompressionMiddleware, minimum_size=1024)
+
+
+@app.exception_handler(sqlite3.OperationalError)
+async def database_busy(_request: Request, exc: sqlite3.OperationalError) -> JSONResponse:
+    """A write that waited out the busy timeout: say so in the usual JSON shape."""
+
+    message = str(exc)
+    if "locked" in message or "busy" in message:
+        return JSONResponse(
+            {"detail": "The notes database is busy; try again."},
+            status_code=503,
+            headers={"Retry-After": "1"},
+        )
+    logging.getLogger("fortress").error("database error", exc_info=exc)
+    return JSONResponse({"detail": "Internal server error"}, status_code=500)
+
+
+@app.exception_handler(Exception)
+async def unexpected_error(_request: Request, exc: Exception) -> JSONResponse:
+    # Errors keep the API's JSON shape ({"detail": ...}) instead of plain text.
+    logging.getLogger("fortress").error("unhandled error", exc_info=exc)
+    return JSONResponse({"detail": "Internal server error"}, status_code=500)
+
+
+# Serve stored files at /media/<file> (immutable caching, ranges, real types).
+app.mount("/media", media.MediaFiles(directory=settings.assets_path), name="media")
+
+# Rendered bodies by validator: a repeated GET skips SQLite and JSON encoding.
+_document_cache = http_cache.ResponseCache(max_entries=256, max_bytes=64 * 1024 * 1024)
+_api_cache = http_cache.ResponseCache(max_entries=256, max_bytes=32 * 1024 * 1024)
+
+
+def _clear_response_caches() -> None:
+    _document_cache.clear()
+    _api_cache.clear()
+
+
+def _document_body(document_id: str, validator: tuple | None = None) -> tuple[str, bytes] | None:
+    """(ETag, rendered tree) of a note, rendered at most once per validator."""
+
+    db = settings.block_db_path
+    key = (db, document_id)
+    if validator is not None:
+        tag = http_cache.etag("document", document_id, *validator)
+        body = _document_cache.get(key, tag)
+        if body is not None:
+            return tag, body
+    result = block_store.document_tree_with_validator(db, document_id)
+    if result is None:
+        return None
+    validator, tree = result
+    tag = http_cache.etag("document", document_id, *validator)
+    body = http_cache.render(tree)
+    _document_cache.put(key, tag, body)
+    return tag, body
+
+
+def _document_response(request: Request, document_id: str) -> Response:
+    validator = block_store.document_validator(settings.block_db_path, document_id)
+    if validator is None:
+        raise HTTPException(404, "Block document not found")
+    tag = http_cache.etag("document", document_id, *validator)
+    if http_cache.if_none_match(request.headers.get("if-none-match"), tag):
+        return http_cache.not_modified(tag)
+    rendered = _document_body(document_id, validator)
+    if rendered is None:
+        raise HTTPException(404, "Block document not found")
+    return http_cache.json_response(rendered[1], rendered[0])
+
+
+def _tree_response(
+    document_id: str, tree: dict, validator: tuple | None = None, cache: bool = True
 ) -> Response:
-    response = await call_next(request)
-    if request.url.path.startswith("/media/"):
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        if request.url.path.endswith(".bin"):
-            response.headers["Content-Disposition"] = "attachment"
-        if request.url.path.endswith(".svg"):
-            # Imported ink drawings: never run scripts when opened directly.
-            response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'"
+    """A tree a write just returned, rendered once (no jsonable_encoder pass).
+
+    With its validator (read in the write's own transaction) the body is
+    cached for the GETs that follow, and ``X-Document-ETag`` carries the ETag
+    ``GET /api/block-documents/{id}`` now answers 304 to.
+    """
+
+    body = http_cache.render(tree)
+    response = http_cache.json_response(body)
+    if validator is not None:
+        tag = http_cache.etag("document", document_id, *validator)
+        if cache:
+            _document_cache.put((settings.block_db_path, document_id), tag, body)
+        response.headers["X-Document-ETag"] = tag
     return response
 
 
-# Serve stored images at /media/<file>.
-app.mount("/media", StaticFiles(directory=settings.assets_path), name="media")
+def _workspace_response(request: Request, name: str, build, *key_parts) -> Response:
+    """A response that depends on the whole workspace (navigation, trash, ...)."""
+
+    epoch, seq = block_store.change_state(settings.block_db_path)
+    tag = http_cache.etag(name, epoch, seq, *key_parts)
+    return http_cache.conditional(
+        request.headers.get("if-none-match"),
+        tag,
+        lambda: http_cache.render(build()),
+        _api_cache,
+        (settings.block_db_path, name, *key_parts),
+    )
 
 # Batch reads and moves for the native app (app/batch.py).
 from .batch import router as batch_router  # noqa: E402
 
 app.include_router(batch_router)
-
 
 @app.get("/api/health")
 def health() -> dict:
@@ -200,8 +330,13 @@ def health() -> dict:
 
 
 @app.get("/api/navigation")
-def get_navigation(recent_limit: int = Query(10, ge=1, le=50)):
-    return block_store.navigation(settings.block_db_path, recent_limit)
+def get_navigation(request: Request, recent_limit: int = Query(10, ge=1, le=50)):
+    return _workspace_response(
+        request,
+        "navigation",
+        lambda: block_store.navigation(settings.block_db_path, recent_limit),
+        recent_limit,
+    )
 
 
 @app.post("/api/folders", response_model=Folder, status_code=201)
@@ -306,26 +441,38 @@ def delete_block_document(document_id: str):
 
 
 @app.get("/api/block-documents/{document_id}")
-def get_block_document(document_id: str):
-    """Read the bootstrapped block tree while the legacy note API remains active."""
+def get_block_document(document_id: str, request: Request):
+    """The note's block tree; ``If-None-Match`` with its ETag answers 304."""
 
+    db = settings.block_db_path
     # The editor needs a block to type into, even in a note that has none.
-    block_store.ensure_editable_block(settings.block_db_path, document_id)
-    block_store.mark_opened(settings.block_db_path, document_id)
-    tree = block_store.document_tree(settings.block_db_path, document_id)
-    if tree is None:
-        raise HTTPException(404, "Block document not found")
-    return tree
+    block_store.ensure_editable_block(db, document_id)
+    # Debounced, and skipped rather than waited for while a writer is busy.
+    block_store.mark_opened(db, document_id, wait=False)
+    return _document_response(request, document_id)
 
 
 @app.get("/api/block-documents/{document_id}/info")
-def get_block_document_info(document_id: str):
+def get_block_document_info(document_id: str, request: Request):
     """Metadata for an info panel: dates, provenance, counts, re-import conflicts."""
 
-    try:
-        return sources.document_info(settings.block_db_path, document_id)
-    except KeyError as exc:
-        raise HTTPException(404, "Block document not found") from exc
+    validator = block_store.document_info_validator(settings.block_db_path, document_id)
+    if validator is None:
+        raise HTTPException(404, "Block document not found")
+
+    def build() -> bytes:
+        try:
+            return http_cache.render(sources.document_info(settings.block_db_path, document_id))
+        except KeyError as exc:
+            raise HTTPException(404, "Block document not found") from exc
+
+    return http_cache.conditional(
+        request.headers.get("if-none-match"),
+        http_cache.etag("info", document_id, *validator),
+        build,
+        _api_cache,
+        (settings.block_db_path, "info", document_id),
+    )
 
 
 @app.post("/api/block-documents/{document_id}/blocks/{block_id}/source-conflict")
@@ -383,10 +530,26 @@ async def import_uploaded_markdown(
     """Create one new note per uploaded Markdown file."""
 
     folder_id = folder_id or None
-    if folder_id is not None and not block_store.folder_exists(settings.block_db_path, folder_id):
+    if folder_id is not None and not await run_in_threadpool(
+        block_store.folder_exists, settings.block_db_path, folder_id
+    ):
         raise HTTPException(404, "folder not found")
     imported: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
+
+    def create_note(name: str, raw: bytes):
+        parsed = parse_uploaded_markdown(name, raw)
+        return documents.create(
+            NoteCreate(
+                title=parsed.title,
+                body=parsed.body,
+                status=parsed.status,
+                folder_id=folder_id,
+            ),
+            created_at=parsed.created_at,
+            source=parsed.provenance,
+        )
+
     for upload in files:
         name = upload.filename or "untitled.md"
         raw = await upload.read(MAX_IMPORT_BYTES + 1)
@@ -394,17 +557,7 @@ async def import_uploaded_markdown(
             errors.append({"name": name, "detail": "file is larger than 5 MB"})
             continue
         try:
-            parsed = parse_uploaded_markdown(name, raw)
-            note = documents.create(
-                NoteCreate(
-                    title=parsed.title,
-                    body=parsed.body,
-                    status=parsed.status,
-                    folder_id=folder_id,
-                ),
-                created_at=parsed.created_at,
-                source=parsed.provenance,
-            )
+            note = await run_in_threadpool(create_note, name, raw)
         except ValueError as exc:
             errors.append({"name": name, "detail": str(exc)})
             continue
@@ -438,7 +591,7 @@ async def start_onenote_import(request: Request):
             suffix = Path(input_name).suffix.lower()
             if suffix not in _ONENOTE_UPLOAD_SUFFIXES:
                 raise HTTPException(415, "Choose a OneNote export: a .zip, .onepkg or .one file.")
-            _check_import_folder(folder_id)
+            await run_in_threadpool(_check_import_folder, folder_id)
             owned = onenote_import.imports_dir(settings.notes_path) / f"{job_id}-upload"
             # The converter names things after the file (a loose .one's section) and
             # its folder (that section's notebook): keep the user's file name.
@@ -468,9 +621,10 @@ async def start_onenote_import(request: Request):
         input_path = Path(payload["path"]).expanduser()
         if not input_path.exists():
             raise HTTPException(400, "That file or folder does not exist.")
-        _check_import_folder(folder_id)
+        await run_in_threadpool(_check_import_folder, folder_id)
         input_name = input_path.name
-    record = onenote_import.jobs.submit(
+    record = await run_in_threadpool(
+        onenote_import.jobs.submit,
         job_id,
         input_path=input_path,
         input_name=input_name,
@@ -555,8 +709,10 @@ def move_document_into(document_id: str, target_id: str):
 
 
 @app.get("/api/trash")
-def list_trash():
-    return workspace.list_trash(settings.block_db_path)
+def list_trash(request: Request):
+    return _workspace_response(
+        request, "trash", lambda: workspace.list_trash(settings.block_db_path)
+    )
 
 
 @app.post("/api/trash/{document_id}/restore")
@@ -612,8 +768,11 @@ def delete_saved_search(search_id: str):
 
 
 @app.get("/api/backups")
-def list_backups():
-    return backups.list_backups(backups.backup_directory(settings.notes_path))
+def list_backups(request: Request):
+    body = http_cache.render(backups.list_backups(backups.backup_directory(settings.notes_path)))
+    return http_cache.conditional(
+        request.headers.get("if-none-match"), http_cache.body_etag(body), lambda: body
+    )
 
 
 @app.post("/api/backups", status_code=201)
@@ -641,6 +800,7 @@ def restore_backup(name: str):
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    _clear_response_caches()
     documents.rebuild_mirrors(directory / f"mirrors-before-{safety.stem}")
     return {"restored": name, "safety_backup": safety.name}
 
@@ -777,10 +937,20 @@ def block_link_targets(q: str = "", limit: int = Query(50, ge=1, le=200)):
 
 
 @app.get("/api/block-documents/{document_id}/backlinks", response_model=list[Backlink])
-def get_backlinks(document_id: str, limit: int = Query(100, ge=1, le=500)):
-    if block_store.document_tree(settings.block_db_path, document_id) is None:
+def get_backlinks(document_id: str, request: Request, limit: int = Query(100, ge=1, le=500)):
+    # (This used to build the note's whole tree just to answer 404.)
+    validator = block_store.document_info_validator(settings.block_db_path, document_id)
+    if validator is None:
         raise HTTPException(404, "Block document not found")
-    return block_store.document_backlinks(settings.block_db_path, document_id, limit)
+    return http_cache.conditional(
+        request.headers.get("if-none-match"),
+        http_cache.etag("backlinks", document_id, limit, *validator[:2]),
+        lambda: http_cache.render(
+            block_store.document_backlinks(settings.block_db_path, document_id, limit)
+        ),
+        _api_cache,
+        (settings.block_db_path, "backlinks", document_id, limit),
+    )
 
 
 @app.post("/api/block-documents/{document_id}/link-checks")
@@ -794,17 +964,28 @@ async def check_block_document_links(document_id: str):
 
 
 @app.post("/api/block-documents/{document_id}/transactions")
-def apply_block_transaction(document_id: str, transaction: BlockTransaction):
+def apply_block_transaction(
+    document_id: str,
+    transaction: BlockTransaction,
+    response: str = Query("document", pattern="^(document|meta)$"),
+):
+    """Apply a transaction. ``?response=meta`` answers without ``children``."""
+
     try:
+        validator: list = []
         tree = block_store.apply_transaction(
             settings.block_db_path,
             document_id,
             transaction.operations,
             transaction.base_revision,
             transaction.transaction_id,
+            validator_out=validator,
+            include_children=response == "document",
         )
-        documents.write_mirror(document_id)
-        return tree
+        documents.schedule_mirror(document_id)
+        return _tree_response(
+            document_id, tree, validator[0] if validator else None, cache=response == "document"
+        )
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -822,8 +1003,8 @@ def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
         tree = block_store.undo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
-        documents.write_mirror(document_id)
-        return tree
+        documents.schedule_mirror(document_id)
+        return _tree_response(document_id, tree)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -838,8 +1019,8 @@ def redo_block_transaction(document_id: str, request: BlockHistoryRequest):
         tree = block_store.redo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
-        documents.write_mirror(document_id)
-        return tree
+        documents.schedule_mirror(document_id)
+        return _tree_response(document_id, tree)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -868,20 +1049,52 @@ async def _read_upload(file: UploadFile, limit: int | None = None) -> bytes:
     return b"".join(chunks)
 
 
+async def _stream_upload(file: UploadFile, path: Path, limit: int | None = None) -> str:
+    """Copy an upload to ``path`` in chunks (never whole in memory); its SHA-256.
+
+    Refuses it (413) as soon as it passes the limit; nothing is left behind.
+    File writes run in worker threads, not on the event loop.
+    """
+
+    limit = MAX_UPLOAD_BYTES if limit is None else limit
+    partial = path.with_name(f".{path.name}.part")
+    digest = hashlib.sha256()
+    size = 0
+    handle = await run_in_threadpool(partial.open, "wb")
+    try:
+        try:
+            while chunk := await file.read(_UPLOAD_CHUNK):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(
+                        413,
+                        f"File is larger than {limit // (1024 * 1024)} MB; choose a smaller one.",
+                    )
+                digest.update(chunk)
+                await run_in_threadpool(handle.write, chunk)
+        finally:
+            await run_in_threadpool(handle.close)
+        await run_in_threadpool(os.replace, partial, path)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    return digest.hexdigest()
+
+
 @app.post("/api/images")
 async def upload_image(file: UploadFile = File(...)):
     if not assets.is_supported_image_type(file.content_type):
         raise HTTPException(400, "Unsupported image type")
-    data = await _read_upload(file)
+    media_type = (file.content_type or "image/png").split(";", 1)[0].strip().lower()
+    path = assets.upload_path(media_type, images.image_extension(media_type))
+    digest = await _stream_upload(file, path)
     # Save the file and return immediately so the image appears instantly. Caption + OCR
     # (slow, only needed for search) run in the background to populate the sidecar cache.
-    url, path = images.save_bytes(data, file.content_type or "image/png")
-    block_store.register_asset(
-        settings.block_db_path, path, assets.content_hash(data),
-        (file.content_type or "image/png").split(";", 1)[0].strip().lower(),
+    await run_in_threadpool(
+        block_store.register_asset, settings.block_db_path, path, digest, media_type
     )
     _spawn(asyncio.to_thread(images.extract_and_store, path))
-    return {"url": url, "text": ""}
+    return {"url": f"/media/{path.name}", "text": ""}
 
 
 @app.post("/api/files")
@@ -889,11 +1102,13 @@ async def upload_file(file: UploadFile = File(...)):
     media_type = (file.content_type or "").split(";", 1)[0].strip().lower()
     if media_type.startswith("image/") and not assets.is_supported_image_type(media_type):
         raise HTTPException(415, "Unsupported image type")
-    data = await _read_upload(file)
-    url, name, path = assets.save_upload(data, file.filename, file.content_type)
-    block_store.register_asset(
-        settings.block_db_path, path, assets.content_hash(data),
-        (file.content_type or "application/octet-stream").split(";", 1)[0].strip().lower(),
+    path = assets.upload_path(media_type)
+    digest = await _stream_upload(file, path)
+    name = assets.safe_filename(file.filename)
+    url = f"/media/{path.name}"
+    await run_in_threadpool(
+        block_store.register_asset, settings.block_db_path, path, digest,
+        media_type or "application/octet-stream",
     )
     if assets.is_supported_image_type(file.content_type):
         _spawn(asyncio.to_thread(images.extract_and_store, path))
@@ -959,7 +1174,7 @@ def search_notes(q: str, mode: str = Query("text", pattern="^(text|embedding)$")
 
 @app.get("/api/notes/{note_id}/related", response_model=list[RelatedResult])
 def related(note_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None = None):
-    if documents.get_note(note_id) is None:
+    if not block_store.document_exists(settings.block_db_path, note_id):
         raise HTTPException(404, "Note not found")
     try:
         return search.related_notes(note_id, k, block_id)
@@ -969,7 +1184,7 @@ def related(note_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None =
 
 @app.post("/api/notes/{note_id}/review", response_model=ReviewResponse)
 async def review(note_id: str, kind: ReviewKind = "factcheck"):
-    note = documents.get_note(note_id)
+    note = await run_in_threadpool(documents.get_note, note_id)
     if note is None:
         raise HTTPException(404, "Note not found")
     return await llm.review_note(kind, note.title, note.body)
@@ -981,8 +1196,8 @@ async def review(note_id: str, kind: ReviewKind = "factcheck"):
 )
 async def review_block(document_id: str, block_id: str, kind: ReviewKind = "factcheck"):
     try:
-        result = block_store.document_subtree(
-            settings.block_db_path, document_id, block_id
+        result = await run_in_threadpool(
+            block_store.document_subtree, settings.block_db_path, document_id, block_id
         )
     except KeyError as exc:
         raise HTTPException(404, "Block not found") from exc
@@ -998,8 +1213,9 @@ async def review_block(document_id: str, block_id: str, kind: ReviewKind = "fact
 )
 async def review_block_context(document_id: str, request: BlockReviewContextRequest):
     try:
-        resolved = block_store.document_review_context(
-            settings.block_db_path, document_id, request.context, request.block_ids
+        resolved = await run_in_threadpool(
+            block_store.document_review_context,
+            settings.block_db_path, document_id, request.context, request.block_ids,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
