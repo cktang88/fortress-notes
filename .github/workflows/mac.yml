@@ -10,11 +10,19 @@ jobs:
   build:
     runs-on: macos-26
     timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mac
     steps:
-      - uses: actions/checkout@v4
-      - name: Toolchain
-        run: |
-          sw_vers
-          xcodebuild -version
-          swift --version
-          ls /Applications | grep -i xcode
+      - uses: actions/checkout@v5
+      - name: Build
+        run: swift build
+      - name: Test and render snapshots
+        run: SNAPSHOT_DIR="$PWD/snapshots" swift test
+      - name: Upload snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshots
+          path: mac/snapshots
+          if-no-files-found: ignore
