@@ -31,7 +31,6 @@ class Settings(BaseSettings):
     # Captions and OCR run locally in the background and reuse cached image text.
     vlm_caption_enabled: bool = True
     vlm_model: str = "HuggingFaceTB/SmolVLM-256M-Instruct"
-    frontend_origin: str = "http://localhost:5173"
     block_db_import_on_startup: bool = True
     # Keep a daily SQLite snapshot in NOTES_DIR/.fortress-backups (last 7 kept).
     auto_backup_enabled: bool = True

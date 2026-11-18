@@ -11,11 +11,12 @@ public final class APIStore: Sendable {
     public struct Options: Sendable, Hashable {
         /// Concurrent identical GETs share one request.
         public var coalescesRequests = true
-        /// Documents are served from memory while fresh.
+        /// Documents are kept in memory and revalidated with their ETags.
         public var cachesDocuments = true
-        /// How long a cached document is served without asking the server again. After
-        /// that it is revalidated (a cheap 304 when the server sends ETags).
-        public var documentMaxAge: TimeInterval = 30
+        /// How long a cached document is served without asking the server at all: only
+        /// long enough for reads that arrive together (the editor and the inspector
+        /// opening one note) to share it. After that the ETag decides (a 304 is cheap).
+        public var documentMaxAge: TimeInterval = 2
         /// Documents kept in memory.
         public var documentCapacity = 64
         /// Bytes of validated GET bodies kept for 304 answers.
@@ -80,8 +81,6 @@ public final class APIStore: Sendable {
         /// Bumped by every mutation: a GET started before a change never answers one
         /// asked for after it.
         var epoch = 0
-        var batchReadsUnsupported = false
-        var batchMovesUnsupported = false
         var stats = Stats()
     }
 
@@ -226,6 +225,30 @@ public final class APIStore: Sendable {
         }
     }
 
+    /// Merges a metadata-only answer (a rename, a status change: `children` empty) into
+    /// the cached note and returns the merged note. Only when the cached copy is at the
+    /// same revision (its content is then still the server's); it keeps its old ETag,
+    /// so the next read after `documentMaxAge` revalidates. Otherwise the cached copy is
+    /// dropped and the metadata comes back as it is.
+    func mergeMetadata(_ metadata: BlockDocument) -> BlockDocument {
+        state.withLock { state in
+            guard options.cachesDocuments, var entry = state.documents[metadata.id],
+                  entry.document.revision == metadata.revision
+            else {
+                state.documents[metadata.id] = nil
+                state.documentOrder.removeAll { $0 == metadata.id }
+                state.documentGenerations[metadata.id, default: 0] += 1
+                return metadata
+            }
+            var merged = metadata
+            merged.children = entry.document.children
+            merged.resolvedLinks = entry.document.resolvedLinks
+            entry.document = merged
+            state.documents[metadata.id] = entry
+            return merged
+        }
+    }
+
     /// Marks a cached document as just checked (a 304, or `unchanged` from a batch).
     func refresh(_ id: String) {
         state.withLock { state in
@@ -302,18 +325,4 @@ public final class APIStore: Sendable {
             }
         }
     }
-
-    // MARK: Batch support
-
-    var batchReadsUnsupported: Bool {
-        get { state.withLock { $0.batchReadsUnsupported } }
-    }
-
-    func markBatchReadsUnsupported() { state.withLock { $0.batchReadsUnsupported = true } }
-
-    var batchMovesUnsupported: Bool {
-        get { state.withLock { $0.batchMovesUnsupported } }
-    }
-
-    func markBatchMovesUnsupported() { state.withLock { $0.batchMovesUnsupported = true } }
 }

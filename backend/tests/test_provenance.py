@@ -76,17 +76,17 @@ class ProvenanceStoreTests(unittest.TestCase):
     # --- Basic provenance --------------------------------------------------
 
     def test_new_documents_default_to_manual_and_blocks_inherit(self) -> None:
-        create_document(self.db, "doc", "Doc", "rough", [], "One\n\nTwo", "t", "t")
+        create_document(self.db, "doc", "Doc", "rough", "One\n\nTwo", "t", "t")
         tree = document_tree(self.db, "doc")
         self.assertEqual(tree["provenance"], {"source": "manual"})
         self.assertEqual(
             tree["children"][0]["provenance"], {"source": "manual", "inherited": True}
         )
         self.assertIsNone(tree["children"][0]["revision"])
-        self.assertIsNone(tree["last_opened_at"])
+        self.assertNotIn("last_opened_at", tree)  # in /info; not part of the note's ETag
 
     def test_editor_inserts_are_manual_or_what_the_client_says_and_survive_undo(self) -> None:
-        create_document(self.db, "doc", "Doc", "rough", [], "One", "t", "t",
+        create_document(self.db, "doc", "Doc", "rough", "One", "t", "t",
                         provenance={"source": "capture"})
         tree = apply_transaction(self.db, "doc", [
             _paragraph("typed", block_id="01J00000000000000000000001"),
@@ -132,9 +132,9 @@ class ProvenanceStoreTests(unittest.TestCase):
     def test_move_into_keeps_each_blocks_source_and_records_the_old_note(self) -> None:
         from app import duplicates
 
-        create_document(self.db, "captured", "Captured", "rough", [], "Thought", "t", "t",
+        create_document(self.db, "captured", "Captured", "rough", "Thought", "t", "t",
                         provenance={"source": "capture"})
-        create_document(self.db, "target", "Target", "rough", [], "Body", "t", "t")
+        create_document(self.db, "target", "Target", "rough", "Body", "t", "t")
         duplicates.move_into(self.db, "captured", "target")
         tree = document_tree(self.db, "target")
         moved = tree["children"][1]
@@ -218,8 +218,8 @@ class ProvenanceStoreTests(unittest.TestCase):
     # --- Links follow renames ----------------------------------------------
 
     def test_note_links_show_the_current_title_after_a_rename(self) -> None:
-        create_document(self.db, "target", "Old title", "rough", [], "Target body", "t", "t")
-        create_document(self.db, "source", "Source", "rough", [], "", "t", "t")
+        create_document(self.db, "target", "Old title", "rough", "Target body", "t", "t")
+        create_document(self.db, "source", "Source", "rough", "", "t", "t")
         target_block = document_tree(self.db, "target")["children"][0]["id"]
         apply_transaction(self.db, "source", [
             BlockOperation(
@@ -303,7 +303,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         tree = document_tree(self.db, first.document_id)
         ids = {node["text"]: node["id"] for node in tree["children"]}
         # Another note links to the page and to one of its blocks.
-        create_document(self.db, "linker", "Linker", "rough", [], "", "t", "t")
+        create_document(self.db, "linker", "Linker", "rough", "", "t", "t")
         apply_transaction(self.db, "linker", [BlockOperation(
             operation="insert", block_id="01J00000000000000000000005", type="paragraph",
             content=[{"type": "docLink", "id": first.document_id}, {"type": "text", "text": " "},
@@ -500,8 +500,8 @@ class ProvenanceStoreTests(unittest.TestCase):
     # --- Metadata -------------------------------------------------------------
 
     def test_document_info_counts(self) -> None:
-        create_document(self.db, "a", "A", "rough", [], "Hello world, it's me.\n\nSecond block", "t", "t")
-        create_document(self.db, "b", "B", "rough", [], "", "t", "t")
+        create_document(self.db, "a", "A", "rough", "Hello world, it's me.\n\nSecond block", "t", "t")
+        create_document(self.db, "b", "B", "rough", "", "t", "t")
         a_block = document_tree(self.db, "a")["children"][0]["id"]
         apply_transaction(self.db, "b", [BlockOperation(
             operation="insert", block_id="01J00000000000000000000008", type="paragraph",
@@ -605,7 +605,12 @@ class ProvenanceApiTests(unittest.TestCase):
         ).json()
         tree = self.client.get(f"/api/block-documents/{captured['document_id']}").json()
         self.assertEqual(tree["provenance"], {"source": "capture", "source_url": "https://example.com/x"})
-        self.assertIsNotNone(tree["last_opened_at"])
+        self.assertEqual(
+            self.client.post(f"/api/block-documents/{captured['document_id']}/opened").status_code,
+            204,
+        )
+        info = self.client.get(f"/api/block-documents/{captured['document_id']}/info").json()
+        self.assertIsNotNone(info["last_opened_at"])
         navigation = self.client.get("/api/navigation").json()
         self.assertEqual(navigation["recent"][0]["source"], "capture")
 

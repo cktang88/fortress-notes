@@ -50,7 +50,7 @@ class AutoTitleTests(unittest.TestCase):
                 "content": parsed.content,
             })
         response = self.client.post(
-            f"/api/block-documents/{document['id']}/transactions",
+            f"/api/block-documents/{document['id']}/transactions?response=document",
             json={"base_revision": document["revision"], "operations": operations},
         )
         self.assertEqual(response.status_code, 200, response.text)

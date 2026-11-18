@@ -160,13 +160,11 @@ public struct BlockDocument: Codable, Hashable, Identifiable, Sendable {
     public var updatedAt: String
     public var children: [BlockNode]
     public var provenance: JSONValue? = nil
-    public var lastOpenedAt: String? = nil
     /// Current titles of linked notes and text of referenced blocks (living links).
     public var resolvedLinks: ResolvedLinks? = nil
 
     enum CodingKeys: String, CodingKey {
         case provenance
-        case lastOpenedAt = "last_opened_at"
         case resolvedLinks = "resolved_links"
         case id
         case revision

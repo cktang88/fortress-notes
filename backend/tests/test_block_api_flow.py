@@ -13,7 +13,7 @@ EDITED = "Edited searchable phrase A migrated searchable block"
 
 class BlockApiFlowTests(unittest.TestCase):
     def test_migration_edit_search_references_export_and_restart(self) -> None:
-        from app import main
+        from app import block_store, main
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)
@@ -56,7 +56,7 @@ class BlockApiFlowTests(unittest.TestCase):
                     self.assertEqual(original_text, "Draft body A migrated searchable block")
 
                     edited = client.post(
-                        f"/api/block-documents/{source['id']}/transactions",
+                        f"/api/block-documents/{source['id']}/transactions?response=document",
                         json={
                             "base_revision": source["revision"],
                             "operations": [
@@ -91,19 +91,17 @@ class BlockApiFlowTests(unittest.TestCase):
                         EDITED,
                     )
 
-                    results = client.get("/api/block-search", params={"q": "searchable phrase"})
-                    self.assertEqual(results.status_code, 200)
-                    self.assertEqual(results.json()[0]["document_id"], source["id"])
+                    results = block_store.search_blocks(settings.block_db_path, "searchable phrase")
+                    self.assertEqual(results[0]["document_id"], source["id"])
                     backlinks = client.get("/api/block-documents/target/backlinks")
                     self.assertEqual(backlinks.status_code, 200)
                     self.assertEqual(backlinks.json()[0]["source_document_id"], source["id"])
                     exported = client.get(f"/api/block-documents/{source['id']}/markdown")
                     self.assertEqual(exported.status_code, 200)
                     self.assertIn("Edited searchable phrase", exported.text)
-                    self.assertEqual(client.get("/api/markdown-export").status_code, 200)
 
                     malformed = client.post(
-                        f"/api/block-documents/{source['id']}/transactions",
+                        f"/api/block-documents/{source['id']}/transactions?response=document",
                         json={"base_revision": 1, "operations": [{"operation": "nonsense"}]},
                     )
                     self.assertEqual(malformed.status_code, 422)
@@ -126,7 +124,7 @@ class BlockApiFlowTests(unittest.TestCase):
                         restarted_undo.json()["children"][0]["text"],
                         original_text,
                     )
+                    # The undone edit is out of the index after a restart too.
                     self.assertEqual(
-                        restarted.get("/api/block-search", params={"q": "searchable phrase"}).status_code,
-                        200,
+                        block_store.search_blocks(settings.block_db_path, "searchable phrase"), []
                     )

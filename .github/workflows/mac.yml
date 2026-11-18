@@ -2,7 +2,8 @@ name: macOS app
 
 on:
   push:
-    paths: ["mac/**", "backend/app/batch.py", "backend/app/auth.py", ".github/workflows/mac.yml"]
+    # The integration job runs against the backend: API changes rebuild the client too.
+    paths: ["mac/**", "backend/app/**", ".github/workflows/mac.yml"]
   workflow_dispatch:
 
 jobs:

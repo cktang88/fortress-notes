@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from app.block_markdown import parse_markdown, render_markdown
-from app.block_store import create_block_document, document_tree, replace_document_from_markdown
+from app.block_store import create_block_document, create_document, document_tree
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -81,29 +81,26 @@ class MarkdownImportTests(unittest.TestCase):
         self.assertEqual([node["type"] for node in spec.content], ["text"])
 
 
-class MarkdownMirrorTests(unittest.TestCase):
-    def test_a_mirror_edit_keeps_block_ids_and_types_markdown_cannot_say(self) -> None:
+class MarkdownExportTests(unittest.TestCase):
+    def test_an_export_read_back_keeps_block_ids_and_types_markdown_cannot_say(self) -> None:
+        from app.block_store import apply_transaction
+        from app.models import BlockOperation
+
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Doc", "rough", [], "Intro\n\n> note\n")
-            tree = document_tree(database, created["id"])
-            intro, quote = tree["children"]
-            from app.block_store import apply_transaction
-            from app.models import BlockOperation
-
+            created = create_block_document(database, "Doc", "rough", "Intro\n\n> note\n")
+            intro, quote = created["children"]
             tree = apply_transaction(database, created["id"], [
                 BlockOperation(operation="update", block_id=quote["id"], type="callout",
                                attrs={"icon": "!"}),
-            ], tree["revision"])
+            ], created["revision"])
             body = render_markdown(tree["children"])
             self.assertIn('"type":"callout"', body)
-            replace_document_from_markdown(
-                database, created["id"], "Doc", "rough", [], body.replace("Intro", "Intro, edited"),
-                created["created_at"], created["updated_at"],
-            )
-            after = document_tree(database, created["id"])
+
+            copy = Path(directory) / "copy.sqlite3"
+            create_document(copy, "doc", "Doc", "rough", body, "t", "t")
+            after = document_tree(copy, "doc")
             self.assertEqual([node["id"] for node in after["children"]], [intro["id"], quote["id"]])
-            self.assertEqual(after["children"][0]["text"], "Intro, edited")
             self.assertEqual((after["children"][1]["type"], after["children"][1]["attrs"]),
                              ("callout", {"icon": "!"}))
             self.assertEqual(after["children"][1]["children"][0]["id"], quote["children"][0]["id"])

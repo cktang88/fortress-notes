@@ -24,11 +24,6 @@ _ASSET_RE = re.compile(r"/media/([A-Za-z0-9]+)\.(png|jpe?g|gif|webp)")
 _extraction_lock = Lock()
 
 
-def image_extension(content_type: str) -> str:
-    media_type = (content_type or "").split(";", 1)[0].strip().lower()
-    return _EXT_BY_TYPE.get(media_type, ".png")
-
-
 def save_bytes(data: bytes, content_type: str) -> tuple[str, Path]:
     """Save image bytes and return (public_url, path). Fast — no model work."""
     media_type = (content_type or "").split(";", 1)[0].strip().lower()
@@ -123,10 +118,3 @@ def inline_for_llm(body: str) -> str:
     return _IMG_MD_RE.sub(repl, _IMG_HTML_RE.sub(repl, body))
 
 
-def note_search_text(title: str, body: str) -> str:
-    """Title + body + image caption/OCR text (read from the sidecar cache, so it's
-    always fresh even before the frontmatter mirror is updated). Used everywhere a note
-    is indexed so full-text and embedding search both cover image content."""
-    base = f"{title}\n\n{body}"
-    extra = "\n".join(collect_image_texts(body).values())
-    return f"{base}\n\n{extra}" if extra else base
