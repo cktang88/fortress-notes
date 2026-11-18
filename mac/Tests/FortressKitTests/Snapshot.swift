@@ -1,29 +1,40 @@
 import AppKit
 import SwiftUI
 
-/// Renders a SwiftUI view in an offscreen window (so AppKit-backed views like List and
-/// NavigationSplitView draw) and writes a PNG to $SNAPSHOT_DIR, for eyeballing in CI.
+/// Shows a SwiftUI view in a real on-screen window and captures it with `screencapture`,
+/// so materials, Liquid Glass and lazily drawn lists look exactly as they do in the app.
+/// Writes `<name>.png` to $SNAPSHOT_DIR; does nothing when that isn't set.
 @MainActor
 func snapshot<V: View>(
     _ view: V, named name: String, size: CGSize = CGSize(width: 1200, height: 760),
     appearance: NSAppearance.Name = .aqua
 ) throws {
     guard let directory = ProcessInfo.processInfo.environment["SNAPSHOT_DIR"] else { return }
-    let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
-    host.frame = CGRect(origin: .zero, size: size)
+    try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    app.appearance = NSAppearance(named: appearance)
+
     let window = NSWindow(
-        contentRect: host.frame, styleMask: [.titled, .fullSizeContentView],
+        contentRect: CGRect(origin: CGPoint(x: 80, y: 80), size: size),
+        styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
         backing: .buffered, defer: false)
     window.appearance = NSAppearance(named: appearance)
-    window.contentView = host
-    host.layoutSubtreeIfNeeded()
-    // Let SwiftUI finish a few layout/render passes before capturing.
-    for _ in 0..<5 { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
-    guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
-    host.cacheDisplay(in: host.bounds, to: rep)
-    let data = rep.representation(using: .png, properties: [:])!
+    window.titlebarAppearsTransparent = true
+    window.isReleasedWhenClosed = false
+    window.contentView = NSHostingView(rootView: view)
+    window.setContentSize(size)
+    window.makeKeyAndOrderFront(nil)
+    window.orderFrontRegardless()
+    app.activate()
+    // Let SwiftUI lay out, lists load their rows and glass settle.
+    for _ in 0..<20 { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+
     let url = URL(fileURLWithPath: directory).appendingPathComponent("\(name).png")
-    try FileManager.default.createDirectory(
-        atPath: directory, withIntermediateDirectories: true)
-    try data.write(to: url)
+    let capture = Process()
+    capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), url.path]
+    try capture.run()
+    capture.waitUntilExit()
+    window.close()
 }
