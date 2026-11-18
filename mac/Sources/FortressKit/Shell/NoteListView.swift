@@ -205,11 +205,10 @@ struct NoteListEmptyView: View {
 /// A note copied from the list: its Markdown as plain text and Markdown, fetched when
 /// something pastes it (the title if the server can't be reached).
 enum NoteCopy {
-    @MainActor
     static func provider(noteId: String, title: String, api: APIClient) -> NSItemProvider {
         let provider = NSItemProvider()
         for type in [UTType.utf8PlainText.identifier, MarkdownCopy.typeIdentifier] {
-            provider.registerDataRepresentation(forTypeIdentifier: type, visibility: .all) { completion in
+            provider.registerDataRepresentation(forTypeIdentifier: type, visibility: .all) { @Sendable completion in
                 nonisolated(unsafe) let completion = completion
                 Task {
                     let text = (try? await api.markdown(documentId: noteId)) ?? title

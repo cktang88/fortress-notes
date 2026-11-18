@@ -167,7 +167,7 @@ struct CommandPaletteView: View {
             let next = event.keyCode == KeyCode.down ? min(current + 1, items.count - 1) : max(current - 1, 0)
             selectedID = items[next].id
             // The field keeps focus, so tell VoiceOver which row is highlighted.
-            AccessibilityNotification.Announcement(items[next].title).post()
+            AccessibilityNotification.Announcement(AttributedString(items[next].title)).post()
             return true
         case KeyCode.returnKey, KeyCode.keypadEnter:
             if modifiers == .command {

@@ -4,7 +4,7 @@ import SwiftUI
 
 /// The global Quick Capture shortcut, chosen in Settings ▸ General (default ⇧⌘Space).
 /// Stored in `UserDefaults` as "keyCode:modifiers:key"; "none" turns it off.
-public struct QuickCaptureShortcut: Equatable, Sendable {
+public struct QuickCaptureShortcut: Equatable, @unchecked Sendable {  // plain values
     public static let defaultsKey = "QuickCaptureShortcut"
     public static let standard = QuickCaptureShortcut(keyCode: UInt16(kVK_Space), modifiers: [.command, .shift], key: " ")
 

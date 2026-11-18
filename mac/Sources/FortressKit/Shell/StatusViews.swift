@@ -17,7 +17,7 @@ struct ToastHost: View {
                     .id(toast.id)
                     .onHover { isHovering = $0 }
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                    .onAppear { AccessibilityNotification.Announcement(toast.message).post() }
+                    .onAppear { AccessibilityNotification.Announcement(AttributedString(toast.message)).post() }
                     .task(id: ToastTimer(id: toast.id, isPaused: isHovering)) {
                         guard !isHovering else { return }
                         try? await Task.sleep(for: .seconds(5))

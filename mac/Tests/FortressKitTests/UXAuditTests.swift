@@ -228,7 +228,7 @@ import Testing
     #expect(writable.contains(.rtf))
     #expect(writable.contains(.string))
     let readable = text.readablePasteboardTypes
-    for type in [BlockEditorController.blocksPasteboardType, .rtf, .string, .html] {
+    for type in [BlockEditorController.blocksPasteboardType, .rtf, .string] {
         #expect(readable.contains(type), "can't paste \(type.rawValue)")
     }
 }

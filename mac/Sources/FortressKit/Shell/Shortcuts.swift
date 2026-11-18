@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A menu command's keyboard shortcut, shown the Mac way ("⌥⌘I").
-public struct AppShortcut: Sendable {
+public struct AppShortcut: @unchecked Sendable {  // KeyEquivalent and EventModifiers are values
     public let title: String
     public let key: KeyEquivalent
     public let modifiers: EventModifiers
