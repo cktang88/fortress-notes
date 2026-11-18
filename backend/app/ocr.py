@@ -19,6 +19,9 @@ re-reads everything lazily while the old text stays searchable meanwhile.
 The text is stored in ``assets.text``; from there it is part of each owning
 block's full-text row, its ColBERT document and Ask's grep corpus, without
 being part of the note body.
+
+The Mac app reads the same assets with Apple Vision and sends its text here; see
+"Which reading wins" below for how the two share the work and whose text is used.
 """
 
 from __future__ import annotations
@@ -211,15 +214,88 @@ def read_asset(path: Path, mime_type: str) -> Result:
     return Result(ocr_image(_open_image(path)), "ocr")
 
 
+# --- Which reading wins -------------------------------------------------------------------
+#
+# One rule: an asset's text is that of its best-ranked finished ("done") result. The
+# Mac app reads pictures and PDFs with Apple Vision (more scripts, handwriting) and
+# sends its results here (:func:`store_external`); they outrank this process's own
+# model, which outranks results of earlier versions of it. Results of one external
+# family replace each other (a newer macOS's Vision replaces an older one's).
+#
+# No asset is read twice for nothing:
+# * The CPU queue never reads an asset a preferred reader has finished.
+# * While an external reader is active (it asked for work within
+#   :data:`EXTERNAL_LEASE_SECONDS`), the CPU queue only reads what that reader gave up
+#   on (a "failed" row): the Mac, which is faster and better, takes the backlog.
+#   When the app quits the lease lapses and the CPU queue carries on by itself.
+# * The external reader re-reads assets the CPU model already read (once per external
+#   model id): that is the upgrade, e.g. Cyrillic the CPU model can't read.
+
+EXTERNAL_FAMILIES = {"apple-vision": 2}
+EXTERNAL_LEASE_SECONDS = 180.0
+MAX_MODEL_CHARS = 64
+
+_external_seen: dict[str, float] = {}
+_external_lock = threading.Lock()
+
+
+def family(model: str) -> str:
+    return model.split("/", 1)[0]
+
+
+def rank(model: str) -> int:
+    """How much a model's text is preferred: external readers > this process's > older."""
+
+    if model == MODEL:
+        return 1
+    return EXTERNAL_FAMILIES.get(family(model), 0)
+
+
+def is_external_model(model: str) -> bool:
+    return (
+        0 < len(model) <= MAX_MODEL_CHARS
+        and family(model) in EXTERNAL_FAMILIES
+        and len(model.split("/", 1)) == 2
+        and model.split("/", 1)[1].strip() != ""
+        and model.isprintable()
+    )
+
+
+def _preferred_sql(column: str) -> str:
+    """SQL truth value: ``column`` names a model preferred over this process's own."""
+
+    return "(" + " OR ".join(
+        f"{column} LIKE '{name}/%'" for name in sorted(EXTERNAL_FAMILIES)
+    ) + ")"
+
+
+def note_external_reader(model: str) -> None:
+    """An external reader asked for work: the CPU queue defers to it for a while."""
+
+    with _external_lock:
+        _external_seen[model] = time.monotonic()
+
+
+def external_reader() -> str | None:
+    """The external reader currently active (asked for work recently), if any."""
+
+    now = time.monotonic()
+    with _external_lock:
+        active = [(seen, model) for model, seen in _external_seen.items()
+                  if now - seen < EXTERNAL_LEASE_SECONDS]
+    return max(active)[1] if active else None
+
+
+def _forget_external_readers() -> None:
+    with _external_lock:
+        _external_seen.clear()
+
+
 # --- Queue --------------------------------------------------------------------------------
 
-# Assets still to read for the current model: one row per content hash, the
-# newest first, those whose every block already has OneNote's OCR text last.
-_PENDING_SQL = f"""
-SELECT assets.content_hash, assets.file_path, assets.mime_type,
-       MAX(assets.created_at) AS created_at,
-       COALESCE(MAX(ocr_results.attempts), 0) AS attempts,
-       EXISTS (
+_OCR_TYPES_SQL = ",".join(f"'{t}'" for t in sorted(OCR_TYPES))
+# Whether each of an asset's blocks already has OneNote's OCR text (read those last).
+_HAS_ALT_SQL = """EXISTS (
            SELECT 1 FROM block_assets JOIN blocks ON blocks.id = block_assets.block_id
             WHERE block_assets.content_hash = assets.content_hash
        ) AND NOT EXISTS (
@@ -227,26 +303,62 @@ SELECT assets.content_hash, assets.file_path, assets.mime_type,
             WHERE block_assets.content_hash = assets.content_hash
               AND trim(COALESCE(CASE WHEN json_valid(blocks.attrs_json)
                                      THEN json_extract(blocks.attrs_json, '$.alt') END, '')) = ''
-       ) AS has_alt
+       )"""
+
+# Assets still to read for a model (bound first): one row per content hash, the newest
+# first, those whose every block already has OneNote's OCR text last. A row "running"
+# with attempts left is pending too (a retry, or a read a crash interrupted).
+_PENDING_SQL = f"""
+SELECT assets.content_hash, assets.file_path, assets.mime_type,
+       MIN(assets.media_name) AS media_name,
+       MAX(assets.created_at) AS created_at,
+       COALESCE(MAX(ocr_results.attempts), 0) AS attempts,
+       {_HAS_ALT_SQL} AS has_alt
   FROM assets
   LEFT JOIN ocr_results
     ON ocr_results.content_hash = assets.content_hash AND ocr_results.model = ?
- WHERE assets.mime_type IN ({",".join(f"'{t}'" for t in sorted(OCR_TYPES))})
+ WHERE assets.mime_type IN ({_OCR_TYPES_SQL})
    AND (ocr_results.status IS NULL
         OR (ocr_results.status = 'running' AND ocr_results.attempts < {MAX_ATTEMPTS}))
+   AND (? = 0 OR NOT EXISTS (
+        SELECT 1 FROM ocr_results AS better
+         WHERE better.content_hash = assets.content_hash AND better.status = 'done'
+           AND {_preferred_sql("better.model")}))
+   AND (? = 0 OR EXISTS (
+        SELECT 1 FROM ocr_results AS given_up
+         WHERE given_up.content_hash = assets.content_hash AND given_up.status = 'failed'
+           AND {_preferred_sql("given_up.model")}))
  GROUP BY assets.content_hash
  ORDER BY has_alt, created_at DESC
  LIMIT ?
 """
 
 
-def pending(db_path: Path, limit: int = 1) -> list[dict]:
+def pending(db_path: Path, limit: int = 1, *, defer: bool = False) -> list[dict]:
+    """The CPU queue: assets this process's model has yet to read and no preferred
+    reader has read. ``defer``: an external reader is active, so only what it gave up on."""
+
     block_store.initialize(db_path)
     with block_store.connection_scope(db_path) as connection:
-        return [dict(row) for row in connection.execute(_PENDING_SQL, (MODEL, limit))]
+        return [dict(row) for row in connection.execute(
+            _PENDING_SQL, (MODEL, 1, int(defer), limit))]
 
 
-def _mark(db_path: Path, content_hash: str, **fields) -> None:
+def external_pending(db_path: Path, model: str, limit: int) -> tuple[int, list[dict]]:
+    """An external reader's queue: (how many, the first ``limit``) assets ``model``
+    hasn't finished, including those the CPU model already read (it reads better)."""
+
+    block_store.initialize(db_path)
+    with block_store.connection_scope(db_path) as connection:
+        total = connection.execute(
+            f"SELECT COUNT(*) FROM ({_PENDING_SQL})", (model, 0, 0, -1)
+        ).fetchone()[0]
+        rows = [dict(row) for row in connection.execute(_PENDING_SQL, (model, 0, 0, limit))]
+    return total, rows
+
+
+def _mark(db_path: Path, content_hash: str, model: str | None = None, **fields) -> None:
+    model = model or MODEL
     fields["updated_at"] = block_store.utc_now()
     columns = ", ".join(fields)
     updates = ", ".join(f"{name} = excluded.{name}" for name in fields)
@@ -255,14 +367,35 @@ def _mark(db_path: Path, content_hash: str, **fields) -> None:
             f"""INSERT INTO ocr_results(content_hash, model, {columns})
                 VALUES (?, ?, {", ".join("?" for _ in fields)})
                 ON CONFLICT(content_hash, model) DO UPDATE SET {updates}""",
-            (content_hash, MODEL, *fields.values()),
+            (content_hash, model, *fields.values()),
         )
 
 
-def process_one(db_path: Path) -> bool:
+def _best_done(connection, content_hash: str) -> dict | None:
+    rows = connection.execute(
+        "SELECT * FROM ocr_results WHERE content_hash = ? AND status = 'done'", (content_hash,)
+    ).fetchall()
+    if not rows:
+        return None
+    return dict(max(rows, key=lambda row: (rank(row["model"]), row["updated_at"])))
+
+
+def _publish(db_path: Path, content_hash: str) -> None:
+    """Give the asset the text of its best finished reading (search, ColBERT, Ask).
+
+    Only the blocks showing this asset are re-indexed, and only when the text changed.
+    """
+
+    with block_store.connection_scope(db_path) as connection:
+        best = _best_done(connection, content_hash)
+    if best is not None:
+        block_store.store_asset_text(db_path, content_hash, best["text"])
+
+
+def process_one(db_path: Path, *, defer: bool = False) -> bool:
     """Read the next pending asset; False when nothing is pending."""
 
-    rows = pending(db_path)
+    rows = pending(db_path, defer=defer)
     if not rows:
         return False
     row = rows[0]
@@ -285,16 +418,75 @@ def process_one(db_path: Path) -> bool:
     _mark(db_path, content_hash, status="done", text=text, method=result.method,
           pages=result.pages, duration_ms=elapsed, error=None)
     with block_store.connection_scope(db_path) as connection:
-        # Results of earlier models are only needed until this one has read the asset.
+        # Results of earlier versions of this model are only needed until it has read
+        # the asset; external readers' results stay (they may outrank it).
         connection.execute(
-            "DELETE FROM ocr_results WHERE content_hash = ? AND model <> ?", (content_hash, MODEL)
+            f"""DELETE FROM ocr_results WHERE content_hash = ? AND model <> ?
+                  AND NOT {_preferred_sql("model")}""",
+            (content_hash, MODEL),
         )
-    block_store.store_asset_text(db_path, content_hash, text)
+    _publish(db_path, content_hash)
     return True
+
+
+def store_external(
+    db_path: Path,
+    content_hash: str,
+    model: str,
+    *,
+    status: str,
+    text: str = "",
+    method: str = "ocr",
+    pages: int | None = None,
+    error: str | None = None,
+    duration_ms: int | None = None,
+) -> dict[str, object]:
+    """Record an external reader's result for an asset (``status`` done or failed).
+
+    Raises KeyError for a hash that is no registered picture or PDF, ValueError for a
+    model that isn't an external reader's.
+    """
+
+    if not is_external_model(model):
+        raise ValueError(f"not an external OCR model: {model!r}")
+    if status not in {"done", "failed"}:
+        raise ValueError(f"status must be done or failed, not {status!r}")
+    block_store.initialize(db_path)
+    with block_store.connection_scope(db_path) as connection:
+        known = connection.execute(
+            f"SELECT 1 FROM assets WHERE content_hash = ? AND mime_type IN ({_OCR_TYPES_SQL}) LIMIT 1",
+            (content_hash,),
+        ).fetchone()
+        previous = connection.execute(
+            "SELECT attempts FROM ocr_results WHERE content_hash = ? AND model = ?",
+            (content_hash, model),
+        ).fetchone()
+    if known is None:
+        raise KeyError(content_hash)
+    attempts = (previous["attempts"] if previous else 0) + 1
+    if status == "failed":
+        # Given up at once: the reader's errors are about the file, not a passing state.
+        # The CPU model then reads it, even while this reader stays active.
+        _mark(db_path, content_hash, model, status="failed", attempts=attempts,
+              error=(error or "failed")[:500], duration_ms=duration_ms)
+        wake()
+        return {"status": "failed", "model": model, "text_chars": 0}
+    text = (text or "").strip()[:MAX_TEXT_CHARS]
+    _mark(db_path, content_hash, model, status="done", attempts=attempts, text=text,
+          method=(method or "ocr")[:32], pages=pages, duration_ms=duration_ms, error=None)
+    with block_store.connection_scope(db_path) as connection:
+        # Another version of the same reader (an older macOS's Vision) is replaced.
+        connection.execute(
+            "DELETE FROM ocr_results WHERE content_hash = ? AND model <> ? AND model LIKE ?",
+            (content_hash, model, f"{family(model)}/%"),
+        )
+    _publish(db_path, content_hash)
+    return {"status": "done", "model": model, "text_chars": len(text)}
 
 
 def status_counts(db_path: Path) -> dict[str, object]:
     block_store.initialize(db_path)
+    reader = external_reader()
     with block_store.connection_scope(db_path) as connection:
         counts = dict(
             connection.execute(
@@ -302,35 +494,65 @@ def status_counts(db_path: Path) -> dict[str, object]:
                 (MODEL,),
             ).fetchall()
         )
+        # Not yet readable by anyone: no result of this model nor a preferred one.
         queued = connection.execute(
-            f"SELECT COUNT(*) FROM ({_PENDING_SQL})", (MODEL, -1)
+            f"SELECT COUNT(*) FROM ({_PENDING_SQL})", (MODEL, 1, 0, -1)
         ).fetchone()[0]
+        external = None
+        if reader is not None:
+            external_counts = dict(
+                connection.execute(
+                    "SELECT status, COUNT(*) FROM ocr_results WHERE model = ? GROUP BY status",
+                    (reader,),
+                ).fetchall()
+            )
+            external = {
+                "model": reader,
+                "queued": connection.execute(
+                    f"SELECT COUNT(*) FROM ({_PENDING_SQL})", (reader, 0, 0, -1)
+                ).fetchone()[0],
+                "done": external_counts.get("done", 0),
+                "failed": external_counts.get("failed", 0),
+            }
     return {
         "model": MODEL,
         "queued": queued,
         "done": counts.get("done", 0),
         "failed": counts.get("failed", 0),
         "running": background.busy(OcrQueue.name),
+        # The Mac app's Apple Vision reader, while it is working (else null).
+        "external": external,
     }
 
 
 def asset_status(db_path: Path, content_hashes: list[str]) -> dict[str, dict[str, object]]:
-    """OCR state of each content hash for the current model (absent = not an OCR type)."""
+    """OCR state of each content hash: its best finished reading (and that reading's
+    model); else this process's model's state (running, failed); else queued."""
 
     if not content_hashes:
         return {}
     placeholders = ",".join("?" for _ in content_hashes)
     with block_store.connection_scope(db_path) as connection:
         rows = connection.execute(
-            f"""SELECT content_hash, status, method, pages, error, updated_at
-                  FROM ocr_results WHERE model = ? AND content_hash IN ({placeholders})""",
-            (MODEL, *content_hashes),
+            f"""SELECT content_hash, model, status, method, pages, error, updated_at
+                  FROM ocr_results WHERE content_hash IN ({placeholders})""",
+            content_hashes,
         ).fetchall()
-    found = {row["content_hash"]: dict(row) for row in rows}
-    return {
-        content_hash: found.get(content_hash, {"status": "queued"})
-        for content_hash in content_hashes
-    }
+    by_hash: dict[str, list[dict]] = {}
+    for row in rows:
+        by_hash.setdefault(row["content_hash"], []).append(dict(row))
+    result = {}
+    for content_hash in content_hashes:
+        found = by_hash.get(content_hash, [])
+        done = [row for row in found if row["status"] == "done" and rank(row["model"]) > 0]
+        own = next((row for row in found if row["model"] == MODEL), None)
+        if done:
+            result[content_hash] = max(done, key=lambda row: (rank(row["model"]), row["updated_at"]))
+        elif own is not None:
+            result[content_hash] = own
+        else:
+            result[content_hash] = {"status": "queued", "model": MODEL}
+    return result
 
 
 # --- Worker -------------------------------------------------------------------------------
@@ -349,7 +571,9 @@ class OcrQueue(background.Service):
         self.db_path: Path | None = None
 
     def step(self) -> float | None:
-        if self.db_path is None or not process_one(self.db_path):
+        if self.db_path is None or not process_one(
+            self.db_path, defer=external_reader() is not None
+        ):
             return None
         return 0
 
@@ -383,5 +607,7 @@ def wait_idle(timeout: float = 30.0) -> bool:
 
     db_path = _queue.db_path
     return background.runner.wait_idle(
-        OcrQueue.name, lambda: db_path is None or not pending(db_path), timeout
+        OcrQueue.name,
+        lambda: db_path is None or not pending(db_path, defer=external_reader() is not None),
+        timeout,
     )

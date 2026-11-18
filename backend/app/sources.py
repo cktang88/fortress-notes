@@ -1016,13 +1016,16 @@ def _picture_text(path: Path, rows: list) -> list[dict[str, Any]]:
             {
                 "block_id": row["block_id"],
                 "media_name": row["media_name"],
+                "content_hash": row["content_hash"],
                 "mime_type": row["mime_type"],
                 # queued, running (or retrying), done, failed
                 "status": state.get("status", "queued"),
                 "method": state.get("method") or None,  # ocr, pdf-text, pdf-text+ocr
                 "pages": state.get("pages"),
                 "error": state.get("error"),
-                "model": _ocr.MODEL,
+                # The reading whose text is used (apple-vision/… from the Mac app, or
+                # this process's model), or the model that is to read it.
+                "model": state.get("model") or _ocr.MODEL,
                 "read_at": state.get("updated_at"),
                 # The text in use; it can predate the current model while that is queued.
                 "text": text[:PICTURE_TEXT_CHARS],
