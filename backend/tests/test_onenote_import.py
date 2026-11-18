@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import os
 import shutil
 import tempfile
@@ -1078,6 +1079,334 @@ def _manifest_blocks(notebook):
                 yield from entries(entry["children"])
 
     yield from entries(notebook["children"])
+
+
+class CompareFindingsTests(_Base):
+    """Regressions found by tools/onenote-compare (rendered OneNote vs imported note)."""
+
+    def import_blocks(self, blocks: list[dict], guid: str = P3) -> dict:
+        page = _pages(self.manifest)[guid]
+        page["items"] = [_outline("i0", blocks)]
+        page["layout"] = [{"kind": "item", "item": "i0"}]
+        self.last_result = self.run_import(self.manifest)
+        return self.tree(guid)
+
+    def test_markdown_export_numbers_ordered_list_items(self) -> None:
+        info = {"ordered": True, "style": "decimal", "marker": "%.", "restart": None}
+        tree = self.import_blocks([
+            {"type": "list_item", "indent": 0, "text": f"Step {n}", "list": info,
+             "object_id": f"{{{n}AAAAAAA-0000-0000-0000-000000000000}}&1"}
+            for n in range(1, 4)
+        ])
+        markdown = export_document_markdown(self.db, tree["id"])
+        # Every OneNote block carries a provenance comment, which ends a Markdown list:
+        # without real numbers each item would read "1." in any Markdown viewer.
+        self.assertIn("1. Step 1", markdown)
+        self.assertIn("2. Step 2", markdown)
+        self.assertIn("3. Step 3", markdown)
+
+    def test_markdown_export_restarts_numbering_where_onenote_does(self) -> None:
+        info = {"ordered": True, "style": "decimal", "marker": "%.", "restart": None}
+        tree = self.import_blocks([
+            {"type": "list_item", "indent": 0, "text": "Tips", "list": {**info, "restart": 3}},
+            {"type": "list_item", "indent": 0, "text": "More", "list": info},
+        ])
+        markdown = export_document_markdown(self.db, tree["id"])
+        self.assertIn("3. Tips", markdown)
+        self.assertIn("4. More", markdown)
+
+    def test_markdown_export_keeps_nesting_and_never_makes_code_blocks(self) -> None:
+        from markdown_it import MarkdownIt
+
+        info = {"ordered": True, "style": "decimal", "marker": "%.", "restart": None}
+        tree = self.import_blocks([
+            {"type": "paragraph", "indent": 0, "text": "Intro"},
+            {"type": "paragraph", "indent": 1, "text": "Indented once"},
+            {"type": "paragraph", "indent": 2, "text": "Indented twice"},
+            {"type": "list_item", "indent": 0, "text": "Outer", "list": info},
+            {"type": "list_item", "indent": 1, "text": "Inner", "list": info},
+            {"type": "list_item", "indent": 2, "text": "Innermost", "list": info},
+        ])
+        html = MarkdownIt("commonmark", {"html": True}).render(export_document_markdown(self.db, tree["id"]))
+        # Indented OneNote paragraphs used to be written 4+ spaces deep: a code block
+        # showing the provenance comments.
+        self.assertNotIn("<pre>", html)
+        self.assertNotIn("&lt;!-- fortress:block", html)
+        self.assertRegex(html, r"<p>Indented twice\b")
+        # Children of "1. " items need 3 spaces, or they fall out of the item.
+        self.assertRegex(html, r"(?s)<ol>\s*<li>.*Outer.*<ol>\s*<li>.*Inner.*<ol>\s*<li>.*Innermost")
+
+    def test_list_numbering_style_and_start_are_kept(self) -> None:
+        tree = self.import_blocks([
+            {"type": "list_item", "indent": 0, "text": "Roman",
+             "list": {"ordered": True, "style": "lower_roman", "marker": "%.", "restart": 3}},
+        ])
+        attrs = tree["children"][0]["attrs"]
+        self.assertEqual((attrs.get("list_style"), attrs.get("list_start")), ("lower_roman", 3))
+
+    def test_hostile_strings_from_the_converter_are_sanitised(self) -> None:
+        bad = ["javascript:alert(1)", "java\nscript:alert(1)", " JAVASCRIPT:alert(1)", "data:text/html,x",
+               "file:///etc/passwd", "\\\\server\\share\\x.doc", "ms-word:ofe|u|https://x/y.docx",
+               "vbscript:x", "https://example.com/" + "a" * 6000]
+        text = " ".join(f"L{i}" for i in range(len(bad))) + " ok"
+        marks = []
+        for i, href in enumerate(bad):
+            start = text.index(f"L{i}")
+            marks.append({"start": start, "end": start + len(f"L{i}"), "type": "link", "href": href})
+        start = text.index("ok")
+        marks.append({"start": start, "end": start + 2, "type": "link", "href": "https://example.com/ok"})
+        page = _pages(self.manifest)[P3]
+        page["title"] = "Bell\x07 title\x1b[31m"
+        tree = self.import_blocks([
+            {"type": "paragraph", "indent": 0, "text": text, "marks": marks},
+            {"type": "paragraph", "indent": 0, "text": "nul\x00 and esc\x1b here", "marks": [
+                {"start": 0, "end": 3, "type": "bold"}]},
+            {"type": "image", "indent": 0, "asset": PNG_NAME, "data_status": "available", "alt_text": "a\x0bb",
+             "hyperlink": "javascript:alert(1)", "width": None, "height": None, "is_printout_page": False,
+             "printout_page_number": None, "is_background": False, "original_name": "x\x01.png", "original_asset": None},
+            {"type": "embed", "indent": 0, "url": "file:///C:/secret.mp4", "thumbnail_asset": None},
+        ])
+        links, first = tree["children"][0], tree["children"][0]["content"]
+        hrefs = [run["href"] for run in first if run["type"] == "link"]
+        self.assertEqual(hrefs, ["https://example.com/ok"])
+        self.assertEqual(links["text"], text)  # the words stay
+        self.assertEqual(len(links["provenance"]["extra"]["dropped_links"]), len(bad))
+        self.assertEqual(tree["children"][1]["text"], "nul and esc here")
+        image = tree["children"][2]
+        self.assertNotIn("link", image["attrs"])
+        self.assertEqual(image["attrs"]["alt"], "ab")
+        self.assertEqual(image["attrs"]["name"], "x.png")
+        self.assertEqual(tree["children"][3]["text"], "file:///C:/secret.mp4")
+        self.assertEqual(tree["title"], "Bell title[31m")
+        markdown = export_document_markdown(self.db, tree["id"])
+        self.assertNotRegex(markdown, r"[\x00-\x08\x0b-\x1f]")
+        visible = re.sub(r"<!--.*?-->", "", markdown, flags=re.DOTALL)
+        self.assertNotIn("](javascript", visible.lower())
+        self.assertNotIn("](file:", visible.lower())
+        self.assertNotIn("](data:", visible.lower())
+
+    def test_tag_highlight_and_font_colours_are_applied(self) -> None:
+        highlight = {"label": "Highlight", "shape": "no_icon", "checkable": False, "completed": False,
+                     "completed_at": None, "highlight_color": "#ffff00", "text_color": "#C00000"}
+        tree = self.import_blocks([{
+            "type": "paragraph", "indent": 0, "text": "1,637,892", "tags": [highlight],
+            "marks": [{"start": 6, "end": 9, "type": "highlight", "color": "#FF0000"}],
+        }])
+        runs = tree["children"][0]["content"]
+        self.assertEqual([(r["text"], r["marks"].get("highlight"), r["marks"].get("color")) for r in runs],
+                         [("1,637,", "#FFFF00", "#C00000"), ("892", "#FF0000", "#C00000")])
+
+    def test_deep_nesting_in_cells_is_flattened_not_refused(self) -> None:
+        bullet = {"ordered": False, "style": "bullet", "marker": "•", "restart": None}
+
+        def table(inner_blocks):
+            return {"type": "table", "indent": 0, "row_count": 1, "col_count": 2, "column_widths": [2.0, 2.0],
+                    "borders_visible": True, "rows": [{"cells": [
+                        {"background": None, "blocks": inner_blocks},
+                        {"background": None, "blocks": [{"type": "paragraph", "indent": 0, "text": "side"}]}]}]}
+
+        deep_list = [{"type": "list_item", "indent": n, "text": f"level {n}", "list": bullet} for n in range(14)]
+        nested = [{"type": "paragraph", "indent": 0, "text": "innermost"}]
+        for _ in range(11):
+            nested = [table(nested)]
+        tree = self.import_blocks([
+            table(deep_list),
+            nested[0],
+            *[{"type": "list_item", "indent": n, "text": f"top {n}", "list": bullet} for n in range(20)],
+        ])
+        text = json.dumps(tree, ensure_ascii=False)
+        for n in range(14):
+            self.assertIn(f"level {n}", text)
+        self.assertIn("innermost", text)
+        for n in range(20):
+            self.assertIn(f"top {n}", text)
+
+    def test_attachment_names_and_asset_paths_cannot_escape(self) -> None:
+        self.manifest["assets"]["e" * 64 + ".png"] = {**PNG_INFO, "path": "../../../etc/passwd"}
+        tree = self.import_blocks([
+            {"type": "file", "indent": 0, "asset": PDF_NAME, "filename": "..\\..\\Windows\\System32\\evil.exe",
+             "extension": "exe", "mime": "application/pdf", "size": len(PDF), "data_status": "available",
+             "media_kind": "other", "icon_asset": None},
+            {"type": "file", "indent": 0, "asset": PDF_NAME, "filename": "../..", "extension": "",
+             "mime": "application/pdf", "size": len(PDF), "data_status": "available", "media_kind": "other",
+             "icon_asset": None},
+            {"type": "file", "indent": 0, "asset": PDF_NAME, "filename": "x" * 5000 + ".pdf", "extension": "pdf",
+             "mime": "application/pdf", "size": len(PDF), "data_status": "available", "media_kind": "other",
+             "icon_asset": None},
+            {"type": "image", "indent": 0, "asset": "e" * 64 + ".png", "data_status": "available", "alt_text": "",
+             "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
+             "is_background": False, "original_name": "/tmp/../x.png", "original_asset": None},
+            {"type": "image", "indent": 0, "asset": "../" + PNG_NAME, "data_status": "available", "alt_text": "",
+             "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
+             "is_background": False, "original_name": None, "original_asset": None},
+            {"type": "image", "indent": 0, "asset": None, "data_status": "empty", "alt_text": "",
+             "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
+             "is_background": False, "original_name": "zero.png", "original_asset": None},
+            {"type": "file", "indent": 0, "asset": None, "filename": "zero.txt", "extension": "txt",
+             "mime": "text/plain", "size": 0, "data_status": "empty", "media_kind": "other", "icon_asset": None},
+        ])
+        self.assertIn("Empty image", tree["children"][5]["text"])
+        self.assertIn("Empty file", tree["children"][6]["attrs"]["caption"])
+        names = [child["attrs"].get("name") for child in tree["children"][:3]]
+        self.assertEqual(names[0], "evil.exe")
+        self.assertEqual(names[1], "attachment")
+        self.assertTrue(names[2].endswith(".pdf") and len(names[2]) <= onenote_import.MAX_FILE_NAME, len(names[2]))
+        # Neither the asset outside the export nor a non content-addressed name is copied.
+        self.assertTrue(all(child["type"] == "paragraph" for child in tree["children"][3:5]))
+        self.assertIn("Image missing", tree["children"][3]["text"])
+        for path in self.settings.assets_path.iterdir():
+            self.assertRegex(path.name, r"^[0-9a-f]{64}\.[a-z0-9]+$")
+
+    def test_unusable_image_data_and_equations_without_latex(self) -> None:
+        bin_name = "b" * 64 + ".bin"
+        self.manifest["assets"][bin_name] = {**PNG_INFO, "path": f"assets/{bin_name}", "mime": "application/octet-stream"}
+        (self.export / "assets").mkdir(parents=True, exist_ok=True)
+        (self.export / "assets" / bin_name).write_bytes(b"garbage bytes")
+        tree = self.import_blocks([
+            {"type": "image", "indent": 0, "asset": bin_name, "data_status": "available", "alt_text": "chart",
+             "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
+             "is_background": False, "original_name": "chart.png", "original_asset": None},
+            {"type": "math", "indent": 0, "text": "x=−b±b2−4ac2a", "latex": None, "mathml": None},
+        ])
+        attachment, math = tree["children"]
+        self.assertEqual(attachment["type"], "file")
+        self.assertTrue(attachment["attrs"]["url"].endswith(".bin"))
+        self.assertIn("chart", attachment["attrs"]["caption"])
+        self.assertEqual(math["type"], "math")
+        warnings = " ".join(w for nb in self.last_result["notebooks"] for w in nb["warnings"])
+        self.assertIn("not a picture", warnings)
+        self.assertIn("no LaTeX", warnings)
+
+    def test_notebook_with_no_pages_and_no_failures_is_reported(self) -> None:
+        # A .onepkg of OneNote 2007 sections converts to an empty notebook with no failure.
+        self.manifest["notebooks"].append({
+            "id": "nb-2", "file_identity": "nb-2", "name": "Personal", "color": None, "source_kind": "onepkg",
+            "source_path": "Personal.onepkg", "children": [], "report": {}})
+        result = self.run_import(self.manifest)
+        work, personal = result["notebooks"]
+        self.assertFalse(any("No pages were found" in w for w in work["warnings"]))
+        self.assertTrue(any("No pages were found" in w for w in personal["warnings"]))
+
+    def test_very_deep_and_long_source_paths_fit_provenance(self) -> None:
+        page = _pages(self.manifest)[P3]
+        page["source_path"] = ["Work", *[f"Group {n} " + "g" * 300 for n in range(12)], "Meetings", page["title"]]
+        page["source_url"] = "https://example.com/" + "u" * 3000
+        tree = self.import_blocks([{"type": "paragraph", "indent": 0, "text": "still imported"}])
+        self.assertEqual(tree["children"][0]["text"], "still imported")
+        path = tree["provenance"]["source_path"]
+        self.assertLessEqual(len(path), onenote_import.MAX_SOURCE_PATH)
+        self.assertTrue(path.startswith("Work › ") and path.endswith("Meetings › " + page["title"]), path)
+
+    def test_blocks_indented_under_a_table_follow_it(self) -> None:
+        tree = self.import_blocks([
+            {"type": "table", "indent": 0, "row_count": 1, "col_count": 1, "column_widths": [3.0],
+             "borders_visible": True, "rows": [{"cells": [
+                 {"background": None, "blocks": [{"type": "paragraph", "indent": 0, "text": "cell"}]}]}]},
+            {"type": "paragraph", "indent": 1, "text": "under the table"},
+            {"type": "paragraph", "indent": 2, "text": "deeper"},
+        ])
+        table, after = tree["children"]
+        self.assertEqual([row["type"] for row in table["children"]], ["table_row"])
+        self.assertEqual((after["text"], [child["text"] for child in after["children"]]),
+                         ("under the table", ["deeper"]))
+
+    def test_clean_text(self) -> None:
+        self.assertEqual(onenote_import._clean("form\x0cfeed bell\x07 nul\x00 a\r\nb‮RTL"),
+                         "form feed bell nul a\nb‮RTL")
+
+    def test_safe_link(self) -> None:
+        self.assertEqual(onenote_import.safe_link("www.google.com"), "http://www.google.com")
+        self.assertEqual(onenote_import.safe_link("https://a.example/x?y=1"), "https://a.example/x?y=1")
+        self.assertEqual(onenote_import.safe_link("mailto:a@b.c"), "mailto:a@b.c")
+        for bad in ("javascript:x", "jav\tascript:x", "file:///c:/x", "\\\\srv\\x", "ms-word:ofe|u|x", "notes.txt",
+                    "https://x/" + "a" * 3000, "https://x/\x00y"):
+            self.assertIsNone(onenote_import.safe_link(bad), bad)
+
+    def test_odd_tag_labels(self) -> None:
+        def tag(label, shape):
+            return {"label": label, "shape": shape, "checkable": False, "completed": False, "completed_at": None,
+                    "highlight_color": None, "text_color": None}
+
+        tree = self.import_blocks([{
+            "type": "paragraph", "indent": 0, "text": "Tagged",
+            "tags": [tag("   ", "yellow_star"), tag("Question ", "question_mark"), tag("", "no_icon"),
+                     tag("x" * 600, "flag")],
+        }])
+        self.assertEqual(tree["children"][0]["attrs"]["onenote_tags"], ["Yellow star", "Question", "x" * 100])
+
+    def test_tags_on_a_cells_first_line_and_todos_in_numbered_lists_are_kept(self) -> None:
+        star = {"label": "Important", "shape": "yellow_star", "checkable": False, "completed": False,
+                "completed_at": None, "highlight_color": None, "text_color": None}
+        cell = {"background": None, "blocks": [{"type": "paragraph", "indent": 0, "text": "Star", "tags": [star]}]}
+        tree = self.import_blocks([
+            {"type": "table", "indent": 0, "row_count": 1, "col_count": 1, "column_widths": [3.0],
+             "borders_visible": True, "rows": [{"cells": [cell]}]},
+            {"type": "check_item", "indent": 0, "text": "Step", "checked": True, "checked_at": None,
+             "list": {"ordered": True, "style": "lower_alpha", "marker": "%)", "restart": None}},
+        ])
+        table, todo = tree["children"]
+        [first] = table["children"][0]["children"][0]["children"]
+        self.assertEqual(first["attrs"]["onenote_tags"], ["Important"])
+        self.assertEqual((todo["type"], todo["attrs"]["checked"], todo["attrs"]["list_format"],
+                          todo["attrs"]["list_style"]), ("check_item", True, "%)", "lower_alpha"))
+
+    def test_monospace_runs_become_inline_code(self) -> None:
+        tree = self.import_blocks([{
+            "type": "paragraph", "indent": 0, "text": "run ls -la now",
+            "marks": [{"start": 4, "end": 10, "type": "font", "family": "Consolas"},
+                      {"start": 4, "end": 10, "type": "color", "color": "#C00000"}],
+        }])
+        runs = tree["children"][0]["content"]
+        # The colour is kept too (it used to be stripped from code runs).
+        self.assertIn({"type": "text", "text": "ls -la", "marks": {"code": True, "color": "#C00000"}}, runs)
+
+    def test_inline_equations_keep_their_latex(self) -> None:
+        text = "Pythagoras: 𝑎2+𝑏2=𝑐2 holds"
+        start = text.index("𝑎")
+        end = start + len("𝑎2+𝑏2=𝑐2")
+        tree = self.import_blocks([
+            {"type": "paragraph", "indent": 0, "text": text,
+             "marks": [{"start": start, "end": end, "type": "math", "latex": "\\(a^{2}+b^{2}=c^{2}\\)"}]},
+            # An equation alone in a list item (converter >= 0.2.1 keeps it a list item).
+            {"type": "list_item", "indent": 0, "text": "∫1𝑥𝑑𝑥",
+             "list": {"ordered": False, "style": "bullet", "marker": "•", "restart": None},
+             "marks": [{"start": 0, "end": 6, "type": "math", "latex": "\\[\\int \\frac{1}{x}dx\\]"}]},
+        ])
+        paragraph, item = tree["children"]
+        self.assertEqual(paragraph["content"], [
+            {"type": "text", "text": "Pythagoras: "},
+            {"type": "text", "text": "$a^{2}+b^{2}=c^{2}$", "marks": {"code": True}},
+            {"type": "text", "text": " holds"},
+        ])
+        self.assertEqual(item["type"], "bullet_item")
+        self.assertEqual(item["text"], "$\\int \\frac{1}{x}dx$")
+        report = self.run_import(self.manifest)
+        self.assertEqual([page for nb in report["notebooks"] for page in nb["low_coverage_pages"]], [])
+
+    def test_alignment_is_kept(self) -> None:
+        cell = {"background": None, "blocks": [{"type": "paragraph", "indent": 0, "text": "Total", "align": "right"}]}
+        tree = self.import_blocks([
+            {"type": "paragraph", "indent": 0, "text": "Centred title", "align": "center"},
+            {"type": "table", "indent": 0, "row_count": 1, "col_count": 1, "column_widths": [3.0],
+             "borders_visible": True, "rows": [{"cells": [cell]}]},
+        ])
+        paragraph, table = tree["children"]
+        self.assertEqual(paragraph["attrs"].get("text_alignment"), "center")
+        cell = table["children"][0]["children"][0]
+        self.assertEqual(cell["attrs"].get("align"), "right")
+        self.assertEqual(cell["children"][0]["text"], "Total")
+
+    def test_video_embed_keeps_its_poster_image(self) -> None:
+        tree = self.import_blocks([{
+            "type": "embed", "indent": 0, "url": "https://www.youtube.com/watch?v=abc",
+            "thumbnail_asset": PNG_NAME, "alt_text": "Talent Connect",
+        }])
+        [image] = tree["children"]
+        self.assertEqual(image["type"], "image")
+        self.assertEqual(image["attrs"]["link"], "https://www.youtube.com/watch?v=abc")
+        self.assertEqual(image["attrs"]["caption"], "https://www.youtube.com/watch?v=abc")
+        self.assertEqual(image["attrs"]["alt"], "Talent Connect")
+        self.assertTrue(image["attrs"]["url"].startswith("/media/"))
 
 
 if __name__ == "__main__":

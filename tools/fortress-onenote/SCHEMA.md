@@ -22,7 +22,9 @@ importer. Rules for evolving it:
   *(omitted when empty)* may be missing.
 
 Additions without a version bump: converter 0.2.0 added block `object_id` /
-`element_id` and link `onenote.object_ref` (see *Object ids*). Older
+`element_id` and link `onenote.object_ref` (see *Object ids*); 0.2.1 added
+`embed.alt_text` and keeps an equation that is alone in a list item / to-do as
+that list item (with a `math` mark) instead of a `math` block. Older
 manifests simply lack them.
 
 ## Conventions
@@ -46,7 +48,7 @@ manifests simply lack them.
 {
   "format": "fortress-onenote-manifest",
   "format_version": 1,
-  "generator": {"name": "fortress-onenote", "version": "0.2.0", "parser": "onenote_parser 2.1"},
+  "generator": {"name": "fortress-onenote", "version": "0.2.1", "parser": "onenote_parser 2.1"},
   "units": {"text_offsets": "code_points", "geometry": "half_inch", "px_per_geometry_unit": 48.0},
   "input": {"kind": "zip|directory|onetoc2|one|onepkg", "name": "<input base name>"},
   "notebooks": [Notebook],
@@ -180,7 +182,7 @@ vertical tab/CR normalised to `\n`) and `marks` (*omitted when empty*).
 | `math` | Paragraph that is only an equation: `text` (OneNote's linear form, markers removed), `latex` (string \| null, `\[…\]`), `mathml` (string \| null). Inline equations are `math` marks instead. |
 | `table` | `row_count`, `col_count`, `column_widths` ([number], geometry units), `borders_visible` bool, `rows`: [{`cells`: [{`background`: colour \| null, `blocks`: [Block]}]}]. Cells hold any blocks, including nested tables. OneNote has no merged cells. |
 | `image` | `asset` (string \| null), `data_status` (`available` \| `missing` \| `invalid` \| `empty`; see below), `alt_text` (string \| null — usually OneNote's OCR text), `width`/`height` (geometry units \| null), `hyperlink` (string \| null), `is_printout_page` bool, `printout_page_number` (int \| null, as stored; may be 0-based), `is_background` bool, `original_name` (sanitised display name \| null), `original_asset` (string \| null: the original when `asset` is OneNote's browser-friendly fallback picture, e.g. for EMF images or XPS printout pages). |
-| `embed` | Online video/iframe: `url`, `thumbnail_asset` (string \| null). |
+| `embed` | Online video/iframe: `url`, `thumbnail_asset` (string \| null), `alt_text` (string \| null, alt/OCR text of the poster picture; converter 0.2.1). |
 | `file` | Attachment: `asset` (string \| null), `filename` (sanitised display name), `extension` (string \| null), `mime`, `size` (bytes as recorded), `data_status` (`available` \| `missing` \| `invalid` \| `empty`), `media_kind` (`audio` \| `video` \| `other` — OneNote recordings are audio/video), `icon_asset` (string \| null). |
 | `ink` | Drawing/handwriting rendered to SVG: `asset` (string \| null, `image/svg+xml`), `recognized_text` (string \| null), `width`, `height` (geometry units), `stroke_count`. |
 

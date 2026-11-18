@@ -44,7 +44,6 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import ocr as _ocr
-from . import block_legacy
 from . import block_schema as schema
 from . import order_keys
 from . import provenance as _provenance
@@ -73,8 +72,7 @@ class SourceBlock:
 
     Either ``markdown`` (the block's own Markdown; it may read as several
     blocks) or a ``type`` with canonical ``attrs``, ``content`` (inline nodes)
-    and ``payload`` (docs/block-model.md). Older shapes are read too: BlockNote
-    type names and ``content={"blocknote": ...}``. Nested blocks go in
+    and ``payload`` (docs/block-model.md); nothing else is read. Nested blocks go in
     ``children`` (a table's are ``table_row`` blocks, a ``columns`` block's are
     ``column`` blocks). ``provenance`` holds extra per-block fields such as
     ``source_path`` or ``extra``. :func:`source_block` builds one from a plain
@@ -89,7 +87,7 @@ class SourceBlock:
     created_at: str | None = None
     modified_at: str | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
-    content: list[dict[str, Any]] | dict[str, Any] | None = None
+    content: list[dict[str, Any]] | None = None
     payload: dict[str, Any] | None = None
     # Source ids this block had in earlier imports (e.g. a content hash before
     # the source exposed a stable id): a stored block with one of them is this
@@ -114,86 +112,36 @@ class UpsertResult:
 
 # --- Building source blocks from plain dicts ------------------------------------------
 
-_TEXT_ATTR_KEYS = ("level", "ordered", "checked", "checked_at", "language", "list_format", "tags")
-_MEDIA_ATTR_KEYS = ("url", "alt", "caption", "width", "height", "name", "size", "mime")
-
 
 def source_block(data: dict[str, Any] | str) -> SourceBlock:
-    """A :class:`SourceBlock` from the plain dict an importer has at hand.
-
-    Common keys: ``type``, ``id`` (the source's id for this block), ``attrs``,
-    ``children``, ``created_at``, ``modified_at``, ``provenance``, ``markdown``.
-    Per type:
-
-    * text (``paragraph`` (default), ``heading``, ``list``/``bullet_item``/...,
-      ``quote``, ``code``): ``inline`` -- inline nodes, BlockNote runs or the
-      compact form (``{"text", "b", "i", "u", "s", "sup", "sub", "code",
-      "color", "highlight", "link"}``) -- or ``text`` (plain); ``level``,
-      ``ordered``, ``checked``, ``checked_at``, ``language``. A ``quote`` with
-      ``inline`` holds one paragraph.
-    * ``table``: ``rows`` (see :func:`table_rows`), ``column_widths`` (CSS px or
-      None), ``header_rows``, ``header_cols``, ``borders``.
-    * ``columns``: ``columns: [{"width": 0.5, "blocks": [...], "id": ...}]``.
-    * ``image``: ``url``, ``alt``, ``caption``, ``width``, ``height``, ``name``.
-    * ``file``: ``url``, ``name``, ``size``, ``mime``.
-    * ``math``: ``latex`` (and optional ``mathml``).
-
-    A bare string is Markdown.
+    """A :class:`SourceBlock` from a plain dict in the canonical shape
+    (docs/block-model.md): ``type``, ``attrs``, ``content`` (inline nodes, text
+    types), ``payload`` (math, html) and ``children`` (a table's are
+    ``table_row`` blocks, whose children are ``table_cell`` blocks; a
+    ``columns`` block's are ``column`` blocks). Source keys: ``id`` (the
+    source's id for this block), ``previous_ids``, ``created_at``,
+    ``modified_at``, ``provenance``. ``markdown`` instead of ``type`` is the
+    block's own Markdown. A bare string is Markdown.
     """
 
     if isinstance(data, str):
         return SourceBlock(markdown=data)
     if not isinstance(data, dict):
         raise BlockShapeError("a source block must be a dict or a Markdown string")
-    block_type = data.get("type")
-    attrs = dict(data.get("attrs") or {})
     content = data.get("content")
-    payload = data.get("payload")
-    children = [source_block(child) for child in data.get("children") or []]
-    if block_type == "table":
-        if data.get("rows") is not None:
-            children = table_rows(data["rows"]) + children
-        for key in ("column_widths", "header_rows", "header_cols", "borders"):
-            if data.get(key) is not None:
-                attrs[key] = data[key]
-        if isinstance(attrs.get("column_widths"), list) and all(
-            width is None for width in attrs["column_widths"]
-        ):
-            del attrs["column_widths"]
-    elif block_type == "columns":
-        if data.get("columns") is not None:
-            children = [source_block({**column, "type": "column"}) for column in data["columns"]]
-    elif block_type == "column":
-        if "width" in data:
-            attrs["width"] = data["width"]
-        children = [source_block(child) for child in data.get("blocks") or []] + children
-    elif block_type in {"image", "file"}:
-        attrs.update({key: data[key] for key in _MEDIA_ATTR_KEYS if key in data})
-    elif block_type == "math":
-        if payload is None and content is None:
-            payload = {"latex": data.get("latex", "")}
-            if data.get("mathml"):
-                payload["mathml"] = data["mathml"]
-    else:
-        attrs.update({key: data[key] for key in _TEXT_ATTR_KEYS if key in data})
-        if content is None:
-            if "inline" in data or "runs" in data:
-                content = {"blocknote": data.get("inline", data.get("runs"))}
-            elif "text" in data and "markdown" not in data:
-                content = {"blocknote": data["text"] if isinstance(data["text"], str) else ""}
-        if content is not None and block_type is None:
-            block_type = "paragraph"
+    if content is not None and not isinstance(content, list):
+        raise BlockShapeError("a source block's content must be a list of inline nodes")
     return SourceBlock(
         markdown=str(data.get("markdown") or ""),
         external_id=data.get("id", data.get("external_id")),
-        type=block_type,
-        attrs=attrs,
-        children=children,
+        type=data.get("type"),
+        attrs=dict(data.get("attrs") or {}),
+        children=[source_block(child) for child in data.get("children") or []],
         created_at=data.get("created_at"),
         modified_at=data.get("modified_at"),
         provenance=dict(data.get("provenance") or {}),
         content=content,
-        payload=payload,
+        payload=data.get("payload"),
         previous_external_ids=[str(item) for item in data.get("previous_ids") or [] if item],
     )
 
@@ -202,55 +150,6 @@ def source_blocks(items: Iterable[dict[str, Any] | str]) -> list[SourceBlock]:
     """:func:`source_block` for each item."""
 
     return [source_block(item) for item in items]
-
-
-_CELL_KEYS = {
-    "background": "background", "backgroundColor": "background", "color": "color",
-    "textColor": "color", "align": "align", "textAlignment": "align",
-    "colspan": "colspan", "rowspan": "rowspan",
-}
-
-
-def table_rows(rows: list[Any]) -> list[SourceBlock]:
-    """``table_row`` source blocks from plain rows.
-
-    A row is a list of cells (or ``{"cells": [...], "id": ...}``). A cell is a
-    string, a list of runs, or a dict with ``inline``/``text`` (its first
-    paragraph), ``blocks`` (more blocks, as :func:`source_block` dicts),
-    ``background``, ``color``, ``align``, ``colspan``, ``rowspan`` and ``id``.
-    """
-
-    result = []
-    for row in rows:
-        cells = row.get("cells") if isinstance(row, dict) else row
-        if not isinstance(cells, list):
-            raise BlockShapeError("every table row must be a list of cells")
-        result.append(SourceBlock(
-            type="table_row", children=[_table_cell(cell) for cell in cells],
-            external_id=row.get("id") if isinstance(row, dict) else None,
-        ))
-    return result
-
-
-def _table_cell(cell: Any) -> SourceBlock:
-    if not isinstance(cell, dict):
-        cell = {"inline": cell}
-    attrs: dict[str, Any] = dict(cell.get("attrs") or {})
-    for key, name in _CELL_KEYS.items():
-        if cell.get(key) is not None:
-            attrs[name] = cell[key]
-    for key, name in _CELL_KEYS.items():
-        if (cell.get("props") or {}).get(key) is not None:
-            attrs[name] = cell["props"][key]
-    if attrs.get("align") == "left":
-        del attrs["align"]
-    children: list[SourceBlock] = []
-    inline = cell.get("inline", cell.get("runs", cell.get("content", cell.get("text"))))
-    if inline:
-        children.append(SourceBlock(type="paragraph", content={"blocknote": inline}))
-    children += [source_block(block) for block in cell.get("blocks") or []]
-    return SourceBlock(type="table_cell", attrs=attrs, children=children,
-                       external_id=cell.get("id"))
 
 
 # --- Folders ------------------------------------------------------------------
@@ -330,23 +229,9 @@ class _Planned(BlockSpec):
 def _resolve(block: SourceBlock) -> list[BlockSpec]:
     """Canonical blocks for one source block (a Markdown string may hold several)."""
 
-    raw = block.content
     if block.type is None:
-        if raw is not None:
-            return block_legacy.convert("paragraph", block.attrs, raw if isinstance(raw, dict) else {"blocknote": raw}, "")
         return parse_markdown(block.markdown) or [BlockSpec("paragraph", content=[])]
-    canonical = block.type in schema.TYPES and not isinstance(raw, dict)
-    if canonical and not (block.markdown and raw is None and block.payload is None
-                          and block.type in schema.TEXT_TYPES):
-        return [BlockSpec(**_fields(schema.normalize_block(block.type, block.attrs, raw, block.payload)))]
-    if raw is None and block.markdown:
-        raw = {"markdown": block.markdown}
-    elif isinstance(raw, list):
-        raw = {"blocknote": raw}
-    raw = dict(raw or {})
-    if block.payload and "latex" in block.payload:
-        raw.setdefault("latex", block.payload["latex"])
-    return block_legacy.convert(block.type, block.attrs, raw, "")
+    return [BlockSpec(**_fields(schema.normalize_block(block.type, block.attrs, block.content, block.payload)))]
 
 
 def _fields(block: schema.Block) -> dict[str, Any]:

@@ -275,7 +275,7 @@ impl PageCtx<'_, '_> {
         let list_info = list.map(list_info);
         let check = common.tags.iter().find(|t| t.checkable).cloned();
 
-        if conv.all_math
+        if is_display_equation(conv.all_math, list_info.is_some(), check.is_some())
             && let Some((text, latex, mathml)) = conv.math
         {
             out.push(Block::Math {
@@ -483,6 +483,7 @@ impl PageCtx<'_, '_> {
                     common,
                     url,
                     thumbnail_asset: asset.clone(),
+                    alt_text: alt.clone(),
                 });
             }
             return;
@@ -2101,6 +2102,12 @@ pub fn dedupe_ids(nbs: &mut [Notebook]) {
     }
 }
 
+/// Whether a paragraph becomes a `math` block. An equation alone in a list item
+/// or to-do stays a list item (with a math mark), so the bullet / box survives.
+fn is_display_equation(all_math: bool, in_list: bool, checkable: bool) -> bool {
+    all_math && !in_list && !checkable
+}
+
 /// Fill in counts that depend on the assembled tree.
 pub fn finalize(nb: &mut Notebook) {
     nb.report.counts.section_groups = count_groups(&nb.children);
@@ -2172,6 +2179,14 @@ mod tests {
         assert!(h.contains("remove its password"));
         let (r, _) = classify_failure("Unexpected end of file", None);
         assert!(r.contains("incomplete"));
+    }
+
+    #[test]
+    fn equations_in_lists_stay_list_items() {
+        assert!(is_display_equation(true, false, false));
+        assert!(!is_display_equation(true, true, false));
+        assert!(!is_display_equation(true, false, true));
+        assert!(!is_display_equation(false, false, false));
     }
 
     #[test]
