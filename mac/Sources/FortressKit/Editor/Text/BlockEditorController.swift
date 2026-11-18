@@ -193,11 +193,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let text = DocumentText.build(blocks, theme: theme, context: context)
         blockCache = [:]
         storage.setAttributedString(text)
-        // The blocks just shown are what reading the text back would give: keep them, so
-        // the first save (and the baseline right after opening) doesn't read every block.
+        // A text block just shown is what reading it back gives (unless building the text
+        // rewrote it): keep those, so the baseline right after opening and the first save
+        // don't read every block back. Tables, columns and embeds are read from the text.
         var byId: [String: EditorBlock] = [:]
         byId.reserveCapacity(blocks.count)
-        for block in blocks { byId[block.id] = block }
+        for block in blocks where Self.readsBackAsShown(block) { byId[block.id] = block }
         var cache: [String: CachedBlock] = [:]
         cache.reserveCapacity(blocks.count)
         storage.enumerateAttribute(.fnBlock, in: NSRange(location: 0, length: storage.length), options: []) { value, range, _ in
@@ -261,6 +262,20 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             isNormalizing = false
         }
         return blocks
+    }
+
+    /// Whether reading `block`'s paragraph back gives `block` itself: inline text only, with
+    /// runs already normalized and no separators or stray attachment characters (building
+    /// the text turns those into soft breaks or drops them).
+    private static func readsBackAsShown(_ block: EditorBlock) -> Bool {
+        guard block.kind.hasInlineText, block.table == nil, block.columns == nil else { return false }
+        for run in block.runs where run.node == nil {
+            if run.text.isEmpty { return false }
+            for unit in run.text.utf16 where unit == 0x0A || unit == 0x0D || unit == 0x2029 || unit == 0xFFFC {
+                return false
+            }
+        }
+        return BlockCodec.normalized(block.runs) == block.runs
     }
 
     /// Forgets the blocks kept from loading and earlier reads, so the next
