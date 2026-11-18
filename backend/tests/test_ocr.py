@@ -388,6 +388,55 @@ class OcrTextIsSearchableTests(unittest.TestCase):
         self.assertIn("gate B", again.json()["picture_text"][0]["text"])
 
 
+class EndToEndTests(unittest.TestCase):
+    """The app's own worker and model: upload a screenshot, then find its words."""
+
+    def test_uploaded_screenshot_becomes_searchable(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app import ask, documents, embeddings, main, search
+
+        with tempfile.TemporaryDirectory() as directory:
+            notes = Path(directory)
+            settings = SimpleNamespace(
+                block_db_import_on_startup=False, block_db_path=notes / ".fortress.sqlite3",
+                notes_path=notes, assets_path=notes / "assets", embeddings_enabled=False,
+                vision_enabled=True, auto_backup_enabled=False, reindex_interval_s=5.0,
+                ocr_threads=2,
+            )
+            settings.assets_path.mkdir()
+            patches = [
+                patch.object(main, "settings", settings),
+                patch.object(documents, "get_settings", lambda: settings),
+                patch.object(search, "get_settings", lambda: settings),
+                patch.object(ask, "get_settings", lambda: settings),
+                patch.object(ocr, "get_settings", lambda: settings),
+                patch("app.assets.get_settings", lambda: settings),
+                patch.object(embeddings, "_get_model", lambda: None),
+            ]
+            for item in patches:
+                item.start()
+                self.addCleanup(item.stop)
+            buffer = io.BytesIO()
+            text_image(["Quarterly offsite in Reykjavik", "Budget approved 48,000"]).save(buffer, "PNG")
+            with TestClient(main.app) as client:
+                url = client.post(
+                    "/api/images", files={"file": ("shot.png", buffer.getvalue(), "image/png")}
+                ).json()["url"]
+                document_id = client.post(
+                    "/api/block-documents", json={"title": "Pasted", "body": ""}
+                ).json()["id"]
+                tree = client.get(f"/api/block-documents/{document_id}").json()
+                client.post(f"/api/block-documents/{document_id}/transactions", json={
+                    "base_revision": tree["revision"],
+                    "operations": [{"operation": "insert", "type": "image", "attrs": {"url": url}}],
+                })
+                self.assertTrue(ocr.wait_idle(120))
+                results = client.get("/api/unified-search", params={"q": "reykjavik"}).json()
+                self.assertEqual([r["document_id"] for r in results], [document_id])
+                self.assertEqual(ask.grep_blocks("reykjav")[0]["document_id"], document_id)
+
+
 @unittest.skipUnless(
     os.environ.get("FORTRESS_REAL_COLBERT")
     or (Path.home() / ".cache/huggingface/hub/models--lightonai--Agent-ModernColBERT").is_dir(),
