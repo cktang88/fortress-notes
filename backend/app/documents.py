@@ -57,7 +57,7 @@ def get_note(document_id: str) -> Note | None:
     tree = block_store.document_tree(db_path, document_id)
     if tree is None:
         return None
-    body = block_store.render_markdown(tree["children"])
+    body = block_store.render_markdown(tree["children"], document_provenance=tree["provenance"])
     return Note(
         id=tree["id"],
         title=tree["title"],
@@ -65,9 +65,17 @@ def get_note(document_id: str) -> Note | None:
         tags=tree["tags"],
         created_at=tree["created_at"],
         updated_at=tree["updated_at"],
-        snippet=" ".join(body.split())[:160],
+        snippet=" ".join(_first_text(tree["children"]).split())[:160],
         body=body,
     )
+
+
+def _first_text(nodes: list[dict]) -> str:
+    for node in nodes:
+        text = node["text"] or _first_text(node["children"])
+        if text.strip():
+            return text
+    return ""
 
 
 # --- Writes ------------------------------------------------------------------
