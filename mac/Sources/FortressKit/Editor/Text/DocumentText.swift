@@ -124,22 +124,25 @@ enum DocumentText {
         return label.isEmpty ? "•" : label
     }
 
+    /// The inline runs of `range`. A node is one contiguous run of its box (see
+    /// `InlineNodes`): read once however its label is split by other attributes, and
+    /// twice when two copies of it sit in the paragraph.
     static func runs(in text: NSAttributedString, range: NSRange) -> [InlineRun] {
         var runs: [InlineRun] = []
         let string = text.string as NSString
-        // A node's label may be split (text typed into it): the node is read once.
-        var seen = Set<ObjectIdentifier>()
-        text.enumerateAttributes(in: range, options: []) { attributes, run, _ in
-            if let node = attributes[.fnNode] as? NodeBox {
-                if seen.insert(ObjectIdentifier(node)).inserted { runs.append(.atomic(node.node)) }
+        text.enumerateAttribute(.fnNode, in: range, options: [.longestEffectiveRange]) { value, segment, _ in
+            if let node = value as? NodeBox {
+                runs.append(.atomic(node.node))
                 return
             }
-            var piece = string.substring(with: run)
-            // A stray attachment character (dropped file icon etc.) carries no text.
-            piece = piece.replacingOccurrences(of: objectReplacement, with: "")
-            piece = piece.replacingOccurrences(of: "\r", with: softBreak)
-            let marks = (attributes[.fnMarks] as? MarksBox)?.marks ?? InlineMarks()
-            runs.append(InlineRun(piece, marks))
+            text.enumerateAttribute(.fnMarks, in: segment, options: [.longestEffectiveRange]) { marks, run, _ in
+                var piece = string.substring(with: run)
+                // A stray attachment character (dropped file icon etc.) carries no text.
+                if piece.utf16.contains(where: { $0 == 0xFFFC || $0 == 0x0D }) {
+                    piece = piece.replacingOccurrences(of: objectReplacement, with: "").replacingOccurrences(of: "\r", with: softBreak)
+                }
+                runs.append(InlineRun(piece, (marks as? MarksBox)?.marks ?? InlineMarks()))
+            }
         }
         return BlockCodec.normalized(runs)
     }

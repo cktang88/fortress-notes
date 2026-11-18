@@ -149,8 +149,10 @@ final class PerfEditor {
     let window: NSWindow
     let session: EditorSession
 
-    init(document: BlockDocument, baseURL: URL = URL(string: "http://127.0.0.1:9")!) {
-        session = EditorSession(document: document, api: APIClient(baseURL: baseURL))
+    /// `decoded`: the blocks as `EditorSession.load` decodes them (off the main thread).
+    init(document: BlockDocument, decoded: [EditorBlock]? = nil, baseURL: URL = URL(string: "http://127.0.0.1:9")!) {
+        let api = APIClient(baseURL: baseURL)
+        session = decoded.map { EditorSession(document: document, decoded: $0, api: api) } ?? EditorSession(document: document, api: api)
         controller = BlockEditorController(baseURL: baseURL)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 800), styleMask: [.titled, .resizable],
                           backing: .buffered, defer: false)
@@ -159,7 +161,9 @@ final class PerfEditor {
         controller.scrollView.frame = window.contentView?.bounds ?? .zero
     }
 
-    /// What opening a note does: blocks → attributed text → viewport layout.
+    /// What opening a note does on the main thread: blocks → attributed text (the first
+    /// screens of a long note) → viewport layout. The rest of a long note and the save
+    /// baseline follow on later run loop turns (`settle`).
     func open() {
         controller.load(session.initialBlocks)
         session.resetBase(to: controller.currentBlocks())
@@ -170,6 +174,22 @@ final class PerfEditor {
             session.editorDidChange(leadingTexts: { controller.leadingTexts() })
         }
         layoutViewport()
+    }
+
+    /// Lets the run loop do what follows an open (the rest of a long note goes in, the
+    /// baseline is made), timing each turn: the longest is the longest the app can't
+    /// answer a key while a note finishes loading.
+    @discardableResult
+    func settle() -> (total: Double, longest: Double, turns: Int) {
+        var total = 0.0, longest = 0.0, turns = 0
+        repeat {
+            let turn = milliseconds { _ = RunLoop.main.run(mode: .default, before: Date()) }
+            total += turn
+            longest = max(longest, turn)
+            turns += 1
+        } while !controller.pendingBlocks.isEmpty && turns < 1000
+        total += milliseconds { _ = session.base }
+        return (total, longest, turns)
     }
 
     func layoutViewport() {
@@ -228,41 +248,49 @@ final class PerfEditor {
         let document = LongNote.document()
         let before = footprintMB()
         var editor: PerfEditor!
-        var flattenTime = 0.0
         var blocks: [EditorBlock] = []
-        flattenTime = milliseconds { blocks = BlockCodec.flatten(document.children, resolved: document.resolvedLinks) }
+        // Decoding runs off the main thread (EditorSession.decode); timed on its own.
+        let decode = milliseconds { blocks = BlockCodec.flatten(document.children, resolved: document.resolvedLinks) }
         let open = milliseconds {
-            editor = PerfEditor(document: document)
+            editor = PerfEditor(document: document, decoded: blocks)
             editor.open()
         }
-        PerfLog.record("open.flatten", flattenTime)
-        // Where opening spends its time.
+        PerfLog.record("open.decode(off main)", decode)
+        PerfLog.record("open.firstPaint(2000 blocks, 100 images, 20 tables 50x8, 10 columns, 3x50k)", open, budget: 150)
+        PerfLog.record("open.firstPaint+decode", open + decode, budget: 150)
+        let laidOut = editor.laidOutFragments
+        let shown = editor.controller.storage.length
+        let rest = editor.settle()
+        PerfLog.record("open.rest.total(later turns)", rest.total)
+        PerfLog.record("open.rest.longestTurn", rest.longest, budget: 50)
+        PerfLog.record("open.rest.turns", Double(rest.turns), unit: "turns")
+        PerfLog.record("open.memory", footprintMB() - before, unit: "MB")
+        PerfLog.record("open.firstPaint.characters(of \(editor.controller.storage.length))", Double(shown), unit: "chars")
+        // Where opening the whole text at once would spend its time.
         let parts = PerfEditor(document: document)
         let context = parts.controller.context
         var text = NSMutableAttributedString()
-        PerfLog.record("open.part.build", milliseconds { text = DocumentText.build(blocks, theme: EditorTheme(), context: context) })
-        PerfLog.record("open.part.storage", milliseconds { parts.controller.storage.setAttributedString(text) })
+        PerfLog.record("open.part.flatten", milliseconds { _ = BlockCodec.flatten(document.children, resolved: document.resolvedLinks) })
+        PerfLog.record("open.part.buildAll", milliseconds { text = DocumentText.build(blocks, theme: EditorTheme(), context: context) })
+        PerfLog.record("open.part.storageAll", milliseconds { parts.controller.storage.setAttributedString(text) })
         PerfLog.record("open.part.layout", milliseconds { parts.layoutViewport() })
-        let paragraphsOnly = blocks.filter { $0.kind.hasInlineText }
-        PerfLog.record("open.part.buildTextOnly(\(paragraphsOnly.count))", milliseconds { _ = DocumentText.build(paragraphsOnly, theme: EditorTheme(), context: context) })
-        let tableNodes = document.children.filter { $0.type == "table" }
-        PerfLog.record("open.part.flattenTables(\(tableNodes.count))", milliseconds { _ = BlockCodec.flatten(tableNodes) })
-        let textNodes = document.children.filter { $0.type != "table" && $0.type != "columns" }
-        PerfLog.record("open.part.flattenText(\(textNodes.count))", milliseconds { _ = BlockCodec.flatten(textNodes) })
+        let plain = NSTextStorage()
+        PerfLog.record("open.part.storageWithoutView", milliseconds { plain.setAttributedString(text) })
+        PerfLog.record("open.part.baseline(2000)", milliseconds { _ = SyncedTree(blocks, reusing: nil, lazily: true) })
         let columnBlocks = blocks.filter { $0.kind == .columns }
         PerfLog.record("open.part.buildColumns(\(columnBlocks.count))", milliseconds { _ = DocumentText.build(columnBlocks, theme: EditorTheme(), context: context) })
-        PerfLog.record("open.total(2000 blocks, 100 images, 20 tables 50x8, 10 columns, 3x50k)", open, budget: 150)
-        PerfLog.record("open.memory", footprintMB() - before, unit: "MB")
         let paragraphs = blocks.count
-        let laidOut = editor.laidOutFragments
         PerfLog.record("open.laidOutFragments(of \(paragraphs))", Double(laidOut), unit: "fragments")
         #expect(editor.controller.storage.length > 150_000)
+        #expect(editor.controller.currentBlocks().map(\.id) == blocks.map(\.id))
         // TextKit 2 lays out the viewport, not the whole note.
         #expect(laidOut < paragraphs / 4, "full layout forced: \(laidOut) of \(paragraphs)")
+        // Opening and loading the rest changes nothing to save.
+        #expect(editor.session.pendingOperationsForTests().isEmpty)
 
         // A second open of the same note (caches warm).
         let again = milliseconds {
-            let other = PerfEditor(document: document)
+            let other = PerfEditor(document: document, decoded: blocks)
             other.open()
         }
         PerfLog.record("open.warm", again, budget: 150)
@@ -271,6 +299,7 @@ final class PerfEditor {
     @Test func keystrokeLatency() throws {
         let editor = PerfEditor(document: LongNote.document())
         editor.open()
+        editor.settle()
         // A paragraph in the middle of the note.
         let middleId = editor.middleParagraph
         let middle = editor.range(ofBlock: middleId)
@@ -307,13 +336,18 @@ final class PerfEditor {
         let document = LongNote.document()
         let editor = PerfEditor(document: document)
         editor.open()
+        editor.settle()
         func live(_ id: String) -> (any LiveBlock)? {
             (editor.controller.storage.attribute(.attachment, at: editor.range(ofBlock: id).location, effectiveRange: nil) as? BlockAttachment)?.live
         }
         let table = try #require(live("t3"))
         if let grid = live("t4") as? TableBlockController {
-            PerfLog.record("layout.table50x8.buildCells", milliseconds { _ = grid.cells })
+            PerfLog.record("layout.table50x8.buildCells", milliseconds { _ = grid.text(row: 0, column: 0) })
             PerfLog.record("layout.table50x8.measure", milliseconds { _ = grid.height(forWidth: 650) })
+            grid.grid.frame = CGRect(x: 0, y: 0, width: 650, height: grid.height(forWidth: 650))
+            let bitmap = grid.grid.bitmapImageRepForCachingDisplay(in: grid.grid.bounds)!
+            PerfLog.record("layout.table50x8.drawAll(400 cells)", milliseconds { grid.grid.cacheDisplay(in: grid.grid.bounds, to: bitmap) })
+            #expect(grid.grid.subviews.filter { $0 is CellTextView }.isEmpty, "cells are drawn, not text views")
         }
         PerfLog.record("layout.table50x8.first", milliseconds { _ = table.height(forWidth: 650) })
         let columns = try #require(live("k3"))
@@ -328,10 +362,13 @@ final class PerfEditor {
     @Test func keystrokeInATableCell() throws {
         let editor = PerfEditor(document: LongNote.document())
         editor.open()
+        editor.settle()
         let range = editor.range(ofBlock: "t0")
         let table = try #require((editor.controller.storage.attribute(.attachment, at: range.location, effectiveRange: nil) as? BlockAttachment)?.live as? TableBlockController)
         _ = table.height(forWidth: 600)
-        let cell = table.cells[25][3]
+        var made: CellTextView?
+        PerfLog.record("tableCell.openEditor", milliseconds { made = table.editor(row: 25, column: 3) })
+        let cell = try #require(made)
         cell.setSelectedRange(NSRange(location: cell.string.utf16.count, length: 0))
         var times: [Double] = []
         for _ in 0..<20 {
@@ -340,11 +377,15 @@ final class PerfEditor {
         let sorted = times.sorted()
         PerfLog.record("keystroke.tableCell.median", sorted[sorted.count / 2], budget: 8)
         PerfLog.record("keystroke.tableCell.max", sorted.last!)
+        var operations: [FortressKit.BlockOperation] = []
+        PerfLog.record("save.diff.tableCell", milliseconds { operations = editor.session.pendingOperationsForTests() }, budget: 8)
+        #expect(operations.map(\.blockId) == ["t0r25c3p"])
     }
 
     @Test func saveDiffCostAfterOneEdit() throws {
         let editor = PerfEditor(document: LongNote.document())
         editor.open()
+        editor.settle()
         let middleId = editor.middleParagraph
         let middle = editor.range(ofBlock: middleId)
         editor.controller.textView.setSelectedRange(NSRange(location: middle.location + 3, length: 0))
@@ -367,18 +408,34 @@ final class PerfEditor {
         let second = milliseconds { operations = editor.session.pendingOperationsForTests() }
         PerfLog.record("save.diff.second", second, budget: 8)
         #expect(operations.count == 1)
+
+        // Return (a new block): the paragraphs change, so the whole note is walked.
+        editor.controller.textView.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        let structural = milliseconds { operations = editor.session.pendingOperationsForTests() }
+        PerfLog.record("save.diff.afterReturn", structural)
+        #expect(operations.contains { $0.operation == .insert })
     }
 
     @Test func pastingFiveMegabytes() throws {
         let editor = PerfEditor(document: LongNote.document(blocks: 50))
         editor.open()
+        editor.settle()
         let line = String(repeating: "Pasted log line with some words in it. ", count: 5) + "\n"
         let text = String(repeating: line, count: 5_000_000 / line.utf8.count)
         editor.controller.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        EditorMetrics.reset()
         let paste = milliseconds { editor.type(text) }
         PerfLog.record("paste.5MB(\(text.utf8.count / 1_000_000) MB, \(5_000_000 / line.utf8.count) lines)", paste)
+        PerfLog.record("paste.5MB.part.normalize", EditorMetrics.normalize)
+        PerfLog.record("paste.5MB.part.restyle", EditorMetrics.restyle)
+        // The same text into a text storage with no editor attached (AppKit's own share).
+        let bare = NSTextStorage(attributedString: editor.controller.storage)
+        let attributes = editor.controller.textView.typingAttributes
+        PerfLog.record("paste.5MB.part.storageOnly", milliseconds { bare.replaceCharacters(in: NSRange(location: 0, length: 0), with: NSAttributedString(string: text, attributes: attributes)) })
         var operations: [FortressKit.BlockOperation] = []
-        let diff = milliseconds { operations = editor.session.pendingOperationsForTests() }
+        var blocks: [EditorBlock] = []
+        PerfLog.record("paste.5MB.part.read", milliseconds { blocks = editor.controller.currentBlocks() })
+        let diff = milliseconds { operations = BlockDiff.operations(from: editor.session.base, to: blocks).operations }
         PerfLog.record("paste.5MB.saveDiff", diff)
         #expect(operations.filter { $0.operation == .insert }.count >= 5_000_000 / line.utf8.count - 1)
         let keystroke = milliseconds { editor.type("a") }
@@ -397,6 +454,7 @@ final class PerfEditor {
         let editor = PerfEditor(document: document)
         let open = milliseconds { editor.open() }
         PerfLog.record("images.open", open, budget: 150)
+        editor.settle()
         // Scroll through the whole note so every picture is asked for, drawing each screen.
         var y: CGFloat = 0
         var draws: [Double] = []
@@ -424,23 +482,59 @@ final class PerfEditor {
     @Test func scrollingLaysOutOnlyTheViewport() throws {
         let editor = PerfEditor(document: LongNote.document())
         editor.open()
+        editor.settle()
         let height = editor.controller.textView.frame.height
         var times: [Double] = []
+        var frames: [Double] = []
         var y: CGFloat = 0
         var slow: [(Double, String)] = []
+        let scrollView = editor.controller.scrollView
+        let bitmap = scrollView.bitmapImageRepForCachingDisplay(in: scrollView.bounds)!
         while y < min(height, 60_000) {
             y += 700
             let time = milliseconds { editor.scroll(to: y) }
+            // What the screen then shows, drawn (tables draw their cells' text).
+            let draw = milliseconds { scrollView.cacheDisplay(in: scrollView.bounds, to: bitmap) }
             times.append(time)
-            if time > 50 { slow.append((time, editor.viewportKinds)) }
+            frames.append(time + draw)
+            if time + draw > 50 { slow.append((time + draw, editor.viewportKinds)) }
         }
         for (time, kinds) in slow.sorted(by: { $0.0 > $1.0 }).prefix(5) {
-            PerfLog.record("scroll.slowStep[\(kinds)]", time)
+            PerfLog.record("scroll.slowFrame[\(kinds)]", time)
         }
         let sorted = times.sorted()
         PerfLog.record("scroll.step.median", sorted[sorted.count / 2], budget: 16)
         PerfLog.record("scroll.step.max", sorted.last ?? 0)
+        let framesSorted = frames.sorted()
+        PerfLog.record("scroll.frame(layout+draw).median", framesSorted[framesSorted.count / 2], budget: 16)
+        PerfLog.record("scroll.frame(layout+draw).max", framesSorted.last ?? 0)
         PerfLog.record("scroll.steps", Double(times.count), unit: "steps")
+    }
+
+    /// Scrolling a 50 × 8 table into view, a screen at a time, drawing each screen.
+    @Test func scrollingThroughALargeTable() throws {
+        let editor = PerfEditor(document: LongNote.document())
+        editor.open()
+        editor.settle()
+        let range = editor.range(ofBlock: "t5")
+        editor.controller.scrollRangeToVisibleForTests(NSRange(location: max(0, range.location - 2000), length: 0))
+        editor.layoutViewport()
+        let scrollView = editor.controller.scrollView
+        let bitmap = scrollView.bitmapImageRepForCachingDisplay(in: scrollView.bounds)!
+        var y = scrollView.contentView.bounds.minY
+        var frames: [Double] = []
+        for _ in 0..<12 {
+            y += 300
+            frames.append(milliseconds {
+                editor.scroll(to: y)
+                scrollView.cacheDisplay(in: scrollView.bounds, to: bitmap)
+            })
+        }
+        let sorted = frames.sorted()
+        PerfLog.record("scroll.table50x8.frame.median", sorted[sorted.count / 2], budget: 16)
+        PerfLog.record("scroll.table50x8.frame.max", sorted.last ?? 0)
+        let table = try #require((editor.controller.storage.attribute(.attachment, at: range.location, effectiveRange: nil) as? BlockAttachment)?.live as? TableBlockController)
+        #expect(table.grid.subviews.filter { $0 is CellTextView }.isEmpty)
     }
 }
 

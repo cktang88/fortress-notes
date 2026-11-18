@@ -140,6 +140,8 @@ final class AskTurn: Identifiable {
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var watchdog: Task<Void, Never>?
     @ObservationIgnored private var lastEvent = ContinuousClock.now
+    /// The "First Ask token" signpost interval, open until the first sentence arrives.
+    @ObservationIgnored private var firstTokenInterval: OSSignpostIntervalState?
 
     private static let log = Logger(subsystem: "FortressNotes", category: "Ask")
 
@@ -162,6 +164,7 @@ final class AskTurn: Identifiable {
     func start(_ stream: AsyncThrowingStream<AskEvent, Error>) {
         task?.cancel()
         lastEvent = .now
+        if firstSentenceAt == nil, firstTokenInterval == nil { firstTokenInterval = Signposts.begin("First Ask token") }
         task = Task { [weak self] in
             do {
                 for try await event in stream {
@@ -183,6 +186,8 @@ final class AskTurn: Identifiable {
         lastEvent = .now
         if case .sentence = event, firstSentenceAt == nil, state.isStreaming {
             firstSentenceAt = .now
+            if let firstTokenInterval { Signposts.end("First Ask token", firstTokenInterval) }
+            firstTokenInterval = nil
             Self.log.info("Ask: first sentence after \(self.timeToFirstSentence ?? 0, format: .fixed(precision: 3)) s")
         }
         state.apply(event)

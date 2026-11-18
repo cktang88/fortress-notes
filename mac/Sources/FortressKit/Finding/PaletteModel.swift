@@ -344,7 +344,9 @@ final class PaletteCache {
         }
         if let last, last.query == query { return last.sections }
         rankings += 1
+        let interval = Signposts.begin("Palette results")
         let sections = PaletteCatalog.sections(for: query, index: index)
+        Signposts.end("Palette results", interval)
         last = (query, sections)
         return sections
     }

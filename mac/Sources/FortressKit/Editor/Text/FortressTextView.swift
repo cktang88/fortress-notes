@@ -86,6 +86,20 @@ final class FortressTextView: NSTextView {
         layoutColumn()
     }
 
+    // A column's text is spell-checked while it is being edited (a note with many
+    // columns scrolled into view would otherwise check them all at once).
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted, isEmbedded { isContinuousSpellCheckingEnabled = true }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted, isEmbedded { isContinuousSpellCheckingEnabled = false }
+        return accepted
+    }
+
     // MARK: Keys
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -96,6 +110,38 @@ final class FortressTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         if let controller, controller.handleKeyDown(event) { return }
         super.keyDown(with: event)
+    }
+
+    // MARK: The whole text (a long note may still be loading its last blocks)
+
+    override func selectAll(_ sender: Any?) {
+        controller?.finishLoading()
+        super.selectAll(sender)
+    }
+
+    override func performTextFinderAction(_ sender: Any?) {
+        controller?.finishLoading()
+        super.performTextFinderAction(sender)
+    }
+
+    override func performFindPanelAction(_ sender: Any?) {
+        controller?.finishLoading()
+        super.performFindPanelAction(sender)
+    }
+
+    override func moveToEndOfDocument(_ sender: Any?) {
+        controller?.finishLoading()
+        super.moveToEndOfDocument(sender)
+    }
+
+    override func moveToEndOfDocumentAndModifySelection(_ sender: Any?) {
+        controller?.finishLoading()
+        super.moveToEndOfDocumentAndModifySelection(sender)
+    }
+
+    override func scrollToEndOfDocument(_ sender: Any?) {
+        controller?.finishLoading()
+        super.scrollToEndOfDocument(sender)
     }
 
     // MARK: Mouse
