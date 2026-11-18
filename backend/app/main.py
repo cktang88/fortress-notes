@@ -23,6 +23,7 @@ from . import (
     duplicates,
     llm,
     search,
+    sources,
     vision,
     workspace,
 )
@@ -64,6 +65,7 @@ from .models import (
     AskRequest,
     CaptureRequest,
     SavedSearchCreate,
+    SourceConflictResolution,
 )
 
 settings = get_settings()
@@ -264,6 +266,8 @@ def create_block_document(data: NoteCreate):
         note = documents.create(data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return block_store.document_tree(settings.block_db_path, note.id)
 
 
@@ -295,9 +299,38 @@ def get_block_document(document_id: str):
 
     # The editor needs a block to type into, even in a note that has none.
     block_store.ensure_editable_block(settings.block_db_path, document_id)
+    block_store.mark_opened(settings.block_db_path, document_id)
     tree = block_store.document_tree(settings.block_db_path, document_id)
     if tree is None:
         raise HTTPException(404, "Block document not found")
+    return tree
+
+
+@app.get("/api/block-documents/{document_id}/info")
+def get_block_document_info(document_id: str):
+    """Metadata for an info panel: dates, provenance, counts, re-import conflicts."""
+
+    try:
+        return sources.document_info(settings.block_db_path, document_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Block document not found") from exc
+
+
+@app.post("/api/block-documents/{document_id}/blocks/{block_id}/source-conflict")
+def resolve_block_source_conflict(
+    document_id: str, block_id: str, data: SourceConflictResolution
+):
+    """Settle a re-import conflict: take the source's version or keep the local edit."""
+
+    try:
+        tree = sources.resolve_block_conflict(
+            settings.block_db_path, document_id, block_id, data.keep
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    documents.write_mirror(document_id)
     return tree
 
 
@@ -358,6 +391,7 @@ async def import_uploaded_markdown(
                     folder_id=folder_id,
                 ),
                 created_at=parsed.created_at,
+                source=parsed.provenance,
             )
         except ValueError as exc:
             errors.append({"name": name, "detail": str(exc)})
@@ -376,7 +410,7 @@ def capture(data: CaptureRequest):
     """Save a quick thought as its own note in the Uncategorized folder."""
 
     try:
-        return documents.capture(data.text)
+        return documents.capture(data.text, data.provenance)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -763,6 +797,8 @@ def create_note(data: NoteCreate):
         return documents.create(data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.get("/api/notes/{note_id}", response_model=Note)

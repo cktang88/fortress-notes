@@ -116,11 +116,22 @@ enum FindingFixtures {
                  sourceText: "Next time: see Kyoto trip for the Gion ryokan.", label: "Kyoto trip", targetBlockId: nil),
     ]
 
-    static let provenance = NoteProvenance(
-        kind: .onenoteImport, path: ["Travel notebook", "Japan", "Kyoto"],
-        originalCreatedAt: Timestamp.date("2021-03-03T10:00:00+00:00"),
-        originalUpdatedAt: Timestamp.date("2024-05-12T10:00:00+00:00"),
-        importedAt: Timestamp.date("2026-11-02T10:00:00+00:00"))
+    /// The real `/info` answer for an imported note, placed in Travel with links in and out.
+    static var info: Data {
+        guard let data = try? fixtureData("info-imported.json"),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return Data("{}".utf8) }
+        object["folder_path"] = [["id": "01M7NZXND9X670BWK4XMRNMYCP", "name": "Travel"]]
+        object["last_opened_at"] = "2026-11-17T21:40:00+00:00"
+        var counts = object["counts"] as? [String: Any] ?? [:]
+        counts["words"] = 186
+        counts["blocks"] = 14
+        counts["outgoing_links"] = 3
+        counts["backlinks"] = 2
+        counts["edits"] = 9
+        object["counts"] = counts
+        object["blocks_by_source"] = ["onenote_import": 12, "manual": 2]
+        return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+    }
 
     static func navigation() -> NavigationResponse {
         (try? JSONDecoder().decode(NavigationResponse.self, from: fixtureData("navigation.json")))
@@ -135,6 +146,8 @@ enum FindingFixtures {
         let api = APIClient(baseURL: URL(string: "http://fixtures.invalid")!, session: URLSession(configuration: configuration))
         let model = AppModel(api: api)
         model.navigation = navigation()
+        model.hasLoadedNavigation = true
+        model.connectsOnAppear = false  // Don't start or look for a real backend.
         return model
     }
 }
@@ -161,6 +174,7 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
         if path.hasSuffix("/api/navigation") { return (try? fixtureData("navigation.json")) ?? Data() }
         if path.hasSuffix("/api/unified-search") { return encoded(FindingFixtures.search) }
         if path.hasSuffix("/api/ask") { return FindingFixtures.askStream }
+        if path.hasSuffix("/info") { return FindingFixtures.info }
         if path.hasSuffix("/backlinks") { return encoded(FindingFixtures.backlinks) }
         if path.hasSuffix("/related") {
             let hasBlock = query.contains { $0.name == "block_id" }
@@ -308,7 +322,7 @@ extension GallerySnapshotTests {
             let model = FindingFixtures.model()
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
             model.focusedBlockId = FindingFixtures.kyotoRyokanBlock
-            return InspectorView(provenance: FindingFixtures.provenance)
+            return InspectorView()
                 .environment(model)
                 .background(Color(nsColor: .windowBackgroundColor))
         }

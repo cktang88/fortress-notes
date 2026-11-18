@@ -294,12 +294,33 @@ private actor Calls {
 @Test func noteInfoCountsWordsBlocksAndLinks() throws {
     let navigation = try JSONDecoder().decode(NavigationResponse.self, from: try fixtureData("navigation.json"))
     var info = NoteInfo.from(navigation: navigation, documentId: "01M7NZXNDZHSR801AP2K15KMAQ")
-    #expect(info.folder == "Travel")
+    #expect(info.folderPath == ["Travel"])
     #expect(info.createdAt != nil)
     info.add(try JSONDecoder().decode(BlockDocument.self, from: try fixtureData("document.json")))
     #expect((info.blocks ?? 0) >= 4)
     #expect((info.words ?? 0) > 8)
     #expect(NoteInfo.linkCount(in: .object(["markdown": .string("See [[Kyoto trip]] and [map](https://x.y)")])) == 2)
+}
+
+@MainActor @Test func noteInfoFromTheRealInfoEndpoint() throws {
+    let imported = NoteInfo(try JSONDecoder().decode(DocumentInfo.self, from: try fixtureData("info-imported.json")))
+    let provenance = try #require(imported.provenance)
+    #expect(provenance.label == "Imported from OneNote")
+    #expect(provenance.path == "Travel notebook › Japan › Kyoto")
+    #expect(provenance.importer == "onenote 1.0")
+    #expect(provenance.isNotable)
+    #expect(imported.words == 14 && imported.blocks == 2)
+    #expect(InfoSection.sourceDates(provenance)?.hasPrefix("Written ") == true)
+    #expect(imported.mixedSources == nil)
+
+    let manual = NoteInfo(try JSONDecoder().decode(DocumentInfo.self, from: try fixtureData("info.json")))
+    #expect(manual.folderPath == ["Travel"])
+    #expect(manual.provenance?.isNotable == false)
+    #expect(manual.backlinksIn == 0)
+
+    var mixed = manual
+    mixed.blocksBySource = ["onenote_import": 12, "manual": 3]
+    #expect(mixed.mixedSources == "12 from OneNote · 3 written here")
 }
 
 func fixtureData(_ name: String) throws -> Data {

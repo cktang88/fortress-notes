@@ -4,8 +4,6 @@ import SwiftUI
 /// "Seen before" for the block being written, related notes and backlinks.
 struct InspectorView: View {
     @Environment(AppModel.self) private var model
-    /// Provenance to show until the backend reports it (previews and snapshots).
-    var provenance: NoteProvenance?
 
     @State private var info = NoteInfo()
     @State private var seenBefore: [RelatedResult] = []
@@ -13,16 +11,12 @@ struct InspectorView: View {
     @State private var backlinks: [Backlink] = []
     @State private var loadedNoteId: String?
 
-    init(provenance: NoteProvenance? = nil) {
-        self.provenance = provenance
-    }
-
     var body: some View {
         Group {
             if let noteId = model.openNoteId {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        InfoSection(info: info, provenance: provenance ?? info.provenance)
+                        InfoSection(info: info, provenance: info.provenance)
                         if !seenBefore.isEmpty {
                             seenBeforeSection.transition(.opacity)
                         }
@@ -34,6 +28,9 @@ struct InspectorView: View {
                     .animation(.smooth(duration: 0.25), value: seenBefore)
                 }
                 .task(id: noteId) { await loadNote(noteId) }
+                .task(id: InfoKey(noteId: noteId, edited: editedStamp(noteId))) {
+                    await loadInfo(noteId)
+                }
                 .task(id: SeenKey(noteId: noteId, blockId: model.focusedBlockId)) {
                     await loadSeenBefore(noteId: noteId, blockId: model.focusedBlockId)
                 }
@@ -44,6 +41,15 @@ struct InspectorView: View {
                     .controlSize(.small)
             }
         }
+    }
+
+    private struct InfoKey: Hashable {
+        var noteId: String
+        var edited: String?
+    }
+
+    private func editedStamp(_ noteId: String) -> String? {
+        NoteInfo.from(navigation: model.navigation, documentId: noteId).updatedAt?.ISO8601Format()
     }
 
     private struct SeenKey: Hashable {
@@ -62,15 +68,31 @@ struct InspectorView: View {
             loadedNoteId = noteId
         }
         let api = model.api
-        async let document = try? api.document(id: noteId)
         async let relatedNotes = try? api.related(documentId: noteId, count: 8)
         async let links = try? api.backlinks(documentId: noteId)
-        let (loadedDocument, loadedRelated, loadedLinks) = await (document, relatedNotes, links)
+        let (loadedRelated, loadedLinks) = await (relatedNotes, links)
         guard !Task.isCancelled else { return }
-        if let loadedDocument { info.add(loadedDocument) }
         related = loadedRelated ?? []
         backlinks = loadedLinks ?? []
-        info.backlinksIn = loadedLinks.map { Set($0.map(\.sourceDocumentId)).count }
+    }
+
+    /// Dates, provenance and counts from `…/info`; refetched (quietly, after a pause)
+    /// whenever the note is edited. Falls back to counting the document itself.
+    private func loadInfo(_ noteId: String) async {
+        if info.words != nil { try? await Task.sleep(for: .milliseconds(800)) }
+        guard !Task.isCancelled else { return }
+        let api = model.api
+        do {
+            let loaded = try await api.documentInfo(id: noteId)
+            guard !Task.isCancelled, model.openNoteId == noteId else { return }
+            info = NoteInfo(loaded)
+        } catch {
+            guard let document = try? await api.document(id: noteId), !Task.isCancelled else { return }
+            var fallback = NoteInfo.from(navigation: model.navigation, documentId: noteId)
+            fallback.add(document)
+            fallback.backlinksIn = Set(backlinks.map(\.sourceDocumentId)).count
+            info = fallback
+        }
     }
 
     /// Passages like the block being written; refreshed 400 ms after the caret settles.
@@ -220,24 +242,28 @@ private struct InspectorRow: View {
     }
 }
 
-/// Finder "Get Info"-style facts about the note: source, dates, size and links.
+/// Finder "Get Info"-style facts about the note: where it came from, dates, size and links.
 struct InfoSection: View {
     let info: NoteInfo
     let provenance: NoteProvenance?
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         InspectorSection(title: "Info", symbol: "info.circle") {
-            if let provenance { source(provenance) }
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
-                if let folder = info.folder { row("Folder", folder) }
+            if let provenance, provenance.isNotable { source(provenance) }
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 5) {
+                if !info.folderPath.isEmpty { row("Folder", info.folderPath.joined(separator: " › ")) }
                 if let created = info.createdAt { row("Created", Self.format(created)) }
                 if let updated = info.updatedAt { row("Edited", Self.format(updated)) }
-                if let words = info.words, let blocks = info.blocks {
-                    row("Length", "\(words.formatted()) \(words == 1 ? "word" : "words") · \(blocks) \(blocks == 1 ? "block" : "blocks")")
+                if let opened = info.openedAt { row("Opened", Self.format(opened)) }
+                if let words = info.words {
+                    row("Length", Self.length(words: words, blocks: info.blocks))
                 }
+                if let mixed = info.mixedSources { row("Blocks", mixed) }
                 if info.linksOut != nil || info.backlinksIn != nil {
                     row("Links", "\(info.linksOut ?? 0) out · \(info.backlinksIn ?? 0) in")
                 }
+                if let edits = info.edits, edits > 0 { row("Edits", edits.formatted()) }
             }
         }
     }
@@ -251,11 +277,12 @@ struct InfoSection: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-            if !provenance.path.isEmpty {
-                Text(provenance.path.joined(separator: " › "))
+            if let path = provenance.path {
+                Text(path)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                    .truncationMode(.middle)
                     .textSelection(.enabled)
             }
             if let url = provenance.url {
@@ -263,17 +290,53 @@ struct InfoSection: View {
                     .font(.subheadline)
                     .lineLimit(1)
             }
-            if let original = provenance.originalCreatedAt {
-                Text("Originally written \(original.formatted(date: .abbreviated, time: .omitted))"
-                     + (provenance.importedAt.map { " · imported \($0.formatted(date: .abbreviated, time: .omitted))" } ?? ""))
+            if let line = provenance.originLine {
+                Button(line) {
+                    if let id = provenance.originDocumentId { model.open(noteId: id) }
+                }
+                .buttonStyle(.link)
+                .font(.subheadline)
+                .disabled(provenance.originDocumentId == nil)
+            }
+            if let dates = Self.sourceDates(provenance) {
+                Text(dates)
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if info.conflicts > 0 {
+                Label("\(info.conflicts) \(info.conflicts == 1 ? "change differs" : "changes differ") from the source",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .quaternarySystemFill), in: .rect(cornerRadius: 8, style: .continuous))
         .padding(.bottom, 4)
+    }
+
+    /// "Written Mar 3, 2021 · changed May 12, 2024 · imported Nov 2, 2026"
+    static func sourceDates(_ provenance: NoteProvenance) -> String? {
+        let day = { (date: Date) in date.formatted(date: .abbreviated, time: .omitted) }
+        var parts: [String] = []
+        if let date = provenance.originalCreatedAt { parts.append("Written \(day(date))") }
+        if let date = provenance.originalUpdatedAt, date != provenance.originalCreatedAt {
+            parts.append("\(parts.isEmpty ? "Changed" : "changed") \(day(date))")
+        }
+        if let date = provenance.syncedAt {
+            parts.append("\(parts.isEmpty ? "Synced" : "synced") \(day(date))")
+        } else if let date = provenance.importedAt {
+            parts.append("\(parts.isEmpty ? "Imported" : "imported") \(day(date))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    static func length(words: Int, blocks: Int?) -> String {
+        var text = "\(words.formatted()) \(words == 1 ? "word" : "words")"
+        if let blocks { text += " · \(blocks) \(blocks == 1 ? "block" : "blocks")" }
+        return text
     }
 
     private func row(_ label: String, _ value: String) -> some View {
@@ -285,11 +348,15 @@ struct InfoSection: View {
             Text(value)
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .lineLimit(2)
                 .textSelection(.enabled)
         }
     }
 
     static func format(_ date: Date) -> String {
-        date.formatted(date: .abbreviated, time: .shortened)
+        if Calendar.current.isDateInToday(date) {
+            return "Today, " + date.formatted(date: .omitted, time: .shortened)
+        }
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 }

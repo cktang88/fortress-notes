@@ -225,14 +225,9 @@ struct CommandPaletteView: View {
     static func run(_ command: PaletteCommand, in model: AppModel) {
         switch command {
         case .newNote:
-            Task { await createNote(title: "", in: model) }
+            Task { await model.newNote() }
         case .newFolder:
-            Task {
-                do {
-                    _ = try await model.api.createFolder(name: "New Folder")
-                    await model.refreshNavigation()
-                } catch { model.report(error) }
-            }
+            Task { await model.newFolder() }
         case .quickCapture:
             QuickCapture.shared.show()
         case .searchNotes, .askNotes:
@@ -240,12 +235,12 @@ struct CommandPaletteView: View {
             model.isPaletteShown = true
         case .allNotes:
             model.query = ""
-            model.scope = .all
+            model.select(.all)
         case .trash:
             model.query = ""
-            model.scope = .trash
+            model.select(.trash)
         case .backups:
-            model.isBackupsRequested = true
+            model.isBackupsShown = true
         case .toggleInspector:
             model.isInspectorShown.toggle()
         case .reload:
@@ -258,6 +253,7 @@ struct CommandPaletteView: View {
             let document = try await model.api.createDocument(title: title)
             await model.refreshNavigation()
             model.open(noteId: document.id)
+            model.requestEditorFocus()
         } catch {
             model.report(error)
         }

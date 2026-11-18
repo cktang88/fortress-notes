@@ -15,7 +15,7 @@ from pathlib import Path
 
 import frontmatter
 
-from . import block_store, duplicates, images, workspace
+from . import block_store, duplicates, images, provenance, workspace
 from .config import get_settings
 from .models import Note, NoteCreate, NoteStatus, NoteSummary, NoteUpdate
 
@@ -70,10 +70,21 @@ def get_note(document_id: str) -> Note | None:
 # --- Writes ------------------------------------------------------------------
 
 
-def create(data: NoteCreate, created_at: object | None = None) -> Note:
-    """Create a note; raises KeyError when the folder does not exist."""
+def create(
+    data: NoteCreate,
+    created_at: object | None = None,
+    source: dict[str, object] | None = None,
+) -> Note:
+    """Create a note; raises KeyError when the folder does not exist.
+
+    ``source`` is server-side provenance (an import); otherwise the client's
+    ``data.provenance`` is validated (ValueError when unusable), defaulting to
+    a note written by hand.
+    """
 
     db_path, _ = _paths()
+    if source is None:
+        source = provenance.normalize(data.provenance) or {"source": "manual"}
     tree = block_store.create_block_document(
         db_path,
         data.title or block_store.derive_title(data.body),
@@ -84,6 +95,7 @@ def create(data: NoteCreate, created_at: object | None = None) -> Note:
         created_at=created_at,
         # An unnamed note takes its title from its first line until someone names it.
         title_auto=not data.title,
+        provenance=source,
     )
     write_mirror(tree["id"])
     note = get_note(tree["id"])
@@ -159,7 +171,7 @@ UNCATEGORIZED = "Uncategorized"
 _uncategorized_lock = threading.Lock()
 
 
-def capture(text: str) -> dict[str, object]:
+def capture(text: str, extra_provenance: dict | None = None) -> dict[str, object]:
     """Save a quick thought as its own note in the Uncategorized folder.
 
     The note is titled from its first line and placed at the top of the folder
@@ -170,6 +182,7 @@ def capture(text: str) -> dict[str, object]:
     body = text.strip()
     if not body:
         raise ValueError("nothing to capture")
+    source = {**provenance.normalize(extra_provenance), "source": "capture"}
     db_path, _ = _paths()
     folder_id = _uncategorized_folder(db_path)
     tree = block_store.create_block_document(
@@ -179,6 +192,7 @@ def capture(text: str) -> dict[str, object]:
         [],
         body,
         folder_id=folder_id,
+        provenance=source,
     )
     block_store.move_document(db_path, tree["id"], folder_id, position=0)
     write_mirror(tree["id"])
@@ -201,6 +215,25 @@ def move_into(source_id: str, target_id: str) -> int:
     write_mirror(target_id)
     trash(source_id)
     return moved
+
+
+# --- Living documents --------------------------------------------------------
+
+
+def upsert_from_source(**kwargs):
+    """Create or update the note for one source page, then refresh its mirror.
+
+    Takes the keyword arguments of ``sources.upsert_document_from_source``
+    (``source``, ``external_id``, ``title``, ``blocks``, ``folder_path``, ...).
+    """
+
+    from . import sources
+
+    db_path, _ = _paths()
+    result = sources.upsert_document_from_source(db_path, **kwargs)
+    if result.status in {"created", "updated"}:
+        write_mirror(result.document_id)
+    return result
 
 
 # --- Mirrors -----------------------------------------------------------------
@@ -229,7 +262,9 @@ def _mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
     if tree is None:
         target.unlink(missing_ok=True)
         return
-    body = block_store.render_markdown(tree["children"])
+    body = block_store.render_markdown(
+        tree["children"], document_provenance=tree["provenance"]
+    )
     # Keep any extra front matter a person added to the file by hand.
     metadata: dict[str, object] = {}
     if target.is_file():
@@ -245,6 +280,7 @@ def _mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
         created_at=tree["created_at"],
         updated_at=tree["updated_at"],
         images=images.collect_image_texts(body),
+        provenance=provenance.front_matter(tree["provenance"]),
     )
     _atomic_write(target, frontmatter.dumps(frontmatter.Post(body, **metadata)))
 
