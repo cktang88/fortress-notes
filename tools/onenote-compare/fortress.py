@@ -561,7 +561,9 @@ def markdown_html(markdown: str, title: str, media_prefix: str, resolved: dict |
         end = body.find("\n---\n", 4)
         if end != -1:
             body = body[end + 5:]
-    md = MarkdownIt("commonmark", {"html": True}).enable("table").enable("strikethrough")
+    # markdown-it's CommonMark preset stops at 20 nested elements (10 list levels) and
+    # silently drops deeper content; viewers such as cmark (GitHub) go far deeper.
+    md = MarkdownIt("commonmark", {"html": True, "maxNesting": 100}).enable("table").enable("strikethrough")
     rendered = md.render(body)
     rendered = rendered.replace('src="/media/', f'src="{media_prefix}').replace('href="/media/', f'href="{media_prefix}')
     # $$ math $$ blocks: show them as display math source.

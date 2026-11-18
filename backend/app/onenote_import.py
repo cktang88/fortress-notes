@@ -11,7 +11,8 @@ Pipeline (docs/onenote-import.md, F3):
    every page becomes one note through ``sources.upsert_document_from_source``
    keyed by the page GUID, so re-importing the same export updates notes in
    place, keeps local edits, and reports untouched pages as ``unchanged``.
-3. **link** -- ``onenote:`` links become ``[[document_id|Title]]`` links. A link
+3. **link** -- ``onenote:`` links become ``docLink`` nodes (they read as the
+   target note's current title; docs/block-model.md §3). A link
    whose target page was not imported yet is kept as plain text in the first
    pass; once every page exists, the pages that had such links are upserted again
    with the links resolved (an ordinary "untouched blocks follow the source"
@@ -42,14 +43,20 @@ Design choices:
   (``object_id``, ``element_id``; a table lists its cells' ids as ``nested``).
 * **Paragraph links** (``onenote:…&object-id={GUID}&N``): when the target page
   is imported and has a block whose ``element_id``/``object_id`` equals the
-  link's ``object_ref``, the link becomes a block reference ``(( block_id ))``
+  link's ``object_ref``, the link becomes a ``blockRef`` node
   (it previews the paragraph's current text and records a backlink); otherwise
   it links to the page.
 * **Removed in OneNote**: on a re-import, notes previously imported from a
   notebook in this export whose page is no longer there are kept and marked
-  ``provenance.source_removed`` (+ ``source_removed_at``), and listed in the
+  removed in source (sync state ``source_removed_at``), and listed in the
   report with section folders that disappeared (sections that failed to read
   are never counted as removed).
+* **Blocks** are written in the canonical shape (``type``, ``attrs``, inline
+  ``content``, ``payload``, ``children``): tables as ``table`` -> ``table_row``
+  -> ``table_cell`` -> blocks, quotes as containers holding a paragraph.
+  OneNote-only details stay as extension attributes (``onenote_tags``,
+  ``list_format``, ``list_style``, ``list_start``, ``checked_at``,
+  ``text_alignment``, an image's ``link``/``original_url``/``ink``...).
 * **Assets** are copied once into ``NOTES_DIR/assets/<sha256>.<ext>`` (deduped by
   hash). Extensions a browser would render as active content (html, svg from
   attachments, ...) are stored as ``.bin`` (served as a download).
@@ -773,6 +780,10 @@ def _tree(blocks: list[dict[str, Any]], ctx: _PageContext, nested: bool = False)
         while len(stack) > 1 and stack[-1][0] >= indent:
             stack.pop()
         stack[-1][1].append(converted)
+        if converted["type"] == "table":
+            # A table's children are its rows: blocks indented under it follow it.
+            stack.append((indent, stack[-1][1]))
+            continue
         converted.setdefault("children", [])
         stack.append((indent, converted["children"]))
     return roots

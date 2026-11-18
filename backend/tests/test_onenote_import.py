@@ -1297,6 +1297,19 @@ class CompareFindingsTests(_Base):
         self.assertLessEqual(len(path), onenote_import.MAX_SOURCE_PATH)
         self.assertTrue(path.startswith("Work › ") and path.endswith("Meetings › " + page["title"]), path)
 
+    def test_blocks_indented_under_a_table_follow_it(self) -> None:
+        tree = self.import_blocks([
+            {"type": "table", "indent": 0, "row_count": 1, "col_count": 1, "column_widths": [3.0],
+             "borders_visible": True, "rows": [{"cells": [
+                 {"background": None, "blocks": [{"type": "paragraph", "indent": 0, "text": "cell"}]}]}]},
+            {"type": "paragraph", "indent": 1, "text": "under the table"},
+            {"type": "paragraph", "indent": 2, "text": "deeper"},
+        ])
+        table, after = tree["children"]
+        self.assertEqual([row["type"] for row in table["children"]], ["table_row"])
+        self.assertEqual((after["text"], [child["text"] for child in after["children"]]),
+                         ("under the table", ["deeper"]))
+
     def test_clean_text(self) -> None:
         self.assertEqual(onenote_import._clean("form\x0cfeed bell\x07 nul\x00 a\r\nb‮RTL"),
                          "form feed bell nul a\nb‮RTL")
