@@ -6,6 +6,7 @@ use crate::input::{self, NotebookSource};
 use crate::layout::{self, LBox};
 use crate::links::normalize_guid;
 use crate::manifest::*;
+use crate::objectids::{Ids, PageIds, SectionIds};
 use crate::richtext::{self, color_hex};
 use onenote_parser::Parser;
 use onenote_parser::contents::{
@@ -90,9 +91,20 @@ struct PageCtx<'a, 'b> {
     page_title: String,
     section_path: Vec<String>,
     source_url: Option<String>,
+    /// Object ids of this page, when the section file could be indexed.
+    ids: Option<PageIds>,
+}
+
+fn set_ids(common: &mut BlockCommon, ids: Ids) {
+    common.object_id = ids.object_id;
+    common.element_id = ids.element_id;
 }
 
 impl PageCtx<'_, '_> {
+    fn ids_with(&mut self, f: impl FnOnce(&mut PageIds) -> Ids) -> Ids {
+        self.ids.as_mut().map(f).unwrap_or_default()
+    }
+
     fn warn(&mut self, message: String) {
         self.nb.report.warnings.push(Warning {
             message,
@@ -179,7 +191,9 @@ impl PageCtx<'_, '_> {
                     out.push(b);
                 }
                 Content::Ink(i) => {
-                    if let Some(b) = self.ink_block(&[(i, (0.0, 0.0))], indent) {
+                    if let Some(mut b) = self.ink_block(&[(i, (0.0, 0.0))], indent) {
+                        let ids = self.ids_with(|p| p.ink());
+                        set_ids(b.common_mut(), ids);
                         out.push(b);
                     }
                 }
@@ -194,6 +208,7 @@ impl PageCtx<'_, '_> {
 
     fn rich_text(&mut self, rt: &RichText, list: Option<&List>, indent: u32, out: &mut Vec<Block>) {
         let tags = self.tags(rt.note_tags());
+        let ids = self.ids_with(|p| p.rich_text(rt.text()));
 
         // Handwriting embedded in the paragraph.
         if !rt.embedded_objects().is_empty() {
@@ -201,6 +216,9 @@ impl PageCtx<'_, '_> {
             let refs: Vec<(&Ink, (f32, f32))> = parts.iter().map(|(i, o)| (*i, *o)).collect();
             if let Some(mut b) = self.ink_block(&refs, indent) {
                 b.common_mut().tags = tags.clone();
+                if rt.text().trim().is_empty() {
+                    set_ids(b.common_mut(), ids.clone());
+                }
                 out.push(b);
             }
             if rt.text().trim().is_empty() {
@@ -247,6 +265,8 @@ impl PageCtx<'_, '_> {
             tags,
             align,
             source_url: None,
+            object_id: ids.object_id,
+            element_id: ids.element_id,
         };
         let list_info = list.map(list_info);
         let check = common.tags.iter().find(|t| t.checkable).cloned();
@@ -318,6 +338,8 @@ impl PageCtx<'_, '_> {
 
     fn table(&mut self, t: &Table, indent: u32) -> Block {
         let tags = self.tags(t.note_tags());
+        let (row_count, col_count) = (t.rows(), t.cols());
+        let ids = self.ids_with(|p| p.table(row_count, col_count));
         let rows = t
             .contents()
             .iter()
@@ -343,10 +365,12 @@ impl PageCtx<'_, '_> {
             common: BlockCommon {
                 indent,
                 tags,
+                object_id: ids.object_id,
+                element_id: ids.element_id,
                 ..Default::default()
             },
-            row_count: t.rows(),
-            col_count: t.cols(),
+            row_count,
+            col_count,
             column_widths: t.col_widths().iter().map(|w| round2(*w)).collect(),
             borders_visible: t.borders_visible(),
             rows,
@@ -355,6 +379,7 @@ impl PageCtx<'_, '_> {
 
     fn image(&mut self, img: &Image, indent: u32, out: &mut Vec<Block>) {
         let tags = self.tags(img.note_tags());
+        let ids = self.ids_with(|p| p.image(img.alt_text(), img.image_filename()));
         let status = img.data_status();
         let original = img.image_filename().map(assets::display_name);
         let mut asset = None;
@@ -414,13 +439,19 @@ impl PageCtx<'_, '_> {
         let common = BlockCommon {
             indent,
             tags,
+            object_id: ids.object_id,
+            element_id: ids.element_id,
             ..Default::default()
         };
         if !embeds.is_empty() {
-            for url in embeds {
+            for (i, url) in embeds.into_iter().enumerate() {
                 self.nb.report.counts.embeds += 1;
+                let mut common = common.clone();
+                if i > 0 {
+                    set_ids(&mut common, Ids::default());
+                }
                 out.push(Block::Embed {
-                    common: common.clone(),
+                    common,
                     url,
                     thumbnail_asset: asset.clone(),
                 });
@@ -448,6 +479,7 @@ impl PageCtx<'_, '_> {
 
     fn file(&mut self, f: &EmbeddedFile, indent: u32) -> Block {
         let tags = self.tags(f.note_tags());
+        let ids = self.ids_with(|p| p.file(f.filename()));
         let filename = assets::display_name(f.filename());
         let ext = assets::ext_of_name(f.filename());
         let status = f.data_status();
@@ -498,6 +530,8 @@ impl PageCtx<'_, '_> {
             common: BlockCommon {
                 indent,
                 tags,
+                object_id: ids.object_id,
+                element_id: ids.element_id,
                 ..Default::default()
             },
             asset,
@@ -764,6 +798,7 @@ fn convert_page(
     page: &OnePage,
     order: usize,
     section_path: &[String],
+    section_ids: Option<&mut SectionIds>,
 ) -> Page {
     let id = page.link_target_id().to_string();
     let raw_title = page
@@ -776,6 +811,7 @@ fn convert_page(
         page_title: raw_title.clone().unwrap_or_default(),
         section_path: section_path.to_vec(),
         source_url: None,
+        ids: section_ids.and_then(|s| s.page(&id)),
     };
 
     let mut items: Vec<Item> = Vec::new();
@@ -1007,6 +1043,7 @@ fn convert_section(
     file_identity: Option<String>,
     rel_file: Option<&str>,
     in_toc: bool,
+    mut ids: Option<SectionIds>,
 ) -> Section {
     let mut path = parent_path.to_vec();
     path.push(s.display_name().to_string());
@@ -1014,7 +1051,7 @@ fn convert_section(
     for series in s.page_series() {
         for p in series.pages() {
             let order = pages.len();
-            pages.push(convert_page(nb, p, order, &path));
+            pages.push(convert_page(nb, p, order, &path, ids.as_mut()));
         }
     }
     // Subpage parents.
@@ -1230,6 +1267,7 @@ pub fn convert_notebook(
                         None,
                         Some(&frel),
                         false,
+                        SectionIds::from_file(&parser, f),
                     ))),
                     Err(e) => nb.report.failed_sections.push(failed(
                         {
@@ -1364,6 +1402,7 @@ pub fn convert_notebook(
                             Some(ident.clone()),
                             Some(&frel),
                             true,
+                            SectionIds::from_file(&parser, &f),
                         );
                         parsed
                             .entry(ident)
@@ -1547,7 +1586,8 @@ fn package_entries(
         .iter()
         .map(|e| match e {
             SectionEntry::Section(s) => {
-                Entry::Section(convert_section(nb, s, parent, None, None, true))
+                // Sections inside a .onepkg are not on disk: no object ids.
+                Entry::Section(convert_section(nb, s, parent, None, None, true, None))
             }
             SectionEntry::SectionGroup(g) => {
                 nb.report.counts.section_groups += 1;
