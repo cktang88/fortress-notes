@@ -209,6 +209,10 @@ class ResponseHeadersMiddleware:
 app.add_middleware(ResponseHeadersMiddleware)
 # gzip API JSON of 1 KB or more (not the Ask stream, not media).
 app.add_middleware(http_cache.ApiCompressionMiddleware, minimum_size=1024)
+# Keep last (outermost): token and browser checks run before anything else.
+from .auth import LocalAuthMiddleware  # noqa: E402
+
+app.add_middleware(LocalAuthMiddleware)
 
 
 @app.exception_handler(sqlite3.OperationalError)
