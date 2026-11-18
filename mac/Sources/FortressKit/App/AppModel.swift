@@ -50,6 +50,8 @@ public final class AppModel {
     public var isPaletteShown = false
     /// Bumped by Edit ▸ Search All Notes (⌥⌘F) to put the caret in the window's search field.
     public var searchFocusRequest = 0
+    /// The Empty Trash confirmation (Trash toolbar or File ▸ Empty Trash…).
+    public var isEmptyTrashConfirmationShown = false
 
     /// A window over a new library of its own (tests, previews).
     public convenience init(api: APIClient = APIClient()) {

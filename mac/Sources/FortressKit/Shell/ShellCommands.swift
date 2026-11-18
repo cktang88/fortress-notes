@@ -21,6 +21,9 @@ public struct ShellCommands: Commands {
     @FocusedValue(\.windowModel) private var model
     @FocusedValue(\.noteListTrash) private var listTrash
     @Environment(\.openWindow) private var openWindow
+    // The list's Sort and Group menu, also in View (HIG: toolbar items are in the menu bar).
+    @AppStorage("noteSort") private var sort: NoteSort = .edited
+    @AppStorage("groupByDate") private var groupsByDate = true
 
     public init(library: Library) {
         self.library = library
@@ -53,6 +56,13 @@ public struct ShellCommands: Commands {
                 .disabled(model == nil || !library.isConnected)
             Button("Restore from Backup…") { model?.isBackupsShown = true }
                 .disabled(model == nil)
+            Divider()
+            Button("Empty Trash…") {
+                model?.query = ""
+                model?.select(.trash)
+                model?.isEmptyTrashConfirmationShown = true
+            }
+            .disabled(model == nil || library.trash.isEmpty && model?.scope == .trash)
         }
 
         CommandGroup(after: .textEditing) {
@@ -75,6 +85,12 @@ public struct ShellCommands: Commands {
             }
             .keyboardShortcut(Shortcuts.focusMode)
             .disabled(model == nil)
+            Divider()
+            Picker("Sort By", selection: $sort) {
+                ForEach(NoteSort.allCases) { Text($0.label).tag($0) }
+            }
+            Toggle("Group by Date", isOn: $groupsByDate)
+                .disabled(sort == .title)
             Divider()
         }
 
