@@ -57,6 +57,17 @@ public final class AppModel {
         }
     }
 
+    // MARK: Finding
+
+    /// The block the caret is in, set by the editor; drives "Seen before" in the inspector.
+    public var focusedBlockId: String?
+    /// Text in the ⌘K palette (set it before showing the palette to open in a mode, e.g. "? " for Ask).
+    public var paletteQuery = ""
+    /// Set by the palette's Backups command; the Shell shows its Backups sheet and clears it.
+    public var isBackupsRequested = false
+
+    // MARK: -
+
     public func report(_ error: Error) {
         if error is URLError { isConnected = false }
         notice = Notice(message: error.localizedDescription)

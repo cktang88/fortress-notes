@@ -1,10 +1,383 @@
 import SwiftUI
 
-/// A streamed, cited answer from the notes. (Finding area — placeholder.)
+/// "Ask your notes": a question answered from the notes, streamed sentence by sentence,
+/// every sentence with chips citing the passages it came from. Follow-ups stack below.
 struct AskView: View {
-    let question: String
+    @Environment(AppModel.self) private var model
+    @State private var turns: [AskTurn]
+    @State private var followUp = ""
+    @FocusState private var isComposerFocused: Bool
+    private let question: String
+    /// Preset turns are shown as they are (previews and snapshots); otherwise the
+    /// question is asked when the view appears.
+    private let startsAsking: Bool
+
+    init(question: String) {
+        self.question = question
+        self.startsAsking = true
+        _turns = State(initialValue: [AskTurn(question: question)])
+    }
+
+    init(question: String, turns: [AskTurn]) {
+        self.question = question
+        self.startsAsking = false
+        _turns = State(initialValue: turns)
+    }
 
     var body: some View {
-        Text(question)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 44) {
+                    ForEach(turns) { turn in
+                        AskTurnView(turn: turn, retry: { retry(turn) })
+                            .id(turn.id)
+                    }
+                }
+                .frame(maxWidth: 640, alignment: .leading)
+                .padding(.horizontal, 48)
+                .padding(.top, 36)
+                .padding(.bottom, 120)
+                .frame(maxWidth: .infinity)
+            }
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .onChange(of: turns.count) { _, _ in
+                if let last = turns.last { withAnimation(.smooth(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .top) } }
+            }
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        .navigationTitle("Ask")
+        .environment(\.openURL, OpenURLAction { url in openCitation(url) })
+        .task {
+            guard startsAsking, let first = turns.first, first.state.isStreaming else { return }
+            first.start(model.api.ask(first.question))
+        }
+        .onDisappear { turns.forEach { $0.stop() } }
+    }
+
+    // MARK: Follow-up composer (glass, floating above the bottom edge)
+
+    private var composer: some View {
+        let isStreaming = turns.last?.state.isStreaming ?? false
+        let canSend = !followUp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return GlassEffectContainer {
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("Ask a follow-up", text: $followUp, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .lineLimit(1...5)
+                    .focused($isComposerFocused)
+                    .onSubmit(send)
+                    .padding(.vertical, 9)
+                    .padding(.leading, 16)
+                if isStreaming {
+                    Button { turns.last?.stop() } label: {
+                        Image(systemName: "stop.fill").font(.system(size: 11, weight: .bold))
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .keyboardShortcut(.cancelAction)
+                    .help("Stop")
+                    .padding(5)
+                } else {
+                    Button(action: send) {
+                        Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold))
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.circle)
+                    .disabled(!canSend)
+                    .help("Ask")
+                    .padding(5)
+                }
+            }
+            .frame(minHeight: 40)
+            .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        }
+        .frame(maxWidth: 560)
+        .padding(.horizontal, 32)
+        .padding(.bottom, 16)
+    }
+
+    private func send() {
+        let text = followUp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !(turns.last?.state.isStreaming ?? false) else { return }
+        followUp = ""
+        let turn = AskTurn(question: text)
+        turns.append(turn)
+        turn.start(model.api.ask(text))
+    }
+
+    private func retry(_ turn: AskTurn) {
+        guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return }
+        let fresh = AskTurn(question: turn.question)
+        turns[index] = fresh
+        fresh.start(model.api.ask(fresh.question))
+    }
+
+    /// Citation chips are links: fortress-cite://<document id>/<block id>.
+    private func openCitation(_ url: URL) -> OpenURLAction.Result {
+        guard let target = AskTurnView.citation(from: url) else { return .systemAction }
+        model.open(noteId: target.documentId, blockId: target.blockId)
+        return .handled
+    }
+}
+
+/// One question with its streamed answer, sources and trace.
+struct AskTurnView: View {
+    static let citationScheme = "fortress-cite"
+
+    /// "fortress-cite:<document id>/<block id>" → the ids (ULIDs keep their case).
+    static func citation(from url: URL) -> (documentId: String, blockId: String?)? {
+        let string = url.absoluteString
+        let prefix = citationScheme + ":"
+        guard string.hasPrefix(prefix) else { return nil }
+        let parts = string.dropFirst(prefix.count).split(separator: "/", maxSplits: 1).map(String.init)
+        guard let documentId = parts.first, !documentId.isEmpty else { return nil }
+        return (documentId, parts.count > 1 ? parts[1] : nil)
+    }
+
+    let turn: AskTurn
+    var retry: () -> Void = {}
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let state = turn.state
+        VStack(alignment: .leading, spacing: 14) {
+            Text(turn.question)
+                .font(.system(size: 22, weight: .semibold))
+                .lineSpacing(3)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+
+            AskTrace(turn: turn)
+
+            if !state.sentences.isEmpty {
+                answer(state)
+                    .transition(.opacity)
+            }
+            outcome(state)
+
+            if !state.citations.isEmpty, !state.isStreaming {
+                sources(state)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: state.sentences.count)
+        .animation(.smooth(duration: 0.25), value: state.phase)
+    }
+
+    /// The answer as one readable paragraph; each sentence is followed by its chips.
+    private func answer(_ state: AskState) -> some View {
+        let parts: [Text] = state.sentences.enumerated().flatMap { index, sentence -> [Text] in
+            var parts = [Text(verbatim: (index == 0 ? "" : " ") + sentence.text)]
+            var seen = Set<Int>()
+            for citation in sentence.citations {
+                guard let number = state.number(of: citation), seen.insert(number).inserted else { continue }
+                parts.append(Text(verbatim: "\u{2009}"))
+                parts.append(chip(number: number, citation: citation))
+            }
+            return parts
+        }
+        return Text.joined(parts)
+            .font(.system(size: 16))
+            .lineSpacing(9)
+            .foregroundStyle(.primary)
+            .textRenderer(MarkRenderer())
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .tint(.accentColor)
+    }
+
+    private func chip(number: Int, citation: AskCitation) -> Text {
+        var link = AttributedString("\u{2002}\(number)\u{2002}")
+        link.link = URL(string: "\(Self.citationScheme):\(citation.documentId)/\(citation.blockId)")
+        link.swiftUI.foregroundColor = .accentColor
+        link.swiftUI.font = .system(size: 11, weight: .semibold).monospacedDigit()
+        link.swiftUI.baselineOffset = 2
+        return Text(link)
+            .customAttribute(TextMark(style: .citation))
+    }
+
+    @ViewBuilder private func outcome(_ state: AskState) -> some View {
+        switch state.phase {
+        case .streaming, .finished(.answered):
+            EmptyView()
+        case .stopped:
+            if state.sentences.isEmpty {
+                calm("Stopped.", detail: nil, symbol: "stop.circle", action: ("Ask Again", retry))
+            }
+        case .finished(.notFound):
+            calm("I couldn’t find anything in your notes about that.", detail: nil,
+                 symbol: "text.magnifyingglass", action: ("Search Instead", { model.query = turn.question }))
+        case .finished(.notConfigured):
+            calm("Answers need a language model.",
+                 detail: "Add an OpenRouter key in Settings to get written answers. Meanwhile, these passages look closest:",
+                 symbol: "key", action: nil)
+            closestPassages(state.sources)
+        case .finished(.timeout):
+            calm("That took too long to answer.",
+                 detail: state.sources.isEmpty ? nil : "These passages look closest:",
+                 symbol: "clock", action: ("Try Again", retry))
+            closestPassages(state.sources)
+        case .finished(.unavailable):
+            calm("Ask isn’t available right now.", detail: "The model didn’t respond.",
+                 symbol: "bolt.horizontal.circle", action: ("Try Again", retry))
+            closestPassages(state.sources)
+        case .failed(let message):
+            calm("Ask isn’t available.", detail: message, symbol: "bolt.horizontal.circle", action: ("Try Again", retry))
+        }
+    }
+
+    private func calm(_ title: String, detail: String?, symbol: String, action: (String, () -> Void)?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: symbol)
+                .foregroundStyle(.secondary)
+                .font(.system(size: 14))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.primary)
+                if let detail {
+                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let action {
+                    Button(action.0, action: action.1)
+                        .controlSize(.small)
+                        .padding(.top, 2)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func closestPassages(_ sources: [AskSource]) -> some View {
+        if !sources.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(sources.prefix(5))) { source in
+                    PassageCard(title: source.documentTitle, text: source.text, number: nil) {
+                        model.open(noteId: source.documentId, blockId: source.blockId)
+                    }
+                }
+            }
+        }
+    }
+
+    private func sources(_ state: AskState) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Sources")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(Array(state.citations.enumerated()), id: \.element.blockId) { index, citation in
+                PassageCard(title: citation.documentTitle, text: citation.quote, number: index + 1) {
+                    model.open(noteId: citation.documentId, blockId: citation.blockId)
+                }
+            }
+        }
+        .padding(.top, 10)
+    }
+}
+
+/// "Searched for “ryokan|hotel” · Read “Kyoto trip” · 0.8 s", with a pulse while working.
+struct AskTrace: View {
+    let turn: AskTurn
+
+    var body: some View {
+        let state = turn.state
+        HStack(spacing: 7) {
+            if state.isStreaming {
+                PulsingDot()
+            } else {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            TimelineView(.periodic(from: turn.started, by: 0.1)) { context in
+                Text(verbatim: line(state, now: context.date))
+                    .monospacedDigit()
+            }
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+        .font(.subheadline)
+        .foregroundStyle(.tertiary)
+    }
+
+    private func line(_ state: AskState, now: Date) -> String {
+        var parts: [String] = []
+        let trace = state.trace
+        if !trace.isEmpty { parts.append(trace) }
+        if state.isStreaming {
+            if trace.isEmpty { parts.append(state.sentences.isEmpty ? "Reading your notes" : "Writing") }
+            parts.append(Self.seconds(now.timeIntervalSince(turn.started)))
+        } else {
+            if trace.isEmpty { parts.append("Read your notes") }
+            if let ms = state.elapsedMs { parts.append(Self.seconds(Double(ms) / 1000)) }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    static func seconds(_ interval: TimeInterval) -> String {
+        String(format: "%.1f s", max(0, interval))
+    }
+}
+
+/// A 6pt accent dot that breathes while an answer streams.
+struct PulsingDot: View {
+    @State private var dim = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Circle()
+            .fill(.tint)
+            .frame(width: 6, height: 6)
+            .opacity(dim ? 0.35 : 1)
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { dim = true }
+            }
+    }
+}
+
+/// A quoted passage from a note: optional number, note title, two lines of text. Click opens it.
+struct PassageCard: View {
+    let title: String
+    let text: String
+    let number: Int?
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if let number {
+                    Text(verbatim: "\(number)")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.tint)
+                        .frame(width: 18, height: 18)
+                        .background(Color.accentColor.opacity(0.14), in: .circle)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title.isEmpty ? "Untitled" : title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text(text)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color(nsColor: isHovered ? .tertiarySystemFill : .quaternarySystemFill),
+                in: .rect(cornerRadius: 8, style: .continuous))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
