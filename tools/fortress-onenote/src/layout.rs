@@ -10,12 +10,19 @@
 //!    [`V_TOLERANCE`]; the band grows to the union (so overlap is transitive).
 //! 3. Inside a band, cluster boxes into *columns* by horizontal overlap
 //!    (more than [`H_TOLERANCE`]), again transitively, ordered left to right.
+//!    *Bridges* are set aside first: a box that overlaps (in both
+//!    directions) two side-by-side boxes, such as a picture floating across
+//!    the gap between two columns or an ink drawing over a page area, would
+//!    otherwise merge their columns. The rest of the band is laid out on its
+//!    own and each bridge becomes a row of its own at its top position.
 //! 4. A band with one box is a plain row. A band with one column (boxes that
 //!    overlap in both directions) is emitted as stacked rows in top order. A
 //!    band with two or more columns becomes a `columns` row; each column's
 //!    boxes are laid out recursively (so a column can stack several outlines
 //!    or contain its own columns).
-//! 5. Bands with more than [`MAX_COLUMNS`] columns are flagged `scattered`.
+//! 5. Bands with more than [`MAX_COLUMNS`] columns are flagged `scattered`,
+//!    unless they are a grid: at most [`GRID_MAX_COLUMNS`] columns whose
+//!    tops are aligned.
 //!
 //! Background images are excluded from banding (they would merge every band)
 //! and emitted as their own rows at their vertical position.
@@ -27,8 +34,14 @@ use crate::manifest::{LayoutColumn, LayoutRow};
 pub const V_TOLERANCE: f32 = 0.15;
 /// Minimum horizontal overlap for two boxes to share a column.
 pub const H_TOLERANCE: f32 = 0.1;
-/// More columns than this in one band is treated as "scattered notes".
+/// More columns than this in one band is treated as "scattered notes",
+/// unless they form a grid (see [`GRID_MAX_COLUMNS`]).
 pub const MAX_COLUMNS: usize = 4;
+/// Up to this many columns whose first boxes start at the same height
+/// (within [`GRID_TOP_TOLERANCE`]) are a deliberate grid, not scattered.
+pub const GRID_MAX_COLUMNS: usize = 5;
+/// Geometry units.
+pub const GRID_TOP_TOLERANCE: f32 = 0.5;
 const MAX_DEPTH: usize = 6;
 
 #[derive(Debug, Clone)]
@@ -126,6 +139,11 @@ fn layout(boxes: &[&LBox], depth: usize, scattered: &mut usize) -> Vec<LayoutRow
             });
             continue;
         }
+        let bridges = bridges(&members);
+        if !bridges.is_empty() {
+            rows.extend(without_bridges(&members, &bridges, depth, scattered));
+            continue;
+        }
         // Columns by horizontal overlap.
         let mut by_x = members.clone();
         by_x.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
@@ -147,7 +165,7 @@ fn layout(boxes: &[&LBox], depth: usize, scattered: &mut usize) -> Vec<LayoutRow
             continue;
         }
         let total: f32 = cols.iter().map(|(l, r, _)| (r - l).max(0.01)).sum();
-        let is_scattered = cols.len() > MAX_COLUMNS;
+        let is_scattered = is_scattered(&cols);
         if is_scattered {
             *scattered += 1;
         }
@@ -166,6 +184,98 @@ fn layout(boxes: &[&LBox], depth: usize, scattered: &mut usize) -> Vec<LayoutRow
         });
     }
     rows
+}
+
+/// Whether a band's columns are scattered notes: more than [`MAX_COLUMNS`],
+/// except for a grid of up to [`GRID_MAX_COLUMNS`] columns with aligned tops.
+fn is_scattered(cols: &[(f32, f32, Vec<&LBox>)]) -> bool {
+    if cols.len() <= MAX_COLUMNS {
+        return false;
+    }
+    let tops: Vec<f32> = cols
+        .iter()
+        .map(|(_, _, m)| m.iter().map(|b| b.y).fold(f32::INFINITY, f32::min))
+        .collect();
+    let spread = tops.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+        - tops.iter().copied().fold(f32::INFINITY, f32::min);
+    cols.len() > GRID_MAX_COLUMNS || spread > GRID_TOP_TOLERANCE
+}
+
+fn h_overlap(a: &LBox, b: &LBox) -> bool {
+    a.x.max(b.x) < a.right().min(b.right()) - H_TOLERANCE
+}
+
+fn v_overlap(a: &LBox, b: &LBox) -> bool {
+    a.y.max(b.y) < a.bottom().min(b.bottom()) - V_TOLERANCE
+}
+
+/// Boxes of a band that *bridge* side-by-side boxes: each overlaps (in both
+/// directions) two other boxes that are side by side, i.e. overlap each
+/// other vertically but not horizontally. Typical bridges are a picture
+/// floating across the gap between two columns, an ink drawing over a whole
+/// page area, or a wide outline whose estimated height reaches into columns
+/// below it. Left in, a bridge merges the columns it touches into one, and
+/// the band is stacked instead of laid out side by side.
+///
+/// Widest boxes are considered first; a box already found to be a bridge
+/// does not count as one of the side-by-side pair of another.
+fn bridges<'a>(members: &[&'a LBox]) -> Vec<&'a LBox> {
+    if members.len() < 3 {
+        return Vec::new();
+    }
+    let mut by_width = members.to_vec();
+    by_width.sort_by(|a, b| b.w.total_cmp(&a.w).then(a.y.total_cmp(&b.y)));
+    let mut found: Vec<&LBox> = Vec::new();
+    for b in by_width {
+        let touching: Vec<&LBox> = members
+            .iter()
+            .copied()
+            .filter(|o| {
+                !std::ptr::eq(*o, b)
+                    && !found.iter().any(|f| std::ptr::eq(*f, *o))
+                    && h_overlap(o, b)
+                    && v_overlap(o, b)
+            })
+            .collect();
+        let bridges_pair = touching.iter().enumerate().any(|(i, p)| {
+            touching[i + 1..]
+                .iter()
+                .any(|q| v_overlap(p, q) && !h_overlap(p, q))
+        });
+        if bridges_pair {
+            found.push(b);
+        }
+    }
+    found
+}
+
+/// Lay out a band without its bridges (which may split it into several
+/// bands and columns), then put each bridge in a row of its own at its top
+/// position: before the rows that start below it, after the others.
+fn without_bridges(
+    members: &[&LBox],
+    bridges: &[&LBox],
+    depth: usize,
+    scattered: &mut usize,
+) -> Vec<LayoutRow> {
+    let rest: Vec<&LBox> = members
+        .iter()
+        .copied()
+        .filter(|m| !bridges.iter().any(|b| std::ptr::eq(*b, *m)))
+        .collect();
+    let owned: Vec<LBox> = members.iter().map(|b| (*b).clone()).collect();
+    let mut keyed: Vec<(f32, usize, LayoutRow)> = layout(&rest, depth + 1, scattered)
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| (row_top(&r, &owned), i, r))
+        .collect();
+    let n = keyed.len();
+    for (k, b) in sorted_by_position(bridges).into_iter().enumerate() {
+        keyed.push((b.y, n + k, LayoutRow::Item { item: b.id.clone() }));
+    }
+    // Stable: equal tops keep the bridged content first.
+    keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    keyed.into_iter().map(|(_, _, r)| r).collect()
 }
 
 fn round3(v: f32) -> f32 {
@@ -314,6 +424,71 @@ mod tests {
         let (rows, scattered) = compute(&boxes);
         assert_eq!(scattered, 1);
         assert_eq!(show(&rows), "![n0|n1|n2|n3|n4|n5]");
+    }
+
+    #[test]
+    fn picture_across_the_gap_does_not_merge_columns() {
+        // gen-layout-columns.one: a floating picture overlaps columns 2 and 3.
+        let mut boxes: Vec<LBox> = (0..4)
+            .map(|i| bx(&format!("c{i}"), 0.5 + i as f32 * 4.2, 2.8, 3.9, 6.7))
+            .collect();
+        boxes.push(bx("img", 4.7, 3.1, 5.6, 3.3));
+        assert_eq!(run(&boxes), "[c0|c1|c2|c3],img");
+    }
+
+    #[test]
+    fn drawing_over_side_by_side_outlines_does_not_stack_them() {
+        // Cornell notes: an ink drawing (the template's lines) covers the
+        // cue column and the note-taking area.
+        let boxes = [
+            bx("summary", 1.25, 22.9, 15.8, 0.5),
+            bx("cue", 1.0, 2.4, 3.6, 3.3),
+            bx("notes", 6.0, 2.4, 10.8, 9.1),
+            bx("ink", 1.0, 2.42, 16.2, 13.0),
+            bx("area", 6.0, 15.9, 6.7, 0.9),
+        ];
+        assert_eq!(run(&boxes), "[cue|notes],ink,area,summary");
+    }
+
+    #[test]
+    fn wide_outline_reaching_into_columns_goes_first() {
+        // The header's estimated height overlaps the two columns below it.
+        let boxes = [
+            bx("header", 0.0, 0.0, 20.0, 3.0),
+            bx("a", 0.0, 2.5, 8.0, 4.0),
+            bx("b", 10.0, 2.5, 8.0, 4.0),
+        ];
+        assert_eq!(run(&boxes), "header,[a|b]");
+    }
+
+    #[test]
+    fn a_box_over_stacked_boxes_is_no_bridge() {
+        // Overlapping both of two stacked outlines (not side by side).
+        let boxes = [
+            bx("a", 0.0, 0.0, 10.0, 3.0),
+            bx("b", 0.0, 3.0, 10.0, 3.0),
+            bx("img", 2.0, 1.0, 4.0, 4.0),
+        ];
+        assert_eq!(run(&boxes), "a,img,b");
+    }
+
+    #[test]
+    fn aligned_grid_of_five_columns_is_not_scattered() {
+        let boxes: Vec<LBox> = (0..5)
+            .map(|i| bx(&format!("c{i}"), i as f32 * 4.2, 2.8, 3.9, 6.7))
+            .collect();
+        let (rows, scattered) = compute(&boxes);
+        assert_eq!((show(&rows).as_str(), scattered), ("[c0|c1|c2|c3|c4]", 0));
+        // Too many columns, even aligned: scattered.
+        let boxes: Vec<LBox> = (0..6)
+            .map(|i| bx(&format!("c{i}"), i as f32 * 4.2, 2.8, 3.9, 6.7))
+            .collect();
+        assert_eq!(compute(&boxes).1, 1);
+        // Five columns at different heights: scattered.
+        let boxes: Vec<LBox> = (0..5)
+            .map(|i| bx(&format!("c{i}"), i as f32 * 4.2, i as f32 * 0.4, 3.9, 6.7))
+            .collect();
+        assert_eq!(compute(&boxes).1, 1);
     }
 
     #[test]

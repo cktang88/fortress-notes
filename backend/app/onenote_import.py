@@ -29,8 +29,9 @@ Design choices:
   parent from its subpages.)
 * **Layout**: the converter's reading-order rows are followed; a ``columns`` row
   becomes a ``columns`` block with one ``column`` per OneNote column (relative
-  ``width``), nested columns included. "Scattered" bands (more than 4 columns)
-  are stacked instead.
+  ``width``), nested columns included. Bands the converter flags as
+  ``scattered`` (scattered notes: more than 4 columns that are not an aligned
+  grid) are stacked instead.
 * **Block ids**: a block with a OneNote object id (manifest ``object_id``, the
   content's ExGUID, stable across edits) gets the source id
   ``<page GUID>/obj:<object_id>``, so a paragraph edited in OneNote updates the
