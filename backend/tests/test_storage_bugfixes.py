@@ -30,6 +30,7 @@ from app.block_store import (
 )
 from app.corpus import embedding_documents
 from app.models import BlockOperation
+from support import mirror_file
 
 _T = "2026-01-01T00:00:00+00:00"
 
@@ -314,7 +315,7 @@ class MirrorRaceTests(unittest.TestCase):
                 slow.join()
                 fast.join()
 
-            self.assertIn("new text", (notes / f"{created['id']}.md").read_text(encoding="utf-8"))
+            self.assertIn("new text", mirror_file(notes, created["id"]).read_text(encoding="utf-8"))
 
 
 class InitializeTests(unittest.TestCase):

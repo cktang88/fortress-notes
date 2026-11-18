@@ -10,7 +10,7 @@ from app.portability import (
 
 
 class PortabilityTests(unittest.TestCase):
-    def test_exports_nested_blocks_with_their_block_ids(self) -> None:
+    def test_exports_plain_markdown_with_the_note_id_in_front_matter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             create_document(
@@ -29,8 +29,12 @@ class PortabilityTests(unittest.TestCase):
 
             self.assertIn("title: Guide", markdown)
             self.assertIn("  - Child", markdown)
-            # Ids travel in Fortress comments, so a re-import keeps links working.
-            self.assertIn(f'# Guide <!-- fortress:block {{"id":"{tree["children"][0]["id"]}"}} -->', markdown)
+            # Plain Markdown: the note's id is in its front matter, and no block
+            # carries one (nothing refers to them).
+            self.assertIn("\nid: guide\n", markdown)
+            self.assertIn("\n# Guide\n\n- Parent\n  - Child\n\nAfter\n", markdown)
+            self.assertNotIn("fortress:block", markdown)
+            self.assertNotIn(tree["children"][0]["id"], markdown)
 
     def test_export_import_round_trip_preserves_document_and_block_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

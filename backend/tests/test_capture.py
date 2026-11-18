@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from support import make_settings, use_settings
+from support import make_settings, use_settings, mirror_file
 
 
 class QuickCaptureTests(unittest.TestCase):
@@ -68,7 +68,7 @@ class QuickCaptureTests(unittest.TestCase):
         from app import documents
 
         documents.flush_mirrors()
-        self.assertTrue((self.notes / f"{second['document_id']}.md").exists())
+        self.assertTrue(mirror_file(self.notes, second["document_id"]).exists())
         from app import block_store
 
         hits = block_store.search_blocks(self.notes / ".fortress.sqlite3", "plumber")
