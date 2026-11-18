@@ -93,6 +93,53 @@ _MONOSPACE = ("consolas", "courier", "courier new", "lucida console", "menlo", "
               "sf mono", "dejavu sans mono", "andale mono", "monospace")
 _NUMBER_STYLES = frozenset({"upper_roman", "lower_roman", "upper_alpha", "lower_alpha"})
 _BAD_LINK_SCHEMES = ("javascript:", "vbscript:", "data:")
+# Link targets kept as links; anything else (file:, UNC paths, ms-word:, javascript:, ...)
+# stays plain text and is listed in the block's provenance (``dropped_links``).
+_SAFE_LINK_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps", "sftp", "news", "sms", "geo"})
+MAX_LINK_LENGTH = 2048
+# C0/C1 control characters other than tab and newline (OneNote files can carry them;
+# they are invisible there and break Markdown/terminals here).
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff]")
+_LINK_JUNK_RE = re.compile(r"[\x00-\x20\x7f-\x9f]")
+_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]{0,31}):")
+
+
+def _clean(text: str) -> str:
+    """``text`` without control characters (tab and newline kept; CR becomes newline)."""
+
+    return _CONTROL_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
+
+
+def _clean_manifest(value: Any) -> Any:
+    """Every string of the manifest cleaned, except rich ``text`` (its marks index into it;
+    runs are cleaned once split)."""
+
+    if isinstance(value, str):
+        return _clean(value)
+    if isinstance(value, list):
+        return [_clean_manifest(item) for item in value]
+    if isinstance(value, dict):
+        rich = "marks" in value
+        return {key: (item if rich and key == "text" else _clean_manifest(item)) for key, item in value.items()}
+    return value
+
+
+def safe_link(href: object) -> str | None:
+    """``href`` when it is safe to keep as a clickable link, else None."""
+
+    if not isinstance(href, str):
+        return None
+    href = href.strip()
+    if not href or len(href) > MAX_LINK_LENGTH:
+        return None
+    # Browsers ignore tabs/newlines/control characters inside a scheme ("java\nscript:").
+    probe = _LINK_JUNK_RE.sub("", href)
+    match = _SCHEME_RE.match(probe)
+    if match is None or match.group(1).lower() not in _SAFE_LINK_SCHEMES:
+        return None
+    if _CONTROL_RE.search(href) or any(ch in href for ch in "\n\t"):
+        return None
+    return href
 # Image types the local OCR reads (images.extract_and_store).
 _OCR_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
 # Pages whose imported text covers less of the manifest's text are reported.
@@ -249,6 +296,7 @@ class _PageContext:
     block_level_links: int = 0  # paragraph links that could only point at their page
     block_references: int = 0  # paragraph links that became block references
     ocr_assets: list[str] = field(default_factory=list)  # image asset names without text
+    dropped_links: list[str] = field(default_factory=list)  # unsafe/unsupported targets kept as text
 
     def count(self, key: str, amount: int = 1) -> None:
         self.stats[key] = self.stats.get(key, 0) + amount
@@ -293,7 +341,7 @@ def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
                 emitted.add(equation)
                 runs.append({"text": f"${equations[equation]}$", "code": 1})
             continue
-        run: dict[str, Any] = {"text": text[a:b]}
+        run: dict[str, Any] = {"text": _clean(text[a:b])}
         for index, (start, end, mark) in enumerate(usable):
             if start > a or end < b:
                 continue
@@ -363,9 +411,10 @@ def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext,
         })
         block_links.append(href)
         return None
-    if not href or href.lower().startswith(_BAD_LINK_SCHEMES):
-        return None
-    return href
+    safe = safe_link(href)
+    if safe is None and href:
+        ctx.dropped_links.append(href[:MAX_LINK_LENGTH])
+    return safe
 
 
 def _inline_latex(mark: dict[str, Any]) -> str | None:
@@ -449,6 +498,7 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
 
     kind = block.get("type")
     block_links: list[str] = []
+    dropped_before = len(ctx.dropped_links)
     result: dict[str, Any]
     if kind in {"paragraph", "heading", "list_item", "check_item", "quote"}:
         result, block_links = _text_block(block, ctx)
@@ -473,11 +523,16 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
     elif kind == "file":
         result = _file(block, ctx)
     elif kind == "embed":
-        url = str(block.get("url") or "").strip()
-        if not url or url.lower().startswith(_BAD_LINK_SCHEMES):
+        url = safe_link(block.get("url"))
+        raw = str(block.get("url") or "").strip()
+        if url is None and not raw:
             return None
         thumbnail = ctx.importer.asset_url(block.get("thumbnail_asset")) if block.get("thumbnail_asset") else None
-        if thumbnail:
+        if url is None:
+            # Not a web address (file:, javascript:, ...): keep it as text, not a link.
+            ctx.dropped_links.append(raw[:MAX_LINK_LENGTH])
+            result = {"type": "paragraph", "text": raw}
+        elif thumbnail:
             # The video's poster frame (what OneNote shows), linked to the video.
             result = {"type": "image", "url": thumbnail, "caption": url, "name": "Video",
                       "attrs": {"link": url, "embed": True}}
@@ -497,12 +552,15 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
     if tags:
         result.setdefault("attrs", {})["onenote_tags"] = tags
     if not nested:
+        dropped = ctx.dropped_links[dropped_before:]
         result["id"], previous = _block_external_id(ctx.page_guid, block)
         if previous:
             result["previous_ids"] = previous
         extra: dict[str, Any] = {}
         if block_links:
             extra["unresolved_links"] = block_links
+        if dropped:
+            extra["dropped_links"] = dropped
         ids = _onenote_ids(block)
         if kind == "table":
             nested_ids = sorted(_nested_object_ids(block))[:200]
@@ -678,8 +736,12 @@ def _image(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
     if name:
         result["name"] = str(name)
     attrs: dict[str, Any] = {}
-    if block.get("hyperlink") and not str(block["hyperlink"]).lower().startswith(_BAD_LINK_SCHEMES):
-        attrs["link"] = str(block["hyperlink"])
+    if block.get("hyperlink"):
+        link = safe_link(block["hyperlink"])
+        if link:
+            attrs["link"] = link
+        else:
+            ctx.dropped_links.append(str(block["hyperlink"])[:MAX_LINK_LENGTH])
     if block.get("is_printout_page"):
         attrs["printout_page"] = block.get("printout_page_number")
     if block.get("is_background"):
@@ -914,7 +976,7 @@ class _Importer:
         self._block_index: dict[str, dict[str, str]] = {}
         manifest_file = manifest_dir / "manifest.json"
         try:
-            self.manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            self.manifest = _clean_manifest(json.loads(manifest_file.read_text(encoding="utf-8")))
         except (OSError, ValueError) as exc:
             raise OneNoteImportError(f"The converter's manifest could not be read: {exc}") from exc
         if self.manifest.get("format") != MANIFEST_FORMAT:
@@ -1178,6 +1240,9 @@ class _Importer:
         ctx = _PageContext(self, guid, label)
         blocks = page_blocks(page, ctx)
         blocks += _subpage_blocks(guid, children.get(guid, []), ctx)
+        if ctx.dropped_links:
+            ctx.warn(f"{len(ctx.dropped_links)} link(s) kept as plain text (not a web address, or too long): "
+                     + ", ".join(repr(link[:80]) for link in ctx.dropped_links[:3]))
         source_url = page.get("source_url")
         title = str(page.get("title") or "Untitled Page")
         onenote_extra: dict[str, Any] = {

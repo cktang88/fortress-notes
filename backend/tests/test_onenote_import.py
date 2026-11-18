@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import os
 import shutil
 import tempfile
@@ -1124,6 +1125,47 @@ class CompareFindingsTests(_Base):
         ])
         attrs = tree["children"][0]["attrs"]
         self.assertEqual((attrs.get("list_style"), attrs.get("list_start")), ("lower_roman", 3))
+
+    def test_hostile_strings_from_the_converter_are_sanitised(self) -> None:
+        bad = ["javascript:alert(1)", "java\nscript:alert(1)", " JAVASCRIPT:alert(1)", "data:text/html,x",
+               "file:///etc/passwd", "\\\\server\\share\\x.doc", "ms-word:ofe|u|https://x/y.docx",
+               "vbscript:x", "https://example.com/" + "a" * 6000]
+        text = " ".join(f"L{i}" for i in range(len(bad))) + " ok"
+        marks = []
+        for i, href in enumerate(bad):
+            start = text.index(f"L{i}")
+            marks.append({"start": start, "end": start + len(f"L{i}"), "type": "link", "href": href})
+        start = text.index("ok")
+        marks.append({"start": start, "end": start + 2, "type": "link", "href": "https://example.com/ok"})
+        page = _pages(self.manifest)[P3]
+        page["title"] = "Bell\x07 title\x1b[31m"
+        tree = self.import_blocks([
+            {"type": "paragraph", "indent": 0, "text": text, "marks": marks},
+            {"type": "paragraph", "indent": 0, "text": "nul\x00 and esc\x1b here", "marks": [
+                {"start": 0, "end": 3, "type": "bold"}]},
+            {"type": "image", "indent": 0, "asset": PNG_NAME, "data_status": "available", "alt_text": "a\x0bb",
+             "hyperlink": "javascript:alert(1)", "width": None, "height": None, "is_printout_page": False,
+             "printout_page_number": None, "is_background": False, "original_name": "x\x01.png", "original_asset": None},
+            {"type": "embed", "indent": 0, "url": "file:///C:/secret.mp4", "thumbnail_asset": None},
+        ])
+        links, first = tree["children"][0], tree["children"][0]["content"]["blocknote"]
+        hrefs = [run["href"] for run in first if run["type"] == "link"]
+        self.assertEqual(hrefs, ["https://example.com/ok"])
+        self.assertEqual(links["text"], text)  # the words stay
+        self.assertEqual(len(links["provenance"]["extra"]["dropped_links"]), len(bad))
+        self.assertEqual(tree["children"][1]["text"], "nul and esc here")
+        image = tree["children"][2]
+        self.assertNotIn("link", image["attrs"])
+        self.assertEqual(image["attrs"]["alt"], "ab")
+        self.assertEqual(image["attrs"]["name"], "x.png")
+        self.assertEqual(tree["children"][3]["text"], "file:///C:/secret.mp4")
+        self.assertEqual(tree["title"], "Bell title[31m")
+        markdown = export_document_markdown(self.db, tree["id"])
+        self.assertNotRegex(markdown, r"[\x00-\x08\x0b-\x1f]")
+        visible = re.sub(r"<!--.*?-->", "", markdown, flags=re.DOTALL)
+        self.assertNotIn("](javascript", visible.lower())
+        self.assertNotIn("](file:", visible.lower())
+        self.assertNotIn("](data:", visible.lower())
 
     def test_monospace_runs_become_inline_code(self) -> None:
         tree = self.import_blocks([{
