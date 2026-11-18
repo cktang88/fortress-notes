@@ -50,10 +50,8 @@ struct LoadingExperiments {
     private func turns(_ editor: PerfEditor) -> [(ms: Double, pending: Int)] {
         var all: [(Double, Int)] = []
         repeat {
-            let before = BlockEditorController.chunksBuilt
             let turn = milliseconds { _ = RunLoop.main.run(mode: .default, before: Date()) }
-            // "pending" now: chunks built this turn, or -2 once loaded.
-            all.append((turn, editor.controller.pendingBlocks.isEmpty ? -2 : BlockEditorController.chunksBuilt - before))
+            all.append((turn, editor.controller.pendingBlocks.count))
         } while !editor.controller.pendingBlocks.isEmpty && all.count < 1000
         all.append((milliseconds { _ = editor.session.base }, -1))
         return all
@@ -61,15 +59,13 @@ struct LoadingExperiments {
 
     @Test func loadingVariants() {
         for round in 0..<3 {
-            for (name, chunks, timer) in [("oldChunkedAppends", true, false), ("buildThenOneAppend", false, false), ("buildThenOneAppend+timer", false, true)] {
+            for (name, chunks) in [("oldChunkedAppends", true), ("buildThenOneAppend", false)] {
                 BlockEditorController.appendsInChunks = chunks
-                BlockEditorController.chainsWithTimer = timer
-                defer { BlockEditorController.chainsWithTimer = false }
                 let editor = PerfEditor(document: LongNote.document())
                 editor.open()
                 let all = turns(editor)
                 let slowest = all.enumerated().sorted { $0.element.ms > $1.element.ms }.prefix(4)
-                    .map { String(format: "#%d %.1f (chunks %d)", $0.offset, $0.element.ms, $0.element.pending) }.joined(separator: ", ")
+                    .map { String(format: "#%d %.1f (pending %d)", $0.offset, $0.element.ms, $0.element.pending) }.joined(separator: ", ")
                 let result = typeInMiddle(editor)
                 line(round, name, result, String(format: "longest %.1f turns %d total %.0f slowest %@", all.map(\.ms).max() ?? 0, all.count,
                                                   all.reduce(0) { $0 + $1.ms }, slowest))
@@ -83,7 +79,7 @@ struct LoadingExperiments {
                 if variant.hasPrefix("baseFirst") { base = milliseconds { _ = editor.session.base } }
                 let all = turns(editor)
                 let slowest = all.enumerated().sorted { $0.element.ms > $1.element.ms }.prefix(4)
-                    .map { String(format: "#%d %.1f (chunks %d)", $0.offset, $0.element.ms, $0.element.pending) }.joined(separator: ", ")
+                    .map { String(format: "#%d %.1f (pending %d)", $0.offset, $0.element.ms, $0.element.pending) }.joined(separator: ", ")
                 print(String(format: "EXP round %d turn0 %@ base %.1f first %.1f slowest %@", round, variant, base, all.first?.ms ?? 0, slowest))
             }
             do {
