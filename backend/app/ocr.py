@@ -39,12 +39,16 @@ log = logging.getLogger("fortress.ocr")
 # every asset is then read again, lazily, in the background.
 MODEL = "rapidocr-ppocrv6-small/1"
 MAX_ATTEMPTS = 3
-# A PDF page with fewer non-space characters than this in its text layer is OCR'd.
+# A PDF page is OCR'd when its text layer has almost no text, or little text and
+# a picture covering a good part of the page (a scan with a stamped header).
 PDF_TEXT_MIN_CHARS = 16
+PDF_SCAN_TEXT_CHARS = 200
+PDF_SCAN_IMAGE_SHARE = 0.25
 PDF_MAX_OCR_PAGES = 100
 PDF_RENDER_MAX_SIDE = 2000
 MAX_TEXT_CHARS = 200_000
 MIN_IMAGE_SIDE = 12
+POLL_SECONDS = 60.0
 
 IMAGE_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp", "image/tiff"}
@@ -158,7 +162,7 @@ def read_pdf(path: Path) -> Result:
                     text = textpage.get_text_range().replace("\r\n", "\n").strip()
                 finally:
                     textpage.close()
-                if len("".join(text.split())) < PDF_TEXT_MIN_CHARS and ocr_pages < PDF_MAX_OCR_PAGES:
+                if ocr_pages < PDF_MAX_OCR_PAGES and _needs_ocr(page, text):
                     width, height = page.get_size()
                     scale = min(PDF_RENDER_MAX_SIDE / max(width, height, 1), 300 / 72)
                     bitmap = page.render(scale=scale)
@@ -176,6 +180,22 @@ def read_pdf(path: Path) -> Result:
         return Result("\n\n".join(parts), method, len(pdf))
     finally:
         pdf.close()
+
+
+def _needs_ocr(page, text: str) -> bool:
+    import pypdfium2.raw as pdfium_c
+
+    characters = len("".join(text.split()))
+    if characters < PDF_TEXT_MIN_CHARS:
+        return True
+    if characters >= PDF_SCAN_TEXT_CHARS:
+        return False
+    width, height = page.get_size()
+    covered = 0.0
+    for image in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE], max_depth=2):
+        left, bottom, right, top = image.get_pos()
+        covered += max(0.0, min(right, width) - max(left, 0)) * max(0.0, min(top, height) - max(bottom, 0))
+    return covered >= PDF_SCAN_IMAGE_SHARE * width * height
 
 
 def read_asset(path: Path, mime_type: str) -> Result:
@@ -346,7 +366,9 @@ class _Worker:
 
     def _run(self, db_path: Path) -> None:
         while not self.stopping.is_set():
-            self.wakeup.wait()
+            # Woken by uploads and imports; the poll also finds assets registered
+            # any other way (an import's PDFs, a restored backup).
+            self.wakeup.wait(POLL_SECONDS)
             self.wakeup.clear()
             while not self.stopping.is_set():
                 self.busy = True

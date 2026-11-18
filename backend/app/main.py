@@ -148,6 +148,7 @@ async def lifespan(_app: FastAPI):
     # earlier run left unread.
     if settings.vision_enabled:
         ocr.start(settings.block_db_path)
+        onenote_import.jobs.ocr = ocr.wake
     try:
         yield
     finally:
