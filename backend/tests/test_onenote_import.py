@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app import block_store, documents, images, onenote_import
+from app import block_store, documents, images, onenote_import, sources
 from app.block_store import apply_transaction, document_tree, search_blocks
 from app.models import BlockOperation
 from app.portability import export_document_markdown
@@ -336,8 +336,8 @@ class ImportManifestTests(_Base):
         tree = self.tree(P1)
         block = _find(tree["children"], lambda node: node["text"] == "Editable paragraph")
         apply_transaction(self.db, tree["id"], [BlockOperation(
-            operation="update", block_id=block["id"], text="Edited in Fortress",
-            content={"markdown": "Edited in Fortress"})], tree["revision"])
+            operation="update", block_id=block["id"],
+            content=[{"type": "text", "text": "Edited in Fortress"}])], tree["revision"])
         changed = copy.deepcopy(self.manifest)
         page = changed["notebooks"][0]["children"][0]["children"][0]["pages"][0]
         page["items"][0]["blocks"][0]["text"] = "Plan heading v2"
@@ -369,44 +369,48 @@ class ImportManifestTests(_Base):
         self.assertEqual(image["attrs"]["alt"], "Quarterly revenue chart OCR")
         self.assertEqual(image["attrs"]["width"], 240)  # 5 half-inch units * 48 px
 
+        # Rows, cells and the blocks in cells are blocks of their own.
         table = _find(tree["children"], lambda node: node["type"] == "table")
-        content = table["content"]["blocknote"]
-        self.assertEqual(content["columnWidths"], [96, 144])
+        self.assertEqual(table["attrs"]["column_widths"], [96, 144])
         self.assertTrue(table["attrs"]["borders"])
-        first, second = content["rows"]
-        self.assertEqual(first["cells"][0]["props"]["backgroundColor"], "#DEEAF6")
-        self.assertEqual(first["cells"][0]["content"][0]["styles"], {"bold": True})
-        self.assertEqual(second["cells"][1]["props"]["backgroundColor"], "#FFF2CC")
-        nested = second["cells"][0]["blocks"]
-        self.assertEqual(second["cells"][0]["content"][0]["text"], "Apples")
-        self.assertEqual([block["type"] for block in nested], ["list", "table"])
-        self.assertFalse(nested[1]["attrs"]["borders"])
-        self.assertIn("deep cell", table["text"])
+        first, second = table["children"]
+        self.assertEqual([row["type"] for row in table["children"]], ["table_row", "table_row"])
+        self.assertEqual(first["children"][0]["attrs"]["background"], "#DEEAF6")
+        self.assertEqual(first["children"][0]["children"][0]["content"],
+                         [{"type": "text", "text": "Name", "marks": {"bold": True}}])
+        self.assertEqual(second["children"][1]["attrs"]["background"], "#FFF2CC")
+        nested = second["children"][0]["children"]
+        self.assertEqual([block["type"] for block in nested], ["paragraph", "bullet_item", "table"])
+        self.assertEqual(nested[0]["text"], "Apples")
+        self.assertFalse(nested[2]["attrs"].get("borders", False))
+        self.assertIn("deep cell", [node["text"] for node in _walk(nested[2]["children"])])
 
         paragraph = _find(tree["children"], lambda node: node["text"].startswith("Bold italic"))
-        runs = paragraph["content"]["blocknote"]
-        styles = {}
+        runs = paragraph["content"]
+        marks = {}
         for run in runs:
             if run["type"] == "text":
-                styles.setdefault(run["text"], run["styles"])
-        self.assertEqual(styles["Bold"], {"bold": True})
-        self.assertEqual(styles["italic"], {"italic": True})
-        self.assertEqual(styles["under"], {"underline": True})
-        self.assertEqual(styles["strike"], {"strike": True})
-        self.assertEqual(styles["2"], {"superscript": True})  # x², then H₂O
-        self.assertIn({"type": "text", "text": "2", "styles": {"subscript": True}}, runs)
-        self.assertEqual(styles["red"], {"textColor": "#C00000"})
-        self.assertEqual(styles["marked"], {"backgroundColor": "#FFFF00"})
+                marks.setdefault(run["text"], run.get("marks"))
+        self.assertEqual(marks["Bold"], {"bold": True})
+        self.assertEqual(marks["italic"], {"italic": True})
+        self.assertEqual(marks["under"], {"underline": True})
+        self.assertEqual(marks["strike"], {"strike": True})
+        self.assertEqual(marks["2"], {"sup": True})  # x², then H₂O
+        self.assertIn({"type": "text", "text": "2", "marks": {"sub": True}}, runs)
+        self.assertEqual(marks["red"], {"color": "#C00000"})
+        self.assertEqual(marks["marked"], {"highlight": "#FFFF00"})
         links = {run["content"][0]["text"]: run["href"] for run in runs if run["type"] == "link"}
         self.assertEqual(links["web"], "https://example.com/")
         markdown = export_document_markdown(self.db, tree["id"])
         self.assertIn("<u>under</u>", markdown)
 
-        lists = [node for node in _walk(tree["children"]) if node["type"] == "list"]
-        parent_item = next(node for node in lists if node["text"] == "Parent item")
+        items = [node for node in _walk(tree["children"])
+                 if node["type"] in ("bullet_item", "numbered_item", "check_item")]
+        parent_item = next(node for node in items if node["text"] == "Parent item")
         self.assertEqual([child["text"] for child in parent_item["children"]], ["Nested item"])
-        self.assertTrue(parent_item["children"][0]["attrs"]["ordered"])
-        done = next(node for node in lists if node["text"] == "Done task")
+        self.assertEqual(parent_item["children"][0]["type"], "numbered_item")
+        done = next(node for node in items if node["text"] == "Done task")
+        self.assertEqual(done["type"], "check_item")
         self.assertIs(done["attrs"]["checked"], True)
         self.assertEqual(done["attrs"]["onenote_tags"], ["Important"])
 
@@ -434,12 +438,12 @@ class ImportManifestTests(_Base):
         self.assertEqual(ink["attrs"]["url"], f"/media/{SVG_NAME}")
         self.assertEqual(ink["attrs"]["alt"], "handwritten words")
         math = next(node for node in nodes if node["type"] == "math")
-        self.assertEqual(math["content"]["latex"], "a=b")
+        self.assertEqual(math["payload"]["latex"], "a=b")
         code = next(node for node in nodes if node["type"] == "code")
         self.assertEqual(code["text"], "print('hi')\nprint('there')")
         self.assertTrue(any(node["type"] == "quote" for node in nodes))
         embed = next(node for node in nodes if "youtube" in node["text"])
-        self.assertEqual(embed["content"]["blocknote"][0]["type"], "link")
+        self.assertEqual(embed["content"][0]["type"], "link")
 
         hits = search_blocks(self.db, "Quarterly revenue")
         self.assertEqual([hit["document_id"] for hit in hits], [self.doc_id(P1)])
@@ -459,11 +463,11 @@ class ImportManifestTests(_Base):
         self.assertIn(UNKNOWN, unresolved["target"])
         tree = self.tree(P1)
         paragraph = _find(tree["children"], lambda node: node["text"].startswith("Bold italic"))
-        hrefs = {run["content"][0]["text"]: run["href"]
-                 for run in paragraph["content"]["blocknote"] if run["type"] == "link"}
-        self.assertEqual(hrefs["Standup"], f"[[{self.doc_id(P3)}|Standup notes]]")
-        self.assertEqual(hrefs["child"], f"[[{self.doc_id(P2)}|Child]]")
-        self.assertNotIn("elsewhere", hrefs)  # unresolved: kept as text
+        # A note link is a docLink node: it reads as the target's current title.
+        links = [node for node in paragraph["content"] if node["type"] == "docLink"]
+        self.assertEqual([node["id"] for node in links], [self.doc_id(P3), self.doc_id(P2)])
+        self.assertIn("Standup notes", paragraph["text"])
+        self.assertNotIn("elsewhere", json.dumps([n for n in paragraph["content"] if n["type"] != "text"]))
         self.assertIn("elsewhere", paragraph["text"])
         self.assertIn(UNKNOWN, paragraph["provenance"]["extra"]["unresolved_links"][0])
         backlinks = block_store.document_backlinks(self.db, self.doc_id(P3))
@@ -487,12 +491,12 @@ class ImportManifestTests(_Base):
         heading = plan["children"][-1]
         self.assertEqual(heading["text"], "Subpages")
         [item] = heading["children"]
-        self.assertEqual(item["content"]["blocknote"][0]["href"], f"[[{self.doc_id(P2)}|Child]]")
+        self.assertEqual(item["content"][0], {"type": "docLink", "id": self.doc_id(P2)})
         child = self.tree(P2)
         self.assertEqual(child["provenance"]["extra"]["onenote"]["parent_page_id"], P1)
         self.assertEqual(child["provenance"]["extra"]["onenote"]["level"], 1)
         [grand] = child["children"][-1]["children"]
-        self.assertEqual(grand["content"]["blocknote"][0]["href"], f"[[{self.doc_id(P2B)}|Grandchild]]")
+        self.assertEqual(grand["content"][0], {"type": "docLink", "id": self.doc_id(P2B)})
         self.assertFalse(any(node["text"] == "Subpages" for node in self.tree(P2B)["children"]))
 
     def test_trashed_page_is_skipped(self) -> None:
@@ -736,15 +740,16 @@ class LivingDocumentTests(_Base):
         tree = self.tree(P1)
         block = self.block(P1, "Editable paragraph")
         apply_transaction(self.db, tree["id"], [BlockOperation(
-            operation="update", block_id=block["id"], text="Edited in Fortress",
-            content={"markdown": "Edited in Fortress"})], tree["revision"])
+            operation="update", block_id=block["id"],
+            content=[{"type": "text", "text": "Edited in Fortress"}])], tree["revision"])
         changed = copy.deepcopy(self.manifest)
         _pages(changed)[P1]["items"][0]["blocks"][5]["text"] = "Edited in OneNote"
         result = self.run_import(changed)["notebooks"][0]
         self.assertEqual(result["conflicts"], 1)
         kept = self.block(P1, "Edited in Fortress")
         self.assertEqual(kept["id"], block["id"])
-        self.assertEqual(kept["provenance"]["conflict"]["source_markdown"], "Edited in OneNote")
+        [conflict] = sources.document_info(self.db, tree["id"])["conflicts"]
+        self.assertEqual((conflict["block_id"], conflict["source_text"]), (block["id"], "Edited in OneNote"))
 
     def test_notes_imported_with_hash_ids_migrate_in_place(self) -> None:
         self.run_import(build_manifest())  # an old, format-1 style manifest
@@ -754,7 +759,9 @@ class LivingDocumentTests(_Base):
         self.assertEqual(result["pages_created"], 0)
         tree = self.tree(P1)
         after = {node["text"]: node["id"] for node in _walk(tree["children"]) if node["text"]}
-        self.assertEqual(after, before)
+        # Same blocks; only the paragraph whose page link became a block
+        # reference reads differently (it shows the referenced block's text).
+        self.assertEqual(sorted(after.values()), sorted(before.values()))
         self.assertEqual([node["id"] for node in tree["children"] if node["type"] == "columns"], columns_before)
         migrated = self.block(P1, "Editable paragraph")
         self.assertEqual(migrated["provenance"]["external_id"], f"{P1}/obj:{oid(0x1B)}")
@@ -770,9 +777,7 @@ class LivingDocumentTests(_Base):
         self.assertEqual(result["links"]["block_links_as_page_links"], 0)
         target = self.block(P2, "Child body")
         paragraph = _find(self.tree(P1)["children"], lambda node: node["text"].startswith("Bold italic"))
-        hrefs = {run["content"][0]["text"]: run["href"]
-                 for run in paragraph["content"]["blocknote"] if run["type"] == "link"}
-        self.assertEqual(hrefs["child"], f"(( {target['id']} ))")
+        self.assertIn({"type": "blockRef", "id": target["id"]}, paragraph["content"])
         with block_store.connection_scope(self.db) as connection:
             refs = connection.execute(
                 "SELECT source_block_id FROM block_refs WHERE target_block_id = ?", (target["id"],)
@@ -786,7 +791,8 @@ class LivingDocumentTests(_Base):
         self.run_import(changed)
         self.assertEqual(self.block(P2, "Child body, revised")["id"], target["id"])
         paragraph = _find(self.tree(P1)["children"], lambda node: node["text"].startswith("Bold italic"))
-        self.assertIn(f"(( {target['id']} ))", json.dumps(paragraph["content"]))
+        self.assertIn({"type": "blockRef", "id": target["id"]}, paragraph["content"])
+        self.assertIn("Child body, revised", paragraph["text"])
 
     def test_paragraph_link_to_a_table_cell_points_at_the_table(self) -> None:
         manifest = copy.deepcopy(self.manifest)
@@ -800,8 +806,8 @@ class LivingDocumentTests(_Base):
                                        "page_title": "Plan"}}]
         self.run_import(manifest)
         table_block = _find(self.tree(P1)["children"], lambda node: node["type"] == "table")
-        body = self.block(P2, "Child body")
-        self.assertIn(f"(( {table_block['id']} ))", json.dumps(body["content"]))
+        body = _find(self.tree(P2)["children"], lambda node: node["type"] == "paragraph")
+        self.assertIn({"type": "blockRef", "id": table_block["id"]}, body["content"])
 
     def test_pages_and_sections_removed_in_onenote_are_marked_not_deleted(self) -> None:
         self.run_import()
@@ -819,10 +825,9 @@ class LivingDocumentTests(_Base):
         self.assertEqual([item["name"] for item in result["sections_removed_in_source"]], ["Meetings"])
         self.assertEqual(result["sections_removed_in_source"][0]["path"], "Work › Meetings")
         for guid in (P2B, P3):
-            provenance = self.tree(guid)["provenance"]  # still there
-            self.assertTrue(provenance["source_removed"])
-            self.assertTrue(provenance["source_removed_at"])
-        self.assertNotIn("source_removed", self.tree(P1)["provenance"])
+            self.assertIsNotNone(self.tree(guid))  # still there
+            self.assertTrue(sources.document_info(self.db, ids[guid])["sync"]["source_removed_at"])
+        self.assertIsNone(sources.document_info(self.db, ids[P1])["sync"]["source_removed_at"])
         # Still listed next time, with the first date.
         again = self.run_import(changed)["notebooks"][0]
         self.assertEqual({item["document_id"] for item in again["pages_removed_in_source"]}, {ids[P2B], ids[P3]})
@@ -831,8 +836,7 @@ class LivingDocumentTests(_Base):
         restored = self.run_import(self.manifest)["notebooks"][0]
         self.assertEqual(restored["pages_removed_in_source"], [])
         self.assertEqual(restored["sections_removed_in_source"], [])
-        self.assertNotIn("source_removed", self.tree(P3)["provenance"])
-        self.assertNotIn("source_removed_at", self.tree(P3)["provenance"])
+        self.assertIsNone(sources.document_info(self.db, ids[P3])["sync"]["source_removed_at"])
 
     def test_unreadable_sections_and_other_notebooks_are_not_removed(self) -> None:
         self.run_import()
@@ -1128,7 +1132,7 @@ class CompareFindingsTests(_Base):
         # showing the provenance comments.
         self.assertNotIn("<pre>", html)
         self.assertNotIn("&lt;!-- fortress:block", html)
-        self.assertIn("<p>Indented twice</p>", html)
+        self.assertRegex(html, r"<p>Indented twice\b")
         # Children of "1. " items need 3 spaces, or they fall out of the item.
         self.assertRegex(html, r"(?s)<ol>\s*<li>.*Outer.*<ol>\s*<li>.*Inner.*<ol>\s*<li>.*Innermost")
 
@@ -1162,7 +1166,7 @@ class CompareFindingsTests(_Base):
              "printout_page_number": None, "is_background": False, "original_name": "x\x01.png", "original_asset": None},
             {"type": "embed", "indent": 0, "url": "file:///C:/secret.mp4", "thumbnail_asset": None},
         ])
-        links, first = tree["children"][0], tree["children"][0]["content"]["blocknote"]
+        links, first = tree["children"][0], tree["children"][0]["content"]
         hrefs = [run["href"] for run in first if run["type"] == "link"]
         self.assertEqual(hrefs, ["https://example.com/ok"])
         self.assertEqual(links["text"], text)  # the words stay
@@ -1188,8 +1192,8 @@ class CompareFindingsTests(_Base):
             "type": "paragraph", "indent": 0, "text": "1,637,892", "tags": [highlight],
             "marks": [{"start": 6, "end": 9, "type": "highlight", "color": "#FF0000"}],
         }])
-        runs = tree["children"][0]["content"]["blocknote"]
-        self.assertEqual([(r["text"], r["styles"].get("backgroundColor"), r["styles"].get("textColor")) for r in runs],
+        runs = tree["children"][0]["content"]
+        self.assertEqual([(r["text"], r["marks"].get("highlight"), r["marks"].get("color")) for r in runs],
                          [("1,637,", "#FFFF00", "#C00000"), ("892", "#FF0000", "#C00000")])
 
     def test_deep_nesting_in_cells_is_flattened_not_refused(self) -> None:
@@ -1328,10 +1332,10 @@ class CompareFindingsTests(_Base):
              "list": {"ordered": True, "style": "lower_alpha", "marker": "%)", "restart": None}},
         ])
         table, todo = tree["children"]
-        [first] = table["content"]["blocknote"]["rows"][0]["cells"][0]["blocks"]
+        [first] = table["children"][0]["children"][0]["children"]
         self.assertEqual(first["attrs"]["onenote_tags"], ["Important"])
-        self.assertEqual((todo["attrs"]["checked"], todo["attrs"]["ordered"], todo["attrs"]["list_style"]),
-                         (True, True, "lower_alpha"))
+        self.assertEqual((todo["type"], todo["attrs"]["checked"], todo["attrs"]["list_format"],
+                          todo["attrs"]["list_style"]), ("check_item", True, "%)", "lower_alpha"))
 
     def test_monospace_runs_become_inline_code(self) -> None:
         tree = self.import_blocks([{
@@ -1339,9 +1343,9 @@ class CompareFindingsTests(_Base):
             "marks": [{"start": 4, "end": 10, "type": "font", "family": "Consolas"},
                       {"start": 4, "end": 10, "type": "color", "color": "#C00000"}],
         }])
-        runs = tree["children"][0]["content"]["blocknote"]
+        runs = tree["children"][0]["content"]
         # The colour is kept too (it used to be stripped from code runs).
-        self.assertIn({"type": "text", "text": "ls -la", "styles": {"code": True, "textColor": "#C00000"}}, runs)
+        self.assertIn({"type": "text", "text": "ls -la", "marks": {"code": True, "color": "#C00000"}}, runs)
 
     def test_inline_equations_keep_their_latex(self) -> None:
         text = "Pythagoras: 𝑎2+𝑏2=𝑐2 holds"
@@ -1356,12 +1360,12 @@ class CompareFindingsTests(_Base):
              "marks": [{"start": 0, "end": 6, "type": "math", "latex": "\\[\\int \\frac{1}{x}dx\\]"}]},
         ])
         paragraph, item = tree["children"]
-        self.assertEqual(paragraph["content"]["blocknote"], [
-            {"type": "text", "text": "Pythagoras: ", "styles": {}},
-            {"type": "text", "text": "$a^{2}+b^{2}=c^{2}$", "styles": {"code": True}},
-            {"type": "text", "text": " holds", "styles": {}},
+        self.assertEqual(paragraph["content"], [
+            {"type": "text", "text": "Pythagoras: "},
+            {"type": "text", "text": "$a^{2}+b^{2}=c^{2}$", "marks": {"code": True}},
+            {"type": "text", "text": " holds"},
         ])
-        self.assertEqual(item["type"], "list")
+        self.assertEqual(item["type"], "bullet_item")
         self.assertEqual(item["text"], "$\\int \\frac{1}{x}dx$")
         report = self.run_import(self.manifest)
         self.assertEqual([page for nb in report["notebooks"] for page in nb["low_coverage_pages"]], [])
@@ -1374,9 +1378,10 @@ class CompareFindingsTests(_Base):
              "borders_visible": True, "rows": [{"cells": [cell]}]},
         ])
         paragraph, table = tree["children"]
-        self.assertEqual(paragraph["attrs"].get("textAlignment"), "center")
-        cell_props = table["content"]["blocknote"]["rows"][0]["cells"][0]["props"]
-        self.assertEqual(cell_props.get("textAlignment"), "right")
+        self.assertEqual(paragraph["attrs"].get("text_alignment"), "center")
+        cell = table["children"][0]["children"][0]
+        self.assertEqual(cell["attrs"].get("align"), "right")
+        self.assertEqual(cell["children"][0]["text"], "Total")
 
     def test_video_embed_keeps_its_poster_image(self) -> None:
         tree = self.import_blocks([{

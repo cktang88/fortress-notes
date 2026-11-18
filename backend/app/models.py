@@ -5,10 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 NoteStatus = Literal["rough", "polished"]
-BlockOperationKind = Literal[
-    "insert", "update", "move", "delete", "set_attrs", "set_user_attrs",
-    "duplicate", "split", "merge"
-]
+BlockOperationKind = Literal["insert", "update", "move", "delete"]
 
 
 class NoteSummary(BaseModel):
@@ -41,29 +38,35 @@ class NoteUpdate(BaseModel):
 
 
 class BlockOperation(BaseModel):
+    """One operation of a block transaction (docs/block-model.md §4).
+
+    Unknown fields (``text``, ``expected_updated_at``, ...) are ignored.
+    """
+
     operation: BlockOperationKind
     block_id: str | None = None
+    # Placement (insert, move): after or before a sibling, else last child of parent_id.
     parent_id: str | None = None
+    after_id: str | None = None
+    before_id: str | None = None
+    # Deprecated (the Mac app's current requests): index among the parent's children.
     position: int | None = Field(default=None, ge=0)
     type: str | None = None
+    # Insert: the block's attrs. Update: a patch (null deletes a key).
     attrs: dict[str, Any] | None = None
+    # Update: a patch of the person's own attributes (null deletes a key).
     user_attrs: dict[str, Any] | None = None
-    content: dict[str, Any] | None = None
-    text: str | None = None
-    split_at: int | None = Field(default=None, ge=0)
-    # insert/update: where the block's content came from (pasted, web, ai, ...).
-    # Omitted on insert means typed here ("manual"); omitted on update keeps it.
+    # Inline nodes (text types). The Mac app's current {"blocknote": runs} is read too.
+    content: list[dict[str, Any]] | dict[str, Any] | None = None
+    # Structured data (math, html).
+    payload: dict[str, Any] | None = None
+    # Insert: where the content came from (pasted, web, ai, ...; default manual).
+    # Update: merged into the block's provenance.
     provenance: dict[str, Any] | None = None
-    # For split, the offset in the block text in UTF-16 code units (JavaScript string
-    # indices, as the browser counts; an emoji is 2). For duplicate/merge,
-    # position keeps its existing sibling-position meaning.
-    expected_updated_at: str | None = None
 
     @model_validator(mode="after")
     def validate_insert_block_id(self) -> "BlockOperation":
-        # BlockNote currently supplies UUIDs. The server may omit the ID and
-        # generate a ULID; accept both formats so validation doesn't rewrite
-        # client IDs or constrain IDs already stored for other operations.
+        # Clients may supply ULIDs or UUIDs; the server generates a ULID when omitted.
         if self.operation == "insert" and self.block_id is not None:
             if (
                 len(self.block_id) == 26
