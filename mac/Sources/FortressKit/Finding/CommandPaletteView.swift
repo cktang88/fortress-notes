@@ -53,8 +53,8 @@ struct CommandPaletteView: View {
 
     private var sections: [PaletteSection] {
         let notes = PaletteCatalog.notes(in: model.navigation)
-        let recent = model.navigation.recent.map {
-            PaletteNote(id: $0.id, title: $0.title, folder: notes.first { note in note.id == $0.id }?.folder)
+        let recent = model.navigation.recent.map { document in
+            PaletteNote(id: document.id, title: document.title, folder: notes.first { $0.id == document.id }?.folder)
         }
         return PaletteCatalog.sections(for: model.paletteQuery, notes: notes, recent: recent)
     }
