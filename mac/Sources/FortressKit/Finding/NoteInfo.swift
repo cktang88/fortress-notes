@@ -94,10 +94,10 @@ struct NoteInfo: Hashable, Sendable {
         self.linksOut = links
     }
 
-    /// Links written in a block's Markdown: [[Note]], ((block)) and [text](url).
+    /// Links in a block's inline content: note links, block references and web links.
     static func linkCount(in content: JSONValue) -> Int {
-        guard case .object(let object) = content, let markdown = object["markdown"]?.stringValue else { return 0 }
-        return ["[[", "((", "]("].reduce(0) { $0 + markdown.components(separatedBy: $1).count - 1 }
+        guard case .array(let nodes) = content else { return 0 }
+        return nodes.filter { ["docLink", "blockRef", "link"].contains($0["type"]?.stringValue ?? "") }.count
     }
 
     /// "12 from OneNote · 3 written here", when the note mixes sources.

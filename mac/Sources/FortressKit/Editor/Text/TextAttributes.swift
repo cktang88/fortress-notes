@@ -25,11 +25,14 @@ final class BlockInfo: NSObject, @unchecked Sendable {
     let origin: OriginBox?
     /// Provenance to record when the block is first saved (pasted web content).
     let newProvenance: JSONValue?
+    /// The quote (or callout) a quote line belongs to.
+    let container: QuoteContainer?
 
     init(id: String = EditorBlock.newId(), kind: BlockKind = .paragraph, depth: Int = 0,
          checked: Bool = false, language: String? = nil, origin: OriginBox? = nil,
-         newProvenance: JSONValue? = nil) {
+         newProvenance: JSONValue? = nil, container: QuoteContainer? = nil) {
         self.newProvenance = newProvenance
+        self.container = container
         self.id = id
         self.kind = kind
         self.depth = depth
@@ -41,30 +44,37 @@ final class BlockInfo: NSObject, @unchecked Sendable {
     convenience init(_ block: EditorBlock) {
         self.init(id: block.id, kind: block.kind, depth: block.depth, checked: block.checked,
                   language: block.language, origin: block.origin.map(OriginBox.init),
-                  newProvenance: block.newProvenance)
+                  newProvenance: block.newProvenance, container: block.container)
     }
 
     func with(id: String? = nil, kind: BlockKind? = nil, depth: Int? = nil, checked: Bool? = nil) -> BlockInfo {
         BlockInfo(id: id ?? self.id, kind: kind ?? self.kind, depth: depth ?? self.depth,
                   checked: checked ?? self.checked, language: language, origin: origin,
-                  newProvenance: newProvenance)
+                  newProvenance: newProvenance, container: container)
     }
 
     func with(newProvenance: JSONValue?) -> BlockInfo {
         BlockInfo(id: id, kind: kind, depth: depth, checked: checked, language: language, origin: origin,
-                  newProvenance: newProvenance)
+                  newProvenance: newProvenance, container: container)
+    }
+
+    /// The same block info under a new id (a duplicate from a paste).
+    func renamed() -> BlockInfo {
+        BlockInfo(kind: kind, depth: depth, checked: checked, language: language, origin: origin,
+                  newProvenance: newProvenance, container: container)
     }
 
     /// A fresh block following this one (Return): new id, no server history.
     func successor(kind: BlockKind) -> BlockInfo {
-        BlockInfo(kind: kind, depth: depth, checked: false, language: kind == .code ? language : nil)
+        BlockInfo(kind: kind, depth: depth, checked: false, language: kind == .code ? language : nil,
+                  container: kind == .quote && self.kind == .quote ? container : nil)
     }
 
     override func isEqual(_ object: Any?) -> Bool {
         guard let other = object as? BlockInfo else { return false }
         return id == other.id && kind == other.kind && depth == other.depth
             && checked == other.checked && language == other.language && origin === other.origin
-            && newProvenance == other.newProvenance
+            && newProvenance == other.newProvenance && container == other.container
     }
 
     override var hash: Int { id.hashValue }

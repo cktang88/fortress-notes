@@ -1,264 +1,137 @@
 import Foundation
 
-/// Converts between the backend's blocks and `EditorBlock`s.
+/// Converts between the server's canonical blocks (docs/block-model.md) and the editor's
+/// flat list of `EditorBlock`s.
 ///
-/// Blocks come in two shapes. Ones saved by an editor carry BlockNote inline content in
-/// `content.blocknote` (`[{type:"text", text, styles}, {type:"link", href, content}]`) and
-/// BlockNote types (`bulletListItem`, `checkListItem`, `codeBlock`, …). Ones imported from
-/// Markdown carry only `content.markdown` with the Markdown syntax still in it and types
-/// like `list`, `code` and `thematic_break`. Both decode to the same editor blocks; an
-/// edited block is always written back in the BlockNote shape (as the web editor does),
-/// keeping every attribute and content key the editor doesn't manage.
+/// Text blocks become paragraphs of the editor (their children deeper ones); a quote or
+/// callout becomes one quote line per paragraph child; tables and columns become one
+/// attachment each, holding their child blocks. Blocks the editor doesn't edit are shown
+/// read-only and never rewritten.
 public enum BlockCodec {
     // MARK: Decoding
 
-    /// Flattens a block tree into paragraphs. Children of editable blocks become deeper
-    /// paragraphs; an embed keeps its subtree to itself.
+    /// Flattens a block tree into paragraphs.
     public static func flatten(_ nodes: [BlockNode], depth: Int = 0, resolved: ResolvedLinks? = nil) -> [EditorBlock] {
         var output: [EditorBlock] = []
+        output.reserveCapacity(nodes.count)
         for node in nodes {
-            var block = decode(node, depth: depth)
-            if let resolved, !resolved.documents.isEmpty { block.runs = currentLinkTitles(block.runs, resolved) }
-            if block.kind == .columns { block.columns = columns(of: node, resolved: resolved) }
-            output.append(block)
-            if !block.kind.holdsOwnChildren {
+            let blocks = decodeAll(node, depth: depth)
+            output.append(contentsOf: blocks)
+            if blocks.count == 1, let block = blocks.first, !block.kind.takesNoChildren {
                 output.append(contentsOf: flatten(node.children, depth: depth + 1, resolved: resolved))
             }
         }
         return output
     }
 
+    /// A node as editor blocks: one, or a quote's lines (its children are not included
+    /// for a text block; `flatten` adds them).
+    public static func decodeAll(_ node: BlockNode, depth: Int = 0) -> [EditorBlock] {
+        if node.type == "quote" || node.type == "callout",
+           !node.children.isEmpty, node.children.allSatisfy({ $0.type == "paragraph" && $0.children.isEmpty }) {
+            let container = QuoteContainer(id: node.id, type: node.type, attrs: node.attrs)
+            return node.children.map { child in
+                EditorBlock(id: child.id, kind: .quote, depth: depth, runs: runs(fromContent: child.content),
+                            origin: BlockOrigin(child, kind: .quote), container: container)
+            }
+        }
+        return [decode(node, depth: depth)]
+    }
+
     /// The columns of a `columns` block, each with its blocks flattened like the main flow.
-    public static func columns(of node: BlockNode, resolved: ResolvedLinks? = nil) -> [EditorColumn] {
+    public static func columns(of node: BlockNode) -> [EditorColumn] {
         node.children.map { child in
-            let origin = BlockOrigin(
-                type: child.type, attrs: child.attrs, userAttrs: child.userAttrs, content: child.content,
-                text: child.text, kind: .embed, native: true, createdAt: child.createdAt, updatedAt: child.updatedAt,
-                provenance: child.provenance, revision: child.revision)
             var width: Double?
             if case .number(let value)? = child.attrs["width"] { width = value }
-            return EditorColumn(id: child.id, width: width, origin: origin,
-                                blocks: flatten(child.children, depth: 0, resolved: resolved))
+            return EditorColumn(id: child.id, width: width, origin: BlockOrigin(child, kind: .embed),
+                                blocks: flatten(child.children, depth: 0))
         }
     }
 
-    /// Note links read with the linked note's current title (living links). The stored
-    /// text changes only if the block is edited.
-    public static func currentLinkTitles(_ runs: [InlineRun], _ resolved: ResolvedLinks) -> [InlineRun] {
-        var output: [InlineRun] = []
-        var index = 0
-        while index < runs.count {
-            let run = runs[index]
-            guard run.node == nil, let href = run.marks.link, let target = InlineMarkdown.documentLinkTarget(href),
-                  let title = resolved.documents[target.id]?.title, !title.isEmpty else {
-                output.append(run)
-                index += 1
-                continue
-            }
-            var end = index
-            var text = ""
-            while end < runs.count, runs[end].node == nil, runs[end].marks.link == href {
-                text += runs[end].text
-                end += 1
-            }
-            if text == title {
-                output.append(contentsOf: runs[index..<end])
-            } else {
-                var marks = run.marks
-                marks.link = InlineMarkdown.documentLinkHref(id: target.id, title: title)
-                output.append(InlineRun(title, marks))
-            }
-            index = end
-        }
-        return output
-    }
-
+    /// One block (without its children, except for blocks that keep them).
     public static func decode(_ node: BlockNode, depth: Int = 0) -> EditorBlock {
-        let native = node.content["blocknote"]
-        let markdown = node.content["markdown"]?.stringValue ?? node.text
-        var origin = BlockOrigin(
-            type: node.type, attrs: node.attrs, userAttrs: node.userAttrs, content: node.content,
-            text: node.text, kind: .paragraph, native: native != nil,
-            createdAt: node.createdAt, updatedAt: node.updatedAt,
-            provenance: node.provenance, revision: node.revision)
-        var block = EditorBlock(id: node.id, kind: .paragraph, depth: depth)
-
-        func inline(stripping pattern: String? = nil) -> [InlineRun] {
-            if let native {
-                if case .array(let items) = native { return runs(fromBlockNote: items) }
-                if case .string(let text) = native { return InlineMarkdown.parse(text) }
-                return []
-            }
-            var source = markdown
-            if let pattern {
-                source = source.split(separator: "\n", omittingEmptySubsequences: false)
-                    .map { $0.replacingOccurrences(of: pattern, with: "", options: .regularExpression) }
-                    .joined(separator: "\n")
-            }
-            return InlineMarkdown.parse(source)
-        }
-
+        var block = EditorBlock(id: node.id, kind: .embed, depth: depth)
         switch node.type {
-        case "paragraph":
-            if native == nil, let image = InlineMarkdown.soleImage(markdown) {
-                block.kind = .image
-                origin.attrs["url"] = origin.attrs["url"] ?? .string(image.url)
-                if origin.attrs["name"] == nil, !image.alt.isEmpty { origin.attrs["name"] = .string(image.alt) }
-            } else {
-                block.runs = inline()
-            }
-        case "heading":
-            let hashes = markdown.prefix { $0 == "#" }.count
-            block.kind = .heading(node.attrs["level"]?.intValue ?? max(hashes, 1))
-            block.runs = inline(stripping: #"^\s*#{1,6}\s+"#)
-        case "list":
-            if let checked = node.attrs["checked"]?.boolValue {
-                block.kind = .check
-                block.checked = checked
-            } else {
-                block.kind = node.attrs["ordered"]?.boolValue == true ? .numbered : .bullet
-            }
-            block.runs = inline(stripping: #"^\s*(?:(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?|\s+)"#)
-        case "bulletListItem", "toggleListItem":
-            block.kind = .bullet
-            block.runs = inline()
-        case "numberedListItem":
-            block.kind = .numbered
-            block.runs = inline()
-        case "checkListItem":
+        case "paragraph": block.kind = .paragraph
+        case "heading": block.kind = .heading(node.attrs["level"]?.intValue ?? 1)
+        case "bullet_item": block.kind = .bullet
+        case "numbered_item": block.kind = .numbered
+        case "check_item":
             block.kind = .check
             block.checked = node.attrs["checked"]?.boolValue ?? false
-            block.runs = inline()
-        case "quote", "blockquote", "callout":
-            block.kind = .quote
-            block.runs = inline(stripping: #"^\s*>\s?"#)
-        case "code", "codeBlock":
+        case "code":
             block.kind = .code
             block.language = node.attrs["language"]?.stringValue
-            if let native {
-                block.runs = [InlineRun(inlineText(native))]
-            } else {
-                var lines = markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-                if let first = lines.first, first.trimmingCharacters(in: .whitespaces).hasPrefix("```")
-                    || first.trimmingCharacters(in: .whitespaces).hasPrefix("~~~") {
-                    let info = first.trimmingCharacters(in: .whitespaces).dropFirst(3)
-                        .trimmingCharacters(in: .whitespaces)
-                    if block.language == nil, !info.isEmpty { block.language = info }
-                    lines.removeFirst()
-                    if let last = lines.last, ["```", "~~~"].contains(last.trimmingCharacters(in: .whitespaces)) {
-                        lines.removeLast()
-                    }
-                }
-                block.runs = [InlineRun(lines.joined(separator: softBreak))]
-            }
-        case "thematic_break", "divider", "hr":
-            block.kind = .divider
-        case "image":
-            block.kind = .image
-        case "file", "audio", "video", "pdf":
-            block.kind = .file
+        case "divider": block.kind = .divider
+        case "image": block.kind = .image
+        case "file": block.kind = .file
+        case "math": block.kind = .math
         case "table":
-            if let table = TableContent(blockNote: native) {
+            if let table = TableContent(node: node) {
                 block.kind = .table
                 block.table = table
-            } else {
-                block.kind = .embed
             }
         case "columns":
-            // Columns hold only column blocks (spec §2a); anything else is shown as is.
-            let valid = !node.children.isEmpty && node.children.allSatisfy { $0.type == "column" }
-            block.kind = valid ? .columns : .embed
-        case "math":
-            block.kind = .math
+            // Columns hold only column blocks; anything else is shown as is.
+            if !node.children.isEmpty, node.children.allSatisfy({ $0.type == "column" }) {
+                block.kind = .columns
+                block.columns = columns(of: node)
+            }
         default:
-            block.kind = .embed
+            break
         }
-        // Rich content the editor can't edit inline (a table's rows, say) makes it an embed.
-        if block.kind.hasInlineText, let native, !isInlineArray(native), native != .null,
-           native.stringValue == nil {
-            block.kind = .embed
-            block.runs = []
+        if block.kind.hasInlineText {
+            block.runs = runs(fromContent: node.content)
+            if block.kind == .code { block.runs = block.runs.map { InlineRun($0.node == nil ? $0.text : "") }.filter { !$0.text.isEmpty } }
         }
-        if block.kind.holdsOwnChildren { origin.children = node.children }
-        block.runs = normalized(block.runs.map { run in
-            var run = run
-            if run.node == nil { run.text = Self.softBreaks(run.text) }
-            return run
-        })
-        origin.kind = block.kind
-        block.origin = origin
+        block.origin = BlockOrigin(node, kind: block.kind, keepingChildren: block.kind == .embed)
         return block
     }
 
-    private static func isInlineArray(_ value: JSONValue) -> Bool {
-        if case .array = value { return true }
-        return false
-    }
-
-    static func runs(fromAny value: JSONValue) -> [InlineRun] {
-        switch value {
-        case .array(let items): runs(fromBlockNote: items)
-        case .string(let text): [InlineRun(text)]
-        default: []
-        }
-    }
-
-    /// BlockNote inline content to runs. Note and block links written as plain text in
-    /// older notes (`[[id|Title]]`, `(( id "label" ))`) become real links.
-    public static func runs(fromBlockNote items: [JSONValue], link: String? = nil) -> [InlineRun] {
+    /// Inline content (docs/block-model.md §3) to runs. `docLink`, `blockRef` and any
+    /// node this editor doesn't know become one atomic run each, kept verbatim.
+    public static func runs(fromContent content: JSONValue) -> [InlineRun] {
+        guard case .array(let items) = content else { return [] }
         var output: [InlineRun] = []
+        output.reserveCapacity(items.count)
         for item in items {
-            switch item {
-            case .string(let text):
-                var marks = InlineMarks()
-                marks.link = link
-                output.append(contentsOf: link == nil ? InlineMarkdown.linkifyReferences(text, marks) : [InlineRun(text, marks)])
-            case .object(let object):
-                let type = object["type"]?.stringValue
-                if type == "text", let text = object["text"]?.stringValue {
-                    var marks = self.marks(from: object["styles"])
-                    marks.link = link
-                    if link == nil, !marks.code {
-                        output.append(contentsOf: InlineMarkdown.linkifyReferences(text, marks))
-                    } else {
-                        output.append(InlineRun(text, marks))
-                    }
-                } else if type == "link", let href = object["href"]?.stringValue, link == nil,
-                          !InlineMarkdown.isBlockReference(href) {
-                    let inner: [JSONValue]
-                    switch object["content"] {
-                    case .array(let items): inner = items
-                    case .string(let text): inner = [.string(text)]
-                    default: inner = []
-                    }
-                    output.append(contentsOf: runs(fromBlockNote: inner, link: href))
-                } else {
-                    // Block references (living: shown with the block's current text),
-                    // mentions and anything newer stay one atomic, untouched node.
+            switch item["type"]?.stringValue {
+            case "text":
+                guard let text = item["text"]?.stringValue else { continue }
+                output.append(InlineRun(softBreaks(text), marks(from: item["marks"])))
+            case "link":
+                guard let href = item["href"]?.stringValue, case .array(let inner)? = item["content"] else {
                     output.append(.atomic(item))
+                    continue
+                }
+                for node in inner {
+                    guard let text = node["text"]?.stringValue else { continue }
+                    var marks = marks(from: node["marks"])
+                    marks.link = href
+                    output.append(InlineRun(softBreaks(text), marks))
                 }
             default:
-                continue
+                output.append(.atomic(item))
             }
         }
-        return output
+        return normalized(output)
     }
 
-    static func marks(from styles: JSONValue?) -> InlineMarks {
+    static func marks(from value: JSONValue?) -> InlineMarks {
         var marks = InlineMarks()
-        guard case .object(let styles)? = styles else { return marks }
-        for (key, value) in styles {
+        guard case .object(let object)? = value else { return marks }
+        for (key, value) in object {
             switch (key, value) {
             case ("bold", .bool(let on)): marks.bold = on
             case ("italic", .bool(let on)): marks.italic = on
             case ("underline", .bool(let on)): marks.underline = on
-            case ("strike", .bool(let on)), ("strikethrough", .bool(let on)): marks.strike = on
+            case ("strike", .bool(let on)): marks.strike = on
             case ("code", .bool(let on)): marks.code = on
-            case ("superscript", .bool(let on)): marks.sup = on
-            case ("subscript", .bool(let on)): marks.sub = on
-            case ("textColor", .string(let color)): marks.textColor = color == "default" ? nil : color
-            case ("backgroundColor", .string(let color)): marks.highlight = color == "default" ? nil : color
-            default: marks.extraStyles[key] = value
+            case ("sup", .bool(let on)): marks.sup = on
+            case ("sub", .bool(let on)): marks.sub = on
+            case ("color", .string(let color)): marks.textColor = color
+            case ("highlight", .string(let color)): marks.highlight = color
+            default: break
             }
         }
         return marks
@@ -266,70 +139,52 @@ public enum BlockCodec {
 
     // MARK: Encoding
 
-    /// The fields to write for a block, keeping what the editor doesn't manage.
+    /// The fields to write for a block. Blocks the editor doesn't edit write back what
+    /// they read.
     public static func encode(_ block: EditorBlock) -> BlockFields {
         let origin = block.origin
-        if block.kind == .table, let table = block.table {
-            if let origin, origin.kind == .table, TableContent(blockNote: origin.content["blocknote"]) == table {
-                return BlockFields(type: origin.type, attrs: origin.attrs, content: origin.content, text: origin.text)
+        switch block.kind {
+        case .table:
+            return BlockFields(type: "table", attrs: block.table?.attrs ?? origin?.attrs ?? [:])
+        case .columns:
+            return BlockFields(type: "columns", attrs: origin?.attrs ?? [:])
+        case .divider, .image, .file, .math, .embed:
+            if let origin, origin.kind == block.kind || block.kind == .embed {
+                return BlockFields(type: origin.type, attrs: origin.attrs, content: origin.content, payload: origin.payload)
             }
-            // The server derives the Markdown and plain text of tables; send its shape.
-            return BlockFields(type: "table", attrs: origin?.attrs ?? [:],
-                               content: .object(["blocknote": table.blockNote]), text: table.plainText)
-        }
-        if !block.kind.hasInlineText {
-            if let origin, origin.kind == block.kind {
-                return BlockFields(type: origin.type, attrs: origin.attrs, content: origin.content, text: origin.text)
-            }
-            let attrs = origin?.attrs ?? [:]
             switch block.kind {
-            case .divider:
-                return BlockFields(type: "divider", attrs: attrs, content: .object(["markdown": .string("---")]), text: "")
-            case .image:
-                let url = attrs["url"]?.stringValue ?? ""
-                let name = attrs["name"]?.stringValue ?? ""
-                return BlockFields(type: "image", attrs: attrs, content: .object(["markdown": .string("![\(name)](\(url))")]), text: name)
-            case .file:
-                let url = attrs["url"]?.stringValue ?? ""
-                let name = attrs["name"]?.stringValue ?? "file"
-                return BlockFields(type: "file", attrs: attrs, content: .object(["markdown": .string("[\(name)](\(url))")]), text: name)
-            default:
-                return BlockFields(
-                    type: origin?.type ?? "paragraph", attrs: attrs,
-                    content: origin?.content ?? .object([:]), text: origin?.text ?? "")
+            case .math: return BlockFields(type: "math", payload: origin?.payload ?? .object(["latex": .string("")]))
+            case .embed: return BlockFields(type: "paragraph", content: .array([]))
+            default: return BlockFields(type: block.kind.canonicalType, attrs: origin?.attrs ?? [:])
             }
+        default:
+            break
         }
-
-        let keepType = origin.map { $0.kind == block.kind && $0.native } ?? false
-        let type = keepType ? origin!.type : block.kind.canonicalType
+        // A text block: declared attributes of another text type are dropped when the
+        // kind changes (the server does the same); extension attributes stay.
         var attrs = origin?.attrs ?? [:]
-        if !keepType {
-            attrs["level"] = nil
-            attrs["checked"] = nil
-            attrs["ordered"] = nil
-            if block.kind != .code { attrs["language"] = nil }
-        }
+        attrs["level"] = nil
+        attrs["checked"] = nil
+        attrs["language"] = nil
         if let level = block.kind.headingLevel { attrs["level"] = .number(Double(level)) }
         if block.kind == .check { attrs["checked"] = .bool(block.checked) }
-        if block.kind == .code {
-            if let language = block.language, !language.isEmpty {
-                attrs["language"] = .string(language)
-            }
-        }
-        var content: [String: JSONValue] = [:]
-        if case .object(let existing)? = origin?.content { content = existing }
-        content["blocknote"] = blockNote(block.runs, code: block.kind == .code)
-        content["markdown"] = .string(markdown(block))
-        return BlockFields(type: type, attrs: attrs, content: .object(content), text: plainText(block.runs))
+        if block.kind == .code, let language = block.language, !language.isEmpty { attrs["language"] = .string(language) }
+        return BlockFields(type: block.kind.canonicalType, attrs: attrs,
+                           content: inlineContent(block.runs, plain: block.kind == .code))
     }
 
-    /// Runs as BlockNote inline content.
-    public static func blockNote(_ runs: [InlineRun], code: Bool = false) -> JSONValue {
+    /// Runs as canonical inline content: text nodes with marks, links around the text
+    /// they cover, atomic nodes as they are. `plain`: unmarked text only (code blocks).
+    public static func inlineContent(_ runs: [InlineRun], plain: Bool = false) -> JSONValue {
+        if plain {
+            let text = hardBreaks(runs.filter { $0.node == nil }.map(\.text).joined())
+            return .array(text.isEmpty ? [] : [.object(["type": .string("text"), "text": .string(text)])])
+        }
         var output: [JSONValue] = []
         var linkHref: String?
         var linkItems: [JSONValue] = []
         func closeLink() {
-            if let href = linkHref {
+            if let href = linkHref, !linkItems.isEmpty {
                 output.append(.object(["type": .string("link"), "href": .string(href), "content": .array(linkItems)]))
             }
             linkHref = nil
@@ -341,35 +196,32 @@ public enum BlockCodec {
                 output.append(node)
                 continue
             }
-            let text = Self.hardBreaks(run.text)
-            let item: JSONValue = .object([
-                "type": .string("text"), "text": .string(text),
-                "styles": code ? .object([:]) : styles(run.marks),
-            ])
-            if let href = run.marks.link, !code {
+            var item: [String: JSONValue] = ["type": .string("text"), "text": .string(hardBreaks(run.text))]
+            let marks = Self.marksObject(run.marks)
+            if !marks.isEmpty { item["marks"] = .object(marks) }
+            if let href = run.marks.link, !href.isEmpty {
                 if linkHref != href { closeLink(); linkHref = href }
-                linkItems.append(item)
+                linkItems.append(.object(item))
             } else {
                 closeLink()
-                output.append(item)
+                output.append(.object(item))
             }
         }
         closeLink()
         return .array(output)
     }
 
-    static func styles(_ marks: InlineMarks) -> JSONValue {
-        var styles = marks.extraStyles
-        if marks.bold { styles["bold"] = .bool(true) }
-        if marks.italic { styles["italic"] = .bool(true) }
-        if marks.underline { styles["underline"] = .bool(true) }
-        if marks.strike { styles["strike"] = .bool(true) }
-        if marks.code { styles["code"] = .bool(true) }
-        if marks.sup { styles["superscript"] = .bool(true) }
-        if marks.sub { styles["subscript"] = .bool(true) }
-        if let color = marks.textColor { styles["textColor"] = .string(color) }
-        if let color = marks.highlight { styles["backgroundColor"] = .string(color) }
-        return .object(styles)
+    static func marksObject(_ marks: InlineMarks) -> [String: JSONValue] {
+        var object: [String: JSONValue] = [:]
+        if marks.bold { object["bold"] = .bool(true) }
+        if marks.italic { object["italic"] = .bool(true) }
+        if marks.underline { object["underline"] = .bool(true) }
+        if marks.strike { object["strike"] = .bool(true) }
+        if marks.code { object["code"] = .bool(true) }
+        if marks.sup { object["sup"] = .bool(true) } else if marks.sub { object["sub"] = .bool(true) }
+        if let color = marks.textColor, !color.isEmpty { object["color"] = .string(color) }
+        if let color = marks.highlight, !color.isEmpty { object["highlight"] = .string(color) }
+        return object
     }
 
     /// "\n" → U+2028, without a Foundation round trip when there is none (most runs:
@@ -396,43 +248,30 @@ public enum BlockCodec {
         return output
     }
 
-    /// What search, titles and snippets read: the text with links as their labels.
-    public static func plainText(_ runs: [InlineRun]) -> String {
+    /// The visible text of the runs (note links and block references as their labels
+    /// when `resolved` knows them).
+    public static func plainText(_ runs: [InlineRun], resolved: ResolvedLinks? = nil) -> String {
         runs.map { run in
-            if let node = run.node { return inlineText(node) }
+            if let node = run.node { return inlineText(node, resolved: resolved) }
             return Self.hardBreaks(run.text)
         }.joined()
     }
 
-    /// The visible text of any inline node.
-    public static func inlineText(_ value: JSONValue) -> String {
+    /// The visible text of an inline node.
+    public static func inlineText(_ value: JSONValue, resolved: ResolvedLinks? = nil) -> String {
         switch value {
         case .string(let text): return text
-        case .array(let items): return items.map(inlineText).joined()
+        case .array(let items): return items.map { inlineText($0, resolved: resolved) }.joined()
         case .object(let object):
+            switch object["type"]?.stringValue {
+            case "docLink": return object["id"]?.stringValue.flatMap { resolved?.documents[$0]?.title } ?? ""
+            case "blockRef": return object["id"]?.stringValue.flatMap { resolved?.blocks[$0]?.text } ?? ""
+            default: break
+            }
             if let text = object["text"]?.stringValue { return text }
-            if let content = object["content"] { return inlineText(content) }
+            if let content = object["content"] { return inlineText(content, resolved: resolved) }
             return ""
         default: return ""
-        }
-    }
-
-    /// Portable Markdown for one block (its children are rendered by the backend).
-    public static func markdown(_ block: EditorBlock) -> String {
-        let body = InlineMarkdown.render(block.runs)
-        switch block.kind {
-        case .paragraph: return body
-        case .heading1: return "# " + body
-        case .heading2: return "## " + body
-        case .heading3: return "### " + body
-        case .bullet: return "- " + body.replacingOccurrences(of: "\n", with: "\n  ")
-        case .numbered: return "1. " + body.replacingOccurrences(of: "\n", with: "\n   ")
-        case .check: return (block.checked ? "- [x] " : "- [ ] ") + body.replacingOccurrences(of: "\n", with: "\n  ")
-        case .quote: return "> " + body.replacingOccurrences(of: "\n", with: "\n> ")
-        case .code:
-            return "```\(block.language ?? "")\n" + plainText(block.runs) + "\n```"
-        case .divider: return "---"
-        case .image, .file, .embed, .table, .columns, .math: return block.origin?.content["markdown"]?.stringValue ?? ""
         }
     }
 

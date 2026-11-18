@@ -15,6 +15,8 @@ final class AttachmentContext {
     @ObservationIgnored var imageDidLoad: ((URL) -> Void)?
     /// Current text of referenced blocks (block references are living).
     var referenceText: [String: String] = [:]
+    /// Current titles of linked notes (note links show them; labels are never stored).
+    var documentTitles: [String: String] = [:]
     @ObservationIgnored private var resolving: Set<String> = []
     @ObservationIgnored var resolveReference: ((String) async -> String?)?
     @ObservationIgnored var relayout: (() -> Void)?
@@ -39,6 +41,7 @@ final class AttachmentContext {
     func adoptResolvedLinks(_ links: ResolvedLinks?) {
         guard let links else { return }
         for (id, block) in links.blocks { referenceText[id] = block.text }
+        for (id, document) in links.documents { documentTitles[id] = document.title }
     }
 
     func url(for string: String) -> URL? {
@@ -115,8 +118,8 @@ final class BlockAttachment: NSTextAttachment {
         allowsTextAttachmentView = true
         switch info.kind {
         case .table:
-            let table = block?.table ?? TableContent(blockNote: info.origin?.origin.content["blocknote"]) ?? .blank()
-            live = TableBlockController(table: table, attrs: info.origin?.origin.attrs ?? [:], context: context, attachment: self)
+            let table = block?.table ?? .blank()
+            live = TableBlockController(table: table, attrs: table.attrs, context: context, attachment: self)
         case .columns:
             live = ColumnsBlockController(columns: block?.columns ?? [], context: context, attachment: self)
         default:
@@ -185,8 +188,7 @@ enum ImageLayout {
             return nil
         }()
         guard let natural, natural.width > 0 else { return CGSize(width: width, height: 220 * theme.scale) }
-        let preview = number("previewWidth") ?? natural.width
-        var shown = min(width, preview, natural.width)
+        var shown = min(width, natural.width)
         var height = shown * natural.height / natural.width
         if height > 480 {
             height = 480
@@ -262,7 +264,7 @@ struct BlockEmbedView: View {
                 FileChip(name: fileName, url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
                          size: fileSize, context: context)
             case .math:
-                MathBlockView(latex: origin?.content["latex"]?.stringValue ?? origin?.text ?? "")
+                MathBlockView(latex: origin?.payload?["latex"]?.stringValue ?? origin?.text ?? "")
             default:
                 EmbedSummary(origin: origin)
             }
@@ -481,18 +483,19 @@ struct EmbedSummary: View {
 
     private var symbol: String {
         switch type {
-        case "table", "raw": "tablecells"
-        case "columns", "column", "columnList": "rectangle.split.2x1"
-        case "mathPlaceholder", "math": "function"
+        case "table": "tablecells"
+        case "html": "chevron.left.forwardslash.chevron.right"
+        case "quote", "callout": "text.quote"
+        case "columns", "column": "rectangle.split.2x1"
+        case "math": "function"
         default: "square.dashed"
         }
     }
 
     private var label: String {
         switch type {
-        case "raw": "HTML"
-        case "columns", "columnList": "Columns"
-        case "mathPlaceholder": "Math"
+        case "html": "HTML"
+        case "columns": "Columns"
         default: type.prefix(1).uppercased() + type.dropFirst()
         }
     }
@@ -510,17 +513,12 @@ struct EmbedSummary: View {
         return parts.joined(separator: "\n")
     }
 
-    /// BlockNote table content: rows of cells of inline content.
+    /// A table kept as it came: rows of cells' text.
     private var tableRows: [[String]]? {
-        guard let content = origin?.content["blocknote"], content["type"]?.stringValue == "tableContent",
-              case .array(let rows)? = content["rows"] else { return nil }
-        return rows.map { row in
-            guard case .array(let cells)? = row["cells"] else { return [] }
-            return cells.map { cell in
-                if let inner = cell["content"] { return BlockCodec.inlineText(inner) }
-                return BlockCodec.inlineText(cell)
-            }
-        }
+        guard let origin, origin.type == "table" else { return nil }
+        let rows = origin.children.filter { $0.type == "table_row" }
+        guard !rows.isEmpty else { return nil }
+        return rows.map { row in row.children.map(TableContent.nestedText) }
     }
 }
 
@@ -540,21 +538,28 @@ final class InlineNodeAttachment: NSTextAttachment {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    var href: String? { node["href"]?.stringValue }
-
+    /// The label: a linked note's current title, a referenced block's current text, or
+    /// the text of any other node.
     @MainActor var label: String {
-        let fallback = BlockCodec.inlineText(node).trimmingCharacters(in: .whitespaces)
-        if let href, let target = InlineMarkdown.blockReferenceTarget(href) {
-            let text = context?.referenceLabel(blockId: target.id, fallback: fallback.isEmpty ? (target.label ?? "block") : fallback) ?? fallback
+        if let id = NoteLinks.documentTarget(node) {
+            let title = context?.documentTitles[id] ?? ""
+            return title.isEmpty ? "Untitled" : title
+        }
+        if let id = NoteLinks.blockTarget(node) {
+            let text = context?.referenceLabel(blockId: id, fallback: "block") ?? "block"
             let clean = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             return clean.count > 80 ? String(clean.prefix(79)) + "…" : clean
         }
+        let fallback = BlockCodec.inlineText(node).trimmingCharacters(in: .whitespaces)
         return fallback.isEmpty ? (node["type"]?.stringValue ?? "•") : fallback
     }
 
+    /// Note links draw in the link colour.
+    var isLink: Bool { NoteLinks.documentTarget(node) != nil || NoteLinks.blockTarget(node) != nil }
+
     @MainActor private func textAttributes(_ attributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
         let font = (attributes[.font] as? NSFont) ?? (context?.theme ?? EditorTheme()).bodyFont()
-        return [.font: font, .foregroundColor: NSColor.textColor]
+        return [.font: font, .foregroundColor: isLink ? NSColor.linkColor : NSColor.textColor]
     }
 
     override func attachmentBounds(
@@ -579,7 +584,8 @@ final class InlineNodeAttachment: NSTextAttachment {
             let font = this.textAttributes(attributes)[.font] as! NSFont
             let label = this.label
             return NSImage(size: bounds.size, flipped: false) { rect in
-                (label as NSString).draw(at: CGPoint(x: 1, y: -font.descender), withAttributes: [.font: font, .foregroundColor: NSColor.textColor])
+                (label as NSString).draw(at: CGPoint(x: 1, y: -font.descender),
+                                        withAttributes: [.font: font, .foregroundColor: this.isLink ? NSColor.linkColor : NSColor.textColor])
                 NSColor.controlAccentColor.withAlphaComponent(0.35).setFill()
                 NSRect(x: 0, y: 0, width: rect.width, height: 2).fill()
                 return true

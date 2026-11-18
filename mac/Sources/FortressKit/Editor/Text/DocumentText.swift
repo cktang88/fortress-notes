@@ -49,6 +49,8 @@ enum DocumentText {
                 var attributes = base(info: info, marks: InlineMarks(), theme: theme)
                 attributes[.fnNode] = NodeBox(node)
                 attributes[.attachment] = InlineNodeAttachment(node: node, context: context)
+                // A note link opens its note when clicked (see `clickedOnLink`).
+                if let id = NoteLinks.documentTarget(node) { attributes[.link] = NoteLinks.documentURL(id: id) }
                 output.append(NSAttributedString(string: objectReplacement, attributes: attributes))
                 continue
             }
@@ -77,8 +79,7 @@ enum DocumentText {
             location = NSMaxRange(paragraph)
             var info = text.blockInfo(at: paragraph.location) ?? BlockInfo()
             if seen.contains(info.id) || text.blockInfo(at: paragraph.location) == nil {
-                info = BlockInfo(kind: info.kind, depth: info.depth, checked: info.checked, language: info.language,
-                                 origin: info.origin, newProvenance: info.newProvenance)
+                info = info.renamed()
                 renamed.append((paragraph, info))
             }
             seen.insert(info.id)
@@ -92,7 +93,7 @@ enum DocumentText {
         let string = text.string as NSString
         var block = EditorBlock(id: info.id, kind: info.kind, depth: info.depth, checked: info.checked,
                                 language: info.language, origin: info.origin?.origin,
-                                newProvenance: info.newProvenance)
+                                newProvenance: info.newProvenance, container: info.kind == .quote ? info.container : nil)
         var content = paragraph
         if content.length > 0, string.character(at: NSMaxRange(content) - 1) == 0x0A { content.length -= 1 }
         if info.kind.hasInlineText {

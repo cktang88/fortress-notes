@@ -53,7 +53,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     }
 
     var theme: EditorTheme { context?.theme ?? EditorTheme() }
-    var borders: Bool { attrs["borders"]?.boolValue ?? true }
+    var borders: Bool { table.extra["borders"]?.boolValue ?? attrs["borders"]?.boolValue ?? true }
     var padding: CGSize { CGSize(width: 10 * theme.scale, height: 7 * theme.scale) }
     var tableWidth: CGFloat { columnEdges.last ?? 0 }
 
@@ -106,10 +106,10 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
                 load(cell.runs, into: view)
                 grid.addSubview(view)
                 rowViews.append(view)
-                if cell.nestedBlocks.isEmpty {
+                if cell.nested.isEmpty {
                     rowNested.append(nil)
                 } else {
-                    let hosting = NSHostingView(rootView: NestedCellBlocks(blocks: cell.nestedBlocks, context: context, scale: theme.scale))
+                    let hosting = NSHostingView(rootView: NestedCellBlocks(blocks: cell.nested, context: context, scale: theme.scale))
                     hosting.sizingOptions = []
                     grid.addSubview(hosting)
                     rowNested.append(hosting)
@@ -235,8 +235,8 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
 
     /// The read-only nested blocks' height at `width`.
     private func nestedHeight(row: Int, column: Int, width: CGFloat) -> CGFloat {
-        guard let cell = table.cell(row: row, column: column), !cell.nestedBlocks.isEmpty else { return 0 }
-        let controller = NSHostingController(rootView: NestedCellBlocks(blocks: cell.nestedBlocks, context: context, scale: theme.scale))
+        guard let cell = table.cell(row: row, column: column), !cell.nested.isEmpty else { return 0 }
+        let controller = NSHostingController(rootView: NestedCellBlocks(blocks: cell.nested, context: context, scale: theme.scale))
         return ceil(controller.sizeThatFits(in: CGSize(width: width, height: 10_000)).height)
     }
 
@@ -352,8 +352,8 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let href = (link as? URL)?.absoluteString ?? (link as? String) ?? ""
-        if let target = InlineMarkdown.documentLinkTarget(href) {
-            context?.openNote?(target.id)
+        if let id = NoteLinks.documentId(from: link) {
+            context?.openNote?(id)
             return true
         }
         if let url = context?.url(for: href) {
@@ -754,16 +754,17 @@ final class TableGridView: NSView {
 }
 
 /// What a OneNote cell holds besides its first line: list items, more paragraphs,
-/// pictures, nested tables, math. Read-only; saved untouched.
+/// pictures, nested tables, math. Read-only; never rewritten.
 struct NestedCellBlocks: View {
-    let blocks: [JSONValue]
+    let blocks: [BlockNode]
     let context: AttachmentContext?
     let scale: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3 * scale) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                row(block)
+            ForEach(Array(flattened.enumerated()), id: \.offset) { _, item in
+                row(item.block)
+                    .padding(.leading, CGFloat(item.depth) * 14 * scale)
             }
         }
         .font(.system(size: 13 * scale))
@@ -771,52 +772,60 @@ struct NestedCellBlocks: View {
         .help("Shown as imported")
     }
 
-    @ViewBuilder private func row(_ block: JSONValue) -> some View {
-        let type = block["type"]?.stringValue ?? "paragraph"
-        let runs = block["content"]?["blocknote"]
-        switch type {
+    /// The blocks with their nested items (a table's rows are summarized instead).
+    private var flattened: [(block: BlockNode, depth: Int)] {
+        var output: [(BlockNode, Int)] = []
+        func add(_ nodes: [BlockNode], _ depth: Int) {
+            for node in nodes {
+                output.append((node, depth))
+                if node.type != "table" { add(node.children, depth + 1) }
+            }
+        }
+        add(blocks, 0)
+        return output
+    }
+
+    @ViewBuilder private func row(_ block: BlockNode) -> some View {
+        switch block.type {
         case "image":
-            if let url = block["attrs"]?["url"]?.stringValue.flatMap({ context?.url(for: $0) }), let image = context?.image(for: url) {
+            if let url = block.attrs["url"]?.stringValue.flatMap({ context?.url(for: $0) }), let image = context?.image(for: url) {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
                     .frame(maxWidth: 160 * scale, maxHeight: 120 * scale, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    .accessibilityLabel(block["attrs"]?["alt"]?.stringValue ?? "Image")
+                    .accessibilityLabel(block.attrs["alt"]?.stringValue ?? "Image")
             } else {
-                Label(block["attrs"]?["alt"]?.stringValue ?? "Image", systemImage: "photo")
+                Label(block.attrs["alt"]?.stringValue ?? "Image", systemImage: "photo")
                     .foregroundStyle(.secondary).lineLimit(2)
             }
         case "table":
-            Label(TableContent(blockNote: runs).map { "Table · \($0.rows.count) rows" } ?? "Table", systemImage: "tablecells")
+            Label("Table · \(block.children.count) rows", systemImage: "tablecells")
                 .foregroundStyle(.secondary)
-                .help(TableContent(blockNote: runs)?.plainText ?? "")
+                .help(TableContent.nestedText(block))
         case "math":
-            Text(MathText.attributed(block["content"]?["latex"]?.stringValue ?? "", size: 14 * scale))
+            Text(MathText.attributed(block.payload?["latex"]?.stringValue ?? block.text, size: 14 * scale))
         case "file":
-            Label(block["attrs"]?["name"]?.stringValue ?? "File", systemImage: "doc")
+            Label(block.attrs["name"]?.stringValue ?? "File", systemImage: "doc")
                 .foregroundStyle(.secondary)
-        case "thematic_break", "divider":
+        case "divider":
             Divider()
         default:
-            let text = runs.map(BlockCodec.inlineText) ?? block["text"]?.stringValue ?? ""
             HStack(alignment: .firstTextBaseline, spacing: 6 * scale) {
                 if let marker = marker(for: block) {
                     Text(marker).foregroundStyle(.secondary)
                 }
-                Text(text)
+                Text(block.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    private func marker(for block: JSONValue) -> String? {
-        let type = block["type"]?.stringValue ?? ""
-        let attrs = block["attrs"]
-        if type == "checkListItem" || (type == "list" && attrs?["checked"]?.boolValue != nil) {
-            return attrs?["checked"]?.boolValue == true ? "☑" : "☐"
+    private func marker(for block: BlockNode) -> String? {
+        switch block.type {
+        case "check_item": block.attrs["checked"]?.boolValue == true ? "☑" : "☐"
+        case "numbered_item": "–"
+        case "bullet_item": "•"
+        default: nil
         }
-        if type == "numberedListItem" || (type == "list" && attrs?["ordered"]?.boolValue == true) { return "–" }
-        if type == "bulletListItem" || type == "list" { return "•" }
-        return nil
     }
 }
 

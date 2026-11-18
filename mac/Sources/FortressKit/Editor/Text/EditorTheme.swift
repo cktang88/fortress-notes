@@ -32,6 +32,8 @@ struct EditorTheme: Sendable {
         case .heading1: .systemFont(ofSize: 22 * scale, weight: .semibold)
         case .heading2: .systemFont(ofSize: 18 * scale, weight: .semibold)
         case .heading3: .systemFont(ofSize: 16 * scale, weight: .semibold)
+        case .heading4: .systemFont(ofSize: 15 * scale, weight: .semibold)
+        case .heading5, .heading6: .systemFont(ofSize: 14 * scale, weight: .semibold)
         case .code: .monospacedSystemFont(ofSize: 14 * scale, weight: .regular)
         default: .systemFont(ofSize: baseSize)
         }
@@ -41,7 +43,8 @@ struct EditorTheme: Sendable {
         switch kind {
         case .heading1: 28 * scale
         case .heading2: 24 * scale
-        case .heading3: 22 * scale
+        case .heading3, .heading4: 22 * scale
+        case .heading5, .heading6: 21 * scale
         case .code: 21 * scale
         default: 26 * scale
         }
@@ -53,7 +56,7 @@ struct EditorTheme: Sendable {
         return switch kind {
         case .heading1: (24 * scale, 8 * scale)
         case .heading2: (20 * scale, 6 * scale)
-        case .heading3: (16 * scale, 4 * scale)
+        case .heading3, .heading4, .heading5, .heading6: (16 * scale, 4 * scale)
         case .bullet, .numbered, .check: (0, 4 * scale)
         case .code: ((8 + 10) * scale, (12 + 10) * scale)
         case .image, .embed, .table, .columns: (14 * scale, 18 * scale)
@@ -80,8 +83,7 @@ struct EditorTheme: Sendable {
         if emphasized, kind == .paragraph { base = .systemFont(ofSize: base.pointSize, weight: .semibold) }
         if marks.sup || marks.sub {
             // Raised and lowered text is three quarters size (the offset is in `attributes`).
-            var smaller = InlineMarks(bold: marks.bold, italic: marks.italic, code: marks.code, link: marks.link)
-            smaller.extraStyles = [:]
+            let smaller = InlineMarks(bold: marks.bold, italic: marks.italic, code: marks.code, link: marks.link)
             let font = self.font(for: kind, marks: smaller)
             return NSFont(descriptor: font.fontDescriptor, size: font.pointSize * 0.75) ?? font
         }
@@ -202,7 +204,7 @@ struct EditorTheme: Sendable {
         if info.kind == .check && info.checked { return .tertiaryLabelColor }
         if let name = textColorName, let color = Self.color(named: name) { return color }
         switch info.kind {
-        case .heading3, .quote: return .secondaryLabelColor
+        case .heading3, .heading5, .heading6, .quote: return .secondaryLabelColor
         default: return .textColor
         }
     }
@@ -236,11 +238,7 @@ struct EditorTheme: Sendable {
         }
         if let link = marks.link, info.kind != .code {
             attributes[.link] = link
-            if InlineMarkdown.isDocumentLink(link) {
-                attributes[.toolTip] = "Open note"
-            } else {
-                attributes[.toolTip] = link
-            }
+            attributes[.toolTip] = link
         }
         return attributes
     }
@@ -316,7 +314,14 @@ struct EditorTheme: Sendable {
             var updated = self.cachedAttributes(info: info, marks: marks)
             updated[.fnBlock] = info
             if !marks.isPlain { updated[.fnMarks] = MarksBox(marks) }
-            if let node = attributes[.fnNode] { updated[.fnNode] = node }
+            if let node = attributes[.fnNode] {
+                updated[.fnNode] = node
+                // A note link keeps the URL that opens it.
+                if let box = node as? NodeBox, let id = NoteLinks.documentTarget(box.node) {
+                    updated[.link] = NoteLinks.documentURL(id: id)
+                    updated[.toolTip] = "Open note"
+                }
+            }
             if let attachment = attributes[.attachment] { updated[.attachment] = attachment }
             if foreign {
                 storage.setAttributes(updated, range: run)

@@ -248,9 +248,7 @@ public final class EditorSession {
             document.children = self.document?.children ?? []
             self.document = document
             if let firstText {
-                document.children = [BlockNode(id: "", documentId: documentId, parentId: nil, position: 0, type: "paragraph",
-                                               attrs: [:], userAttrs: [:], content: .object([:]), text: firstText,
-                                               createdAt: "", updatedAt: "", children: [])]
+                document.children = [BlockNode(id: "", documentId: documentId, type: "paragraph", text: firstText)]
             }
             updatedAt = Timestamp.date(document.updatedAt)
             if document.titleAuto ?? false, titleTask == nil {

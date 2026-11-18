@@ -102,6 +102,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             return await resolve(id)
         }
         child.context.referenceText = context.referenceText
+        child.context.documentTitles = context.documentTitles
         child.context.session = context.session
     }
 
@@ -232,8 +233,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             let stored = storage.blockInfo(at: paragraph.location)
             var info = stored ?? BlockInfo()
             if seen.contains(info.id) || stored == nil {
-                info = BlockInfo(kind: info.kind, depth: info.depth, checked: info.checked, language: info.language,
-                                 origin: info.origin, newProvenance: info.newProvenance)
+                info = info.renamed()
                 renamed.append((paragraph, info))
             }
             seen.insert(info.id)
@@ -582,7 +582,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             let paragraph = text.paragraphRange(at: location)
             var info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
             if info.id == previousId {
-                info = BlockInfo(kind: info.kind, depth: info.depth, checked: info.checked, language: info.language, origin: info.origin)
+                info = info.renamed()
             }
             if !info.kind.hasInlineText {
                 let hasAttachment = paragraph.length > 1 && storage.attribute(.attachment, at: paragraph.location, effectiveRange: nil) is BlockAttachment
@@ -670,8 +670,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let href = (link as? URL)?.absoluteString ?? (link as? String) ?? ""
-        if let target = InlineMarkdown.documentLinkTarget(href) {
-            onOpenNote?(target.id, nil)
+        if let id = NoteLinks.documentId(from: link) {
+            onOpenNote?(id, nil)
             return true
         }
         if let url = context.url(for: href) {
@@ -1032,6 +1032,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         case "#" where current == .paragraph: return (.heading1, false)
         case "##" where current == .paragraph: return (.heading2, false)
         case "###" where current == .paragraph: return (.heading3, false)
+        case "####" where current == .paragraph: return (.heading4, false)
+        case "#####" where current == .paragraph: return (.heading5, false)
+        case "######" where current == .paragraph: return (.heading6, false)
         case "-", "*", "+": return current == .paragraph ? (.bullet, false) : nil
         case ">" where current == .paragraph: return (.quote, false)
         case "[]", "[ ]", "- [ ]", "- []": return (.check, false)
@@ -1250,9 +1253,10 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// Replaces `[[query` with a link to the chosen note.
     func insertNoteLink(_ suggestion: LinkSuggestion, replacing range: NSRange) {
         let info = info(at: range.location)
-        let href = InlineMarkdown.documentLinkHref(id: suggestion.documentId, title: suggestion.title)
-        let label = suggestion.title.isEmpty ? "Untitled" : suggestion.title
-        let replacement = NSMutableAttributedString(attributedString: attributed(label, info: info, marks: InlineMarks(link: href)))
+        // A `docLink` node: its label is the note's current title, never stored.
+        context.documentTitles[suggestion.documentId] = suggestion.title
+        let node = NoteLinks.documentNode(id: suggestion.documentId)
+        let replacement = NSMutableAttributedString(attributedString: DocumentText.inline([.atomic(node)], info: info, context: context, theme: theme))
         replacement.append(attributed(" ", info: info))
         textView.breakUndoCoalescing()
         replace(range, with: replacement, selecting: NSRange(location: range.location + replacement.length, length: 0))
@@ -1400,7 +1404,6 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                     }
                     let uploaded = try await uploadFile(data, source.name, source.type)
                     let kind: BlockKind = source.type.hasPrefix("image/") ? .image : .file
-                    let markdown = kind == .image ? "![\(uploaded.name)](\(uploaded.url))" : "[\(uploaded.name)](\(uploaded.url))"
                     var attrs: [String: JSONValue] = ["url": .string(uploaded.url), "name": .string(uploaded.name)]
                     if kind == .image, let size = await Self.pixelSize(of: data) {
                         // Stored size: the picture's space is right before it loads (no jump).
@@ -1409,8 +1412,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                     } else if kind == .file {
                         attrs["size"] = .number(Double(data.count))
                     }
-                    let origin = BlockOrigin(type: kind.canonicalType, attrs: attrs, content: .object(["markdown": .string(markdown)]),
-                                             text: uploaded.name, kind: kind, native: true)
+                    let origin = BlockOrigin(type: kind.canonicalType, attrs: attrs, text: uploaded.name, kind: kind)
                     let block = EditorBlock(kind: kind, depth: depth, origin: origin)
                     let paragraph = DocumentText.paragraph(block, context: context)
                     let insertAt = min(anchorId.flatMap { range(ofBlock: $0) }.map(NSMaxRange) ?? string.length, string.length)
@@ -1446,11 +1448,19 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let (blocks, _) = DocumentText.blocks(from: substring)
         let payload = blocks.map { block -> [String: JSONValue] in
             let fields = BlockCodec.encode(block)
-            return [
-                "type": .string(fields.type), "attrs": .object(fields.attrs), "content": fields.content,
-                "text": .string(fields.text), "depth": .number(Double(block.depth)),
+            var item: [String: JSONValue] = [
+                "type": .string(fields.type), "kind": .string(block.kind.rawValue), "attrs": .object(fields.attrs),
+                "content": fields.content, "depth": .number(Double(block.depth)),
                 "partial": .bool(!substring.string.hasSuffix("\n") && block == blocks.last),
             ]
+            if let payload = fields.payload { item["payload"] = payload }
+            // A table travels with its cells' text (pasted with new ids).
+            if let table = block.table {
+                item["rows"] = .array(table.rows.map { row in
+                    .array(row.cells.map { cell in .object(["attrs": .object(cell.attrs), "content": BlockCodec.inlineContent(cell.runs)]) })
+                })
+            }
+            return item
         }
         guard let data = try? JSONEncoder().encode(payload) else { return false }
         return pasteboard.setData(data, forType: Self.blocksPasteboardType)
@@ -1463,15 +1473,33 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let selection = textView.selectedRange()
         let current = info(at: selection.location)
         var blocks = payload.map { item -> EditorBlock in
+            var rows: [BlockNode] = []
+            if case .array(let items)? = item["rows"] {
+                rows = items.map { row in
+                    guard case .array(let cells) = row else { return BlockNode(id: EditorBlock.newId(), type: "table_row") }
+                    return BlockNode(id: EditorBlock.newId(), type: "table_row", children: cells.map { cell in
+                        var attrs: [String: JSONValue] = [:]
+                        if case .object(let found)? = cell["attrs"] { attrs = found }
+                        return BlockNode(id: EditorBlock.newId(), type: "table_cell", attrs: attrs, children: [
+                            BlockNode(id: EditorBlock.newId(), type: "paragraph", content: cell["content"] ?? .array([])),
+                        ])
+                    })
+                }
+            }
             let node = BlockNode(
-                id: EditorBlock.newId(), documentId: "", parentId: nil, position: 0,
-                type: item["type"]?.stringValue ?? "paragraph",
+                id: EditorBlock.newId(), type: item["type"]?.stringValue ?? "paragraph",
                 attrs: { if case .object(let attrs)? = item["attrs"] { return attrs }; return [:] }(),
-                userAttrs: [:], content: item["content"] ?? .object([:]), text: item["text"]?.stringValue ?? "",
-                createdAt: "", updatedAt: "", children: [])
+                content: item["content"] ?? .null, payload: item["payload"], children: rows)
             var block = BlockCodec.decode(node, depth: (item["depth"]?.intValue ?? 0) + current.depth)
-            block.origin = nil
-            if block.kind.hasInlineText == false { block.origin = BlockCodec.decode(node).origin }
+            if item["kind"]?.stringValue == BlockKind.quote.rawValue { block.kind = .quote }
+            if block.kind.hasInlineText { block.origin = nil }
+            if var table = block.table {
+                // Pasted cells are new blocks: inserted, not updated.
+                for row in table.rows.indices {
+                    for cell in table.rows[row].cells.indices { table.rows[row].cells[cell].hasParagraph = false }
+                }
+                block.table = table
+            }
             return block
         }
         // Columns travel without their blocks on this pasteboard; they aren't pasted.
