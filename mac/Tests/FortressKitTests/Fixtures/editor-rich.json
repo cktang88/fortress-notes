@@ -1,0 +1,590 @@
+{
+ "id": "01M7RICHDOC000000000000000",
+ "title": "Kyoto trip",
+ "status": "polished",
+ "tags": [],
+ "created_at": "2026-03-02T09:00:00+00:00",
+ "updated_at": "2026-11-16T09:00:00+00:00",
+ "revision": 12,
+ "title_auto": false,
+ "can_undo": false,
+ "can_redo": false,
+ "children": [
+  {
+   "id": "01M7RICH000000000000000001",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "paragraph",
+   "attrs": {},
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Three slow days in Kyoto, mostly on foot. The plan is loose on purpose: ",
+      "styles": {}
+     },
+     {
+      "type": "text",
+      "text": "one temple a morning",
+      "styles": {
+       "bold": true
+      }
+     },
+     {
+      "type": "text",
+      "text": ", long lunches, and the rest of the time for ",
+      "styles": {}
+     },
+     {
+      "type": "text",
+      "text": "wandering",
+      "styles": {
+       "italic": true
+      }
+     },
+     {
+      "type": "text",
+      "text": ".",
+      "styles": {}
+     }
+    ]
+   },
+   "text": "Three slow days in Kyoto, mostly on foot. The plan is loose on purpose: one temple a morning, long lunches, and the rest of the time for wandering.",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000002",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Before we go",
+      "styles": {}
+     }
+    ]
+   },
+   "text": "Before we go",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000003",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "checkListItem",
+   "attrs": {
+    "checked": true
+   },
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Book the ryokan in Gion",
+      "styles": {}
+     }
+    ]
+   },
+   "text": "Book the ryokan in Gion",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000004",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "checkListItem",
+   "attrs": {
+    "checked": false
+   },
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Buy a 7-day JR pass",
+      "styles": {}
+     }
+    ]
+   },
+   "text": "Buy a 7-day JR pass",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000005",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "checkListItem",
+   "attrs": {
+    "checked": false
+   },
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Print the ",
+      "styles": {}
+     },
+     {
+      "type": "link",
+      "href": "[[01M7NZXNENK5XG14881ZB8R42Q|Packing list]]",
+      "content": [
+       {
+        "type": "text",
+        "text": "Packing list",
+        "styles": {}
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " and check the weather",
+      "styles": {}
+     }
+    ]
+   },
+   "text": "Print the Packing list and check the weather",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000006",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Days",
+      "styles": {}
+     }
+    ]
+   },
+   "text": "Days",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000009",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "numberedListItem",
+   "attrs": {},
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Fushimi Inari at dawn, before the crowds",
+      "styles": {}
+     }
+    ]
+   },
+   "text": "Fushimi Inari at dawn, before the crowds",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": [
+    {
+     "id": "01M7RICH000000000000000007",
+     "document_id": "01M7RICHDOC000000000000000",
+     "parent_id": null,
+     "position": 0,
+     "type": "bulletListItem",
+     "attrs": {},
+     "user_attrs": {},
+     "content": {
+      "blocknote": [
+       {
+        "type": "text",
+        "text": "Take the ",
+        "styles": {}
+       },
+       {
+        "type": "text",
+        "text": "JR Nara line",
+        "styles": {
+         "code": true
+        }
+       },
+       {
+        "type": "text",
+        "text": " two stops from Kyoto Station",
+        "styles": {}
+       }
+      ]
+     },
+     "text": "Take the JR Nara line two stops from Kyoto Station",
+     "created_at": "2026-03-02T09:00:00+00:00",
+     "updated_at": "2026-11-16T09:00:00+00:00",
+     "children": []
+    },
+    {
+     "id": "01M7RICH000000000000000008",
+     "document_id": "01M7RICHDOC000000000000000",
+     "parent_id": null,
+     "position": 0,
+     "type": "bulletListItem",
+     "attrs": {},
+     "user_attrs": {},
+     "content": {
+      "blocknote": [
+       {
+        "type": "text",
+        "text": "The upper trail is quiet after the Yotsutsuji crossing",
+        "styles": {
+         "textColor": "gray"
+        }
+       }
+      ]
+     },
+     "text": "The upper trail is quiet after the Yotsutsuji crossing",
+     "created_at": "2026-03-02T09:00:00+00:00",
+     "updated_at": "2026-11-16T09:00:00+00:00",
+     "children": []
+    }
+   ]
+  },
+  {
+   "id": "01M7RICH000000000000000010",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "numberedListItem",
+   "attrs": {},
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Arashiyama bamboo grove, then the ",
+      "styles": {}
+     },
+     {
+      "type": "text",
+      "text": "Okochi Sanso villa",
+      "styles": {
+       "backgroundColor": "yellow"
+      }
+     }
+    ]
+   },
+   "text": "Arashiyama bamboo grove, then the Okochi Sanso villa",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000011",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "numberedListItem",
+   "attrs": {},
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Philosopher's Path, coffee at ",
+      "styles": {}
+     },
+     {
+      "type": "link",
+      "href": "https://example.com/weekenders",
+      "content": [
+       {
+        "type": "text",
+        "text": "Weekenders",
+        "styles": {}
+       }
+      ]
+     }
+    ]
+   },
+   "text": "Philosopher's Path, coffee at Weekenders",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000012",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "image",
+   "attrs": {
+    "url": "FIXTURE_IMAGE",
+    "name": "Higashiyama at dusk",
+    "previewWidth": 640
+   },
+   "user_attrs": {},
+   "content": {},
+   "text": "",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000013",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "quote",
+   "attrs": {},
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "The best plan for Kyoto is the one you are willing to abandon.",
+      "styles": {
+       "italic": true
+      }
+     }
+    ]
+   },
+   "text": "The best plan for Kyoto is the one you are willing to abandon.",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000014",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "codeBlock",
+   "attrs": {
+    "language": "text"
+   },
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Shinkansen  Tokyo 07:03  →  Kyoto 09:15\nNozomi 3    Car 7, seats 12A–12B",
+      "styles": {}
+     }
+    ]
+   },
+   "text": "Shinkansen  Tokyo 07:03  →  Kyoto 09:15\nNozomi 3    Car 7, seats 12A–12B",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000015",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "divider",
+   "attrs": {},
+   "user_attrs": {},
+   "content": {},
+   "text": "",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000016",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "table",
+   "attrs": {},
+   "user_attrs": {},
+   "content": {
+    "blocknote": {
+     "type": "tableContent",
+     "rows": [
+      {
+       "cells": [
+        [
+         {
+          "type": "text",
+          "text": "Day",
+          "styles": {}
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "text": "Area",
+          "styles": {}
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "text": "Dinner",
+          "styles": {}
+         }
+        ]
+       ]
+      },
+      {
+       "cells": [
+        [
+         {
+          "type": "text",
+          "text": "Fri",
+          "styles": {}
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "text": "Fushimi",
+          "styles": {}
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "text": "Izakaya near the station",
+          "styles": {}
+         }
+        ]
+       ]
+      },
+      {
+       "cells": [
+        [
+         {
+          "type": "text",
+          "text": "Sat",
+          "styles": {}
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "text": "Arashiyama",
+          "styles": {}
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "text": "Tofu kaiseki",
+          "styles": {}
+         }
+        ]
+       ]
+      }
+     ]
+    }
+   },
+   "text": "",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000017",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "file",
+   "attrs": {
+    "url": "/media/kyoto-itinerary.pdf",
+    "name": "Kyoto itinerary.pdf"
+   },
+   "user_attrs": {},
+   "content": {},
+   "text": "",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  },
+  {
+   "id": "01M7RICH000000000000000018",
+   "document_id": "01M7RICHDOC000000000000000",
+   "parent_id": null,
+   "position": 0,
+   "type": "paragraph",
+   "attrs": {},
+   "user_attrs": {},
+   "content": {
+    "blocknote": [
+     {
+      "type": "text",
+      "text": "Budget is ",
+      "styles": {}
+     },
+     {
+      "type": "text",
+      "text": "¥180,000",
+      "styles": {
+       "bold": true,
+       "textColor": "red"
+      }
+     },
+     {
+      "type": "text",
+      "text": " for two, ",
+      "styles": {}
+     },
+     {
+      "type": "text",
+      "text": "not counting",
+      "styles": {
+       "underline": true
+      }
+     },
+     {
+      "type": "text",
+      "text": " the ",
+      "styles": {}
+     },
+     {
+      "type": "text",
+      "text": "rail pass",
+      "styles": {
+       "strike": true
+      }
+     },
+     {
+      "type": "text",
+      "text": ".",
+      "styles": {}
+     }
+    ]
+   },
+   "text": "Budget is ¥180,000 for two, not counting the rail pass.",
+   "created_at": "2026-03-02T09:00:00+00:00",
+   "updated_at": "2026-11-16T09:00:00+00:00",
+   "children": []
+  }
+ ]
+}

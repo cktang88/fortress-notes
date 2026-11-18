@@ -1,0 +1,155 @@
+import AppKit
+
+/// The note body: a TextKit 2 text view with a centered column and a header (title and
+/// meta line) hosted above the text. Editing behavior lives in `BlockEditorController`.
+final class FortressTextView: NSTextView {
+    weak var controller: BlockEditorController?
+    /// Title and meta line, laid out above the text.
+    var header: NSView? {
+        didSet {
+            oldValue?.removeFromSuperview()
+            if let header { addSubview(header) }
+            layoutColumn()
+        }
+    }
+    var theme = EditorTheme() { didSet { layoutColumn() } }
+    /// Measure in characters (DESIGN a.3: Narrow 60 / Comfortable 68 / Wide 80).
+    var measureCharacters: CGFloat = 68 { didSet { layoutColumn() } }
+    private var headerHeight: CGFloat = 0
+
+    static func make() -> FortressTextView {
+        let textView = FortressTextView(usingTextLayoutManager: true)
+        textView.isRichText = true
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.drawsBackground = true
+        textView.backgroundColor = .textBackgroundColor
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
+        textView.isAutomaticQuoteSubstitutionEnabled = true
+        textView.isAutomaticDashSubstitutionEnabled = true
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = true
+        textView.smartInsertDeleteEnabled = true
+        textView.displaysLinkToolTips = true
+        textView.linkTextAttributes = [
+            .foregroundColor: NSColor.controlAccentColor,
+            .cursor: NSCursor.pointingHand,
+        ]
+        textView.writingToolsBehavior = .complete
+        textView.textContainer?.lineFragmentPadding = 0
+        return textView
+    }
+
+    /// The column: `min(available − 2×48, 68 characters)`, centered.
+    var columnWidth: CGFloat {
+        let font = theme.bodyFont()
+        let sample = "abcdefghijklmnopqrstuvwxyz " as NSString
+        let average = sample.size(withAttributes: [.font: font]).width / CGFloat(sample.length)
+        let measure = (measureCharacters * average).rounded()
+        return max(200, min(bounds.width - 96, measure))
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        layoutColumn()
+    }
+
+    func layoutColumn() {
+        let width = columnWidth
+        let side = max(48, ((bounds.width - width) / 2).rounded(.down))
+        if let header {
+            header.frame.size.width = width
+            let height = header.fittingSize.height
+            header.frame = CGRect(x: side, y: 36, width: width, height: height)
+            headerHeight = height
+        }
+        let top = 36 + headerHeight + 12
+        let inset = NSSize(width: side, height: top)
+        if textContainerInset != inset { textContainerInset = inset }
+    }
+
+    /// The header measured again (its title wrapped or a banner appeared).
+    func headerDidChange() { layoutColumn() }
+
+    // MARK: Keys
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === self, let controller, controller.handleKeyEquivalent(event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if let controller, controller.handleKeyDown(event) { return }
+        super.keyDown(with: event)
+    }
+
+    // MARK: Mouse
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let controller, controller.handleClick(at: point) { return }
+        super.mouseDown(with: event)
+    }
+
+    override func paste(_ sender: Any?) {
+        if let controller, controller.pasteFiles(from: .general) { return }
+        super.paste(sender)
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == BlockEditorController.blocksPasteboardType, let controller, controller.pasteBlocks(from: pboard) { return true }
+        return super.readSelection(from: pboard, type: type)
+    }
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [BlockEditorController.blocksPasteboardType] + super.readablePasteboardTypes
+    }
+
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [BlockEditorController.blocksPasteboardType] + super.writablePasteboardTypes
+    }
+
+    override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == BlockEditorController.blocksPasteboardType {
+            return controller?.writeBlocks(to: pboard) ?? false
+        }
+        return super.writeSelection(to: pboard, type: type)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if let controller, controller.pasteFiles(from: sender.draggingPasteboard) { return true }
+        return super.performDragOperation(sender)
+    }
+
+    // MARK: Format actions (for menus and the command palette)
+
+    @objc func fortressToggleBold(_ sender: Any?) { controller?.toggleMark(\.bold) }
+    @objc func fortressToggleItalic(_ sender: Any?) { controller?.toggleMark(\.italic) }
+    @objc func fortressToggleUnderline(_ sender: Any?) { controller?.toggleMark(\.underline) }
+    @objc func fortressToggleStrikethrough(_ sender: Any?) { controller?.toggleMark(\.strike) }
+    @objc func fortressToggleInlineCode(_ sender: Any?) { controller?.toggleMark(\.code) }
+    @objc func fortressHighlight(_ sender: Any?) { controller?.toggleHighlight("yellow") }
+    @objc func fortressAddLink(_ sender: Any?) { controller?.editLink() }
+    @objc func fortressBody(_ sender: Any?) { controller?.setKind(.paragraph) }
+    @objc func fortressHeading1(_ sender: Any?) { controller?.setKind(.heading1) }
+    @objc func fortressHeading2(_ sender: Any?) { controller?.setKind(.heading2) }
+    @objc func fortressHeading3(_ sender: Any?) { controller?.setKind(.heading3) }
+    @objc func fortressBulletedList(_ sender: Any?) { controller?.setKind(.bullet) }
+    @objc func fortressNumberedList(_ sender: Any?) { controller?.setKind(.numbered) }
+    @objc func fortressChecklist(_ sender: Any?) { controller?.setKind(.check) }
+    @objc func fortressQuote(_ sender: Any?) { controller?.setKind(.quote) }
+    @objc func fortressCodeBlock(_ sender: Any?) { controller?.setKind(.code) }
+    @objc func fortressToggleCheckbox(_ sender: Any?) { controller?.toggleChecked() }
+    @objc func fortressIndent(_ sender: Any?) { controller?.indent(by: 1) }
+    @objc func fortressOutdent(_ sender: Any?) { controller?.indent(by: -1) }
+    @objc func fortressMoveBlockUp(_ sender: Any?) { controller?.moveBlocks(by: -1) }
+    @objc func fortressMoveBlockDown(_ sender: Any?) { controller?.moveBlocks(by: 1) }
+
+    // Standard Format ▸ Font items route here too.
+    @objc override func underline(_ sender: Any?) { controller?.toggleMark(\.underline) }
+}
