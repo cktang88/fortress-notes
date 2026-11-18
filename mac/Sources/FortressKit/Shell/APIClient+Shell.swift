@@ -18,6 +18,16 @@ public struct MarkdownImportResult: Codable, Hashable, Sendable {
 /// Endpoints only the Shell uses. They build their own requests so `APIClient.swift`
 /// stays untouched by this area.
 extension APIClient {
+    /// `GET /api/health` (open without the token): the server's
+    /// `X-Fortress-Instance`, or nil when it doesn't name one. Throws when nothing
+    /// healthy answers.
+    public func healthInstance() async throws -> String? {
+        let request = try makeRequest("GET", "api/health", kind: .probe)
+        let (data, response) = try await load(request)
+        try check(response, body: data)
+        return response.value(forHTTPHeaderField: BackendAuth.instanceHeader)
+    }
+
     /// Moves a folder under another folder (nil = top level).
     public func moveFolder(id: String, parentId: String?) async throws {
         let body = try JSONEncoder().encode(["parent_id": parentId.map(JSONValue.string) ?? .null])
