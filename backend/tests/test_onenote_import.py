@@ -1272,6 +1272,16 @@ class CompareFindingsTests(_Base):
         self.assertFalse(any("No pages were found" in w for w in work["warnings"]))
         self.assertTrue(any("No pages were found" in w for w in personal["warnings"]))
 
+    def test_very_deep_and_long_source_paths_fit_provenance(self) -> None:
+        page = _pages(self.manifest)[P3]
+        page["source_path"] = ["Work", *[f"Group {n} " + "g" * 300 for n in range(12)], "Meetings", page["title"]]
+        page["source_url"] = "https://example.com/" + "u" * 3000
+        tree = self.import_blocks([{"type": "paragraph", "indent": 0, "text": "still imported"}])
+        self.assertEqual(tree["children"][0]["text"], "still imported")
+        path = tree["provenance"]["source_path"]
+        self.assertLessEqual(len(path), onenote_import.MAX_SOURCE_PATH)
+        self.assertTrue(path.startswith("Work › ") and path.endswith("Meetings › " + page["title"]), path)
+
     def test_clean_text(self) -> None:
         self.assertEqual(onenote_import._clean("form\x0cfeed bell\x07 nul\x00 a\r\nb‮RTL"),
                          "form feed bell nul a\nb‮RTL")

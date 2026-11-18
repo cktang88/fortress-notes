@@ -921,6 +921,22 @@ def _file(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
 
 
 MAX_FILE_NAME = 200
+# provenance.source_path / source_url limit (provenance._STRING_FIELDS).
+MAX_SOURCE_PATH = 2000
+MAX_PATH_PART = 200
+
+
+def _source_path(parts: list[Any], fallback: str) -> str:
+    """"Notebook › Group › Section › Page" within MAX_SOURCE_PATH: very long names are cut,
+    and with very deep section groups the middle groups give way to "…"."""
+
+    names = [name if len(name) <= MAX_PATH_PART else name[: MAX_PATH_PART - 1] + "…"
+             for name in (str(part) for part in parts)]
+    path = " › ".join(names) or fallback
+    while len(path) > MAX_SOURCE_PATH and len(names) > 3:
+        names = [names[0], "…", *names[3:]] if names[1] == "…" else [names[0], "…", *names[2:]]
+        path = " › ".join(names)
+    return path[: MAX_SOURCE_PATH - 1] + "…" if len(path) > MAX_SOURCE_PATH else path
 
 
 def _file_name(value: object) -> str:
@@ -1414,10 +1430,11 @@ class _Importer:
         if page.get("author"):
             onenote_extra["author"] = str(page["author"])[:200]
         provenance: dict[str, Any] = {
-            "source_path": " › ".join(str(part) for part in (page.get("source_path") or [])) or label,
+            "source_path": _source_path(page.get("source_path") or [], label),
             "extra": {"onenote": onenote_extra},
         }
-        if isinstance(source_url, str) and source_url.lower().startswith(("http://", "https://")):
+        if (isinstance(source_url, str) and source_url.lower().startswith(("http://", "https://"))
+                and len(source_url) <= MAX_SOURCE_PATH):
             provenance["source_url"] = source_url
         result = sources.upsert_document_from_source(
             self.db_path,
