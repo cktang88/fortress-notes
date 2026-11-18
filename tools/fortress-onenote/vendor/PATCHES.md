@@ -92,6 +92,18 @@ property for the file name; entries without an ordering id keep their
 position after ordered ones. Files: `one/property_set/toc_container.rs`,
 `onenote/notebook.rs`, `onestore/shared/prop_set.rs`.
 
+**P9 — which character-format flags a style stores.** `ParagraphStyling`
+reported bold, italic, underline, strikethrough, superscript and subscript
+as plain `bool`s, so a text run that does not store a flag (and inherits it
+from the paragraph style) could not be told apart from one that explicitly
+turns it off. The new `ParagraphStyling::stored_flags()` returns them as
+`StoredFlags` (`Option<bool>` each; exported as
+`onenote_parser::property::rich_text::StoredFlags`); the existing accessors
+are unchanged. The converter uses it to give text runs the formatting of
+their paragraph style (a whole paragraph made bold and blue by a custom
+paragraph style lost both). Files: `lib.rs`, `onenote/rich_text.rs`,
+`one/property_set/paragraph_style_object.rs`.
+
 ## cab 0.6.0
 
 **C1 — no panic on corrupt cabinets.** In `folder.rs`, a file offset beyond

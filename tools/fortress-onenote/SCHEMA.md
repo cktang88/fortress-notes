@@ -221,6 +221,13 @@ carry several tags; each keeps its own definition.
 `{"start": int, "end": int, "type": …}` plus type-specific fields. Spans of
 the same mark are merged; marks may overlap; sorted by `start`.
 
+Marks are the effective character formatting: a text run inherits every
+property it does not store itself (bold … subscript, font, size, colour,
+highlight) from its paragraph style, so formatting applied to a whole
+paragraph appears as marks over the whole text. OneNote's built-in styles
+(Normal, Heading 1–6, Page Title, Citation, Quote, Code) are not inherited:
+their look is expressed by the block type.
+
 | `type` | fields |
 |---|---|
 | `bold`, `italic`, `underline`, `strikethrough`, `superscript`, `subscript` | — |

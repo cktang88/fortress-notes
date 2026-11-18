@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P3).
+// Modified by fortress-onenote (vendor/PATCHES.md: P3, P9).
 //! A OneNote file parser.
 //!
 //! `onenote_parser` provides a high-level API to parse OneNote notebooks and
@@ -236,5 +236,7 @@ pub mod property {
         pub use crate::one::property::charset::Charset;
         pub use crate::one::property::paragraph_alignment::ParagraphAlignment;
         pub use crate::onenote::rich_text::ParagraphStyling;
+        // PATCH(fortress-onenote, P9)
+        pub use crate::onenote::rich_text::StoredFlags;
     }
 }

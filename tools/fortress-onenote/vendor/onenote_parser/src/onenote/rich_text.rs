@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P6).
+// Modified by fortress-onenote (vendor/PATCHES.md: P6, P9).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::charset::Charset;
@@ -273,9 +273,40 @@ pub struct ParagraphStyling {
     pub(crate) hyperlink: bool,
     pub(crate) hyperlink_protected: bool,
     pub(crate) hidden: bool,
+    // PATCH(fortress-onenote, P9)
+    pub(crate) stored_flags: StoredFlags,
+}
+
+/// PATCH(fortress-onenote, P9): the character-format flags of a style as
+/// stored in the file: `None` when the property is absent.
+///
+/// A text run inherits every property it does not store from the paragraph
+/// style ([`RichText::paragraph_style`]); an explicit `Some(false)` in a run
+/// overrides a `true` in the paragraph style. The plain accessors
+/// ([`ParagraphStyling::bold`] …) cannot tell the two apart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StoredFlags {
+    /// Bold.
+    pub bold: Option<bool>,
+    /// Italic.
+    pub italic: Option<bool>,
+    /// Underline.
+    pub underline: Option<bool>,
+    /// Strikethrough.
+    pub strikethrough: Option<bool>,
+    /// Superscript.
+    pub superscript: Option<bool>,
+    /// Subscript.
+    pub subscript: Option<bool>,
 }
 
 impl ParagraphStyling {
+    /// PATCH(fortress-onenote, P9): which character-format flags this style
+    /// stores (see [`StoredFlags`]).
+    pub fn stored_flags(&self) -> StoredFlags {
+        self.stored_flags
+    }
+
     /// The text's charset.
     pub fn charset(&self) -> Option<Charset> {
         self.charset
@@ -831,6 +862,7 @@ fn parse_style(data: paragraph_style_object::Data) -> ParagraphStyling {
         hyperlink: data.hyperlink,
         hyperlink_protected: data.hyperlink_protected,
         hidden: data.hidden,
+        stored_flags: data.stored_flags,
     }
 }
 
