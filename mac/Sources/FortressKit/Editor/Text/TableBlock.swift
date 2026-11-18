@@ -148,8 +148,8 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
                 let inner = max(20, span.width - 2 * padding.width)
                 var height = textHeight(cell, width: inner)
                 if let extra = nested[r][c] {
-                    extra.frame.size.width = inner
-                    height += 4 * theme.scale + ceil(extra.fittingSize.height)
+                    _ = extra
+                    height += 4 * theme.scale + nestedHeight(row: r, column: c, width: inner)
                 }
                 rowHeight = max(rowHeight, ceil(height) + 2 * padding.height)
             }
@@ -169,6 +169,13 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         if abs(before - measuredHeight) > 0.5, let attachment {
             context?.attachmentDidResize?(attachment)
         }
+    }
+
+    /// The read-only nested blocks' height at `width`.
+    private func nestedHeight(row: Int, column: Int, width: CGFloat) -> CGFloat {
+        guard let cell = table.cell(row: row, column: column), !cell.nestedBlocks.isEmpty else { return 0 }
+        let controller = NSHostingController(rootView: NestedCellBlocks(blocks: cell.nestedBlocks, context: context, scale: theme.scale))
+        return ceil(controller.sizeThatFits(in: CGSize(width: width, height: 10_000)).height)
     }
 
     private func textHeight(_ view: CellTextView, width: CGFloat) -> CGFloat {
@@ -209,7 +216,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
                 let textHeight = self.textHeight(cell, width: max(20, inner.width))
                 cell.frame = CGRect(x: inner.minX, y: inner.minY, width: max(20, inner.width), height: textHeight)
                 if let extra = nested[r][c] {
-                    let height = ceil(extra.fittingSize.height)
+                    let height = nestedHeight(row: r, column: c, width: max(20, inner.width))
                     extra.frame = CGRect(x: inner.minX, y: inner.minY + textHeight + 4 * theme.scale, width: max(20, inner.width), height: height)
                 }
             }
