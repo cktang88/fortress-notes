@@ -40,9 +40,9 @@ class _WordModel:
 
 
 def _docs(database):
-    from app import block_store
+    from app import corpus
 
-    return [(b, v, t) for b, _d, v, t in block_store.embedding_documents(database)]
+    return [(b, v, t) for b, _d, v, t in corpus.embedding_documents(database)]
 
 
 def _edit_block(database, block_id: str, text: str) -> None:
@@ -229,7 +229,7 @@ class BlockEmbeddingTests(unittest.TestCase):
         ), patch.object(embeddings, "get_settings", return_value=settings):
             results = []
             threads = [
-                threading.Thread(target=lambda: results.append(embeddings._get_model()))
+                threading.Thread(target=lambda: results.append(embeddings.load_model()))
                 for _ in range(3)
             ]
             for thread in threads:
@@ -280,15 +280,15 @@ class NoteQueryTests(unittest.TestCase):
             calls.append(list(texts))
             return [torch.ones(len(text.split()), 2) for text in texts]
 
-        embeddings._cache.queries.clear()
-        embeddings._cache.queries["Saved paragraph here"] = torch.zeros(3, 2)
+        embeddings._cache.paragraph_queries.clear()
+        embeddings._cache.paragraph_queries["Saved paragraph here"] = torch.zeros(3, 2)
         with patch.object(embeddings, "_get_model", return_value=object()), patch.object(
             embeddings, "_encode", side_effect=fake_encode
         ), patch.object(embeddings, "_saved_query", return_value=None):
             joined = embeddings.note_query_embedding(
                 ["Kyoto trip", "Saved paragraph here", "", "New one"]
             )
-        self.addCleanup(embeddings._cache.queries.clear)
+        self.addCleanup(embeddings._cache.paragraph_queries.clear)
         # One batched model call for the two unseen texts; the saved one is reused.
         self.assertEqual(calls, [["Kyoto trip", "New one"]])
         # Title (2 tokens) + saved (3) + new (2), in note order, blank paragraphs skipped.

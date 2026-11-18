@@ -14,7 +14,17 @@ Fast enough to run on every keystroke over tens of thousands of paragraphs, on C
   in bfloat16: encoding is several times faster and scores match float32 to
   about three decimals. Elsewhere everything stays float32.
 * Query encodings are cached (LRU), so refetching the same related list or
-  search costs only the scoring.
+  search costs only the scoring. Typed queries, paragraph texts (related to a
+  paragraph or a note) and whole notes each have their own cache, so opening a
+  long note can't evict what was just searched.
+* One thread runs the model (``_Encoder``): searches go ahead of background
+  indexing, which is fed to it a batch at a time, and PyLate's tokenizer (which
+  sets ``max_seq_length`` on every call) is never used from two threads at once.
+* Requests never wait for the model to load: until the background indexer has
+  loaded it (``load_model``), every scorer falls back to keyword overlap.
+* A whole note is queried with at most ``NOTE_QUERY_VECTORS`` weighted vectors
+  (its paragraphs' query vectors, clustered), so related-to-a-note costs about
+  the same for a 1000-paragraph note as for a 50-paragraph one.
 
 Edits are applied incrementally: ``warm_index()`` (run on a short interval in the
 background) encodes changed paragraphs in batches and drops removed ones;
@@ -25,17 +35,21 @@ and scores paragraphs that are still waiting for the background indexer as 0.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
+import queue
 import sqlite3
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import Future
 from contextlib import closing
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
 from . import block_query
+from . import corpus as corpus_store
 from .config import get_settings
 
 _log = logging.getLogger("fortress")
@@ -46,6 +60,15 @@ INLINE_ENCODE_LIMIT = 8
 ENCODE_BATCH = 16
 INDEX_CHUNK = 64
 QUERY_CACHE_SIZE = 256
+# Query encodings of paragraph texts (focused related, whole-note queries) and of
+# whole notes (clustered), kept apart from typed queries.
+PARAGRAPH_CACHE_SIZE = 4096
+NOTE_CACHE_SIZE = 32
+# A whole-note query is clustered down to this many weighted vectors.
+NOTE_QUERY_VECTORS = 256
+NOTE_CLUSTER_ROUNDS = 4
+# Upper bound on the similarity matrix built at once (elements; 4 bytes each).
+SIM_CHUNK_ELEMENTS = 1 << 24
 # Long queries (a whole note) are scored in two stages: a strided subset of their
 # tokens ranks every paragraph, then the best candidates get exact MaxSim.
 LONG_QUERY_TOKENS = 96
@@ -147,8 +170,12 @@ class _Index:
         length, row, _hash, _version, tokens = self.where[block_id]
         return self.buckets[length].rows[row, :tokens]
 
-    def maxsim_all(self, query) -> tuple[list[str | None], object]:
-        """Exact MaxSim of ``query`` [nq, dim] against every row: (ids, scores)."""
+    def maxsim_all(self, query, weights=None) -> tuple[list[str | None], object]:
+        """Exact MaxSim of ``query`` [nq, dim] against every row: (ids, scores).
+
+        ``weights`` [nq] (float32) weighs each query vector's best match (a
+        clustered note query); None sums them as usual.
+        """
 
         import torch
 
@@ -159,17 +186,14 @@ class _Index:
             used = len(bucket.ids)
             if not used:
                 continue
-            # One multiply per bucket (chunking it into cache-sized blocks measured slower).
-            rows = bucket.rows[:used]
-            sims = (rows.reshape(-1, rows.shape[-1]) @ query_t).view(used, bucket.length, -1)
-            parts.append(sims.amax(dim=1).sum(dim=1, dtype=torch.float32))
+            parts.append(_maxsim_rows(bucket.rows[:used], query_t, weights))
             ids.extend(bucket.ids)
         if not parts:
             return [], torch.empty(0)
         return ids, torch.cat(parts)
 
-    def maxsim_some(self, query, block_ids: list[str]) -> list[float]:
-        """Exact MaxSim for some paragraphs, batched per bucket."""
+    def maxsim_some(self, query, block_ids: list[str], weights=None) -> list[float]:
+        """Exact MaxSim for some paragraphs, batched per bucket (see ``maxsim_all``)."""
 
         import torch
 
@@ -182,12 +206,30 @@ class _Index:
             rows = self.buckets[length].rows[
                 torch.tensor([self.where[block_ids[p]][1] for p in positions])
             ]
-            sims = (rows.reshape(-1, rows.shape[-1]) @ query_t).view(len(positions), length, -1)
-            for position, score in zip(
-                positions, sims.amax(dim=1).sum(dim=1, dtype=torch.float32).tolist()
-            ):
+            for position, score in zip(positions, _maxsim_rows(rows, query_t, weights).tolist()):
                 out[position] = score
         return out
+
+
+def _maxsim_rows(rows, query_t, weights=None):
+    """MaxSim of rows [n, L, dim] against query_t [dim, nq], chunked so the
+    similarity matrix stays under ``SIM_CHUNK_ELEMENTS`` (a 1000-paragraph note
+    against 600 candidates used to allocate gigabytes at once)."""
+
+    import torch
+
+    count, length, dim = rows.shape
+    step = max(1, SIM_CHUNK_ELEMENTS // max(1, length * query_t.shape[1]))
+    parts = []
+    for start in range(0, count, step):
+        chunk = rows[start : start + step]
+        sims = (chunk.reshape(-1, dim) @ query_t).view(chunk.shape[0], length, -1)
+        best = sims.amax(dim=1)
+        if weights is None:
+            parts.append(best.sum(dim=1, dtype=torch.float32))
+        else:
+            parts.append(best.float() @ weights)
+    return parts[0] if len(parts) == 1 else torch.cat(parts)
 
 
 @dataclass
@@ -200,18 +242,67 @@ class _Cache:
     store_loaded: bool = False
     synced_corpus: object | None = None
     queries: OrderedDict = field(default_factory=OrderedDict)
+    paragraph_queries: OrderedDict = field(default_factory=OrderedDict)
+    note_queries: OrderedDict = field(default_factory=OrderedDict)
     query_hashes: set[str] = field(default_factory=set)
     dtype: object | None = None
 
 
 _cache = _Cache()
-# The background reindexer and request threads can all reach for the model first.
+# Only the background loader takes this; requests never wait on it.
 _model_lock = threading.Lock()
 # Guards the index and the persistent store (scoring takes a few tens of ms).
 _index_lock = threading.RLock()
+# Guards the query caches.
+_queries_lock = threading.Lock()
 # Searches in flight; the background indexer pauses between batches while any are.
 _active_queries = 0
 _active_lock = threading.Lock()
+
+_FOREGROUND, _BACKGROUND = 0, 1
+
+
+class _Encoder:
+    """The one thread that runs the model, foreground work first.
+
+    PyLate's ``tokenize`` sets the tokenizer's ``max_seq_length`` (query or
+    document length) on every call, so two threads encoding at once can cut a
+    paragraph to query length and save it that way. Every encode and tokenize
+    runs here instead. Background indexing is submitted a batch at a time, so a
+    search waits for at most one batch.
+    """
+
+    def __init__(self) -> None:
+        self._queue: queue.PriorityQueue = queue.PriorityQueue()
+        self._order = itertools.count()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def run(self, fn, priority: int):
+        if threading.current_thread() is self._thread:
+            return fn()
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(
+                    target=self._loop, name="colbert-encoder", daemon=True
+                )
+                self._thread.start()
+        done: Future = Future()
+        self._queue.put((priority, next(self._order), fn, done))
+        return done.result()
+
+    def _loop(self) -> None:
+        while True:
+            _priority, _order, fn, done = self._queue.get()
+            if not done.set_running_or_notify_cancel():
+                continue
+            try:
+                done.set_result(fn())
+            except BaseException as error:  # handed to the waiting caller
+                done.set_exception(error)
+
+
+_encoder = _Encoder()
 
 
 def model_loaded() -> bool:
@@ -226,12 +317,17 @@ def _bf16_supported() -> bool:
     return "avx512_bf16" in flags or "amx_bf16" in flags
 
 
-def _get_model():
-    """Lazily load the ColBERT model. Returns None if disabled or unavailable."""
+def _get_model(wait: bool = False):
+    """The ColBERT model, or None if disabled, unavailable or (``wait=False``) not loaded yet.
+
+    Request paths call it without ``wait`` and never block: until the model is
+    ready they score with keywords. Only the background indexer (``load_model``)
+    loads it.
+    """
     settings = get_settings()
     if not getattr(settings, "embeddings_enabled", True) or _cache.failed:
         return None
-    if _cache.model is not None:
+    if _cache.model is not None or not wait:
         return _cache.model
     with _model_lock:
         if _cache.model is not None or _cache.failed:
@@ -260,7 +356,21 @@ def _get_model():
             return None
 
 
+def load_model():
+    """Load the model (blocking). For the background indexer and scripts only."""
+
+    return _get_model(wait=True)
+
+
+def model_if_ready():
+    """The model if it is loaded, else None (never blocks)."""
+
+    return _get_model()
+
+
 def available() -> bool:
+    """Whether scoring uses the model right now (False while it is still loading)."""
+
     return _get_model() is not None
 
 
@@ -268,15 +378,29 @@ def scoring_state(corpus) -> object | None:
     """A token that stays equal while scores against ``corpus`` cannot change.
 
     None while they may (the model is loading, or paragraphs are still being
-    encoded): results are then not worth caching.
+    encoded): results are then not worth caching. Brings the index up to date
+    with ``corpus`` first when that is cheap: only the notes changed since the
+    last sync are compared, and a few edited paragraphs are encoded right away
+    (ahead of background work) rather than left for the indexer.
     """
 
     settings = get_settings()
     if not getattr(settings, "embeddings_enabled", True) or _cache.failed:
         return ("keywords",)
-    if _cache.loaded and _cache.synced_corpus is corpus:
-        return ("model", len(_cache.index))
-    return None
+    model = _get_model()
+    if model is None:
+        return None
+    if _cache.synced_corpus is not corpus:
+        with _index_lock:
+            _load_store()
+            missing = _sync(corpus)
+        if missing and len(missing) <= INLINE_ENCODE_LIMIT:
+            _add(model, missing, background=False)
+            with _index_lock:
+                missing = _sync(corpus)
+        if missing:
+            return None
+    return ("model",)
 
 
 def _tensor(embedding):
@@ -295,35 +419,84 @@ def _tensor(embedding):
     return tensor.to(dtype).contiguous()
 
 
-def _encode(model, texts: list[str], *, is_query: bool) -> list:
-    import torch
+def _encode(model, texts: list[str], *, is_query: bool, background: bool | None = None) -> list:
+    """Encode on the model thread; background work (default: documents) goes a batch
+    at a time behind any waiting search."""
 
-    with torch.inference_mode():
-        out = model.encode(
-            texts,
-            is_query=is_query,
-            batch_size=ENCODE_BATCH,
-            show_progress_bar=False,
-            convert_to_numpy=False,
-        )
+    if background is None:
+        background = not is_query
+    priority = _BACKGROUND if background else _FOREGROUND
+
+    def run(batch: list[str]) -> list:
+        import torch
+
+        with torch.inference_mode():
+            return list(
+                model.encode(
+                    batch,
+                    is_query=is_query,
+                    batch_size=ENCODE_BATCH,
+                    show_progress_bar=False,
+                    convert_to_numpy=False,
+                )
+            )
+
+    out: list = []
+    for start in range(0, len(texts), ENCODE_BATCH):
+        batch = texts[start : start + ENCODE_BATCH]
+        out.extend(_encoder.run(lambda batch=batch: run(batch), priority))
     return [_tensor(embedding) for embedding in out]
+
+
+def tokenized_lengths(texts: list[str], *, is_query: bool = True) -> list[int] | None:
+    """Token counts of ``texts`` as the model reads them (no forward pass), or None
+    while the model isn't loaded. Runs on the model thread like every encode."""
+
+    model = _get_model()
+    if model is None:
+        return None
+
+    def run() -> list[int]:
+        return [len(ids) for ids in model.tokenize(texts, is_query=is_query)["input_ids"]]
+
+    return _encoder.run(run, _FOREGROUND)
 
 
 def _text_hash(text: str) -> str:
     return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
 
-def _query_embedding(model, query: str):
-    cached = _cache.queries.get(query)
+def _remember(cache: OrderedDict, key, value, size: int) -> None:
+    with _queries_lock:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > size:
+            cache.popitem(last=False)
+
+
+def _recall(cache: OrderedDict, key):
+    with _queries_lock:
+        value = cache.get(key)
+        if value is not None:
+            cache.move_to_end(key)
+        return value
+
+
+def _query_embedding(model, query: str, *, paragraph: bool = False):
+    """Query encoding of ``query``: a typed query, or (``paragraph``) a paragraph's text."""
+
+    cache, size = (
+        (_cache.paragraph_queries, PARAGRAPH_CACHE_SIZE)
+        if paragraph
+        else (_cache.queries, QUERY_CACHE_SIZE)
+    )
+    cached = _recall(cache, query)
     if cached is not None:
-        _cache.queries.move_to_end(query)
         return cached
     embedding = _saved_query(query)
     if embedding is None:
         embedding = _encode(model, [query], is_query=True)[0]
-    _cache.queries[query] = embedding
-    while len(_cache.queries) > QUERY_CACHE_SIZE:
-        _cache.queries.popitem(last=False)
+    _remember(cache, query, embedding, size)
     return embedding
 
 
@@ -470,14 +643,31 @@ def _persist(rows: list[tuple[str, str, object]], removed: list[str]) -> None:
 
 
 def _sync(corpus) -> list[tuple[str, str, str]]:
-    """Match the index to ``corpus``; returns paragraphs that still need encoding."""
+    """Match the index to ``corpus``; returns paragraphs that still need encoding.
+
+    After the first full pass only the notes that changed since the last synced
+    snapshot are compared (``corpus.changed_between``), so an edit costs a look
+    at one note, not at every paragraph.
+    """
 
     index = _cache.index
     missing: list[tuple[str, str, str]] = []
-    if corpus is _cache.synced_corpus:
+    synced = _cache.synced_corpus
+    if corpus is synced:
         return missing
+    changed = None
+    if isinstance(corpus, corpus_store.Corpus) and isinstance(synced, corpus_store.Corpus):
+        changed = corpus_store.changed_between(synced, corpus)
+    if changed is None:
+        rows = corpus
+        candidates = None  # every indexed paragraph may be gone
+    else:
+        rows = [row for note in changed if note in corpus.notes for row in corpus.notes[note].rows]
+        candidates = [
+            row[0] for note in changed if note in synced.notes for row in synced.notes[note].rows
+        ]
     live: set[str] = set()
-    for block_id, _document_id, version, text in corpus:
+    for block_id, _document_id, version, text in rows:
         live.add(block_id)
         entry = index.where.get(block_id)
         if entry is not None and entry[3] == version:
@@ -487,7 +677,11 @@ def _sync(corpus) -> list[tuple[str, str, str]]:
             index.set_version(block_id, version)
             continue
         missing.append((block_id, version, text))
-    stale = [block_id for block_id in index.where if block_id not in live]
+    stale = [
+        block_id
+        for block_id in (index.where if candidates is None else candidates)
+        if block_id not in live and block_id in index.where
+    ]
     for block_id in stale:
         index.remove(block_id)
     _persist([], stale)
@@ -496,8 +690,10 @@ def _sync(corpus) -> list[tuple[str, str, str]]:
     return missing
 
 
-def _add(model, docs: list[tuple[str, str, str]]) -> None:
-    embeddings = _encode(model, [text for _id, _version, text in docs], is_query=False)
+def _add(model, docs: list[tuple[str, str, str]], *, background: bool = True) -> None:
+    embeddings = _encode(
+        model, [text for _id, _version, text in docs], is_query=False, background=background
+    )
     rows = []
     with _index_lock:
         for (block_id, version, text), embedding in zip(docs, embeddings):
@@ -536,12 +732,10 @@ def warm_index(time_limit: float | None = None, *, queries: bool = True) -> int:
     is indexed (and with ``queries``), paragraphs also get their query encoding
     precomputed, so asking what relates to a paragraph needs no model pass.
     """
-    model = _get_model()
+    model = load_model()
     if model is None:
         return 0
-    from . import block_store  # local import to avoid an import cycle
-
-    corpus = block_store.embedding_documents(get_settings().block_db_path)
+    corpus = corpus_store.snapshot(get_settings().block_db_path)
     with _index_lock:
         _load_store()
         missing = _sync(corpus)
@@ -576,9 +770,7 @@ def _warm_queries(model, time_limit: float | None = None) -> int:
         gone = _cache.query_hashes - live
         todo: dict[str, str] = {}
         if len(_cache.query_hashes) - len(gone) < len(live):
-            from . import block_store
-
-            for _block_id, _document_id, _version, text in block_store.embedding_documents(
+            for _block_id, _document_id, _version, text in corpus_store.snapshot(
                 get_settings().block_db_path
             ):
                 text_hash = _text_hash(text)
@@ -600,7 +792,7 @@ def _warm_queries(model, time_limit: float | None = None) -> int:
         while _active_queries:
             time.sleep(0.005)
         chunk = pending[start : start + INDEX_CHUNK]
-        encoded = _encode(model, [text for _hash, text in chunk], is_query=True)
+        encoded = _encode(model, [text for _hash, text in chunk], is_query=True, background=True)
         try:
             with closing(_connect(path)) as connection, connection:
                 connection.executemany(
@@ -620,7 +812,11 @@ def _warm_queries(model, time_limit: float | None = None) -> int:
 
 
 def score_documents(
-    query: str, docs: list[tuple[str, str, str]], *, normalized: bool = False
+    query: str,
+    docs: list[tuple[str, str, str]],
+    *,
+    normalized: bool = False,
+    paragraph: bool = False,
 ) -> dict[str, float]:
     """Score `query` against docs = [(id, updated_at_iso, text)]. Returns {id: score}.
 
@@ -628,7 +824,8 @@ def score_documents(
     paragraph) when available, otherwise keyword overlap (share of query words
     found, 0-1). With ``normalized=True`` MaxSim is divided by the number of query
     tokens, i.e. the mean best cosine similarity (about 0-1), so a fixed relevance
-    threshold works for short and long queries alike.
+    threshold works for short and long queries alike. ``paragraph`` marks the
+    query as a paragraph's text (cached apart from typed queries).
     """
     model = _get_model()
     if model is None:
@@ -637,12 +834,32 @@ def score_documents(
     if not docs:
         return {}
 
-    query_emb = _query_embedding(model, query)
+    query_emb = _query_embedding(model, query, paragraph=paragraph)
     scores = _score_with(model, query_emb, docs)
     if normalized:
         count = max(int(query_emb.shape[0]), 1)
         scores = {block_id: score / count for block_id, score in scores.items()}
     return scores
+
+
+def _paragraph_encodings(model, texts: list[str]) -> dict[str, object]:
+    """Query encodings of paragraph texts: cached, saved, or encoded in one batch."""
+
+    found: dict[str, object] = {}
+    missing = []
+    for text in dict.fromkeys(texts):
+        cached = _recall(_cache.paragraph_queries, text)
+        if cached is None:
+            cached = _saved_query(text)
+        if cached is None:
+            missing.append(text)
+        else:
+            found[text] = cached
+    if missing:
+        found.update(zip(missing, _encode(model, missing, is_query=True)))
+    for text, embedding in found.items():
+        _remember(_cache.paragraph_queries, text, embedding, PARAGRAPH_CACHE_SIZE)
+    return found
 
 
 def note_query_embedding(texts: list[str]):
@@ -659,37 +876,76 @@ def note_query_embedding(texts: list[str]):
     texts = [text for text in texts if text.strip()]
     if model is None or not texts:
         return None
-    found: dict[str, object] = {}
-    missing = []
-    for text in dict.fromkeys(texts):
-        cached = _cache.queries.get(text)
-        if cached is None:
-            cached = _saved_query(text)
-        if cached is None:
-            missing.append(text)
-        else:
-            found[text] = cached
-    if missing:
-        found.update(zip(missing, _encode(model, missing, is_query=True)))
-    for text, embedding in found.items():
-        _cache.queries[text] = embedding
-        _cache.queries.move_to_end(text)
-    while len(_cache.queries) > QUERY_CACHE_SIZE:
-        _cache.queries.popitem(last=False)
+    found = _paragraph_encodings(model, texts)
     return torch.cat([found[text] for text in texts], dim=0)
 
 
+def note_query(texts: list[str]):
+    """A whole note as at most ``NOTE_QUERY_VECTORS`` weighted query vectors.
+
+    Returns (vectors, weights or None, token count): the paragraphs' query
+    vectors (``note_query_embedding``), clustered when there are more than
+    ``NOTE_QUERY_VECTORS``. A cluster's vector is the mean of its members and its
+    weight their number, so weighted MaxSim stays on the scale of the plain sum
+    over every token (and is a lower bound of it). Cached per note text.
+    """
+
+    texts = [text for text in texts if text.strip()]
+    if not texts or _get_model() is None:
+        return None
+    key = hashlib.blake2b("\x00".join(texts).encode("utf-8"), digest_size=16).digest()
+    cached = _recall(_cache.note_queries, key)
+    if cached is not None:
+        return cached
+    joined = note_query_embedding(texts)
+    if joined is None:
+        return None
+    tokens = int(joined.shape[0])
+    vectors, weights = _cluster(joined, NOTE_QUERY_VECTORS)
+    result = (vectors, weights, tokens)
+    _remember(_cache.note_queries, key, result, NOTE_CACHE_SIZE)
+    return result
+
+
+def _cluster(vectors, size: int):
+    """(vectors, None) if there are at most ``size``, else (centroids, counts) of a
+    few rounds of spherical k-means seeded evenly across the note."""
+
+    import torch
+
+    count = int(vectors.shape[0])
+    if count <= size:
+        return vectors, None
+    points = vectors.float()
+    seeds = torch.linspace(0, count - 1, size).round().long()
+    centroids = torch.nn.functional.normalize(points[seeds], dim=-1)
+    for _round in range(NOTE_CLUSTER_ROUNDS):
+        assign = (points @ centroids.T).argmax(dim=1)
+        sums = torch.zeros_like(centroids).index_add_(0, assign, points)
+        filled = torch.bincount(assign, minlength=size) > 0
+        centroids = torch.where(
+            filled[:, None], torch.nn.functional.normalize(sums, dim=-1), centroids
+        )
+    assign = (points @ centroids.T).argmax(dim=1)
+    counts = torch.bincount(assign, minlength=size)
+    sums = torch.zeros_like(centroids).index_add_(0, assign, points)
+    keep = counts > 0
+    means = sums[keep] / counts[keep, None]
+    return means.to(vectors.dtype).contiguous(), counts[keep].float()
+
+
 def score_note(texts: list[str], docs: list[tuple[str, str, str]]) -> tuple[dict[str, float], int]:
-    """Raw MaxSim of a whole note (see ``note_query_embedding``) and its query token count."""
+    """Raw MaxSim of a whole note (see ``note_query``) and its query token count."""
 
     model = _get_model()
-    query_emb = note_query_embedding(texts)
-    if model is None or query_emb is None or not docs:
+    query = note_query(texts) if model is not None else None
+    if query is None or not docs:
         return {}, 0
-    return _score_with(model, query_emb, docs), int(query_emb.shape[0])
+    vectors, weights, tokens = query
+    return _score_with(model, vectors, docs, weights), tokens
 
 
-def _score_with(model, query_emb, docs: list[tuple[str, str, str]]) -> dict[str, float]:
+def _score_with(model, query_emb, docs: list[tuple[str, str, str]], weights=None) -> dict[str, float]:
     """MaxSim of a ready query embedding against ``docs``, indexing stale ones as needed."""
 
     global _active_queries
@@ -711,18 +967,18 @@ def _score_with(model, query_emb, docs: list[tuple[str, str, str]]) -> dict[str,
                 else:
                     stale.append((block_id, version, text))
         if stale and len(stale) <= INLINE_ENCODE_LIMIT:
-            _add(model, stale)
+            _add(model, stale, background=False)
             stale = []
         blank.update(block_id for block_id, _version, _text in stale)
         with _index_lock:
-            scores = _score_indexed(query_emb, docs, blank)
+            scores = _score_indexed(query_emb, docs, blank, weights)
     finally:
         with _active_lock:
             _active_queries -= 1
     return scores
 
 
-def _score_indexed(query_emb, docs, unscored: set[str]) -> dict[str, float]:
+def _score_indexed(query_emb, docs, unscored: set[str], weights=None) -> dict[str, float]:
     """MaxSim for ``docs``; 0 for those in ``unscored`` (blank or not encoded yet)."""
 
     index = _cache.index
@@ -733,7 +989,7 @@ def _score_indexed(query_emb, docs, unscored: set[str]) -> dict[str, float]:
         wanted = [doc[0] for doc in docs if doc[0] in where and doc[0] not in unscored]
         # A handful of paragraphs (filtered search, tests): score them one by one.
         scores = dict.fromkeys((doc[0] for doc in docs), 0.0)
-        scores.update(zip(wanted, index.maxsim_some(query_emb, wanted)))
+        scores.update(zip(wanted, index.maxsim_some(query_emb, wanted, weights)))
         return scores
     tokens = int(query_emb.shape[0])
     if tokens > LONG_QUERY_TOKENS:
@@ -741,21 +997,25 @@ def _score_indexed(query_emb, docs, unscored: set[str]) -> dict[str, float]:
         wanted = [doc[0] for doc in docs if doc[0] in where and doc[0] not in unscored]
         scores = dict.fromkeys((doc[0] for doc in docs), 0.0)
         step = -(-tokens // PREFILTER_TOKENS)
-        ids, rough = index.maxsim_all(query_emb[::step])
-        rough = rough * (tokens / query_emb[::step].shape[0])
+        if weights is None:
+            ids, rough = index.maxsim_all(query_emb[::step])
+            rough = rough * (tokens / query_emb[::step].shape[0])
+        else:
+            ids, rough = index.maxsim_all(query_emb[::step], weights[::step])
+            rough = rough * float(weights.sum() / weights[::step].sum())
         estimate = dict(zip(ids, rough.tolist()))
         candidates = sorted(wanted, key=lambda block_id: -estimate[block_id])
         exact = candidates[:PREFILTER_CANDIDATES]
         # Paragraphs outside the shortlist keep the (scaled) prefilter estimate,
         # capped below the shortlist so the ranking stays exact at the top.
         floor = None
-        for block_id, score in zip(exact, index.maxsim_some(query_emb, exact)):
+        for block_id, score in zip(exact, index.maxsim_some(query_emb, exact, weights)):
             scores[block_id] = score
             floor = score if floor is None else min(floor, score)
         for block_id in candidates[PREFILTER_CANDIDATES:]:
             scores[block_id] = min(estimate[block_id], floor) if floor is not None else 0.0
         return scores
-    ids, values = index.maxsim_all(query_emb)
+    ids, values = index.maxsim_all(query_emb, weights)
     all_scores = dict(zip(ids, values.tolist()))
     get = all_scores.get
     scores = {doc[0]: get(doc[0], 0.0) for doc in docs}

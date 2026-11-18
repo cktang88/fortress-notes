@@ -6,8 +6,8 @@ from app.block_store import (
     apply_transaction,
     bootstrap_markdown,
     document_tree,
-    embedding_documents,
 )
+from app.corpus import embedding_documents
 from app.models import BlockOperation
 
 

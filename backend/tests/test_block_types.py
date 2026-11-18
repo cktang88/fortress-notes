@@ -16,10 +16,10 @@ from app.block_store import (
     create_document,
     document_backlinks,
     document_tree,
-    embedding_documents,
     search_blocks,
     undo_transaction,
 )
+from app.corpus import embedding_documents
 from app.block_types import BlockShapeError, inline_from_markdown, inline_to_markdown
 from app.models import BlockOperation
 from app.portability import export_document_markdown, import_markdown_directory

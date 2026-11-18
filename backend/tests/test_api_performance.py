@@ -346,14 +346,14 @@ class ApiWorkTests(unittest.TestCase):
         url = f"/api/notes/{mine['id']}/related"
         calls: list[int] = []
 
-        def scores(texts, docs):
+        def scores(docs, *, query=None, texts=None):
             calls.append(1)
-            return {bid: 1.0 for bid, _version, text in docs if "kyoto" in text}
+            return {bid: 1.0 for bid, _version, text in docs if "kyoto" in text}, None
 
         with (
-            patch.object(embeddings, "_get_model", lambda: None),
+            patch.object(embeddings, "_get_model", lambda wait=False: None),
             patch.object(embeddings._cache, "failed", True),
-            patch.object(search.relevance, "related_note_scores", scores),
+            patch.object(search.relevance, "related", scores),
             patch.object(self.documents, "get_note", side_effect=AssertionError("built")),
             patch.object(block_store, "document_tree", side_effect=AssertionError("built")),
         ):

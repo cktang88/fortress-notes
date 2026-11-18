@@ -6,9 +6,11 @@ import threading
 from collections import OrderedDict
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from . import block_query, block_store, documents, embeddings, relevance
+from . import corpus as corpus_store
 from .config import get_settings
 from .models import RelatedResult, SearchResult
 
@@ -29,7 +31,7 @@ def full_text_search(q: str) -> list[SearchResult]:
 def embedding_search(q: str, k: int = 20) -> list[SearchResult]:
     if not q.strip():
         return []
-    block_docs = block_store.embedding_documents(get_settings().block_db_path)
+    block_docs = corpus_store.snapshot(get_settings().block_db_path)
     scores = embeddings.score_documents(
         q, [(block_id, updated_at, text) for block_id, _, updated_at, text in block_docs]
     )
@@ -52,85 +54,131 @@ def _ranked(scores: dict[str, float]) -> list[SearchResult]:
     return results
 
 
-# Related results per (note, k, block) for one corpus and scoring state: opening
-# a note again (or another window asking) skips the scoring pass.
-_related_cache: OrderedDict[tuple, tuple[object, object, list[RelatedResult]]] = OrderedDict()
-_related_lock = threading.Lock()
+# Related results per (note, k, block). An entry stays valid while its note is
+# unchanged: edits to other notes are folded in by scoring just their paragraphs
+# (``relevance.rescore``) instead of the whole corpus again.
 _RELATED_CACHE_SIZE = 256
+# More changed notes than this since an entry was computed: score everything again.
+_RELATED_PATCH_LIMIT = 64
+
+
+@dataclass
+class _Related:
+    corpus: object  # the snapshot the matches are current for
+    state: object
+    note: object  # the note's corpus entry then (identity: its title and text)
+    query: str | None
+    texts: list[str] | None
+    calibration: tuple[int, float] | None
+    # every other note clearing the cutoff: id -> (score, block id, block text)
+    matches: dict[str, tuple[float, str, str]]
+
+
+_related_cache: OrderedDict[tuple, _Related] = OrderedDict()
+_related_lock = threading.Lock()
 
 
 def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list[RelatedResult]:
     settings = get_settings()
     db_path = settings.block_db_path
-    # Only the title and one block's text are needed: this used to build and
-    # render the whole note twice (a full tree and its Markdown) per request.
-    title = block_store.document_title(db_path, note_id)
-    if title is None:
+    corpus = corpus_store.snapshot(db_path)
+    note = corpus.notes.get(note_id)
+    if note is None:
         return []
-    query = title
+    query: str | None = None
     if block_id is not None:
+        # Only one block's text is needed (this used to render the whole note).
         text = block_store.block_text(db_path, note_id, block_id)
         if text is None:
             raise KeyError(f"block not found: {block_id}")
-        query = text
-    all_blocks = block_store.embedding_documents(db_path)
-    state = embeddings.scoring_state(all_blocks)
-    key = (db_path, note_id, k, block_id, title)
-    if state is not None:
+        # Its indexed text (with any image text) when it has one.
+        query = next((row[3] for row in note.rows if row[0] == block_id), text)
+        if not query.strip():
+            return []
+    state = embeddings.scoring_state(corpus)
+    key = (db_path, note_id, k, block_id)
+    with _related_lock:
+        cached = _related_cache.get(key)
+        if cached is not None:
+            _related_cache.move_to_end(key)
+    entry = None
+    if state is not None and cached is not None and cached.state == state and cached.note is note:
+        if cached.corpus is corpus:
+            entry = cached
+        elif cached.calibration is not None:
+            entry = _patched(cached, corpus, note_id)
+    if entry is None:
+        entry = _related(corpus, note, block_id, query, state)
+    if state is not None and entry is not cached:
         with _related_lock:
-            cached = _related_cache.get(key)
-            if cached is not None and cached[0] is all_blocks and cached[1] == state:
-                _related_cache.move_to_end(key)
-                return list(cached[2])
-    results = _related_notes(note_id, k, block_id, title, query, all_blocks)
-    if state is not None:
-        with _related_lock:
-            _related_cache[key] = (all_blocks, state, results)
+            _related_cache[key] = entry
             while len(_related_cache) > _RELATED_CACHE_SIZE:
                 _related_cache.popitem(last=False)
-    return list(results)
+    return _results(entry.matches, k)
 
 
-def _related_notes(
-    note_id: str, k: int, block_id: str | None, title: str, query: str, all_blocks
-) -> list[RelatedResult]:
-    # One pass: the focused paragraph's indexed text (or all of this note's), and every
-    # other note's paragraphs.
-    candidates = []
-    own_texts = [title]
-    for bid, document_id, updated_at, text in all_blocks:
-        if document_id != note_id:
-            candidates.append((bid, updated_at, text))
-        elif bid == block_id:
-            query = text
-        else:
-            own_texts.append(text)
-    if block_id is not None and not query.strip():
-        return []
+def _related(corpus, note, block_id: str | None, query: str | None, state) -> _Related:
+    """Score the note (or one of its paragraphs) against every other note's paragraphs."""
+
+    candidates = [
+        (bid, version, text)
+        for bid, document_id, version, text in corpus
+        if document_id != note.document_id
+    ]
+    texts = None
+    if block_id is None:
+        # A whole note is queried as its title plus each paragraph's saved query
+        # encoding (clustered for long notes), so it needs no long model pass.
+        texts = [note.title, *(row[3] for row in note.rows)]
     # Only paragraphs that clear the relevance cutoff, so every consumer (the
     # related panel, the "↗ N related" chip) shows real relations, not just the top k.
-    # A whole note is queried as its title plus each paragraph's saved query encoding,
-    # so it needs no long model pass.
-    scores = (
-        relevance.related_scores(query, candidates)
-        if block_id is not None
-        else relevance.related_note_scores(own_texts, candidates)
-    )
-    # Few paragraphs clear the cutoff: look up only theirs (in corpus order, so ties
-    # resolve as before).
-    note_matches: dict[str, tuple[float, str, str]] = {}
+    scores, calibration = relevance.related(candidates, query=query, texts=texts)
+    matches: dict[str, tuple[float, str, str]] = {}
     if scores:
-        for bid, document_id, _, text in all_blocks:
+        # In corpus order, so ties resolve as before.
+        for bid, document_id, _, text in corpus:
             score = scores.get(bid)
-            if score is None or document_id == note_id:
-                continue
-            current = note_matches.get(document_id)
-            if current is None or score > current[0]:
-                note_matches[document_id] = (score, bid, text)
+            if score is not None and document_id != note.document_id:
+                _keep_best(matches, document_id, score, bid, text)
+    return _Related(corpus, state, note, query, texts, calibration, matches)
+
+
+def _patched(cached: _Related, corpus, note_id: str) -> _Related | None:
+    """``cached`` brought up to ``corpus`` by rescoring only the notes that changed."""
+
+    changed = corpus_store.changed_between(cached.corpus, corpus)
+    if changed is None or len(changed) > _RELATED_PATCH_LIMIT or note_id in changed:
+        return None
+    rows = [
+        row for document_id in sorted(changed) if document_id in corpus.notes
+        for row in corpus.notes[document_id].rows
+    ]
+    scores = relevance.rescore(
+        [(bid, version, text) for bid, _document_id, version, text in rows],
+        cached.calibration,
+        query=cached.query,
+        texts=cached.texts,
+    )
+    matches = {nid: match for nid, match in cached.matches.items() if nid not in changed}
+    for bid, document_id, _, text in rows:
+        score = scores.get(bid)
+        if score is not None:
+            _keep_best(matches, document_id, score, bid, text)
+    return _Related(
+        corpus, cached.state, cached.note, cached.query, cached.texts, cached.calibration, matches
+    )
+
+
+def _keep_best(matches: dict, document_id: str, score: float, block_id: str, text: str) -> None:
+    current = matches.get(document_id)
+    if current is None or score > current[0]:
+        matches[document_id] = (score, block_id, text)
+
+
+def _results(matches: dict[str, tuple[float, str, str]], k: int) -> list[RelatedResult]:
     ranked = sorted(
-        ((nid, match) for nid, match in note_matches.items() if match[0] > 0),
-        key=lambda item: item[1][0],
-        reverse=True,
+        ((nid, match) for nid, match in matches.items() if match[0] > 0),
+        key=lambda item: (-item[1][0], item[0]),
     )
     # Summaries only for the notes that can make the list (every one is active).
     summaries = documents.summaries([nid for nid, _match in ranked[: k * 2]])
@@ -176,7 +224,7 @@ def unified_search(
     allowed = block_query.allowed_block_ids(db_path, filters)
 
     def meaning() -> list[str]:
-        blocks = block_store.embedding_documents(db_path)
+        blocks = corpus_store.snapshot(db_path)
         if allowed is not None:
             blocks = [block for block in blocks if block[0] in allowed]
         scores = embeddings.score_documents(

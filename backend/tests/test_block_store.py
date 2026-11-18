@@ -21,7 +21,6 @@ from app.block_store import (
     document_backlinks,
     document_tree,
     document_subtree,
-    embedding_documents,
     ensure_fts_integrity,
     fts_is_consistent,
     initialize,
@@ -39,6 +38,7 @@ from app.block_store import (
     store_asset_text,
     undo_transaction,
 )
+from app.corpus import embedding_documents
 from app.models import BlockOperation, BlockTransaction
 from pydantic import ValidationError
 

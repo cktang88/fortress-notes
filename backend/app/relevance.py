@@ -70,37 +70,80 @@ def related_scores(query: str, docs: list[tuple[str, str, str]]) -> dict[str, fl
     shared distinctive words otherwise.
     """
 
-    if not query.strip() or not docs:
-        return {}
-    if not embeddings.available():
-        return relevant_keyword_scores(query, docs)
-    tokens = _query_token_count(query)
-    if not tokens:
-        return {}
-    return relevant_model_scores(embeddings.score_documents(query, docs), tokens)
+    return related(docs, query=query)[0]
 
 
 def related_note_scores(texts: list[str], docs: list[tuple[str, str, str]]) -> dict[str, float]:
     """Like ``related_scores`` for a whole note given as its title and paragraphs."""
 
-    if not any(text.strip() for text in texts) or not docs:
+    return related(docs, texts=texts)[0]
+
+
+def related(
+    docs: list[tuple[str, str, str]], *, query: str | None = None, texts: list[str] | None = None
+) -> tuple[dict[str, float], tuple[int, float] | None]:
+    """``related_scores`` (``query``: a paragraph) or ``related_note_scores`` (``texts``).
+
+    Also returns the calibration used, (query tokens, baseline), when the model
+    scored them, so ``rescore`` can score more docs the same way later.
+    """
+
+    if query is not None:
+        if not query.strip() or not docs:
+            return {}, None
+        if not embeddings.available():
+            return relevant_keyword_scores(query, docs), None
+        tokens = _query_token_count(query)
+        if not tokens:
+            return {}, None
+        raw = embeddings.score_documents(query, docs, paragraph=True)
+    else:
+        texts = texts or []
+        if not any(text.strip() for text in texts) or not docs:
+            return {}, None
+        if not embeddings.available():
+            return relevant_keyword_scores("\n\n".join(texts), docs), None
+        raw, tokens = embeddings.score_note(texts, docs)
+        if not tokens:
+            return {}, None
+    if not raw:
+        return {}, None
+    baseline = model_baseline(raw, tokens)
+    return normalized_scores(raw, tokens, baseline), (tokens, baseline)
+
+
+def rescore(
+    docs: list[tuple[str, str, str]],
+    calibration: tuple[int, float],
+    *,
+    query: str | None = None,
+    texts: list[str] | None = None,
+) -> dict[str, float]:
+    """Relevance of a few more docs for a query scored before by ``related``.
+
+    Keeps that pass's baseline (the median over the whole corpus barely moves
+    when a few notes change), so cached related lists can take in edits to
+    other notes without scoring every paragraph again.
+    """
+
+    if not docs:
         return {}
-    if not embeddings.available():
-        return relevant_keyword_scores("\n\n".join(texts), docs)
-    raw, tokens = embeddings.score_note(texts, docs)
-    if not tokens:
-        return {}
-    return relevant_model_scores(raw, tokens)
+    tokens, baseline = calibration
+    if query is not None:
+        raw = embeddings.score_documents(query, docs, paragraph=True)
+    else:
+        raw, _tokens = embeddings.score_note(texts or [], docs)
+    return normalized_scores(raw, tokens, baseline)
 
 
 def _query_token_count(query: str) -> int:
     """How many vectors ColBERT makes for ``query`` (no padding, so no forward pass needed)."""
 
-    model = embeddings._get_model()
     try:
-        return len(model.tokenize([query], is_query=True)["input_ids"][0])
+        lengths = embeddings.tokenized_lengths([query], is_query=True)
     except Exception:
         return 0
+    return lengths[0] if lengths else 0
 
 
 def relevant_model_scores(
@@ -113,10 +156,24 @@ def relevant_model_scores(
 
     if query_tokens <= 0 or not raw:
         return {}
-    ceiling = float(query_tokens)
-    baseline = _UNRELATED_RATIO * ceiling
+    return normalized_scores(raw, query_tokens, model_baseline(raw, query_tokens), cutoff)
+
+
+def model_baseline(raw: dict[str, float], query_tokens: int) -> float:
+    """The raw score of a typical unrelated paragraph for this query (see above)."""
+
+    baseline = _UNRELATED_RATIO * float(query_tokens)
     if len(raw) >= _MIN_CANDIDATES_FOR_MEDIAN:
         baseline = max(baseline, statistics.median(raw.values()))
+    return baseline
+
+
+def normalized_scores(
+    raw: dict[str, float], query_tokens: int, baseline: float, cutoff: float = RELATED_MIN_SCORE
+) -> dict[str, float]:
+    """``relevant_model_scores`` with a given baseline (e.g. one kept from a full pass)."""
+
+    ceiling = float(query_tokens)
     span = ceiling - baseline
     if span <= 0:
         return {}

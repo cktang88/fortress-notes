@@ -29,7 +29,7 @@ class UnifiedSearchTests(unittest.TestCase):
             patch.object(documents, "get_settings", lambda: self.settings),
             patch.object(search, "get_settings", lambda: self.settings),
             # Keyword overlap stands in for the ColBERT model.
-            patch.object(embeddings, "_get_model", lambda: None),
+            patch.object(embeddings, "_get_model", lambda wait=False: None),
         ):
             item.start()
             self.addCleanup(item.stop)
