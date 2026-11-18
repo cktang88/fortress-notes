@@ -13,7 +13,8 @@ with a failing check (and every 25th page), `--prune` deletes each input's
 converted files and temporary notes once its pages are checked, and `--skip TEXT`
 leaves out inputs whose path contains TEXT.
 
-Open `REPORT_DIR/index.html` (pass rate per check, one row per page, links to a
+`REPORT_DIR` defaults to `./onenote-compare-report`. Open `REPORT_DIR/index.html`
+(pass rate per check, one row per page, links to a
 detail page per page with the diffs and a side-by-side image). `results.json`
 holds the same data.
 
@@ -66,7 +67,7 @@ For each input:
 ## Requirements
 
 * Rust (stable) — builds the converter; installs `one2html` 2.0.1 into
-  `~/.cache/fortress-onenote-compare` on first use (its default `backtrace`
+  `~/.cache/fortress-onenote-compare` (or `$FORTRESS_COMPARE_CACHE`) on first use (its default `backtrace`
   feature needs nightly, so it is built without it). Set `ONE2HTML` to use another
   binary and `FORTRESS_ONENOTE_BIN` to skip building the converter.
 * `uv` and the backend's locked environment (`cd backend && uv sync --frozen`).

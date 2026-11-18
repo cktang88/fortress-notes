@@ -1,11 +1,24 @@
 # OneNote -> Fortress Notes migration research (Nov 2026)
 
-STATUS: complete — file-based route (F1–F5) is the recommendation; sections 2a + Obsidian notes are Graph background only.
+STATUS: complete, and built. The file-based route (F1–F5) is what shipped:
+`tools/fortress-onenote` (Rust converter, manifest format in
+[SCHEMA.md](../tools/fortress-onenote/SCHEMA.md)) → `backend/app/onenote_import.py` →
+File › Import › From OneNote… in the Mac app. **The behaviour as implemented is
+specified in [spec.md §7b](../spec.md#7b-onenote-import-onenote_importpy)**; this
+document keeps the research and the reasoning behind it. Sections 2a and the Obsidian
+notes are Graph background only. [tools/onenote-compare](../tools/onenote-compare/README.md)
+verifies imports page by page against an independent rendering.
 
-## 0. Fortress block model as it stands (from repo)
-- `backend/app/block_store.py`: table `blocks(id, document_id, parent_id, position, type, attrs_json, content_json, text, ...)`; content is stored per block as `{"markdown": "<source>"}` (or a `blocknote` native payload); `ImportedBlock(id, type, source, attrs, children)`.
-- Block types produced by Markdown import: `paragraph`, `heading`, `list` (attrs `ordered`, `checked`; children nested), `quote` (container), `code` (attrs `language`), `thematic_break`, and `raw` — **GFM tables and HTML blocks currently land as `raw`** (no structured table block). Inline formatting lives inside each block's Markdown source (so bold/italic/strike/links exist; highlight/colour/underline/font size do not).
-- No external-id / import-source column exists -> idempotent re-import needs a mapping table (see section 3).
+## 0. Fortress block model
+
+At the time of this research (early Nov 2026) blocks stored Markdown or BlockNote JSON
+and GFM tables landed as raw blocks. That model is gone: blocks are now canonical
+(`type`, `attrs`, inline `content` with marks, `payload`), with structured tables
+(`table` → `table_row` → `table_cell`, cells holding any blocks), `columns`/`column`,
+`check_item`, `math`, `file` and `image` blocks, and colour/highlight/underline/sup/sub
+marks — see [docs/block-model.md](block-model.md). Re-import keys live in
+`documents.source_kind`/`source_external_id` and the `block_sync` table
+(`backend/app/sources.py`, spec.md §7a).
 
 ## 2a. Microsoft Graph OneNote API (verified Nov 2026)
 
@@ -81,14 +94,14 @@ The Graph material above is kept only as background (it documents what the HTML 
 4. **OneNote for Mac**: only per-page/section **PDF** export (File -> Save as PDF). Useless for structured import (lossy, no structure) — not recommended. The Mac app keeps notebooks in a private cache, not as .one files.
 5. **OneDrive desktop sync on Mac**: OneNote notebooks are *not* synced as .one files; the client shows them as internet-shortcut placeholders (`.url`) — not a usable route. (see verification note below)
 
-**Recommendation**: Route 1 (OneNote web "Export notebook") per notebook, falling back to Route 2 (OneDrive web Download) if the menu is missing. Both produce a .zip we accept directly (drag the .zip onto Fortress). Route 3 (.onepkg) supported as well for users with Windows access.
+**Recommendation**: Route 1 (OneNote web "Export notebook") per notebook, falling back to Route 2 (OneDrive web Download) if the menu is missing. Both produce a .zip we accept directly (File › Import › From OneNote…, then choose or drop the .zip). Route 3 (.onepkg) supported as well for users with Windows access.
 - Verification of route 5: OneDrive sync shows notebooks as Internet-shortcut `.url` placeholders that only open OneNote web; the real `.one` files are not materialised locally ([MS answers thread](https://answers.microsoft.com/en-us/msoffice/forum/all/onenote-files-are-saved-as-a-web-link-instead-of-a/5fdf2311-c113-440b-bf50-21460832d4d8); [OneNoteGem](https://en.onenotegem.com/a/documents/gem-for-OneNote/Gem_Fix_Tools/2020/0331/open-notebook-url.html)). Not usable.
 
 ### In-app instructions to show the user (Mac, personal OneDrive)
 > **Export from OneNote (about 1 minute per notebook)**
 > 1. In a browser, open **onenote.com/notebooks** and sign in with your Microsoft account.
 > 2. Right-click a notebook → **Export notebook** → **Export**. A `.zip` downloads (it contains a folder named after the notebook).
-> 3. Repeat for each notebook. Don't unzip — drag all the `.zip` files onto Fortress (or File → Import → OneNote…).
+> 3. Repeat for each notebook. Don't unzip — in Fortress choose File → Import → From OneNote… and drop each `.zip` on the sheet.
 > *No "Export notebook" item?* Open **onedrive.live.com → My files**, tick the notebook (or the folder holding your notebooks, usually *Documents*) → **Download**. Drag that `.zip` in instead.
 > *Got a zip with only `errors.txt`?* The notebook was too big for Microsoft's exporter — split it into smaller notebooks in OneNote and export again (or use the OneDrive "Download" route).
 > *Have a Windows PC?* OneNote for Windows → File → Export → Notebook → **OneNote Package (.onepkg)** also works and is the most complete copy (includes the classic desktop format).
@@ -122,7 +135,7 @@ Fortress must ignore `OneNote_RecycleBin/` folders and `errors.txt`, and tolerat
 ### B. `one2html` (msiemens) — Rust CLI, **MIT**, v2.0.1 (Oct 2026, last commit 28 Oct 2026)
 Converts notebook/section/.onepkg to HTML; renders each outline as `position:absolute; left/top` divs (unit × 48 px), `width` when user-sized else `max-width`; tables with `border-collapse`, borders when visible, col widths; math → MathML; ink → absolutely positioned SVG; note-tag icons. Install `cargo binstall one2html` or `cargo install --locked --no-default-features --features bin,onepkg one2html`. Good **reference implementation** and a zero-code prototype path (run it, parse its HTML in Python), but HTML is a lossy intermediate (style flattening, no GUIDs/levels/OCR text as data).
 
-### C. Obsidian Importer's TypeScript parser — **MIT** (see section above). Reads cloud package-store and desktop revision-store `.one`, `.onepkg` (own CAB+LZX), detects `.onex`/IRM. Model is simpler: no outline positions, no fonts/colours except highlight, tags with labels, ink with recognized text. Useful only if we wanted a JS/WASM-free TS path in a web frontend; not for us.
+### C. Obsidian Importer's TypeScript parser — **MIT** (see section above). Reads cloud package-store and desktop revision-store `.one`, `.onepkg` (own CAB+LZX), detects `.onex`/IRM. Model is simpler: no outline positions, no fonts/colours except highlight, tags with labels, ink with recognized text. Useful only for a TypeScript/JS client; not for us.
 
 ### D. Python options
 - **aspose-note-foss** (PyPI, "Aspose.Note FOSS for Python", 26.9.0, Sept 2026; README says MIT but PyPI license metadata says `LicenseRef-Aspose-Split` — check before vendoring): pure Python, reads `.one` → DOM of Page/Outline/OutlineElement/RichText(TextRun styles: bold/italic/underline/strike/super/sub/font/colour/hyperlinks)/Image/Table/AttachedFile/NoteTag (incl. custom), `Page.Level`, CreationTime. **Not documented: FSSHTTP (OneDrive-download) format, `.onepkg`, outline positions, ink, math.** Brand-new (first release Jan 2026 as `aspose-note`, renamed), vendor "free edition" of a commercial product. Attractive (no binary to ship) but unproven on exactly the files this user will have — evaluate with a real export before considering. ([PyPI](https://pypi.org/project/aspose-note-foss/))
@@ -141,62 +154,49 @@ Why this over the alternatives:
 - **Why not pure Python (aspose-note-foss)**: unverified on the FSSHTTP format the web export produces, no positions/ink/math, brand-new, unclear licence metadata. Re-evaluate later if we want zero native code.
 - Prototype shortcut (day 1): run `one2html` on the user's zip to eyeball fidelity before writing the CLI.
 
-### CLI contract
-`fortress-onenote extract <input.zip|.onepkg|.onetoc2|.one|dir> --out <workdir>` →
-- unzips (zip) itself or accepts a directory; finds every `*.onetoc2` (skip `OneNote_RecycleBin`), else treats loose `.one` files as sections; `.onepkg` via `parse_package`.
-- writes `workdir/manifest.json` (schema-versioned) + `workdir/assets/<sha256>.<ext>` (content-addressed, so duplicates collapse and re-runs are free).
-```json
-{ "schema": 1, "tool": {"name":"fortress-onenote","parser":"onenote_parser 2.1.0"},
-  "notebooks": [{ "fileIdentity":"…","name":"Recipes","color":"#…",
-    "children": [ {"kind":"sectionGroup","fileIdentity":"…","name":"…","children":[…]},
-                  {"kind":"section","fileIdentity":"…","name":"Soups","color":"#…",
-                   "warnings":[…],
-                   "pages":[{ "guid":"{…}","title":"Pho","level":0,"order":3,
-                              "created":"2019-…Z","modified":"2024-…Z","author":"…",
-                              "outlines":[{ "x":0.5,"y":1.2,"width":6.5,"userWidth":true,
-                                            "elements":[ /* paragraph | list item | table | image | file | ink, nested */ ] }],
-                              "floating":[ {"kind":"image","x":…,"y":…,"asset":"sha.png","alt":"OCR…"} ],
-                              "inkText":"recognized handwriting…" }]} ] }],
-  "report": { "sectionsFailed":[{"path":"…","reason":"password-protected"}], "warnings":[…] } }
-```
-Paragraph element: `{"kind":"p","style":"h2|p|cite|code|…","align":"left|center|right","indent":1,"list":{"ordered":true,"format":"1.","restart":null}|null,"tags":[{"label":"To Do","shape":"…","checkable":true,"completed":false}],"runs":[{"text":"…","b":1,"i":1,"u":1,"s":1,"sup":1,"sub":1,"font":"Consolas","size":11,"color":"#C00000","highlight":"#FFFF00","link":"https://…","math":0}],"children":[…]}`.
-Table: `{"kind":"table","borders":true,"colWidths":[…],"rows":[[{"bg":"#DEEAF6","children":[…]}]]}`. Image: `{"kind":"image","asset":"…","mime":"image/png","w":…,"h":…,"alt":"…","link":"…","printoutPage":3|null}`. File: `{"kind":"file","asset":"…","name":"Contract.pdf","mime":"application/pdf","status":"ok|missing|invalid"}`. Ink: `{"kind":"ink","svgAsset":"…","bbox":[…],"recognized":"…"}`. Math: run with `"math":1` plus `"mathml":"<math…>"` (port one2html's math renderer, MIT).
+### CLI contract (as built)
+`fortress-onenote <input.zip|folder|.onetoc2|.one|.onepkg> --out <dir> [--keep-extracted] [--compact] [-q]`
+→ `<dir>/manifest.json` (schema-versioned; any other version is refused by the
+importer) + `<dir>/assets/<sha256>.<ext>` (content-addressed, so duplicates collapse and
+re-runs are free), and one JSON summary line on stdout. It unzips safely, finds every
+notebook (`.onetoc2`, skipping `OneNote_RecycleBin`), treats loose `.one` files as
+sections, reads `.onepkg` via `parse_package`, and reports failed sections with a reason
+and a hint. The manifest format (pages, layout rows, blocks, marks, object ids, report)
+is specified in [tools/fortress-onenote/SCHEMA.md](../tools/fortress-onenote/SCHEMA.md);
+usage and tests in [its README](../tools/fortress-onenote/README.md).
 
 ### Python side: `backend/app/onenote_import.py` + `POST /api/import/onenote` (upload zip/onepkg; job id; progress via polling)
 **Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, two-pass link rewrite) and the job API. Update (Nov 2026): blocks are keyed by OneNote object ids (ExGUIDs, stable across edits; `onenote_parser` 2.1 keeps them internal, so the converter reads them from `Parser::dump_onestore` and matches them to content — tools/fortress-onenote/SCHEMA.md "Object ids"), paragraph links become block references, pages deleted in OneNote are marked `source_removed`, jobs persist/cancel, and each page gets a text-coverage check.
 Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff against mapping table) → apply in one transaction per page (existing block transaction machinery) → second pass link rewrite → report.
 
-**Mapping**
+**Mapping** (as built; the authoritative list is spec.md §7b)
 | OneNote | Fortress |
 |---|---|
-| Notebook | top-level folder (under an optional "OneNote" parent the user picks) |
+| Notebook | top-level folder (or under a folder the user picks), keyed by `file_identity` |
 | Section group | nested folder |
-| Section | folder (section colour → folder `attrs.color` if/when folders get colours) |
-| Page (level 0) | document in the section folder; title = page title (empty title → first line, as OneNote does) |
-| Subpage (level 1/2) | **document nested under its parent page** if we add `documents.parent_document_id` (recommended, see parity list); interim: child document in the same folder with `attrs.onenote_parent` + a "Subpages" list block of `[[id|Title]]` links appended to the parent. Parent = nearest preceding page with level-1 (same rule as Obsidian). |
-| created / modified | `documents.created_at` / `updated_at` set from the page (and block timestamps = page modified), not import time |
-| Page title + date line | title only (OneNote's date/time under the title = created) |
-| Single outline / outlines stacked vertically | blocks in y-order (ties broken by x) |
-| **Outlines side by side** | `columns` layout block (see algorithm) with one `column` child per outline (attrs `width` as fraction) |
-| Paragraph `style_id` h1..h6 | `heading` attrs `level` (OneNote has Heading 1–6, Page Title, Citation, Quote, Code) |
-| Citation/Quote style | `quote`; "Code" style or runs all in Consolas/Courier → `code` block (merge adjacent, Obsidian's trick) |
-| Bullets / numbering | `list` blocks (existing), `ordered`, nested children; keep `list_format` in attrs (`a.`, `i.`) |
-| To Do tag (checkable shapes) | `list` with `checked` true/false (existing check items); `completed_at` → `attrs.checked_at` |
-| Other tags (Important, Question, custom labelled) | block attr `tags: ["important","question","Custom label"]` rendered as marker chips + filterable in search (`block_attrs` table already indexes attrs); fallback text `#important` |
-| Inline bold/italic/strike/link | Markdown marks (already supported) |
-| underline, highlight (`highlight` colour), font colour, super/sub | **new inline marks** (BlockNote already has `underline`, `textColor`, `backgroundColor` styles; store via the existing `{"blocknote": [...]}` content payload, or in Markdown as `<u>`, `<mark data-color>`, `<span data-color>`, `<sup>/<sub>`) — map arbitrary OneNote colours to the nearest of BlockNote's named colours and keep the exact hex in a data attribute |
-| fonts / font sizes | dropped by default (keep only "monospace" → code). Optionally large size runs → no-op. Report count of dropped font changes. |
-| Tables | **new structured `table` block** (see shape) — cells may contain multiple blocks; nested table → rendered as a nested table block inside the cell (or flattened to text with a report entry if v1 cells are inline-only) |
-| Images | asset via existing image store (`/api/images`, `NOTES_DIR/assets`, dedupe by `content_hash`); image block attrs `{asset_id, width, alt: OCR text, source_url}`; OCR alt indexed for search/Ask |
-| Attachments | file block via `/api/files` → asset; show file card (name, size, type icon, open/quick-look) |
-| Printouts | file block for the PDF + its page images as an image gallery (or just the PDF with inline PDF viewer later); keep OCR text from the page images |
-| Video iframes | link block / embed with the URL |
-| Audio/video recordings | file block (audio/*) with player |
-| Ink | SVG asset in an image block positioned in reading order (by y) + `alt` = recognized handwriting |
-| Math | `math` block/inline (frontend already has `MathPlaceholderBlock.tsx`) storing LaTeX (via MathML→LaTeX) and original MathML |
-| Web links | Markdown links |
-| `onenote:` links | **rewrite in pass 2**: parse `page-id={GUID}` (and `section-id`) from the URL → mapping table → `[[doc_id|Title]]`; `object-id={…}` (paragraph links) → block reference if we kept the paragraph id, else page link; unresolved (other notebooks / not imported) → keep text + original URL in `attrs.unresolved_link`, list in report |
-| Pasted web content | content as-is; OneNote appends a "Pasted from <https://…>" line — detect that paragraph (link-only paragraph starting "Pasted from"/localized) → set document/blocks `attrs.source_url` and keep the link |
+| Section | folder (section colours are not kept) |
+| Page (level 0) | note in the section folder; title = page title (untitled pages: first line); keyed by the page GUID |
+| Subpage (level 1/2) | note in the same folder, right after its parent; the parent gets a trailing **Subpages** list of links. `extra.onenote.level`/`parent_page_id` keep the tree |
+| created / modified | the note's `created_at` / `updated_at` (and provenance `source_created_at`/`source_modified_at`) |
+| Outlines stacked vertically | blocks in reading order |
+| **Outlines side by side** | `columns` block with one `column` per outline (`width` = relative fraction); bands of more than 4 are stacked |
+| Paragraph `style_id` h1..h6 | `heading` with `level` |
+| Citation/Quote style | `quote`; "Code" style or all-monospace runs → `code` (adjacent ones merged) |
+| Bullets / numbering | `bullet_item` / `numbered_item`, nested; OneNote's marker kept in `attrs.list_format` |
+| To Do tag (checkable shapes) | `check_item` with `checked`; `completed_at` → `attrs.checked_at` |
+| Other note tags (Important, Question, custom) | kept as labels in `attrs.onenote_tags` (extension attribute; Fortress has no tags of its own) |
+| bold/italic/underline/strike/sup/sub, font colour, highlight, links | canonical marks (`bold`, `italic`, `underline`, `strike`, `sup`, `sub`, `color`, `highlight`) and `link` nodes |
+| fonts / font sizes | dropped (monospace → `code`) |
+| Tables | `table` → `table_row` → `table_cell`; column widths, borders, cell backgrounds; cells hold any blocks, nested tables included |
+| Images | asset copied to `NOTES_DIR/assets/<sha256>.<ext>`; `image` block with `alt` = OneNote's OCR text, width/height; the app's OCR queue reads it too |
+| Attachments | `file` block (name, size, mime) |
+| Printouts | the page pictures as `image` blocks with `attrs.printout_page`; EMF/XPS originals kept as `attrs.original_url` |
+| Video iframes | paragraph with a link to the video |
+| Audio/video recordings | `file` block |
+| Ink | one SVG per page as an `image` block with `attrs.ink`; `alt` = recognised handwriting |
+| Math | `math` block (`latex` + `mathml`) for a paragraph that is only an equation; inline equations become inline code `$<LaTeX>$` |
+| `onenote:` links | rewritten in a second pass: page links → `docLink`; paragraph links (`object-id`) → `blockRef` when the paragraph is found, else a page link; unresolved → plain text, URL in provenance, listed in the report |
+| "Pasted from <url>" | `source_url` in the note's provenance |
 
 **Columns detection** (outline geometry; units = half-inches):
 1. Collect outlines + floating images/files/ink as boxes `(x, y, w, h_est)`; `h_est` = Σ estimated line heights (≈0.18 in per text line at 11pt, wrap by width; image height from picture height) — no height is stored.
@@ -205,46 +205,44 @@ Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff a
 4. Page "scattered notes" (many tiny outlines) → if >4 columns in a band, fall back to sequential blocks and flag in report.
 Keep raw geometry in each column's attrs (`onenote_x/y/w`) so we can re-run with better heuristics without re-parsing.
 
-**Idempotent re-import**
-- New table `import_sources(source TEXT, external_id TEXT, kind TEXT /*notebook|group|section|page|block|asset*/, local_id TEXT, content_hash TEXT, source_modified TEXT, imported_at TEXT, PRIMARY KEY(source, external_id))` with `source = 'onenote'`.
-- Keys: notebook/section/group → `file_identity` (stable across rename/move; fall back to path); page → `link_target_id` GUID; paragraphs → object id (ExGUID) where the converter can match one, else a content hash.
-- Re-run: page unchanged (same `source_modified` and `content_hash` of the generated block tree) → skip; changed in OneNote and **untouched in Fortress** (document revision == revision recorded at import) → replace blocks; changed on both sides → import as a new revision and keep Fortress edits in history (or create "Title (OneNote update)" and report a conflict). Renamed/moved sections → move folders. Deleted in OneNote → never auto-delete; list in report.
-- Assets content-addressed by sha256 → no duplicate files.
-- Job state persisted (`import_jobs` table: phase, current section/page, counts) so a worker restart resumes from the last committed page. Each page is its own transaction.
+**Idempotent re-import** (as built: `backend/app/sources.py`, spec.md §7a)
+- Every note is a *living document* keyed by `(source, external_id)` = `("onenote_import", page GUID)`; folders by `notebook:`/`group:`/`section:` + `file_identity`; paragraphs by OneNote object id (ExGUID) where the converter can match one, else a content hash.
+- Re-run: untouched blocks follow the source; blocks edited in Fortress keep the local text and record the source's version as a conflict (shown in the inspector, settled with `POST …/source-conflict`); local additions and deletions stick; a whole re-import is one undo step; unchanged pages report `unchanged`. Deleted in OneNote → never deleted here; marked `source_removed` and listed in the report.
+- Assets content-addressed by SHA-256 → no duplicate files.
+- Jobs run one at a time on the `imports` background lane; the job record is persisted in `NOTES_DIR/.fortress-imports/`, survives restarts (an interrupted job reads `failed` with `interrupted: true`; importing again resumes in place) and can be cancelled.
 
-**Verification report** (shown after import; also saved as a Fortress note "OneNote import report – <date>")
-- Counts per notebook: sections, section groups, pages (by level), images, attachments, tables, ink drawings, equations, tags (by label), links (web / onenote resolved / unresolved) — source counts from manifest vs created counts from DB, highlighted when different.
-- Text coverage check per page: normalised plain text from the manifest vs `text` column of imported blocks (character count + similarity); pages under 99% listed.
-- Lists: sections failed (password-protected, malformed, IRM) with fix instructions; attachments with `data_status != ok`; unresolved `onenote:` links; layouts degraded (scattered >4 columns); dropped formatting (font family/size changes) counts; parser warnings verbatim.
-- Spot-check helper: link per page to the original in OneNote web (if a `oneNoteWebUrl` can be derived — otherwise just title + section path).
+**Verification report** (as built: the job's `result`, shown in the import sheet)
+- Per notebook: pages created/updated/unchanged/skipped, images, files, tables, pages with columns, ink, math, check items, conflicts, images queued for OCR, failed sections with reason and hint, warnings.
+- Text coverage per page: the manifest's words vs the imported note's (multiset, weighted by length); pages under 98 % are listed.
+- Links: rewritten, block references, paragraph links that fell back to page links, unresolved links; pages and sections removed in OneNote; OneNote web's `errors.txt`.
 
-## F4. Fortress features needed for parity — prioritised for THIS user
-1. **Table block** (P0 — "tables" + pasted web content are heavy users of tables). Shape: `type:"table"`, `attrs:{columnWidths:[0.3,0.7], borders:true, headerRow:false}`, children `table_row` → `table_cell` blocks (`attrs:{background:"#DEEAF6", align}`), each cell holding child blocks (paragraphs/lists/images; nested tables allowed). Markdown export: GFM table when every cell is a single inline paragraph, else HTML `<table>`. BlockNote 0.57 (MPL-2.0) already ships a `table` block with cell `backgroundColor`/`textColor` and header rows — but its cells are inline-only; nested blocks in cells would need a custom block or flattening (report it). Currently GFM tables import as `raw` blocks — upgrade the Markdown importer at the same time.
-2. **Inline formatting marks: underline, highlight (with colour), text colour, super/subscript** (P0 — user said "rich text formatting"; highlight is ubiquitous in OneNote notes). Search/Ask must index plain text only.
-3. **Attachments display** (P0): file block card (name/size/type, open, Quick Look on Mac, inline PDF preview later); printout = PDF + page images; ensure `/api/files` handles large PDFs.
-4. **Columns layout block** (P1 — explicit user requirement): `type:"columns"` with `column` children (`attrs:{width: fraction}`), each holding blocks; responsive collapse to stacked on narrow widths; Markdown export as sequential sections with an HTML comment marker (`<!-- columns -->`) for round-trip. **Note: BlockNote's `@blocknote/xl-multi-column` is GPL-3.0 OR proprietary** — don't use it; write our own column block in the web editor and in SwiftUI.
-5. **Page hierarchy / subpages** (P1): `documents.parent_document_id` (document nesting inside a folder) with collapsible sidebar tree; otherwise subpages become siblings.
-6. **Image block with alt/OCR text + width** (P1): keep OCR alt (OneNote's own OCR) → searchable; the app's OCR queue (`backend/app/ocr.py`) reads every image and PDF; OneNote's alt text is indexed too.
-7. **Tags/markers on blocks** (P2): Important/Question/custom tag chips + a "tagged items" view (OneNote's "Find tags" summary), checklist `checked_at`.
-8. **Math block/inline** (P2): LaTeX rendering (KaTeX) — frontend has a MathPlaceholderBlock to build on.
-9. **Ink as SVG images** (P2) with recognized handwriting as alt text.
-10. **Source URL on documents** (P3) for pasted web clippings; **folder colours** (P3) for section colours; **embedded video** (P3).
+## F4. Fortress features needed for parity — status
+
+1. **Table block** — done (structured `table`/`table_row`/`table_cell`, nested blocks in cells, GFM or HTML in Markdown).
+2. **Inline marks: underline, highlight, text colour, super/subscript** — done (search and Ask index plain text only).
+3. **Attachments** — done (`file` blocks; the Mac app shows file chips).
+4. **Columns layout block** — done (`columns`/`column`; Markdown round-trips via `<!-- fortress:columns -->` comments).
+5. **Page hierarchy / subpages** — partial: subpages sit next to their parent with a *Subpages* link list; nested notes are not built.
+6. **Image alt/OCR text + width** — done (OneNote's OCR text in `alt`, plus the app's own OCR: RapidOCR in the backend and Apple Vision in the Mac app).
+7. **Note tags** — kept as `attrs.onenote_tags` labels only; Fortress deliberately has no tags or tag views.
+8. **Math** — done (`math` blocks with LaTeX + MathML; the Mac app sets LaTeX with a small built-in renderer).
+9. **Ink** — done (SVG image + recognised handwriting as `alt`).
+10. **Source URL on notes** — done (provenance `source_url`); folder colours and embedded video players are not built.
 
 ## F5. Licensing
-- `onenote_parser` — **MPL-2.0** (file-level weak copyleft): fine to link into our CLI/app (static linking OK) as long as any *modified MPL files* are published; unmodified use from crates.io needs only the licence notice + pointer to source. Its test fixtures include AGPL-3.0 samples — don't copy those into our repo.
-- `one2html` — **MIT** (reuse rendering/math code freely with notice). `cab` crate (used by `onepkg` feature) — MIT.
-- Obsidian Importer (Graph + file importers, InkML→SVG, code-detection, tag mapping) — **MIT**.
-- `mathml-to-latex` (npm) — MIT; BlockNote core — MPL-2.0; **`@blocknote/xl-multi-column` — GPL-3.0 OR proprietary (avoid)**.
-- aspose-note-foss — README says MIT, PyPI metadata `LicenseRef-Aspose-Split`: verify before any reuse. pyOneNote — Apache-2.0.
-- Our `fortress-onenote` CLI can be MIT/our licence; include NOTICE entries for MPL/MIT deps.
+- `onenote_parser` — **MPL-2.0** (file-level weak copyleft): fine to link into our CLI (static linking OK) as long as any *modified MPL files* are published. We vendor it with fixes in `tools/fortress-onenote/vendor/onenote_parser/` (changes listed in `vendor/PATCHES.md`). Its test fixtures include AGPL-3.0 samples — not copied into our repo.
+- `one2html` — **MIT**; the converter's `src/math/` is adapted from it (notice in `tools/fortress-onenote/LICENSES/`). `cab` crate (`.onepkg`) — MIT, vendored with hardening fixes.
+- Obsidian Importer (Graph + file importers, InkML→SVG, code-detection, tag mapping) — **MIT**; used as reference only.
+- aspose-note-foss — README says MIT, PyPI metadata `LicenseRef-Aspose-Split`: not used. pyOneNote — Apache-2.0, not used.
+- Third-party notices: `tools/fortress-onenote/LICENSES/THIRD-PARTY.md`.
 
 ## Appendix: why Graph was dropped (kept for reference)
 User refused any Microsoft/Azure sign-in. Also: a personal-account user can't register an Entra app without first creating a directory (since June 2024 all new app registrations must live in a tenant — [Entra breaking changes](https://learn.microsoft.com/en-us/entra/identity-platform/reference-breaking-changes)), rclone users report the friction in Feb 2026 ([rclone forum](https://forum.rclone.org/t/onedrive-own-client-id-guide-is-outdated/53431)); and OneNote Graph throttling is 400 req/hour per user → 3–5 h for this user's ~500 pages. The file route avoids all of that and gives *more* data (positions as numbers, custom tag labels, handwriting recognition) — the one thing Graph gives that files don't is nothing material for this user.
 
 STATUS: complete (Nov 18 2026).
 
-## Open items to verify with the user's real export (first thing to do)
-1. Run `one2html` on one exported zip (`cargo install --locked --no-default-features --features bin,onepkg one2html`) and compare to OneNote web visually — confirms format support + layout fidelity.
-2. Confirm `page-id={GUID}` in this user's `onenote:` links equals `Page::link_target_id()` (doc comment says internal links reference it; not tested here).
-3. Confirm the web "Export notebook" zip contains `.onetoc2` + all section `.one` files (Microsoft's page only says "two OneNote files") and whether embedded files/printouts are included in full (Joplin/Obsidian users have reported incomplete zips: [Joplin forum](https://discourse.joplinapp.org/t/onenote-zip-import-incomplete/43826)).
+## Open items from the research
+1. ~~Run `one2html` on an exported zip and compare to OneNote visually.~~ Done as a tool: `tools/onenote-compare` renders every page with one2html and with Fortress and diffs them (text, marks, tables, images, links, layout, ...).
+2. Confirm `page-id={GUID}` in the user's `onenote:` links equals `Page::link_target_id()` — the importer relies on it (links it cannot resolve are listed in the report).
+3. Confirm the web "Export notebook" zip contains `.onetoc2` + every section `.one` and embedded files/printouts in full (Joplin/Obsidian users have reported incomplete zips: [Joplin forum](https://discourse.joplinapp.org/t/onenote-zip-import-incomplete/43826)); the converter places sections missing from the TOC by folder (`in_toc: false`).
 4. "Pasted from <url>" source lines are a OneNote-for-Windows convention; check whether the user's clippings have them.

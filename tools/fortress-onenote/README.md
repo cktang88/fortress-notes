@@ -54,8 +54,12 @@ one JSON summary line is printed to stdout; see SCHEMA.md for exit codes.
 
 ## Locating the binary (for the importer)
 
-The Python importer looks for `FORTRESS_ONENOTE_BIN`, then
-`tools/fortress-onenote/target/release/fortress-onenote`.
+The Python importer (`backend/app/onenote_import.py`, `converter_path`) uses
+`FORTRESS_ONENOTE_BIN` when it is set; otherwise the first of
+`tools/fortress-onenote/target/release/fortress-onenote`, a `fortress-onenote` next to
+the running Python (or in `../Resources/bin`, as in an app bundle), or `PATH`. The Mac
+app sets `FORTRESS_ONENOTE_BIN` to the repository build (or a copy bundled with the
+app) when it starts the backend.
 
 ```sh
 cd tools/fortress-onenote

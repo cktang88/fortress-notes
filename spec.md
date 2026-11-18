@@ -5,21 +5,25 @@
 A local-first block-centric notes app where **SQLite is the live source of truth** for
 documents, nested blocks, references, and indexes. Markdown remains the portable
 import/export format. The native Mac app provides one search box (full text +
-ColBERT late-interaction embedding search + titles), live related results, a
-rough→polished workflow, and Ask (cited answers from your notes).
+ColBERT late-interaction embedding search + titles, no mode toggle), live related
+results, nested folders, a rough→polished workflow, Ask (cited answers from your
+notes), text read from every picture and PDF, and lossless OneNote import.
 
-Non-goals (for v1): multi-user, auth, real-time collaboration, mobile, cloud sync,
-nested folders.
+Non-goals: multi-user, real-time collaboration, mobile, cloud sync, tags, pinned notes,
+whole-workspace (zip) export. The backend serves one local user; its only access
+control is the per-launch token described in §3 ("Local auth").
 
 ## 2. Data model
 
 SQLite (`NOTES_DIR/.fortress.sqlite3`) is the only source of truth: documents,
-folders, nested blocks with stable IDs, references, history, assets, and the FTS
-index. Every write goes to SQLite first. Each active note also gets a read-only
-Markdown mirror, `NOTES_DIR/<id>.md`, rewritten atomically after every change and
-removed when the note is trashed, so notes stay readable outside the app. The app
-never reads the mirrors back; only the explicit Markdown importer reads `.md` files.
-A mirror looks like this (extra front-matter keys added by hand are preserved):
+folders, nested blocks with stable IDs, references, history, assets, OCR text and the
+FTS index. Every write goes to SQLite first. Each active note also gets a read-only
+Markdown mirror, `NOTES_DIR/<id>.md`, so notes stay readable outside the app. Writers
+never touch mirrors: the `mirrors` background lane (`documents.MirrorWriter`) follows
+SQLite's change log, rewrites a changed note's mirror atomically (coalesced, about
+0.5 s after the edit) and removes it when the note is trashed. The app never reads
+the mirrors back; only the explicit Markdown importer reads `.md` files. A mirror
+looks like this (extra front-matter keys added by hand are preserved):
 
 ```markdown
 ---
@@ -30,16 +34,19 @@ created_at: 2026-06-20T10:00:00Z
 updated_at: 2026-06-20T10:05:00Z
 images:                  # text read from each referenced picture/PDF (see §6)
   01J....png: "Q1 revenue"
+provenance:              # where the note came from (§7a)
+  source: manual
 ---
 
 The note body in Markdown.
 ```
 
-Pasted images are stored as files in `NOTES_DIR/assets/<id>.<ext>` and referenced from
-the body as raw `<img src="/media/<id>.<ext>" width=…>` HTML (kept as HTML so the
-resized width survives the round-trip).
+Pasted images are stored as files in `NOTES_DIR/assets/<id>.<ext>` (imported ones as
+`<sha256>.<ext>`); in Markdown they are written as
+`<img src="/media/<id>.<ext>" width=…>` HTML so the width survives the round-trip
+(docs/block-model.md §7).
 
-- **id**: ULID (sortable, unique). Filename = `<id>.md`.
+- **id**: ULID (sortable, unique). Mirror filename = `<id>.md`.
 - **status**: `rough` (braindump/brainstorm) or `polished`. Drives UI badge + filter
   and the "promote to polished" action.
 - **title**: if empty, derived from the first heading/line of the body.
@@ -64,20 +71,35 @@ with **422**.
 ## 3. Backend (FastAPI, Python / uv)
 
 ### Modules (`backend/app/`)
-- `config.py` — settings from env (`pydantic-settings`).
-- `models.py` — Pydantic schemas (`NoteSummary`, `NoteCreate`, `NoteUpdate`,
-  `BlockTransaction`, `RelatedResult`, ...).
-- `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS.
+- `config.py` — settings, read once from the environment and `backend/.env`
+  (`pydantic-settings`).
+- `auth.py` — local auth middleware (token, browser and host checks) and the
+  parent-process watch (see "Local auth" below).
+- `models.py` — Pydantic schemas (`NoteCreate`, `NoteUpdate`, `BlockTransaction`,
+  `RelatedResult`, `ExternalOcrResult`, ...).
+- `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS, change log.
 - `block_schema.py` — the block type registry and inline content rules (§2a).
+- `block_query.py` — filtered block-level full-text queries.
 - `order_keys.py` — fractional sibling order keys.
 - `block_markdown.py` — Markdown in and out of canonical blocks (ids in comments).
 - `block_legacy.py`, `block_migration.py` — the schema-14 migration of stored
   data in older block shapes (the API accepts canonical shapes only).
-- `documents.py` — note lifecycle (create/update/trash/restore/purge) and Markdown mirrors.
+- `documents.py` — note lifecycle (create/update/trash/restore/purge/capture/move-into)
+  and the Markdown mirror writer.
+- `workspace.py` — the Trash listing. `duplicates.py` — notes that repeat each other
+  (`/similar`, move-into). `backups.py` — snapshots and restore.
+- `portability.py` — Markdown import (files, uploads, first-start import) and export.
+- `background.py` — the one owner of background work (lanes, below).
+- `corpus.py` — the incremental search corpus every search reader shares.
+- `textutil.py` — shared text rules (words, stopwords, case/accent folding, which
+  text of a block is searchable, snippets).
 - `embeddings.py` — ColBERT late-interaction via PyLate; encode + MaxSim scoring,
   with a keyword fallback when disabled/unavailable.
+- `relevance.py` — the cutoff that decides which "related" paragraphs are related.
 - `search.py` — unified search (words + meaning + titles) and related notes.
 - `ask.py` / `llm.py` — Ask your notes over OpenRouter chat completions.
+- `ocr.py`, `images.py`, `assets.py` — text in pictures and PDFs (§6), uploaded files.
+- `provenance.py`, `sources.py` — provenance and living documents (§7a).
 - `main.py` — FastAPI app and routes.
 - `document_service.py` — rendered note bodies and the one document ETag, shared by
   the single GET, the batch read and the writes that answer with a tree.
@@ -90,9 +112,11 @@ with **422**.
 
 | Method | Path | Body / Query | Returns |
 | --- | --- | --- | --- |
+| `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded, vision_enabled, vision_loaded, block_db_ready}` (open without the token) |
+| `GET` | `/api/block-schema` | — | the block type registry (docs/block-model.md) |
 | `GET` | `/api/navigation` | `?recent_limit=` | folder tree + recent notes |
-| `POST` · `PATCH` · `DELETE` | `/api/folders` · `/api/folders/{id}` | `{name, parent_id?}` | folder |
-| `POST` | `/api/folders/{id}/move` · `/api/block-documents/{id}/move` | `{parent_id}` · `{folder_id}` | the moved item |
+| `POST` · `PATCH` · `DELETE` | `/api/folders` · `/api/folders/{id}` | `{name, parent_id?, position?}` · `{name}` · — | folder (folders nest); `DELETE` answers 409 unless the folder is empty |
+| `POST` | `/api/folders/{id}/move` · `/api/block-documents/{id}/move` | `{parent_id, position?}` · `{folder_id, position?}` | the moved item |
 | `POST` | `/api/block-documents` | `NoteCreate` | `201` document tree; header `X-Document-ETag` |
 | `GET` | `/api/block-documents/{id}` | `If-None-Match` | document tree (`ETag`), or `304`; never writes |
 | `PATCH` | `/api/block-documents/{id}` | `{title?, status?}` (anything else: 422) | metadata payload (`children: []`); header `X-Document-ETag`. Title `""` hands it back to the first line |
@@ -108,6 +132,8 @@ with **422**.
 | `POST` | `/api/capture` | `{text, provenance?}` | `201 {document_id, title, folder}` |
 | `POST` | `/api/files` | multipart `file` | `{props: {url, name}}` (images and PDFs get OCR in the background) |
 | `GET` | `/api/ocr` | — | `{enabled, model, queued, done, failed, running}` (background OCR state) |
+| `GET` | `/api/ocr/pending` | `?model=apple-vision/…&limit=8` | pictures/PDFs an external reader has yet to read (§6) |
+| `GET` · `PUT` | `/api/ocr/{content_hash}` | — · `{model, status, text, method, pages, error, duration_ms}` | all text read from one picture/PDF · store an external reader's result (§6) |
 | `GET` | `/media/{file}` | — | stored file bytes (ranges, immutable caching; see below) |
 | `POST` | `/api/batch/block-documents` | `{ids: [≤50], known: {id: ETag}}` | `{documents: [tree], etags: {id: ETag}, unchanged: [id], missing: [id]}`; never writes |
 | `POST` | `/api/batch/move` | `{documents: [{id, folder_id}], folders: [{id, parent_id}]}` | `{folders, documents}` (counts moved) |
@@ -125,7 +151,6 @@ with **422**.
 | `GET` | `/api/import/onenote/{job_id}` | — | import job (§7b) |
 | `GET` | `/api/import/onenote` | `?limit=20` | recent import jobs, newest first |
 | `POST` | `/api/import/onenote/{job_id}/cancel` | — | `202` the job |
-| `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
 
 ### HTTP caching, compression, errors
 
@@ -174,26 +199,90 @@ with **422**.
   FTS rows share their block's rowid, so an edit re-indexes only the blocks it wrote.
   Markdown mirrors of edited notes are written in the background (coalesced, 0.5 s).
 
-### Late-interaction search (PyLate)
-- Model: `lightonai/Agent-ModernColBERT` (configurable).
-- On index build, encode each note body (chunked if long) as multi-vector doc
-  embeddings (`model.encode(..., is_query=False)`); cache them keyed by id+updated_at.
-- Query: encode `q` as query embeddings (`is_query=True`), score every doc with
-  **MaxSim** (sum over query tokens of max cosine to doc tokens), return top-k.
-- Brute-force is fine at personal scale; PLAID/Voyager index is a future optimization.
-- **Indexing**: embeddings are computed lazily and cached per `(id, updated_at)`. A
-  background task (`_reindex_loop`, every `REINDEX_INTERVAL_S`, default 5s) pre-encodes
-  any changed notes via `embeddings.warm_index()` so searches stay instant; it also
-  evicts embeddings for deleted notes. Steady-state (nothing changed) it's a no-op.
-- **Related notes**: start with the current note's body as the query, then use the
-  focused block. Exclude the current note and return top-k.
-- **Fallback**: if embeddings disabled or model missing, score by keyword overlap so
-  the UI still works.
+### Local auth (`auth.py`)
+
+The backend listens on loopback, where web pages can reach it too, so:
+
+- Requests a browser made (an `Origin` header, or `Sec-Fetch-Site` other than `none`)
+  are refused (403) everywhere.
+- With `FORTRESS_TOKEN` in the environment (the Mac app makes a fresh random one per
+  launch), every request needs it as `X-Fortress-Token: <token>` or
+  `Authorization: Bearer <token>` (else 401); only `GET /api/health` is open.
+- Without a token (tests, a backend started by hand) the `Host` must be a loopback
+  name (`FORTRESS_ALLOWED_HOSTS` adds more), and importing OneNote by server-side
+  path is refused (uploads still work).
+- Every answer carries `X-Fortress-Instance` (the first 16 hex digits of the token's
+  SHA-256, or a random id per process without one), so the app only talks to the
+  backend it started.
+- With `FORTRESS_PARENT_PID` the backend stops itself once that process is gone; on
+  shutdown it stops running OneNote converters.
+
+### Background work (`background.py`)
+
+Everything done outside a request runs on a *lane* (its own thread, never the
+executor that serves search and Ask):
+
+| lane | priority | work |
+| --- | --- | --- |
+| `mirrors` | high | Markdown mirrors follow SQLite (`documents.MirrorWriter`) |
+| `imports` | normal | OneNote import jobs, one at a time (§7b) |
+| `backups` | normal | the daily snapshot (`AUTO_BACKUP_ENABLED`) |
+| `ocr` | low | text in pictures and PDFs (§6; `VISION_ENABLED`) |
+| `index` | low | ColBERT embeddings (`embeddings.Reindexer`; `EMBEDDINGS_ENABLED`) |
+
+Low-priority lanes wait briefly while a search is scoring. A restore pauses every lane;
+shutdown stops them (and any converter) and writes pending mirrors.
+
+### Search corpus, unified search and related notes
+
+- **Corpus** (`corpus.py`): one list of `(block_id, document_id, version, text)` rows
+  for every active paragraph, where text is `textutil.searchable_text` (the block's
+  text plus the text read from its pictures/PDFs). It is updated by deltas
+  (`change_log.seq`, `documents.change_seq`, `assets.text_updated_at`), not rebuilt;
+  search, related notes, Ask's grep and the indexer all read the same snapshot.
+- **Embeddings** (`embeddings.py`): `lightonai/Agent-ModernColBERT` (`COLBERT_MODEL`)
+  via PyLate, one multi-vector document per paragraph, scored with exact **MaxSim**
+  (brute force, one matrix multiply per padded length bucket). Embeddings persist in
+  `NOTES_DIR/.fortress-embeddings.sqlite3` (keyed by block id and a hash of the text),
+  bfloat16 where the CPU supports it (`EMBEDDINGS_PRECISION`). The `index` lane loads
+  the model and encodes changed paragraphs every `REINDEX_INTERVAL_S` (default 5 s);
+  until the model is loaded every scorer falls back to keyword overlap.
+- **Unified search** (`GET /api/unified-search`): FTS5 words, ColBERT meaning and note
+  titles each rank blocks; reciprocal rank fusion combines them (a title containing
+  every query word weighs more), with a small boost for recent edits and a cap on
+  blocks per note. Each result says why it matched and carries a snippet. There is
+  no mode parameter: one box, one ranked list.
+- **Related notes** (`GET …/related`): notes like the whole note, or like one
+  paragraph with `block_id` (the app's "Seen before"). The current note is excluded;
+  `relevance.py` keeps only results that beat what an unrelated paragraph would score
+  for this query (cutoff 0.18, calibrated in `scripts/calibrate_related.py`).
+
+### Ask (`ask.py`, `llm.py`)
+
+`POST /api/ask {question}`; with `Accept: application/x-ndjson` the answer streams as
+`sentence`, `step` and finally `done` events.
+
+1. Candidates are gathered locally first (tens of ms): a literal grep for the
+   question's key words and unified search, in parallel.
+2. One streamed OpenRouter call (`ASK_MODEL`, default `inception/mercury-3`,
+   `ASK_REASONING_EFFORT`) sees those passages and answers, or asks for one more
+   `grep` across every note or `read` of a whole note.
+3. Every sentence must cite a verbatim quote; a sentence whose quote isn't in the
+   cited passage is dropped. Checked sentences are sent as soon as they are complete.
+4. A 3-second budget: when time runs short the model must answer with what it has;
+   if it is too slow, the closest passages (and any sentences already checked) are
+   returned. Without `OPENROUTER_API_KEY` the result is `not_configured`.
+
+Only passages (the part of a long paragraph around the matched words) are sent to the
+model, never the whole workspace.
 
 ## 4. Client
 
-The native macOS app in `mac/` (SwiftUI + TextKit 2) is the only client; see
-`mac/DESIGN.md`. The web UI (Vite/React/BlockNote) was removed.
+The native macOS app in `mac/` (SwiftUI + TextKit 2, macOS 26) is the only client;
+see `mac/DESIGN.md`. It starts the backend itself (`mac/Sources/FortressKit/Shell/
+BackendController.swift`: the repository's `backend/.venv/bin/uvicorn`, else
+`uv run uvicorn`, with `FORTRESS_TOKEN`, `FORTRESS_PARENT_PID` and
+`FORTRESS_ONENOTE_BIN`) and reads pictures and PDFs with Apple Vision (§6).
 
 ## 6. Images & OCR (`ocr.py`, `images.py`)
 
@@ -201,7 +290,7 @@ The native macOS app in `mac/` (SwiftUI + TextKit 2) is the only client; see
   inserts an image or file block with the returned `/media/…` URL. Markdown stays
   small — images are files.
 - **Fast & non-blocking**: `/api/files` saves the file and returns **immediately**
-  (~ms); OCR runs later on the OCR worker thread, never on a request.
+  (~ms); OCR runs later on the `ocr` background lane, never on a request.
 - **OCR pipeline** (`ocr.py`): every image (png/jpeg/gif/webp/bmp/tiff) and PDF
   asset — pasted, uploaded or imported from OneNote — is read once per content
   SHA-256 and OCR model id (`ocr.MODEL`). Images: RapidOCR with PP-OCRv6 small
@@ -214,10 +303,10 @@ The native macOS app in `mac/` (SwiftUI + TextKit 2) is the only client; see
   attempts, error, …)`. An asset is pending while no `done`/`failed` row exists for its
   hash and the current model, so the queue survives restarts with nothing to replay,
   a changed model re-reads everything lazily (the old text stays searchable meanwhile;
-  old-model rows are dropped once re-read) and a cache hit costs nothing. One daemon
-  thread works through it: newest assets first, pictures whose every block already has
-  OneNote's OCR text (`alt`) last; woken by uploads and imports, and it polls once a
-  minute for assets registered any other way. `running` is written before the work,
+  old-model rows are dropped once re-read) and a cache hit costs nothing. The `ocr`
+  lane works through it one asset at a time: newest assets first, pictures whose every
+  block already has OneNote's OCR text (`alt`) last; woken by uploads and imports, and
+  it polls once a minute for assets registered any other way. `running` is written before the work,
   so an asset that crashes the process is retried at most 3 times.
 - **Searchable, not shown**: the text goes to `assets.text`, which feeds each owning
   block's FTS row, its ColBERT document (the block's version includes the asset's
@@ -226,6 +315,15 @@ The native macOS app in `mac/` (SwiftUI + TextKit 2) is the only client; see
   snippets when the match is in the picture. OneNote alt text stays in the block's own
   text, so both are indexed. `GET …/info` lists `picture_text` per picture/PDF block
   (status, method, pages, model, text) and `GET /api/ocr` the queue state.
+- **Apple Vision from the Mac app** (`mac/Sources/FortressKit/Finding/PictureText/`,
+  Settings › General › *Text in Pictures*): the app asks `GET /api/ocr/pending?model=
+  apple-vision/<macOS major>` for what it hasn't read (newest first, a few at a time),
+  reads each file with Vision (more scripts, handwriting) and stores the result with
+  `PUT /api/ocr/{content_hash}`. Which text wins: a reading that found text beats one
+  that found none, then an external reader beats the CPU model, which beats its own
+  older versions, then the newest. While an external reader is active the CPU queue
+  leaves the backlog to it, and it never reads an asset a preferred reader has
+  finished.
 - Older `<id>.txt` sidecars are migrated into `assets.text` once by
   `backfill_assets` (until the queue re-reads the file).
 
@@ -259,7 +357,7 @@ was created with). Provenance is never part of block text, FTS or embeddings.
   "source_created_at": "…", "source_modified_at": "…",  // the source's own timestamps
   "imported_at": "…", "synced_at": "…",                  // first import, last re-import that changed it
   "importer": {"name": "onenote", "version": "1.0"},
-  "origin": {"operation": "move_into|duplicate|split", "document_id": "…",
+  "origin": {"operation": "move_into", "document_id": "…",   // "duplicate"/"split" are still accepted
              "document_title": "…", "block_id": "…", "at": "…"},
   "extra": {},                   // importer-specific
   // server-maintained on blocks: "source_hash", "conflict", "source_removed", "dismissed_hash";
@@ -270,7 +368,7 @@ was created with). Provenance is never part of block text, FTS or embeddings.
 ```
 
 - **Document payload** (`GET /api/block-documents/{id}` and every tree response) adds
-  `provenance`, `last_opened_at` (set when that GET runs, at most once a minute) and
+  `provenance`, `last_opened_at` (set by `POST …/opened`, at most once a minute) and
   `resolved_links: {documents: {id: {title}}, blocks: {id: {document_id, document_title, type, text}}}`.
   `[[id|Title]]` links are served with the target's current title (stored text is
   untouched). Each block adds `provenance` (its own, or the note's with
@@ -281,8 +379,8 @@ was created with). Provenance is never part of block text, FTS or embeddings.
   for a saved Ask answer), `CaptureRequest.provenance` (e.g. `source_url`), and
   `BlockOperation.provenance` on `insert` (default `{"source": "manual"}`) and
   `update` (omitted keeps it). Client input is validated (422/409) and cannot set the
-  server-maintained keys. Duplicate/split copies get `origin` and lose `external_id`;
-  move-into stamps `origin.operation = "move_into"` on every moved block.
+  server-maintained keys. Move-into (`POST …/move-into/{target_id}`) stamps
+  `origin.operation = "move_into"` on every moved block.
 - **Markdown**: export front matter carries `provenance:`; a block whose provenance
   differs from the note's is preceded by one line
   `<!-- fortress:block {"external_id":"{GUID}","source":"onenote_import",…} -->`.
@@ -403,8 +501,9 @@ app bundle), else `PATH`. Converter timeout: `FORTRESS_ONENOTE_TIMEOUT_S`
   note tags → `attrs.onenote_tags` (labels). Unknown block types keep their text
   and are reported.
 - Marks → runs: bold/italic/underline/strike/superscript/subscript, `color`,
-  `highlight`, links; monospace fonts → `code`; inline equations keep OneNote's
-  linear text; font sizes are dropped.
+  `highlight`, links; monospace fonts → `code`; inline equations become inline
+  code `$<LaTeX>$` (there is no inline math node; OneNote's linear text is kept only
+  when an equation has no LaTeX); font sizes are dropped.
 - Block source ids: `<page>/obj:<object_id>` when the manifest block has a
   OneNote object id (ExGUID `{GUID}&N`, stable across edits — SCHEMA.md
   "Object ids"), so a paragraph edited in OneNote updates the **same** Fortress
@@ -516,12 +615,8 @@ ended.
 
 ## 8. Roadmap / potential features
 
-- **PLAID/Voyager index** for embedding search at larger scale.
-- Larger leaderboard-class OCR/VLM (e.g. PaddleOCR-VL) as an opt-in tier; on the
-  Mac, Apple Vision OCR from the native app.
+- **PLAID/Voyager index** for embedding search at larger scale (brute-force MaxSim is
+  fine at personal scale).
+- Larger leaderboard-class OCR/VLM (e.g. PaddleOCR-VL) as an opt-in tier.
+- Subpages as nested notes (`extra.onenote.level/parent_page_id` already keep the tree).
 - Graph view stays deferred (outside the single-user product boundary).
-
-## 9. Open questions
-- Chunking strategy for very long notes (per-paragraph vs whole-note vectors).
-- Whether to persist the embedding cache to disk between runs (v1: in-memory).
-- Debounce window + conflict handling if a file changes on disk while editing.
