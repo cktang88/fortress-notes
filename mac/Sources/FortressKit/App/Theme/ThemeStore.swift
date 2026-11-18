@@ -112,9 +112,9 @@ public final class ThemeStore {
 
     /// The user's accent colour, or nil for Multicolor (no explicit choice), when the
     /// app's own accent (Fortress Ember) applies.
-    public static var systemAccent: RGBColor? {
+    public static var systemAccent: PaletteColor? {
         guard UserDefaults.standard.object(forKey: "AppleAccentColor") != nil else { return nil }
-        return RGBColor(NSColor.controlAccentColor)
+        return PaletteColor(NSColor.controlAccentColor)
     }
 
     func apply() {

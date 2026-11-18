@@ -150,19 +150,19 @@ struct EditorTheme: Sendable {
     /// A highlighter by name (the theme's hue as a tint) or hex (made quiet enough for text).
     static func highlightColor(named name: String) -> NSColor? {
         if let hue = MarkHue(name: name) { return markHighlightColors[hue] }
-        return RGBColor(hex: name).map(ThemeRuntime.foreignFill)
+        return PaletteColor(hex: name).map(ThemeRuntime.foreignFill)
     }
 
     /// A hex text colour picked in another app, under the contrast rule (`Palette.legibleText`).
     static func hexColor(_ string: String) -> NSColor? {
-        guard string.trimmingCharacters(in: .whitespaces).hasPrefix("#"), let color = RGBColor(hex: string) else { return nil }
+        guard string.trimmingCharacters(in: .whitespaces).hasPrefix("#"), let color = PaletteColor(hex: string) else { return nil }
         return ThemeRuntime.foreignText(color)
     }
 
     /// A cell or block background picked in another app (`Palette.legibleFill`).
     static func cellBackground(named name: String) -> NSColor? {
         if let hue = MarkHue(name: name) { return markHighlightColors[hue] }
-        guard name.trimmingCharacters(in: .whitespaces).hasPrefix("#"), let color = RGBColor(hex: name) else { return nil }
+        guard name.trimmingCharacters(in: .whitespaces).hasPrefix("#"), let color = PaletteColor(hex: name) else { return nil }
         return ThemeRuntime.foreignFill(color)
     }
 

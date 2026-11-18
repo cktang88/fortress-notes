@@ -7,9 +7,9 @@ public struct VSCodeTheme: Sendable {
     public var name: String
     public var type: String?
     /// Workbench colour id → colour with alpha (e.g. "editor.background").
-    public var colors: [String: (color: RGBColor, alpha: Double)]
+    public var colors: [String: (color: PaletteColor, alpha: Double)]
     /// TextMate scope → foreground.
-    public var tokenForegrounds: [String: RGBColor]
+    public var tokenForegrounds: [String: PaletteColor]
 
     public enum ParseError: Error, Equatable {
         case notATheme
@@ -50,7 +50,7 @@ public struct VSCodeTheme: Sendable {
     }
 
     /// A token colour for the first scope (or a more specific one) that the theme sets.
-    func token(_ scopes: String...) -> RGBColor? {
+    func token(_ scopes: String...) -> PaletteColor? {
         for scope in scopes {
             if let exact = tokenForegrounds[scope] { return exact }
             if let match = tokenForegrounds.first(where: { $0.key.hasPrefix(scope + ".") }) { return match.value }
@@ -58,13 +58,13 @@ public struct VSCodeTheme: Sendable {
         return nil
     }
 
-    static func color(_ string: String) -> (color: RGBColor, alpha: Double)? {
+    static func color(_ string: String) -> (color: PaletteColor, alpha: Double)? {
         var hex = string.trimmingCharacters(in: .whitespaces)
         if hex.hasPrefix("#") { hex.removeFirst() }
         var alpha = 1.0
         if hex.count == 8, let a = UInt8(hex.suffix(2), radix: 16) { alpha = Double(a) / 255 }
         if hex.count == 4, let a = UInt8(String(repeating: hex.last!, count: 2), radix: 16) { alpha = Double(a) / 255 }
-        guard let color = RGBColor(hex: hex) else { return nil }
+        guard let color = PaletteColor(hex: hex) else { return nil }
         return (color, alpha)
     }
 
@@ -115,23 +115,23 @@ extension Palette {
     public init(vsCode theme: VSCodeTheme) {
         let dark = theme.isDark
         let background = theme.colors["editor.background"]?.color
-            ?? RGBColor(hex: dark ? "#1E1E1E" : "#FFFFFF")!
-        func solid(_ keys: String...) -> RGBColor? {
+            ?? PaletteColor(hex: dark ? "#1E1E1E" : "#FFFFFF")!
+        func solid(_ keys: String...) -> PaletteColor? {
             for key in keys {
                 if let entry = theme.colors[key] { return background.mixed(with: entry.color, entry.alpha) }
             }
             return nil
         }
         let text = solid("editor.foreground", "foreground") ?? theme.token("source", "text")
-            ?? RGBColor(hex: dark ? "#D4D4D4" : "#1F1F1F")!
+            ?? PaletteColor(hex: dark ? "#D4D4D4" : "#1F1F1F")!
         let accent = solid("textLink.foreground", "button.background", "focusBorder", "activityBarBadge.background")
             ?? theme.token("entity.name.function") ?? text
-        let red = solid("terminal.ansiRed") ?? theme.token("invalid", "variable.other.constant") ?? RGBColor(hex: "#E5484D")!
-        let yellow = solid("terminal.ansiYellow") ?? theme.token("entity.name.type", "support.type") ?? RGBColor(hex: "#D9A400")!
-        let green = solid("terminal.ansiGreen") ?? theme.token("string") ?? RGBColor(hex: "#3FA35A")!
-        let cyan = solid("terminal.ansiCyan") ?? theme.token("support.function", "string.regexp") ?? RGBColor(hex: "#2AA3B8")!
+        let red = solid("terminal.ansiRed") ?? theme.token("invalid", "variable.other.constant") ?? PaletteColor(hex: "#E5484D")!
+        let yellow = solid("terminal.ansiYellow") ?? theme.token("entity.name.type", "support.type") ?? PaletteColor(hex: "#D9A400")!
+        let green = solid("terminal.ansiGreen") ?? theme.token("string") ?? PaletteColor(hex: "#3FA35A")!
+        let cyan = solid("terminal.ansiCyan") ?? theme.token("support.function", "string.regexp") ?? PaletteColor(hex: "#2AA3B8")!
         let blue = solid("terminal.ansiBlue") ?? theme.token("entity.name.function") ?? accent
-        let purple = solid("terminal.ansiMagenta") ?? theme.token("keyword", "storage") ?? RGBColor(hex: "#9A5BD6")!
+        let purple = solid("terminal.ansiMagenta") ?? theme.token("keyword", "storage") ?? PaletteColor(hex: "#9A5BD6")!
         let orange = theme.token("constant.numeric", "constant") ?? red.mixed(with: yellow, 0.5)
         var surface = solid("textCodeBlock.background", "editorWidget.background", "editor.lineHighlightBackground")
             ?? background.mixed(with: text, 0.06)
@@ -159,7 +159,7 @@ extension Palette {
     }
 }
 
-extension RGBColor {
-    static let black = RGBColor(red: 0, green: 0, blue: 0)
-    static let white = RGBColor(red: 1, green: 1, blue: 1)
+extension PaletteColor {
+    static let black = PaletteColor(red: 0, green: 0, blue: 0)
+    static let white = PaletteColor(red: 1, green: 1, blue: 1)
 }

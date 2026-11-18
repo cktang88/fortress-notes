@@ -8,7 +8,7 @@ extension Palette {
         case accent, link, selection, highlight, codeText, quoteBar
     }
 
-    public subscript(role: Role) -> RGBColor {
+    public subscript(role: Role) -> PaletteColor {
         switch role {
         case .background: background
         case .sunken: sunken
@@ -36,7 +36,7 @@ public struct ActivePalettes: Hashable, Sendable {
     public var darkIncreased: Palette
 
     /// `systemAccent` is nil when the user's accent colour is Multicolor.
-    public init(light: Palette, dark: Palette, systemAccent: RGBColor? = nil) {
+    public init(light: Palette, dark: Palette, systemAccent: PaletteColor? = nil) {
         self.light = light.withSystemAccent(systemAccent)
         self.dark = dark.withSystemAccent(systemAccent)
         lightIncreased = light.withSystemAccent(systemAccent, minimum: 7).increasedContrast()
@@ -72,12 +72,12 @@ public final class ThemeRuntime: @unchecked Sendable {
 
     private let lock = NSLock()
     private var _active = ActivePalettes.default
-    private var derived: [DerivedKey: RGBColor] = [:]
+    private var derived: [DerivedKey: PaletteColor] = [:]
 
     private struct DerivedKey: Hashable {
         enum Kind: Hashable { case text, fill, markText, markHighlight }
         var kind: Kind
-        var color: RGBColor
+        var color: PaletteColor
         var hue: MarkHue?
         var palette: Palette
     }
@@ -105,7 +105,7 @@ public final class ThemeRuntime: @unchecked Sendable {
 
     func palette(for appearance: NSAppearance) -> Palette { active.palette(for: appearance) }
 
-    private func derive(_ key: DerivedKey, _ make: () -> RGBColor) -> RGBColor {
+    private func derive(_ key: DerivedKey, _ make: () -> PaletteColor) -> PaletteColor {
         lock.lock()
         if let found = derived[key] { lock.unlock(); return found }
         lock.unlock()
@@ -147,7 +147,7 @@ public final class ThemeRuntime: @unchecked Sendable {
     }
 
     /// A text colour picked in another app, made legible (`Palette.legibleText`).
-    public static func foreignText(_ color: RGBColor) -> NSColor {
+    public static func foreignText(_ color: PaletteColor) -> NSColor {
         NSColor(name: nil) { appearance in
             let runtime = ThemeRuntime.shared
             let palette = runtime.palette(for: appearance)
@@ -156,7 +156,7 @@ public final class ThemeRuntime: @unchecked Sendable {
     }
 
     /// A cell or block fill picked in another app, made quiet enough for text (`Palette.legibleFill`).
-    public static func foreignFill(_ color: RGBColor) -> NSColor {
+    public static func foreignFill(_ color: PaletteColor) -> NSColor {
         NSColor(name: nil) { appearance in
             let runtime = ThemeRuntime.shared
             let palette = runtime.palette(for: appearance)
@@ -200,7 +200,7 @@ extension EnvironmentValues {
     }
 }
 
-extension RGBColor {
+extension PaletteColor {
     public var color: Color { Color(.sRGB, red: red, green: green, blue: blue) }
 }
 

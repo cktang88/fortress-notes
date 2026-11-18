@@ -3,7 +3,7 @@ import AppKit
 /// An opaque sRGB colour with components in 0…1, plus the colour science the theme
 /// system needs: WCAG 2 contrast, and OKLab/OKLCH (Björn Ottosson, 2020) for perceptual
 /// mixing and for changing lightness without shifting hue.
-public struct RGBColor: Hashable, Sendable, Codable {
+public struct PaletteColor: Hashable, Sendable, Codable {
     public var red: Double
     public var green: Double
     public var blue: Double
@@ -44,7 +44,7 @@ public struct RGBColor: Hashable, Sendable, Codable {
     }
 
     /// Contrast ratio, 1…21 (WCAG 2.2: AA text needs 4.5, large text and UI parts 3).
-    public func contrast(with other: RGBColor) -> Double {
+    public func contrast(with other: PaletteColor) -> Double {
         let a = luminance, b = other.luminance
         return (max(a, b) + 0.05) / (min(a, b) + 0.05)
     }
@@ -80,7 +80,7 @@ public struct RGBColor: Hashable, Sendable, Codable {
     }
 
     /// The colour for OKLab coordinates, or nil when it is outside sRGB.
-    static func fromOKLab(_ L: Double, _ A: Double, _ B: Double, clamp: Bool) -> RGBColor? {
+    static func fromOKLab(_ L: Double, _ A: Double, _ B: Double, clamp: Bool) -> PaletteColor? {
         let l = pow(L + 0.3963377774 * A + 0.2158037573 * B, 3)
         let m = pow(L - 0.1055613458 * A - 0.0638541728 * B, 3)
         let s = pow(L - 0.0894841775 * A - 1.2914855480 * B, 3)
@@ -89,7 +89,7 @@ public struct RGBColor: Hashable, Sendable, Codable {
         let b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
         let epsilon = 1e-4
         if !clamp, [r, g, b].contains(where: { $0 < -epsilon || $0 > 1 + epsilon }) { return nil }
-        return RGBColor(red: gamma(max(0, r)), green: gamma(max(0, g)), blue: gamma(max(0, b)))
+        return PaletteColor(red: gamma(max(0, r)), green: gamma(max(0, g)), blue: gamma(max(0, b)))
     }
 
     public var oklch: OKLCH {
@@ -120,7 +120,7 @@ public struct RGBColor: Hashable, Sendable, Codable {
     }
 
     /// Perceptual mix in OKLab: 0 is self, 1 is `other`.
-    public func mixed(with other: RGBColor, _ fraction: Double) -> RGBColor {
+    public func mixed(with other: PaletteColor, _ fraction: Double) -> PaletteColor {
         if fraction <= 0 { return self }
         if fraction >= 1 { return other }
         let t = fraction
@@ -131,30 +131,30 @@ public struct RGBColor: Hashable, Sendable, Codable {
     /// The same hue and chroma with the lightness moved, as little as possible, away
     /// from `background` until the contrast reaches `ratio`. Colours that already pass
     /// come back unchanged, so a theme author's choice survives whenever it is legible.
-    public func ensuringContrast(_ ratio: Double, against background: RGBColor) -> RGBColor {
+    public func ensuringContrast(_ ratio: Double, against background: PaletteColor) -> PaletteColor {
         if contrast(with: background) >= ratio { return self }
         let lch = oklch
         // Darker on light backgrounds, lighter on dark ones; the other way if that can't work.
         let towardDark = background.luminance > 0.18
         for darker in [towardDark, !towardDark] {
             let limit = darker ? 0.0 : 1.0
-            let extreme = RGBColor(oklch: OKLCH(limit, lch.chroma, lch.hue))
+            let extreme = PaletteColor(oklch: OKLCH(limit, lch.chroma, lch.hue))
             guard extreme.contrast(with: background) >= ratio else { continue }
             var near = lch.lightness, far = limit
             for _ in 0..<22 {
                 let mid = (near + far) / 2
-                if RGBColor(oklch: OKLCH(mid, lch.chroma, lch.hue)).contrast(with: background) >= ratio { far = mid } else { near = mid }
+                if PaletteColor(oklch: OKLCH(mid, lch.chroma, lch.hue)).contrast(with: background) >= ratio { far = mid } else { near = mid }
             }
-            return RGBColor(oklch: OKLCH(far, lch.chroma, lch.hue))
+            return PaletteColor(oklch: OKLCH(far, lch.chroma, lch.hue))
         }
         // Not reachable at this chroma: the best neutral.
-        let black = RGBColor(red: 0, green: 0, blue: 0), white = RGBColor(red: 1, green: 1, blue: 1)
+        let black = PaletteColor(red: 0, green: 0, blue: 0), white = PaletteColor(red: 1, green: 1, blue: 1)
         return black.contrast(with: background) > white.contrast(with: background) ? black : white
     }
 
     /// A background tint of `self` over `base` (fraction 0…`strength`), the strongest one
     /// on which `text` still has `ratio` contrast.
-    public func tint(over base: RGBColor, strength: Double, keeping text: RGBColor, ratio: Double = 4.5) -> RGBColor {
+    public func tint(over base: PaletteColor, strength: Double, keeping text: PaletteColor, ratio: Double = 4.5) -> PaletteColor {
         var t = min(1, max(0, strength))
         if text.contrast(with: base.mixed(with: self, t)) >= ratio { return base.mixed(with: self, t) }
         var low = 0.0

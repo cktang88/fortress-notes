@@ -7,7 +7,7 @@ import Testing
 /// Colour maths, the contrast rules, the default palettes, and the Base16/Base24 and
 /// VS Code theme readers.
 struct ThemeTests {
-    private func hex(_ string: String) -> RGBColor { RGBColor(hex: string)! }
+    private func hex(_ string: String) -> PaletteColor { PaletteColor(hex: string)! }
 
     // MARK: Colour maths
 
@@ -15,7 +15,7 @@ struct ThemeTests {
         #expect(hex("#FBF8F1").hex == "#FBF8F1")
         #expect(hex("abc").hex == "#AABBCC")
         #expect(hex("#11223380").hex == "#112233")
-        #expect(RGBColor(hex: "#12") == nil)
+        #expect(PaletteColor(hex: "#12") == nil)
         #expect(abs(hex("#000000").contrast(with: hex("#FFFFFF")) - 21) < 0.01)
         // WCAG's own example pair: #777 on white is just under 4.5.
         #expect(abs(hex("#777777").contrast(with: .white) - 4.48) < 0.01)
@@ -24,11 +24,11 @@ struct ThemeTests {
     @Test func oklchRoundTrip() {
         for string in ["#B4532A", "#13151C", "#FBF8F1", "#268BD2", "#859900"] {
             let color = hex(string)
-            let back = RGBColor(oklch: color.oklch)
+            let back = PaletteColor(oklch: color.oklch)
             #expect(back.hex == color.hex, "\(string) → \(back.hex)")
         }
         // Out-of-gamut chroma is reduced, not clipped per channel: the hue survives.
-        let vivid = RGBColor(oklch: 0.7, 0.4, 145)
+        let vivid = PaletteColor(oklch: 0.7, 0.4, 145)
         #expect(abs(vivid.oklch.hue - 145) < 3)
     }
 
@@ -81,7 +81,7 @@ struct ThemeTests {
         #expect(p.text.contrast(with: p.highlight) >= minimums.secondaryText - 0.01, "\(name) highlight")
         // Citation chip: accent on accent at 15% over the page.
         let b = p.background, a = p.accent
-        let chip = RGBColor(red: b.red + (a.red - b.red) * 0.15, green: b.green + (a.green - b.green) * 0.15,
+        let chip = PaletteColor(red: b.red + (a.red - b.red) * 0.15, green: b.green + (a.green - b.green) * 0.15,
                             blue: b.blue + (a.blue - b.blue) * 0.15)
         #expect(a.contrast(with: chip) >= minimums.secondaryText, "\(name) chip")
     }

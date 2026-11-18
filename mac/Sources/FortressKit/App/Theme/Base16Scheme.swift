@@ -11,7 +11,7 @@ public struct Base16Scheme: Hashable, Sendable {
     /// "light" or "dark" when the file says; otherwise from base00's lightness.
     public var variant: String?
     /// "base00"… to colours (16 slots for Base16, 24 for Base24).
-    public var slots: [String: RGBColor]
+    public var slots: [String: PaletteColor]
 
     public enum ParseError: Error, Equatable {
         case missingSlot(String)
@@ -21,7 +21,7 @@ public struct Base16Scheme: Hashable, Sendable {
 
     public init(yaml: String) throws {
         var fields: [String: String] = [:]
-        var slots: [String: RGBColor] = [:]
+        var slots: [String: PaletteColor] = [:]
         for rawLine in yaml.components(separatedBy: .newlines) {
             let line = Self.stripComment(rawLine).trimmingCharacters(in: .whitespaces)
             guard let colon = line.firstIndex(of: ":") else { continue }
@@ -31,7 +31,7 @@ public struct Base16Scheme: Hashable, Sendable {
                 value = String(value.dropFirst().dropLast())
             }
             let lower = key.lowercased()
-            if lower.hasPrefix("base"), lower.count == 6, let color = RGBColor(hex: value) {
+            if lower.hasPrefix("base"), lower.count == 6, let color = PaletteColor(hex: value) {
                 slots[lower] = color
             } else if !value.isEmpty {
                 fields[lower] = value
@@ -65,7 +65,7 @@ public struct Base16Scheme: Hashable, Sendable {
         return line
     }
 
-    public subscript(_ slot: Int) -> RGBColor? { slots[String(format: "base%02x", slot)] }
+    public subscript(_ slot: Int) -> PaletteColor? { slots[String(format: "base%02x", slot)] }
 }
 
 extension Palette {
@@ -84,11 +84,11 @@ extension Palette {
         let dark = scheme.isDark
         var lowered = background.oklch
         lowered.lightness += dark ? -0.03 : -0.022
-        let sunken = scheme[0x10] ?? RGBColor(oklch: lowered)
+        let sunken = scheme[0x10] ?? PaletteColor(oklch: lowered)
         var surface = s(0x01)
         if surface.contrast(with: background) < 1.04 { surface = background.mixed(with: text, 0.06) }
         let red = s(0x08), purple = s(0x0E)
-        let marks: [MarkHue: RGBColor] = [
+        let marks: [MarkHue: PaletteColor] = [
             .red: red, .orange: s(0x09), .yellow: s(0x0A), .green: s(0x0B), .cyan: s(0x0C),
             .blue: s(0x0D), .purple: purple, .brown: s(0x0F),
             .pink: scheme[0x17] ?? purple.mixed(with: red, 0.5),
