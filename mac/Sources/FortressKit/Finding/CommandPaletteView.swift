@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// ⌘K: jump to any note or run any command, from the keyboard. A Raycast-style glass
+/// Open Quickly… (⇧⌘O): jump to any note or run any command, from the keyboard. A Raycast-style glass
 /// panel, 560 wide, floating over the window (the window is not dimmed).
 ///
 /// Keys: ↑/↓ move, ↩ runs, ⌘↩ asks your notes, esc closes. Prefixes: ">" commands,
@@ -38,7 +38,7 @@ struct CommandPaletteView: View {
                     footer(selected: items.first { $0.id == currentSelection(in: items) })
                 }
                 .frame(width: 560)
-                .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                .floatingGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
             .scaleEffect(isShown || reduceMotion ? 1 : 0.98, anchor: .top)
             .opacity(isShown ? 1 : 0)
@@ -247,6 +247,23 @@ struct CommandPaletteView: View {
             Task { await model.refreshNavigation() }
         case .importOneNote:
             model.showOneNoteImport()
+        case .newWindow:
+            model.library.openWindow?(nil)
+        case .importMarkdown:
+            model.isImporterShown = true
+        case .exportMarkdown:
+            Task { await model.exportOpenNote() }
+        case .backUpNow:
+            Task { await model.backUpNow() }
+        case .focusMode:
+            model.isFocusMode.toggle()
+        case .rough, .polished, .recent:
+            model.query = ""
+            model.select(command == .rough ? .rough : command == .polished ? .polished : .recent)
+        case .moveToTrash:
+            if let id = model.openNoteId { Task { await model.trashNote(id: id) } }
+        case .openInNewWindow:
+            if let id = model.openNoteId { model.library.openWindow?(id) }
         }
     }
 

@@ -14,15 +14,32 @@ public enum LibraryScope: Hashable, Sendable {
     case folder(id: String)
 }
 
-/// The app's shared state. Screens read it and call its methods; each feature area adds
-/// its own state and actions in an extension in its own folder (Shell/, Editor/, Finding/).
+/// One main window's state (selection, open note, sheets, palette) over the `Library`
+/// all windows share. Screens read it and call its methods; each feature area adds its
+/// own state and actions in an extension in its own folder (Shell/, Editor/, Finding/).
 @MainActor
 @Observable
 public final class AppModel {
-    /// Replaced when the backend address changes in Settings.
-    public var api: APIClient
+    /// The state every window shares.
+    public let library: Library
 
-    public var navigation = NavigationResponse(items: [], recent: [])
+    // Shared state, kept in the library (forwarded so screens and actions read one model).
+    public var api: APIClient { get { library.api } set { library.api = newValue } }
+    public var navigation: NavigationResponse { get { library.navigation } set { library.navigation = newValue } }
+    public var notice: Notice? { get { library.notice } set { library.notice = newValue } }
+    public var isConnected: Bool { get { library.isConnected } set { library.isConnected = newValue } }
+    public var hasLoadedNavigation: Bool { get { library.hasLoadedNavigation } set { library.hasLoadedNavigation = newValue } }
+    public var backend: BackendController { library.backend }
+    public var trash: [TrashedDocument] { get { library.trash } set { library.trash = newValue } }
+    public var backups: [Backup] { get { library.backups } set { library.backups = newValue } }
+    public var oneNoteImport: OneNoteImporter { library.oneNoteImport }
+    public var pictureText: PictureTextReader { library.pictureText }
+
+    /// The window's undo manager (set by the window), for undoable library edits.
+    @ObservationIgnored public weak var undoManager: UndoManager?
+    /// Above zero while an undo or redo runs (its work must not register again).
+    @ObservationIgnored var undoSuppression = 0
+
     public var scope: LibraryScope = .all
     public var route: Route = .empty {
         didSet { noteMayHaveOpened() }
@@ -31,34 +48,32 @@ public final class AppModel {
     public var query = ""
     public var isInspectorShown = false
     public var isPaletteShown = false
-    /// The last error worth telling the person about (shown as a quiet banner).
-    public var notice: Notice?
-    /// Whether the backend answered the last request.
-    public var isConnected = true
+    /// Bumped by Edit ▸ Search All Notes (⌥⌘F) to put the caret in the window's search field.
+    public var searchFocusRequest = 0
 
-    public init(api: APIClient = APIClient()) {
-        self.api = api
+    /// A window over a new library of its own (tests, previews).
+    public convenience init(api: APIClient = APIClient()) {
+        self.init(library: Library(api: api))
+    }
+
+    /// Another window over a shared library.
+    public init(library: Library) {
+        self.library = library
     }
 
     // MARK: Shell
     // State owned by the Shell area (window, sidebar, note list, sheets). Actions live in
     // Shell/AppModel+Shell.swift.
 
-    /// Starts and stops a local backend when it isn't already running.
-    public let backend = BackendController()
     /// The transient capsule at the bottom of the window ("Moved to Trash · Undo").
     public var toast: Toast?
-    /// Notes in the Trash, loaded when the Trash is shown.
-    public var trash: [TrashedDocument] = []
     /// The selected note while the Trash is shown (trashed notes don't open in the editor).
     public var selectedTrashId: String?
-    public var backups: [Backup] = []
     public var isBackupsShown = false
     public var isImporterShown = false
-    /// The OneNote import sheet (File ▸ Import ▸ From OneNote…) and its import, which keeps
-    /// running when the sheet is closed.
+    /// The OneNote import sheet (File ▸ Import ▸ From OneNote…); the import itself is the
+    /// library's and keeps running when the sheet is closed.
     public var isOneNoteImportShown = false
-    public let oneNoteImport = OneNoteImporter()
     /// Markdown files waiting for the import sheet, with the folder they go into.
     public var pendingImport: MarkdownImportRequest?
     /// A note's Markdown ready for the save panel.
@@ -70,8 +85,6 @@ public final class AppModel {
     /// Bumped when the note list hands keyboard focus to the editor (↩ on a row).
     /// The editor can watch it with `.onChange` and take focus.
     public var editorFocusRequest = 0
-    /// Whether the sidebar tree has loaded once (so empty states don't flash at launch).
-    public var hasLoadedNavigation = false
     /// Set false (snapshots, previews) to skip contacting the backend when a window opens.
     public var connectsOnAppear = true
 
@@ -123,18 +136,22 @@ public final class AppModel {
         var apply: (inout NavigationResponse) -> Void
     }
 
-    @ObservationIgnored var navigationFetches = 0
-    @ObservationIgnored var newestAppliedFetch = 0
-    @ObservationIgnored var navigationFetchesInFlight = 0
-    @ObservationIgnored var patchSequence = 0
-    @ObservationIgnored var navigationPatches: [NavigationPatch] = []
-    /// Reconnects after the backend goes away (see `startReconnecting`).
-    @ObservationIgnored var reconnectTask: Task<Void, Never>?
+    var navigationFetches: Int { get { library.navigationFetches } set { library.navigationFetches = newValue } }
+    var newestAppliedFetch: Int { get { library.newestAppliedFetch } set { library.newestAppliedFetch = newValue } }
+    var navigationFetchesInFlight: Int {
+        get { library.navigationFetchesInFlight } set { library.navigationFetchesInFlight = newValue }
+    }
+    var patchSequence: Int { get { library.patchSequence } set { library.patchSequence = newValue } }
+    var navigationPatches: [NavigationPatch] { get { library.navigationPatches } set { library.navigationPatches = newValue } }
+    /// Reconnects after the backend goes away (see `startReconnecting`); one for all windows.
+    var reconnectTask: Task<Void, Never>? { get { library.reconnectTask } set { library.reconnectTask = newValue } }
     /// Delays between reconnection attempts (doubling up to the last).
-    @ObservationIgnored public var reconnectDelays: (first: Duration, max: Duration) = (.milliseconds(500), .seconds(30))
+    public var reconnectDelays: (first: Duration, max: Duration) {
+        get { library.reconnectDelays } set { library.reconnectDelays = newValue }
+    }
     @ObservationIgnored var hoverPrefetchTask: Task<Void, Never>?
     /// How many times the app restarted a backend that stopped by itself.
-    @ObservationIgnored var backendRestarts = 0
+    var backendRestarts: Int { get { library.backendRestarts } set { library.backendRestarts = newValue } }
 
     /// Reloads the sidebar tree and recent notes.
     ///
@@ -205,13 +222,11 @@ public final class AppModel {
 
     /// The block the caret is in, set by the editor; drives "Seen before" in the inspector.
     public var focusedBlockId: String?
-    /// Text in the ⌘K palette (set it before showing the palette to open in a mode, e.g. "? " for Ask).
+    /// Text in the palette (Open Quickly…, ⇧⌘O) (set it before showing the palette to open in a mode, e.g. "? " for Ask).
     public var paletteQuery = ""
     /// The open note's blocks as last saved: block id → a version of its text. Set by
     /// `noteDidChange` (via `recordBlockVersions`); "Seen before" caches per block text.
     public internal(set) var savedBlockVersions: [String: Int] = [:]
-    /// Reads the text in pictures and PDFs with Apple Vision (Finding/PictureText).
-    public let pictureText = PictureTextReader()
 
     // MARK: -
 

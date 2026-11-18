@@ -29,6 +29,8 @@ struct NoteListView: View {
                                     .padding(8)
                             }
                             .contextMenu { NoteContextMenu(note: note) }
+                            .accessibilityAction(named: "Move to Trash") { Task { await model.trashNote(id: note.id) } }
+                            .accessibilityAction(named: "Open in New Window") { model.library.openWindow?(note.id) }
                             .onHover { inside in model.prefetchOnHover(noteId: inside ? note.id : nil) }
                     }
                 } header: {
@@ -41,7 +43,6 @@ struct NoteListView: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .background(Color(nsColor: .textBackgroundColor))
-        .animation(.smooth(duration: 0.2), value: notes.map(\.id))
         .task(id: model.openNoteId) {
             // Load the notes above and below the open one, so ↑/↓ open instantly. A new
             // selection cancels this before it sends anything.
@@ -144,10 +145,12 @@ struct NoteRow: View {
 
 struct NoteContextMenu: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     let note: NavigationDocument
 
     var body: some View {
         Button("Open") { model.open(noteId: note.id) }
+        Button("Open in New Window") { openWindow(id: MainWindowScene.id, value: note.id) }
         MoveToFolderMenu(noteId: note.id)
         Button("Export as Markdown…") {
             model.open(noteId: note.id)

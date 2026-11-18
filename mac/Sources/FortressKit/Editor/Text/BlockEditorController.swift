@@ -1544,13 +1544,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         case ([.command], "b"): toggleMark(\.bold)
         case ([.command], "i"): toggleMark(\.italic)
         case ([.command], "u"): toggleMark(\.underline)
-        case ([.command], "e"): toggleMark(\.code)
+        case ([.command, .option], "e"): toggleMark(\.code)  // ⌘E stays Use Selection for Find.
         case ([.command, .shift], "x"): toggleMark(\.strike)
         case ([.command, .shift], "h"): toggleHighlight("yellow")
         case ([.command, .control], "="), ([.command, .control], "+"): toggleMark(\.sup)
         case ([.command, .control], "-"): toggleMark(\.sub)
-        case ([.command, .option], "t"): insertTable()
-        case ([.command, .shift], "k"), ([.command], "l"): editLink()
+        case ([.command], "k"): editLink()  // As in Notes, Pages, Mail and TextEdit.
         case ([.command, .option], "0"): setKind(.paragraph)
         case ([.command, .option], "1"): setKind(.heading1)
         case ([.command, .option], "2"): setKind(.heading2)
@@ -1559,8 +1558,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         case ([.command, .shift], "8"), ([.command, .shift], "*"): setKind(.numbered)
         case ([.command, .shift], "l"): setKind(.check)
         case ([.command, .option], "'"): setKind(.quote)
-        case ([.command, .option], "c"): setKind(.code)
-        case ([.command], "\r"): toggleChecked()
+        case ([.command, .option, .control], "c"): setKind(.code)  // ⌥⌘C is Copy Style.
+        case ([.command, .shift], "u"): toggleChecked()  // Notes' Mark as Checked.
         case ([.command], "]"): indent(by: 1)
         case ([.command], "["): indent(by: -1)
         default:

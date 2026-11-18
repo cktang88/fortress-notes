@@ -93,7 +93,7 @@ struct AskView: View {
                 }
             }
             .frame(minHeight: 40)
-            .glassEffect(.regular, in: .rect(cornerRadius: 20))
+            .floatingGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .frame(maxWidth: 560)
         .padding(.horizontal, 32)

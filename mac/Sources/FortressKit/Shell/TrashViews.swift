@@ -24,7 +24,6 @@ struct TrashListView: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .background(Color(nsColor: .textBackgroundColor))
-        .animation(.smooth(duration: 0.2), value: model.trash.map(\.id))
         .overlay {
             if model.trash.isEmpty && model.isConnected {
                 ContentUnavailableView(

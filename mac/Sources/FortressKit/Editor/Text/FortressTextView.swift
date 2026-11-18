@@ -18,6 +18,12 @@ final class FortressTextView: NSTextView {
     /// A column's text inside a columns block: no header, no gutters.
     var isEmbedded = false { didSet { layoutColumn() } }
     private var headerHeight: CGFloat = 0
+    /// The note's own undo stack. Text undo stays apart from the window's (where the
+    /// list's Move to Trash, moves and renames are undone), so ⌘Z in the note undoes
+    /// typing and ⌘Z in the list undoes list actions; loading a note clears only this.
+    let noteUndo = UndoManager()
+
+    override var undoManager: UndoManager? { noteUndoManager ?? noteUndo }
 
     static func make() -> FortressTextView {
         let textView = FortressTextView(usingTextLayoutManager: true)
@@ -254,4 +260,18 @@ final class FortressTextView: NSTextView {
 
     // Standard Format ▸ Font items route here too.
     @objc override func underline(_ sender: Any?) { controller?.toggleMark(\.underline) }
+}
+
+extension NSView {
+    /// The undo stack of the note this view is in: the outermost note text view's (a
+    /// column's text, a table cell and the note itself share one).
+    var noteUndoManager: UndoManager? {
+        var view: NSView? = self
+        var outermost: FortressTextView?
+        while let current = view {
+            if let text = current as? FortressTextView { outermost = text }
+            view = current.superview
+        }
+        return outermost?.noteUndo
+    }
 }
