@@ -42,6 +42,7 @@ public struct MainWindow: View {
                         .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
                 }
                 .toolbar { DetailToolbar() }
+                .overlay(alignment: .bottom) { ToastHost() }
         }
         .navigationTitle(model.windowTitle)
         .navigationSubtitle(model.windowSubtitle)
@@ -51,7 +52,6 @@ public struct MainWindow: View {
                 CommandPaletteView().padding(.top, 140)
             }
         }
-        .overlay(alignment: .bottom) { ToastHost() }
         .modifier(ShellPresentations())
         .frame(minWidth: 900, minHeight: 560)
         .tint(.fortressEmber)
