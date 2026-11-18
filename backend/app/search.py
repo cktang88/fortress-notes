@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from . import block_query, block_store, documents, embeddings, relevance
+from . import block_query, block_store, documents, embeddings, relevance, textutil
 from . import corpus as corpus_store
 from .config import get_settings
 from .models import RelatedResult
@@ -174,13 +174,20 @@ _SNIPPET = 220
 
 
 def unified_search(
-    q: str, filters: block_query.BlockSearchFilters | None = None, limit: int = 30
+    q: str,
+    filters: block_query.BlockSearchFilters | None = None,
+    limit: int = 30,
+    *,
+    with_rows: bool = False,
 ) -> list[dict[str, object]]:
     """One ranked list of blocks from exact words, meaning, and note titles.
 
     Each source ranks blocks on its own; reciprocal rank fusion combines the
     ranks, so no score scales need to agree. Recent edits get a small boost and
     no note contributes more than a few blocks.
+
+    ``with_rows`` adds each block's full ``block_details`` row under ``"row"``
+    (Ask quotes whole paragraphs, not snippets, and needn't load them again).
     """
 
     if not q.strip():
@@ -213,7 +220,7 @@ def unified_search(
     # A title naming every query word is almost certainly the note being looked for;
     # one sharing a single word of several is weak evidence. Plain rank fusion would
     # count both the same, so weight title matches by how much of the query they cover.
-    query_words = max(1, len(set(block_query.query_tokens(q))))
+    query_words = max(1, len(set(textutil.words(q))))
     title_weight = {
         str(match["block_id"]): _FULL_TITLE_WEIGHT
         if int(match["hits"]) >= query_words
@@ -236,7 +243,7 @@ def unified_search(
 
     details = block_query.block_details(db_path, list(fused))
     now = datetime.now(timezone.utc)
-    tokens = block_query.query_tokens(q)
+    tokens = textutil.words(q)
     wanted = set(tokens)
     for block_id, row in details.items():
         fused[block_id] *= 1.0 + 0.15 * _recency(str(row["updated_at"]), now)
@@ -244,7 +251,7 @@ def unified_search(
         # note covers every query word across its title and text ("hotel <name>": the
         # name in the title, "hotel" in the paragraph). Boost by the share it covers.
         if wanted:
-            words = block_query.query_tokens(
+            words = textutil.words(
                 f"{row['document_title']} {row['text']} {row['asset_text']}"
             )
             covered = sum(1 for token in wanted if any(w.startswith(token) for w in words))
@@ -263,18 +270,19 @@ def unified_search(
             in_asset, asset_highlights = _snippet(str(row["asset_text"]), tokens)
             if asset_highlights or not snippet:
                 snippet, highlights = in_asset, asset_highlights
-        results.append(
-            {
-                "block_id": block_id,
-                "document_id": document_id,
-                "document_title": row["document_title"],
-                "block_type": row["type"],
-                "text": snippet,
-                "highlights": highlights,
-                "matched": reasons[block_id],
-                "score": round(fused[block_id], 6),
-            }
-        )
+        result = {
+            "block_id": block_id,
+            "document_id": document_id,
+            "document_title": row["document_title"],
+            "block_type": row["type"],
+            "text": snippet,
+            "highlights": highlights,
+            "matched": reasons[block_id],
+            "score": round(fused[block_id], 6),
+        }
+        if with_rows:
+            result["row"] = row
+        results.append(result)
         if len(results) >= limit:
             break
     return results
@@ -302,13 +310,8 @@ def _snippet(text: str, tokens: list[str]) -> tuple[str, list[list[int]]]:
     """
 
     wanted = set(tokens)
-    matched = [(start, end) for start, end, word in block_query.word_spans(text) if word in wanted]
-    first = matched[0][0] if matched else 0
-    start = max(0, min(first - _SNIPPET // 3, len(text) - _SNIPPET))
-    if start > 0:
-        space = text.find(" ", start)
-        start = space + 1 if 0 <= space < first else start
-    stop = min(start + _SNIPPET, len(text))
+    matched = [(start, end) for start, end, word in textutil.word_spans(text) if word in wanted]
+    start, stop = textutil.window(text, matched[0][0] if matched else 0, _SNIPPET)
     window = text[start:stop]
     prefix = "…" if start > 0 else ""
     suffix = "…" if stop < len(text) else ""

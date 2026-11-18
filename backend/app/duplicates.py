@@ -7,11 +7,10 @@ match means "you already wrote this", and it can be explained in one number.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from . import provenance as _provenance
-from . import order_keys
+from . import order_keys, textutil
 from .block_store import (
     connection_scope,
     initialize,
@@ -23,17 +22,8 @@ from .block_store import (
 MIN_WORDS = 12
 THRESHOLD = 0.6
 
-_WORD = re.compile(r"[^\W_]{3,}", re.UNICODE)
-_STOPWORDS = frozenset(
-    """the and for that with this from have are was were but not you your our they them
-    their there then than what when where which who will would could should about into
-    over also just like some more most only very been being has had its it's can all any
-    each other such these those out how why use using get got one two may might must""".split()
-)
-
-
 def _words(text: str) -> set[str]:
-    return {word for word in (w.lower() for w in _WORD.findall(text)) if word not in _STOPWORDS}
+    return set(textutil.content_words(text))
 
 
 def similar_documents(path: Path, document_id: str, limit: int = 3) -> list[dict[str, object]]:

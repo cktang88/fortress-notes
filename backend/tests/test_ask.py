@@ -156,6 +156,29 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertEqual(ask.grep_blocks("kyoto"), [])
         self.assertTrue(ask.grep_blocks("osaka"))
 
+    def test_grep_ignores_accents_like_search(self) -> None:
+        from app import ask
+
+        self.client.post(
+            "/api/block-documents",
+            json={"title": "Pâtisserie", "body": "The best café crème is at Société Rue."},
+        )
+        self.client.post("/api/block-documents", json={"title": "Kaffee", "body": "Order a cafe latte."})
+        expected = "The best café crème is at Société Rue."
+        # The question's words are folded, so the prefetch finds the accented note...
+        self.assertEqual(ask.key_terms("Where is the cafe creme?"), ["creme", "cafe"])
+        self.assertIn(expected, [row["text"] for row in ask.grep_terms(ask.key_terms("cafe creme"))])
+        # ...and the model's regex matches with or without accents, either way round.
+        self.assertIn(expected, [row["text"] for row in ask.grep_blocks("cafe creme")])
+        self.assertIn(expected, [row["text"] for row in ask.grep_blocks("SOCIETE|nothing")])
+        self.assertIn("Order a cafe latte.", [row["text"] for row in ask.grep_blocks("café latte")])
+        self.assertIn(expected, [row["text"] for row in ask.grep_blocks("p[aâ]tisserie")])
+        # ASCII escapes keep their meaning (folding must not lowercase \D into \d).
+        self.assertEqual(ask.grep_blocks(r"\Dcafe\D\D\D\D\Dcr"), ask.grep_blocks("é cafe cr"))
+        # The passage shown to the model is cut around the folded match.
+        long = ("Filler words about nothing much at all. " * 40) + "Société Rue. " + ("More. " * 200)
+        self.assertIn("Société Rue.", ask._window(long, ["societe"]))
+
     def test_prefetch_greps_exact_names_before_any_model_call(self) -> None:
         miguel = self.client.post(
             "/api/block-documents", json={"title": "Contractors", "body": "Miguel quoted 12k for the deck."}
@@ -412,6 +435,50 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertIn("The ferry leaves at 7:40", window)
         self.assertIn(window, body)  # a verbatim slice, so quotes from it are real
         self.assertEqual(ask._window("short", ["ferry"]), "short")
+
+    def test_a_tool_round_adds_at_most_its_character_budget(self) -> None:
+        from app import ask
+
+        sources = ask._Sources()
+        rows = [
+            {"id": f"b{i}", "document_id": "d", "document_title": "Long", "text": "word " * 120}
+            for i in range(40)
+        ]
+        added = sources.add(rows, 2000)
+        self.assertEqual(len(added), 3)  # 600 characters each
+        self.assertLessEqual(sum(len(sources.by_id[s]["text"]) for s in added), 2000)
+        # The rest stays available to a later look.
+        self.assertEqual(len(sources.add(rows[3:], 600)), 1)
+        # A single passage over the budget is still shown (cut to its window).
+        self.assertEqual(len(ask._Sources().add([{**rows[0], "text": "x " * 2000}], 10)), 1)
+
+    def test_closing_the_stream_cancels_the_model_call(self) -> None:
+        import asyncio
+
+        from app import ask, llm
+
+        cancelled = asyncio.Event()
+
+        async def slow_stream(*args, **kwargs):
+            yield '{"action": "answer", "sentences": [{"text": "Alfama.", "citations": [{"id": "S1", "quote": "hotel in Alfama"}]},'
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            yield "]}"
+
+        async def run() -> dict:
+            stream = ask.ask_stream("Which hotel in Lisbon?")
+            first = await anext(stream)
+            await stream.aclose()  # what the server does when the client goes away
+            await asyncio.wait_for(cancelled.wait(), 2)
+            return first
+
+        with patch.object(llm, "chat_json_stream", slow_stream):
+            first = asyncio.run(run())
+        self.assertEqual(first["type"], "sentence")
+        self.assertTrue(cancelled.is_set())
 
     def test_read_tool_returns_a_whole_note(self) -> None:
         from app import ask

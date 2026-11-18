@@ -14,23 +14,22 @@ every keystroke). Now:
 * A snapshot (``Corpus``) is immutable and is a plain list of rows, so callers
   can iterate it and use ``is`` to tell whether anything changed. Unchanged
   notes share their ``Note`` entries across snapshots, so data derived per note
-  (Ask's lower-cased "title + text" rows, cached related lists) survives edits
+  (Ask's folded "title + text" rows, cached related lists) survives edits
   to other notes. ``changed_between`` names the notes that differ between two
   snapshots, for consumers that update incrementally.
 
-``searchable_text`` is the one place that decides what text of a block is
+``textutil.searchable_text`` is the one place that decides what text of a block is
 indexed (its text plus the text found in its images).
 """
 
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
 
-from . import block_store
+from . import block_store, textutil
 
 Row = tuple[str, str, str, str]  # (block_id, document_id, version, text)
 
@@ -38,14 +37,7 @@ Row = tuple[str, str, str, str]  # (block_id, document_id, version, text)
 _HISTORY = 512
 
 
-def searchable_text(text: str, asset_texts: Iterable[str] = ()) -> str:
-    """What search, related notes, Ask and the embeddings see of one block.
-
-    ``text`` is the block's own plain text; ``asset_texts`` the text extracted
-    from images and files it shows (OCR, captions), in a stable order.
-    """
-
-    return "\n\n".join(part for part in (text, "\n".join(t for t in asset_texts if t.strip())) if part)
+searchable_text = textutil.searchable_text
 
 
 @dataclass(eq=False)
@@ -58,11 +50,15 @@ class Note:
     _titled: list | None = field(default=None, repr=False)
 
     def titled(self) -> list[tuple[str, str, str, str]]:
-        """(block_id, title, text, lower-cased "title\\ntext") per row (built once)."""
+        """(block_id, title, text, folded "title\\ntext") per row (built once).
+
+        Folded with ``textutil.fold`` (lowercase, no accents, same length), so
+        offsets past ``len(title) + 1`` are offsets into ``text``.
+        """
 
         if self._titled is None:
             self._titled = [
-                (block_id, self.title, text, f"{self.title}\n{text}".lower())
+                (block_id, self.title, text, textutil.fold(f"{self.title}\n{text}"))
                 for block_id, _document_id, _version, text in self.rows
             ]
         return self._titled
@@ -79,7 +75,7 @@ class Corpus(list):
         self._titled: list | None = None
 
     def titled(self) -> list[tuple[str, str, str, str]]:
-        """Every row as (block_id, note title, text, lower-cased "title\\ntext")."""
+        """Every row as (block_id, note title, text, folded "title\\ntext")."""
 
         if self._titled is None:
             self._titled = list(
@@ -271,11 +267,7 @@ def _load_notes(connection, document_ids: set[str] | None) -> dict[str, Note]:
                          ) AS asset_version
                    ), '') AS version,
                    blocks.text,
-                   (SELECT group_concat(assets.text, char(10))
-                      FROM block_assets
-                      JOIN assets USING (content_hash, media_name)
-                     WHERE block_assets.block_id = blocks.id AND trim(assets.text) <> '')
-                       AS asset_text
+                   {textutil.asset_text_sql("blocks.id")} AS asset_text
               FROM blocks
               JOIN documents ON documents.id = blocks.document_id
              WHERE documents.deleted_at IS NULL{where}
@@ -287,7 +279,7 @@ def _load_notes(connection, document_ids: set[str] | None) -> dict[str, Note]:
              ORDER BY blocks.document_id, blocks.order_key, blocks.id""",
         params,
     ):
-        text = searchable_text(str(row[3]), [row[4]] if row[4] else ())
+        text = searchable_text(str(row[3]), row[4] or "")
         by_note.setdefault(str(row[1]), []).append((str(row[0]), str(row[1]), str(row[2]), text))
     for document_id, rows in by_note.items():
         note = notes.get(document_id)

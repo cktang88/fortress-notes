@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import re
+import heapq
 import time
 import unicodedata
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -33,7 +34,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 import httpx
 import regex
 
-from . import block_query, block_store, llm, search
+from . import block_query, block_store, llm, search, textutil
 from . import corpus as corpus_store
 from .config import get_settings
 
@@ -47,19 +48,13 @@ TOOL_HITS = 8
 # Characters of a paragraph shown to the model: a window around the matched words.
 SOURCE_CHARS = 700
 NOTE_BLOCKS = 40
+# Characters of new passages one grep or read may add to the prompt (~2k tokens):
+# a long note read whole would otherwise slow every later model call.
+TOOL_CHARS = 8000
 # Total time one grep over every note may take (the model's regex can backtrack badly).
 GREP_SECONDS = 0.3
 
 _clock = time.monotonic
-
-_STOPWORDS = frozenset(
-    """the and for that with this from have are was were but not you your our they them
-    their there then than what when where which who whom whose why how did does do done
-    will would could should about into over also just like some more most only very been
-    being has had its can all any each other such these those out get got one may might
-    must ever last first tell me my mine i we us is it of on in at to a an or as by""".split()
-)
-_WORD = re.compile(r"[^\W_]+", re.UNICODE)
 
 _SYSTEM = (
     "You answer questions using ONLY the person's own notes. Sources are numbered "
@@ -101,33 +96,24 @@ def _normalize(text: str) -> str:
 
 
 def key_terms(question: str) -> list[str]:
-    """Distinctive words of a question, longest first (names, dates, rare words)."""
+    """Distinctive words of a question, folded, longest first (names, dates, rare words)."""
 
-    terms = []
-    for word in _WORD.findall(question):
-        lowered = word.lower()
-        if lowered in _STOPWORDS or (len(lowered) < 3 and not lowered.isdigit()):
-            continue
-        if lowered not in terms:
-            terms.append(lowered)
-    return sorted(terms, key=len, reverse=True)[:6]
+    return sorted(textutil.content_words(question), key=len, reverse=True)[:6]
 
 
 def _window(text: str, terms: list[str]) -> str:
-    """At most ``SOURCE_CHARS`` of ``text``, centred on the first matched term.
+    """At most ``SOURCE_CHARS`` of ``text``, around the first matched term.
 
     The window is a verbatim slice, so a quote found in it is in the note too.
+    Terms are folded (``textutil.fold``), so "cafe" finds "Café".
     """
 
     if len(text) <= SOURCE_CHARS:
         return text
-    lowered = text.lower()
-    first = min((i for i in (lowered.find(term) for term in terms) if i >= 0), default=0)
-    start = max(0, min(first - SOURCE_CHARS // 3, len(text) - SOURCE_CHARS))
-    if start > 0:  # Start on a word boundary.
-        space = text.find(" ", start, first if first > start else start + 40)
-        start = space + 1 if space >= 0 else start
-    return text[start : start + SOURCE_CHARS]
+    start, stop = textutil.window(
+        text, textutil.first_match(textutil.fold(text), terms), SOURCE_CHARS
+    )
+    return text[start:stop]
 
 
 def _with_asset_text(row: dict[str, object]) -> str:
@@ -148,13 +134,20 @@ class _Sources:
         self._block_ids: set[str] = set()
         self.terms = terms or []
 
-    def add(self, rows: list[dict[str, object]]) -> list[str]:
+    def add(self, rows: list[dict[str, object]], budget: int | None = None) -> list[str]:
+        """Number the new passages; stop once they hold ``budget`` characters."""
+
         added = []
+        used = 0
         for row in rows:
             block_id = str(row["id"])
             text = _with_asset_text(row)
             if block_id in self._block_ids or not text.strip():
                 continue
+            shown = _window(text, self.terms)
+            if budget is not None and added and used + len(shown) > budget:
+                break
+            used += len(shown)
             self._block_ids.add(block_id)
             source_id = f"S{len(self.by_id) + 1}"
             self.by_id[source_id] = {
@@ -162,7 +155,7 @@ class _Sources:
                 "document_id": row["document_id"],
                 "document_title": row["document_title"],
                 "updated_at": row.get("updated_at", ""),
-                "text": _window(text, self.terms),
+                "text": shown,
             }
             added.append(source_id)
         return added
@@ -197,20 +190,21 @@ def _compile_grep(pattern: str):
 def grep_blocks(pattern: str, limit: int = TOOL_HITS) -> list[dict[str, object]]:
     """Active paragraphs matching a case-insensitive regex (or plain text if invalid).
 
-    Runs under a time limit so a pathological pattern can't stall Ask, and only a
-    non-empty match counts, so a stray ``|`` doesn't match every paragraph.
+    Accents are ignored like in search ("cafe" finds "café" and the other way
+    round). Runs under a time limit so a pathological pattern can't stall Ask, and
+    only a non-empty match counts, so a stray ``|`` doesn't match every paragraph.
     """
 
     pattern = pattern.strip()[:200]
     if not pattern:
         return []
-    compiled = _compile_grep(pattern)
+    compiled = _compile_grep(textutil.fold_accents(pattern))
     if compiled is None:
         return []
     db_path = get_settings().block_db_path
     deadline = time.monotonic() + GREP_SECONDS
     hits = []
-    for block_id, title, text, _lowered in _titled_corpus(db_path):
+    for block_id, _title, _text, folded in _titled_corpus(db_path):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
@@ -218,7 +212,7 @@ def grep_blocks(pattern: str, limit: int = TOOL_HITS) -> list[dict[str, object]]
             # The note's title counts as part of each paragraph: "kyoto" should find
             # "ryokan in Gion" in the note called "Kyoto trip".
             matched = any(
-                match.group() for match in compiled.finditer(f"{title}\n{text}", timeout=remaining)
+                match.group() for match in compiled.finditer(folded, timeout=remaining)
             )
         except TimeoutError:
             break
@@ -231,7 +225,7 @@ def grep_blocks(pattern: str, limit: int = TOOL_HITS) -> list[dict[str, object]]
 
 
 def _titled_corpus(db_path) -> list[tuple[str, str, str, str]]:
-    """(block_id, note title, text, lower-cased "title\ntext") for every active paragraph.
+    """(block_id, note title, text, folded "title\ntext") for every active paragraph.
 
     Built per note and kept with the corpus snapshot, so an edit only rebuilds the
     rows of the note it changed; a term grep is then one pass of `in` checks.
@@ -241,23 +235,21 @@ def _titled_corpus(db_path) -> list[tuple[str, str, str, str]]:
 
 
 def grep_terms(terms: list[str], limit: int = PREFETCH_GREP) -> list[dict[str, object]]:
-    """Paragraphs containing the most of ``terms`` (literal, case-insensitive)."""
+    """Paragraphs containing the most of ``terms`` (folded words, as ``key_terms``)."""
 
     if not terms:
         return []
     db_path = get_settings().block_db_path
     scored = []
-    for block_id, _title, text, lowered in _titled_corpus(db_path):
-        hits = 0
-        for term in terms:
-            if term in lowered:
-                hits += 1
-        if hits:
+    for block_id, title, _text, folded in _titled_corpus(db_path):
+        found = [term for term in terms if term in folded]
+        if found:
             # Words in the paragraph itself beat words only in its note's title.
-            in_text = sum(1 for term in terms if term in text.lower())
-            scored.append((hits, in_text, block_id))
-    scored.sort(key=lambda item: (-item[0], -item[1]))
-    ids = [block_id for _hits, _in_text, block_id in scored[:limit]]
+            body = len(title) + 1
+            in_text = sum(1 for term in found if folded.find(term, body) >= 0)
+            scored.append((len(found), in_text, -len(scored), block_id))
+    # Most terms first, then most in the text, then corpus order.
+    ids = [item[3] for item in heapq.nlargest(limit, scored)]
     details = block_query.block_details(db_path, ids)
     return [details[block_id] for block_id in ids if block_id in details]
 
@@ -302,11 +294,8 @@ def read_note(name: str) -> list[dict[str, object]]:
 
 
 def _semantic(question: str) -> list[dict[str, object]]:
-    hits = search.unified_search(question, limit=PREFETCH_SEARCH)
-    details = block_query.block_details(
-        get_settings().block_db_path, [str(hit["block_id"]) for hit in hits]
-    )
-    return [details[str(hit["block_id"])] for hit in hits if str(hit["block_id"]) in details]
+    # unified_search already loaded each block's full row; reuse it.
+    return [hit["row"] for hit in search.unified_search(question, limit=PREFETCH_SEARCH, with_rows=True)]
 
 
 async def _prefetch_parallel(question: str, sources: _Sources) -> list[str]:
@@ -431,7 +420,7 @@ async def _call(prompt: str, timeout: float, sources: _Sources, emit: Emit, show
                 if checked is not None:
                     shown.append(checked)
                     await emit({"type": "sentence", "sentence": checked})
-    return llm._parse_json_object(stream.text)
+    return llm.parse_json_object(stream.text)
 
 
 async def _run(question: str, emit: Emit) -> dict[str, object]:
@@ -476,7 +465,7 @@ async def _run(question: str, emit: Emit) -> dict[str, object]:
         ):
             # "Not found" with other wording to try: grep it locally (milliseconds) and,
             # only if that turns up new passages, give the model one last look.
-            added = sources.add(await asyncio.to_thread(grep_blocks, retry))
+            added = sources.add(await asyncio.to_thread(grep_blocks, retry), TOOL_CHARS)
             steps.append({"action": "grep", "detail": retry})
             await emit({"type": "step", "step": steps[-1]})
             if added:
@@ -489,14 +478,14 @@ async def _run(question: str, emit: Emit) -> dict[str, object]:
             return _answer(data, sources, steps, started, shown)
         if action == "grep" and isinstance(data.get("pattern"), str):
             pattern = data["pattern"]
-            added = sources.add(await asyncio.to_thread(grep_blocks, pattern))
+            added = sources.add(await asyncio.to_thread(grep_blocks, pattern), TOOL_CHARS)
             steps.append({"action": "grep", "detail": pattern})
             await emit({"type": "step", "step": steps[-1]})
             found = sources.payload(added) if added else "[] (no new matches)"
             transcript += f'\n\nYou searched for /{pattern}/. New sources:\n{found}'
         elif action == "read" and isinstance(data.get("note"), str):
             note = data["note"]
-            added = sources.add(await asyncio.to_thread(read_note, note))
+            added = sources.add(await asyncio.to_thread(read_note, note), TOOL_CHARS)
             steps.append({"action": "read", "detail": note})
             await emit({"type": "step", "step": steps[-1]})
             found = sources.payload(added) if added else "[] (no such note, or nothing new)"

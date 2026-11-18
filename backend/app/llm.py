@@ -122,7 +122,7 @@ async def chat_json_stream(
                     yield delta
 
 
-def _parse_json_object(content: object) -> dict:
+def parse_json_object(content: object) -> dict:
     """The JSON object in a model reply, even inside a code fence or after prose."""
 
     text = content.strip() if isinstance(content, str) else ""

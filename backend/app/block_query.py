@@ -7,16 +7,16 @@ This module deliberately contains no HTTP concerns.  Routes can use
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
+from . import textutil
 from .block_store import connection_scope, initialize
 
 
-_FTS_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+_FTS_TOKEN = textutil.WORD
 _VALID_STATUSES = frozenset({"rough", "polished"})
 
 
@@ -202,18 +202,17 @@ def block_details(path: Path, block_ids: list[str]) -> dict[str, dict[str, objec
         rows = connection.execute(
             f"""SELECT blocks.id, blocks.document_id, blocks.type, blocks.text,
                        blocks.updated_at, documents.title AS document_title,
-                       COALESCE((
-                           SELECT group_concat(assets.text, char(10))
-                             FROM block_assets
-                             JOIN assets USING (content_hash, media_name)
-                            WHERE block_assets.block_id = blocks.id
-                              AND trim(assets.text) <> ''
-                       ), '') AS asset_text
+                       COALESCE({textutil.asset_text_sql("blocks.id")}, '') AS asset_text
                   FROM blocks JOIN documents ON documents.id = blocks.document_id
                  WHERE blocks.id IN ({placeholders}) AND documents.deleted_at IS NULL""",
             block_ids,
         ).fetchall()
     return {row["id"]: dict(row) for row in rows}
+
+
+@lru_cache(maxsize=1 << 14)
+def _title_words(title: str) -> tuple[str, ...]:
+    return tuple(textutil.words(title))
 
 
 def title_matches(path: Path, query: str, limit: int = 20) -> list[dict[str, object]]:
@@ -229,73 +228,34 @@ def title_matches(path: Path, query: str, limit: int = 20) -> list[dict[str, obj
         return []
     initialize(path)
     with connection_scope(path) as connection:
-        rows = connection.execute(
-            """SELECT documents.id AS document_id, documents.title, documents.updated_at,
-                      (SELECT blocks.id FROM blocks
-                        WHERE blocks.document_id = documents.id
-                          AND blocks.parent_id IS NULL
-                        ORDER BY blocks.order_key LIMIT 1) AS block_id
-                 FROM documents
-                WHERE documents.deleted_at IS NULL"""
-        ).fetchall()
-    matches = []
-    for row in rows:
-        if not row["block_id"]:
-            continue
-        words = query_tokens(str(row["title"] or ""))
-        hits = sum(1 for token in tokens if any(word.startswith(token) for word in words))
-        if hits:
-            matches.append(
-                {
-                    "document_id": row["document_id"],
-                    "hits": hits,
-                    "updated_at": row["updated_at"],
-                    "block_id": row["block_id"],
-                }
-            )
+        # Titles are matched here (word lists cached per title); only the notes that
+        # match need their first block looked up.
+        matches = []
+        for row in connection.execute(
+            "SELECT id, title, updated_at FROM documents WHERE deleted_at IS NULL"
+        ):
+            words = _title_words(str(row["title"] or ""))
+            hits = sum(1 for token in tokens if any(word.startswith(token) for word in words))
+            if hits:
+                matches.append(
+                    {"document_id": row["id"], "hits": hits, "updated_at": row["updated_at"]}
+                )
+        for match in matches:
+            first = connection.execute(
+                # Written to match the blocks_sibling_order index.
+                """SELECT id FROM blocks
+                    WHERE document_id = ? AND COALESCE(parent_id, '') = ''
+                    ORDER BY order_key LIMIT 1""",
+                (match["document_id"],),
+            ).fetchone()
+            match["block_id"] = first["id"] if first else None
+    matches = [match for match in matches if match["block_id"]]
     matches.sort(key=lambda match: str(match["updated_at"]), reverse=True)
     matches.sort(key=lambda match: -int(match["hits"]))
     return matches[:limit]
 
 
-def fold(text: str) -> str:
-    """Lowercase ``text`` and strip accents, keeping exactly one character per character.
-
-    Offsets into the result are offsets into ``text``, so matches found in the folded
-    text can be highlighted in the original. Mirrors the FTS ``unicode61`` tokenizer's
-    case and diacritic folding closely enough for highlighting.
-    """
-
-    if text.isascii():
-        return text.lower()
-    return "".join(map(_fold_char, text))
-
-
-@lru_cache(maxsize=4096)
-def _fold_char(character: str) -> str:
-    if character.isascii():
-        return character.lower()
-    base = "".join(
-        part
-        for part in unicodedata.normalize("NFKD", character)
-        if not unicodedata.combining(part)
-    ).lower()
-    if len(base) == 1:
-        return base
-    lowered = character.lower()
-    return lowered if len(lowered) == 1 else character
-
-
-def query_tokens(query: str) -> list[str]:
-    """Words of ``query`` as the word search sees them: lowercase, without accents."""
-
-    return _FTS_TOKEN.findall(fold(query))
-
-
-def word_spans(text: str) -> list[tuple[int, int, str]]:
-    """(start, end, folded word) for each word of ``text``, in ``text`` offsets."""
-
-    return [
-        (match.start(), match.end(), match.group())
-        for match in _FTS_TOKEN.finditer(fold(text))
-    ]
+# The text rules live in ``textutil``; these names stay for existing callers.
+fold = textutil.fold
+query_tokens = textutil.words
+word_spans = textutil.word_spans

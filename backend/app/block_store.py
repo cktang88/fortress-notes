@@ -33,7 +33,7 @@ from typing import Iterable
 import frontmatter
 from ulid import ULID
 
-from . import block_legacy, order_keys
+from . import block_legacy, order_keys, textutil
 from . import block_schema as schema
 from . import provenance as _provenance
 from .block_markdown import BlockSpec, parse_markdown
@@ -2984,14 +2984,11 @@ def _refresh_fts(
     document_id: str,
     text: str,
 ) -> None:
-    asset_texts = connection.execute(
-        """SELECT assets.text FROM block_assets
-             JOIN assets USING (content_hash, media_name)
-            WHERE block_assets.block_id = ? AND trim(assets.text) <> ''
-            ORDER BY block_assets.media_name""",
-        (block_id,),
-    ).fetchall()
-    indexed_text = "\n\n".join([text, *(row["text"] for row in asset_texts)])
+    # The same text the corpus gives embeddings, related notes and Ask.
+    asset_text = connection.execute(
+        f"SELECT {textutil.asset_text_sql('?')}", (block_id,)
+    ).fetchone()[0]
+    indexed_text = textutil.searchable_text(text, asset_text or "")
     _fts_insert(connection, block_id, document_id, indexed_text)
 
 

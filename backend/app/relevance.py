@@ -41,7 +41,7 @@ from __future__ import annotations
 import statistics
 from functools import lru_cache
 
-from . import block_query, embeddings
+from . import embeddings, textutil
 
 RELATED_MIN_SCORE = 0.18
 _UNRELATED_RATIO = 0.70
@@ -51,16 +51,7 @@ _MIN_CANDIDATES_FOR_MEDIAN = 5
 KEYWORD_MIN_SHARED = 2
 _COMMON_SHARE = 0.5  # a word in over half the paragraphs is not distinctive...
 _COMMON_MIN_CORPUS = 20  # ...once there are enough paragraphs to tell
-_STOPWORDS = frozenset(
-    """a about above after again against all also am an and any are as at be because
-    been before being below between both but by can could did do does doing down during
-    each few for from further get got had has have having he her here hers herself him
-    himself his how i if in into is it its itself just let me more most my myself next no
-    nor not now of off on once only or other our ours ourselves out over own same she
-    should so some still such than that the their theirs them themselves then there these
-    they this those through to too under until up very was we were what when where which
-    while who whom why will with would you your yours yourself yourselves""".split()
-)
+
 
 
 def related_scores(query: str, docs: list[tuple[str, str, str]]) -> dict[str, float]:
@@ -206,8 +197,4 @@ def relevant_keyword_scores(query: str, docs: list[tuple[str, str, str]]) -> dic
 @lru_cache(maxsize=1 << 16)
 def _distinctive(text: str) -> frozenset[str]:
     # Cached: the keyword fallback tokenized every paragraph on every request.
-    return frozenset({
-        word
-        for word in block_query.query_tokens(text)
-        if word not in _STOPWORDS and not word.isdigit() and (len(word) >= 3 or not word.isascii())
-    })
+    return frozenset(textutil.content_words(text, numbers=False))
