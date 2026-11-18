@@ -185,6 +185,12 @@ struct DesktopBackdrop: View {
     }
 }
 
+/// Runs the main run loop briefly (AppKit layout and drawing).
+@MainActor
+func pumpRunLoop(_ seconds: TimeInterval) {
+    RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+}
+
 /// Like `snapshot(_:named:)`, but lets the window run longer first, so views that load
 /// from the (fake) backend and stream answers have settled.
 @MainActor
@@ -211,7 +217,7 @@ func settledSnapshot<V: View>(
     let deadline = Date().addingTimeInterval(seconds)
     // Alternate: the run loop draws, the await lets tasks on the main actor (loads, streams) resume.
     while Date() < deadline {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+        pumpRunLoop(0.03)
         try? await Task.sleep(for: .milliseconds(30))
     }
 

@@ -126,10 +126,10 @@ struct AskView: View {
 
 /// One question with its streamed answer, sources and trace.
 struct AskTurnView: View {
-    static let citationScheme = "fortress-cite"
+    nonisolated static let citationScheme = "fortress-cite"
 
     /// "fortress-cite:<document id>/<block id>" → the ids (ULIDs keep their case).
-    static func citation(from url: URL) -> (documentId: String, blockId: String?)? {
+    nonisolated static func citation(from url: URL) -> (documentId: String, blockId: String?)? {
         let string = url.absoluteString
         let prefix = citationScheme + ":"
         guard string.hasPrefix(prefix) else { return nil }
