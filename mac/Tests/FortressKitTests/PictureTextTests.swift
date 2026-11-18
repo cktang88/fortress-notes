@@ -162,7 +162,12 @@ final class FakeRecognizer: TextRecognizer, Sendable {
         try? await Task.sleep(for: .milliseconds(100))
         #expect(await backend.pendingAsks == 1)
         reader.start(backend: backend, key: "b")
-        try? await Task.sleep(for: .milliseconds(200))
+        // A new key starts a new reader, which asks again (poll: a busy CI machine can
+        // take far longer than any fixed sleep).
+        let deadline = ContinuousClock.now + .seconds(30)
+        while await backend.pendingAsks < 2, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         #expect(await backend.pendingAsks == 2)
         reader.stop()
     }
