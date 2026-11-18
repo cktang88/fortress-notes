@@ -120,7 +120,13 @@ public final class EditorSession {
         }.value
     }
 
-    public var hasUnsavedChanges: Bool { dirty || inFlight || unsent != nil }
+    public var hasUnsavedChanges: Bool { dirty || inFlight || isDiffing || unsent != nil }
+
+    /// Notes with more blocks than this are diffed off the main thread.
+    static let diffOffMainAbove = 5000
+    @ObservationIgnored private var isDiffing = false
+    /// Changes whenever the baseline is replaced from outside a save (a load, a reset).
+    @ObservationIgnored private var baseGeneration = 0
 
     // MARK: Loading
 
@@ -208,6 +214,7 @@ public final class EditorSession {
     /// The baseline becomes `blocks`: made on the next quiet run loop turn (or when a
     /// save needs it first), not while the note is being put on screen.
     private func setBaseLater(_ blocks: [EditorBlock]) {
+        baseGeneration += 1
         baseTree = nil
         baseBlocks = blocks
         RunLoop.main.perform(inModes: [.default]) { [weak self] in
@@ -246,8 +253,8 @@ public final class EditorSession {
     /// Sends pending edits now. If a transaction is already in flight, the edits go
     /// after it (they are never dropped).
     public func flush() async {
-        guard !inFlight, saveState != .conflict else {
-            if inFlight, dirty { scheduleFlush(after: .milliseconds(50)) }
+        guard !inFlight, !isDiffing, saveState != .conflict else {
+            if inFlight || isDiffing, dirty { scheduleFlush(after: .milliseconds(50)) }
             return
         }
         let pending: (transaction: BlockTransaction, result: SyncedTree)
@@ -260,8 +267,27 @@ public final class EditorSession {
             }
             dirty = false
             let interval = Signposts.begin("Save diff")
-            let (operations, result) = BlockDiff.operations(from: base, to: blocks)
+            let diffed: (operations: [BlockOperation], result: SyncedTree)
+            if blocks.count > Self.diffOffMainAbove {
+                // A huge note (a pasted log): the diff runs off the main thread, so typing
+                // goes on while it is worked out. The baseline must still be the one it
+                // started from when it is done, or it is worked out again.
+                let base = self.base
+                let generation = baseGeneration
+                isDiffing = true
+                diffed = await Task.detached(priority: .userInitiated) { BlockDiff.operations(from: base, to: blocks) }.value
+                isDiffing = false
+                guard generation == baseGeneration else {
+                    Signposts.end("Save diff", interval)
+                    dirty = true
+                    scheduleFlush(after: .milliseconds(50))
+                    return
+                }
+            } else {
+                diffed = BlockDiff.operations(from: base, to: blocks)
+            }
             Signposts.end("Save diff", interval)
+            let (operations, result) = diffed
             guard !operations.isEmpty else {
                 base = result
                 recovered = nil

@@ -180,7 +180,8 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         let position = CellPosition(row: row, column: column)
         let view = retired.removeValue(forKey: position) ?? makeEditor(row: row, column: column)
         editor = view
-        grid.addSubview(view)
+        view.isHidden = false
+        if view.superview !== grid { grid.addSubview(view) }
         placeEditor()
         grid.setNeedsDisplay(cellFrame(row: row, column: column))
         return view
@@ -205,14 +206,20 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         guard let view = editor else { return }
         editor = nil
         if focusedCell === view { focusedCell = nil }
-        view.removeFromSuperview()
-        if view.wasEdited { retired[CellPosition(row: view.row, column: view.column)] = view }
+        if view.wasEdited {
+            // Hidden, not removed: a text view out of its window loses its undo steps.
+            view.isHidden = true
+            retired[CellPosition(row: view.row, column: view.column)] = view
+        } else {
+            view.removeFromSuperview()
+        }
         grid.setNeedsDisplay(cellFrame(row: view.row, column: view.column))
     }
 
     /// Forgets every editor (the table's shape changed: their positions are stale).
     private func dropEditors() {
         retireEditor()
+        for view in retired.values { view.removeFromSuperview() }
         retired = [:]
         focusedCell = nil
     }

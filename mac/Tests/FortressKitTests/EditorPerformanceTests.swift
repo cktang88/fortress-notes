@@ -180,16 +180,20 @@ final class PerfEditor {
     /// baseline is made), timing each turn: the longest is the longest the app can't
     /// answer a key while a note finishes loading.
     @discardableResult
-    func settle() -> (total: Double, longest: Double, turns: Int) {
-        var total = 0.0, longest = 0.0, turns = 0
+    func settle() -> (total: Double, longest: Double, turns: Int, slowest: [Double]) {
+        var total = 0.0, turns = 0
+        var all: [Double] = []
         repeat {
             let turn = milliseconds { _ = RunLoop.main.run(mode: .default, before: Date()) }
             total += turn
-            longest = max(longest, turn)
+            all.append(turn)
             turns += 1
         } while !controller.pendingBlocks.isEmpty && turns < 1000
-        total += milliseconds { _ = session.base }
-        return (total, longest, turns)
+        let baseline = milliseconds { _ = session.base }
+        total += baseline
+        all.append(baseline)
+        let slowest = Array(all.sorted(by: >).prefix(3))
+        return (total, slowest.first ?? 0, turns, slowest)
     }
 
     func layoutViewport() {
@@ -264,6 +268,7 @@ final class PerfEditor {
         PerfLog.record("open.rest.total(later turns)", rest.total)
         PerfLog.record("open.rest.longestTurn", rest.longest, budget: 50)
         PerfLog.record("open.rest.turns", Double(rest.turns), unit: "turns")
+        PerfLog.record("open.rest.slowestTurns[\(rest.slowest.map { String(format: "%.0f", $0) }.joined(separator: ","))]", rest.slowest.dropFirst().first ?? 0)
         PerfLog.record("open.memory", footprintMB() - before, unit: "MB")
         PerfLog.record("open.firstPaint.characters(of \(editor.controller.storage.length))", Double(shown), unit: "chars")
         // Where opening the whole text at once would spend its time.
@@ -305,11 +310,22 @@ final class PerfEditor {
         let middle = editor.range(ofBlock: middleId)
         editor.controller.textView.setSelectedRange(NSRange(location: middle.location + 10, length: 0))
         var times: [Double] = []
+        var inserts: [Double] = []
+        var normalizes: [Double] = []
         for index in 0..<40 {
-            times.append(milliseconds { editor.type(index % 8 == 7 ? " " : "a") })
+            EditorMetrics.reset()
+            var insert = 0.0
+            times.append(milliseconds {
+                insert = milliseconds { editor.controller.textView.insertText(index % 8 == 7 ? " " : "a", replacementRange: editor.controller.textView.selectedRange()) }
+                editor.layoutViewport()
+            })
+            inserts.append(insert)
+            normalizes.append(EditorMetrics.normalize)
         }
         let sorted = times.sorted()
         PerfLog.record("keystroke.middle.median", sorted[sorted.count / 2], budget: 8)
+        PerfLog.record("keystroke.middle.part.insert.median", inserts.sorted()[inserts.count / 2])
+        PerfLog.record("keystroke.middle.part.normalize.median", normalizes.sorted()[normalizes.count / 2])
         PerfLog.record("keystroke.middle.max", sorted.last!)
 
         // Inside a 50,000-character paragraph.
@@ -404,6 +420,8 @@ final class PerfEditor {
 
         // A second edit after a save: still only that block.
         editor.session.resetBase(to: editor.controller.currentBlocks())
+        // The baseline is made on the next quiet run loop turn, as in the app.
+        editor.settle()
         editor.type("y")
         let second = milliseconds { operations = editor.session.pendingOperationsForTests() }
         PerfLog.record("save.diff.second", second, budget: 8)

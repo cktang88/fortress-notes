@@ -290,7 +290,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         for block in pendingBlocks {
             height += Self.estimatedHeight(block)
             count += 1
-            if height > 6000 || count >= 150 { break }
+            if height > 3000 || count >= 80 { break }
         }
         append(Array(pendingBlocks.prefix(count)))
         pendingBlocks.removeFirst(count)
@@ -390,36 +390,39 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard !lastRead.isEmpty else { return nil }
         let string = self.string
         let length = string.length
-        var updated = lastRead
+        let checkDirty = !dirtyInfos.isEmpty
         var blocks: [EditorBlock] = []
         blocks.reserveCapacity(lastRead.count)
         var location = 0
         for index in lastRead.indices {
             guard location < length, let info = storage.blockInfo(at: location) else { return nil }
             let entry = lastRead[index]
-            if info === entry.info, !dirtyInfos.contains(ObjectIdentifier(info)) {
+            var block: EditorBlock
+            var paragraphLength = entry.length
+            if info === entry.info, !checkDirty || !dirtyInfos.contains(ObjectIdentifier(info)) {
                 let end = location + entry.length
                 guard end <= length, string.character(at: end - 1) == 0x0A else { return nil }
+                block = entry.block
             } else {
-                // Edited (or given a new kind): the same block, read again.
+                // Edited (or given a new kind): the same block, read again. (A failed
+                // check below leaves `lastRead` half updated: the full walk replaces it.)
                 guard info.id == entry.info.id else { return nil }
                 let paragraph = string.paragraphRange(at: location)
                 guard paragraph.location == location else { return nil }
-                let block = DocumentText.block(in: storage, paragraph: paragraph, info: info)
-                updated[index] = ReadBlock(info: info, length: paragraph.length, block: block)
+                block = DocumentText.block(in: storage, paragraph: paragraph, info: info)
+                paragraphLength = paragraph.length
+                lastRead[index] = ReadBlock(info: info, length: paragraph.length, block: block)
                 blockCache[info.id] = CachedBlock(info: info, length: paragraph.length, block: block)
             }
-            var block = updated[index].block
             if !info.kind.hasInlineText,
                let attachment = storage.attribute(.attachment, at: location, effectiveRange: nil) as? BlockAttachment,
                let live = attachment.live {
                 live.write(into: &block)
             }
             blocks.append(block)
-            location += updated[index].length
+            location += paragraphLength
         }
         guard location == length else { return nil }
-        lastRead = updated
         dirtyBlocks.removeAll(keepingCapacity: true)
         dirtyInfos.removeAll(keepingCapacity: true)
         return blocks
@@ -765,6 +768,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let end = min(text.length, NSMaxRange(editedRange) + 1)
         var location = start
         var previousId: String? = start > 0 ? storage.blockInfo(at: text.paragraphRange(at: start - 1).location)?.id : nil
+        var touched: [NSRange] = []
+        var touchedInfo: BlockInfo?
+        var uniform = true
         while location < text.length {
             let paragraph = text.paragraphRange(at: location)
             var info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
@@ -783,13 +789,45 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             if first !== info || tagged != paragraph { storage.addAttribute(.fnBlock, value: info, range: paragraph) }
             dirtyBlocks.insert(info.id)
             dirtyInfos.insert(ObjectIdentifier(info))
-            let restyleStart = EditorMetrics.now()
-            theme.restyle(storage, range: paragraph)
-            EditorMetrics.restyle += EditorMetrics.since(restyleStart)
+            touched.append(paragraph)
+            if let firstInfo = touchedInfo {
+                if firstInfo.kind != info.kind || firstInfo.depth != info.depth || firstInfo.checked != info.checked { uniform = false }
+            } else {
+                touchedInfo = info
+            }
             previousId = info.id
             location = NSMaxRange(paragraph)
             if location >= end { break }
         }
+        let restyleStart = EditorMetrics.now()
+        defer { EditorMetrics.restyle += EditorMetrics.since(restyleStart) }
+        guard let first = touched.first, let last = touched.last else { return }
+        let whole = NSUnionRange(first, last)
+        if touched.count >= 16, uniform, let info = touchedInfo, Self.isPlainAndStyled(storage, whole) {
+            // Many paragraphs of one kind with no marks (pasted lines): one style for all,
+            // set in one go instead of paragraph by paragraph (25,000 pasted lines took a
+            // second to style one at a time).
+            let attributes = theme.cachedAttributes(info: info, marks: InlineMarks())
+            for key in EditorTheme.presentationKeys where attributes[key] == nil {
+                storage.removeAttribute(key, range: whole)
+            }
+            storage.addAttributes(attributes, range: whole)
+        } else {
+            for paragraph in touched { theme.restyle(storage, range: paragraph) }
+        }
+    }
+
+    /// No marks, nodes or attachments anywhere in `range`, and all of it styled by the
+    /// editor (not pasted rich text still to be read for its marks).
+    private static func isPlainAndStyled(_ storage: NSTextStorage, _ range: NSRange) -> Bool {
+        for key in [NSAttributedString.Key.fnMarks, .fnNode, .attachment] {
+            var effective = NSRange()
+            if storage.attribute(key, at: range.location, longestEffectiveRange: &effective, in: range) != nil || effective != range {
+                return false
+            }
+        }
+        var effective = NSRange()
+        return storage.attribute(.fnStyled, at: range.location, longestEffectiveRange: &effective, in: range) != nil && effective == range
     }
 
     // MARK: NSTextViewDelegate

@@ -92,7 +92,7 @@ public struct SyncedTree: Hashable, Sendable {
             tree.sources[block.id] = source
             tree.fields[block.id] = lazily ? nil : source.fields
             if block.kind == .table, let table = block.table {
-                if let oldTable = old.table, let inner = previous.tables[block.id],
+                if let oldTable = old.table, let inner = previous.tableTree(block.id),
                    let patched = patchingTable(inner, from: oldTable, to: table, lazily: lazily) {
                     tree.tables[block.id] = patched
                 } else {
@@ -129,6 +129,15 @@ public struct SyncedTree: Hashable, Sendable {
         }
         tree.patched = changed
         return tree
+    }
+
+    /// A table's rows and cells as a tree: kept, or made now from the table's block (a
+    /// baseline leaves them until a table changes: 20 tables of 400 cells are 24,000
+    /// nodes nobody needs when a paragraph is edited).
+    func tableTree(_ id: String) -> SyncedTree? {
+        if let kept = tables[id] { return kept }
+        guard case .block(let block)? = sources[id], block.kind == .table, let table = block.table else { return nil }
+        return Builder(previous: nil, lazily: true).table(table, id: id, unchanged: false, always: true)
     }
 
     /// A node's fields, encoding them now if they were left for later.
@@ -168,11 +177,13 @@ public struct SyncedTree: Hashable, Sendable {
         }
 
         /// A table's own tree: carried over when the table is unchanged.
-        func table(_ table: TableContent, id: String, unchanged: Bool) -> SyncedTree {
-            if unchanged, let kept = previous?.tables[id] { return kept }
+        func table(_ table: TableContent, id: String, unchanged: Bool, always: Bool = false) -> SyncedTree? {
+            // Unchanged: whatever the last tree had (a baseline makes them when asked).
+            if unchanged, !always { return previous?.tables[id] }
+            if lazily, previous == nil, !always { return nil }
             var tree = SyncedTree()
             tree.children[nil] = []
-            let inner = Builder(previous: previous?.tables[id], lazily: lazily)
+            let inner = Builder(previous: previous?.tableTree(id), lazily: lazily)
             for row in table.rows {
                 inner.node(row.id, under: nil, .fixed(BlockFields(type: "table_row", attrs: row.attrs)), into: &tree)
                 for cell in row.cells {
@@ -336,7 +347,7 @@ public enum BlockDiff {
                 }
             }
             if let rows = result.tables[id] {
-                let before = base.tables[id] ?? SyncedTree()
+                let before = base.tableTree(id) ?? SyncedTree()
                 if let cells = rows.patched, let updates = updates(from: before, to: rows, changed: cells) {
                     operations += updates
                 } else {
@@ -449,7 +460,7 @@ public enum BlockDiff {
             if let rows = result.tables[id] {
                 let isNew = replaced.contains(id) || base.parent[id] == nil
                 if isNew || base.sources[id] != result.sources[id] {
-                    operations += Self.operations(from: isNew ? SyncedTree() : base.tables[id] ?? SyncedTree(), to: rows, root: id)
+                    operations += Self.operations(from: isNew ? SyncedTree() : base.tableTree(id) ?? SyncedTree(), to: rows, root: id)
                 }
             }
         }

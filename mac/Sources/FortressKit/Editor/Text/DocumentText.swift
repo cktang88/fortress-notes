@@ -130,6 +130,17 @@ enum DocumentText {
     static func runs(in text: NSAttributedString, range: NSRange) -> [InlineRun] {
         var runs: [InlineRun] = []
         let string = text.string as NSString
+        guard range.length > 0 else { return [] }
+        // Plain text (no nodes, no marks: most paragraphs of a paste) is one run.
+        var plain = NSRange()
+        if text.attribute(.fnNode, at: range.location, longestEffectiveRange: &plain, in: range) == nil, plain == range,
+           text.attribute(.fnMarks, at: range.location, longestEffectiveRange: &plain, in: range) == nil, plain == range {
+            var piece = string.substring(with: range)
+            if piece.utf16.contains(where: { $0 == 0xFFFC || $0 == 0x0D }) {
+                piece = piece.replacingOccurrences(of: objectReplacement, with: "").replacingOccurrences(of: "\r", with: softBreak)
+            }
+            return piece.isEmpty ? [] : [InlineRun(piece)]
+        }
         text.enumerateAttribute(.fnNode, in: range, options: []) { value, segment, _ in
             if let node = value as? NodeBox {
                 runs.append(.atomic(node.node))

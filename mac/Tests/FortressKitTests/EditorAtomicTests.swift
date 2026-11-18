@@ -185,10 +185,12 @@ private func nodes(_ block: EditorBlock) -> Int { block.runs.filter { $0.node !=
         let (_, _, live) = try table()
         live.focus(row: 4, column: 3, atEnd: false)
         let cell = try #require(live.editor)
+        #expect(cell.selectedRange() == NSRange(location: 0, length: 4))
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("cell-\(UUID().uuidString)"))
         pasteboard.clearContents()
-        #expect(cell.writeSelection(to: pasteboard, types: [.string]))
-        #expect(pasteboard.string(forType: .string) == "R4C3")
+        let types = cell.writablePasteboardTypes
+        #expect(cell.writeSelection(to: pasteboard, types: types), "\(types)")
+        #expect(pasteboard.string(forType: .string) == "R4C3", "\(pasteboard.types ?? [])")
     }
 }
 
