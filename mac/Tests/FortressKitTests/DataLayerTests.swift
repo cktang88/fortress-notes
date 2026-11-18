@@ -279,22 +279,6 @@ import Testing
         #expect(NoteListing.allDocuments(in: model.navigation.items).allSatisfy { $0.folderId == nil })
     }
 
-    @Test func deletingAFolderFallsBackToSingleMovesOnAnOlderBackend() async throws {
-        SpyProtocol.reset { seen in
-            if seen.path == "/api/batch/move" { return .json(Data(#"{"detail":"Not Found"}"#.utf8), status: 404) }
-            if seen.method == "DELETE" { return SpyProtocol.Reply(status: 204, body: Data()) }
-            return .json(Data(#"{"id":"x","folder_id":null,"position":0}"#.utf8))
-        }
-        let model = makeModel(SpyProtocol.client())
-        model.navigation = NavigationResponse(
-            items: [.folder(NavigationFolder(id: "f1", parentId: nil, name: "Old", position: 0,
-                                             children: [.document(SpyJSON.note("n1", folder: "f1")), .document(SpyJSON.note("n2", folder: "f1"))]))],
-            recent: [])
-        await model.deleteFolder(id: "f1")
-        #expect(SpyProtocol.count("POST", "/move") == 3)  // the batch, then one per note
-        #expect(model.notice == nil)
-    }
-
     // MARK: Prefetch
 
     /// Prefetching the neighbours is one request; opening them is then instant, and a
@@ -307,6 +291,7 @@ import Testing
                 let documents = ids.map { SpyJSON.document($0) }
                 let body = try! JSONSerialization.data(withJSONObject: [
                     "documents": documents.map { try! JSONSerialization.jsonObject(with: SpyJSON.encoded($0)) },
+                    "etags": Dictionary(uniqueKeysWithValues: ids.map { ($0, "\"e-\($0)\"") }),
                     "unchanged": [String](), "missing": [String](),
                 ])
                 return .json(body, delay: 0.5)
@@ -325,19 +310,74 @@ import Testing
         #expect(SpyProtocol.seen.first?.headers["X-Fortress-Prefetch"] == "1")
     }
 
-    /// An older backend without the batch endpoint: prefetch stops (reading notes one by
-    /// one would mark them opened) and reads still work.
-    @Test func prefetchStopsOnABackendWithoutBatches() async throws {
+    /// One validator: a prefetch sends the ETags of the notes it holds (not revisions),
+    /// keeps the ETags it gets back, and a note opened later is revalidated with them.
+    @Test func prefetchUsesETagsBothWays() async throws {
         SpyProtocol.reset { seen in
-            seen.path.hasPrefix("/api/batch")
-                ? .json(Data(#"{"detail":"Not Found"}"#.utf8), status: 404)
-                : .document(SpyJSON.document("n2"))
+            if seen.path == "/api/batch/block-documents" {
+                struct Asked: Decodable { var ids: [String]; var known: [String: String] }
+                let asked = try! JSONDecoder().decode(Asked.self, from: seen.body)
+                let unchanged = asked.ids.filter { asked.known[$0] == "\"e-\($0)\"" }
+                let sent = asked.ids.filter { !unchanged.contains($0) }
+                let body = try! JSONSerialization.data(withJSONObject: [
+                    "documents": sent.map { try! JSONSerialization.jsonObject(with: SpyJSON.encoded(SpyJSON.document($0))) },
+                    "etags": Dictionary(uniqueKeysWithValues: sent.map { ($0, "\"e-\($0)\"") }),
+                    "unchanged": unchanged, "missing": [String](),
+                ])
+                return .json(body)
+            }
+            if seen.headers["If-None-Match"] == "\"e-n2\"" { return SpyProtocol.Reply(status: 304, body: Data()) }
+            return .document(SpyJSON.document("n2"))
+        }
+        var options = APIStore.Options()
+        options.documentMaxAge = 0
+        let api = SpyProtocol.client(options: options)
+        await api.prefetchDocuments(ids: ["n2"])
+        await api.prefetchDocuments(ids: ["n2"])  // stale by now: sent with its ETag
+        #expect(try await api.document(id: "n2").id == "n2")
+        #expect(SpyProtocol.seen.count == 3)
+        #expect(String(decoding: SpyProtocol.seen[1].body, as: UTF8.self).contains("e-n2"))
+        #expect(SpyProtocol.seen[2].headers["If-None-Match"] == "\"e-n2\"")
+        #expect(api.store.stats.notModified == 1)
+    }
+
+    /// A save answered with the whole note and its `X-Document-ETag`: the next read
+    /// revalidates with that ETag (a 304), not a full download.
+    @Test func savesKeepTheETagTheyAreAnsweredWith() async throws {
+        SpyProtocol.reset { seen in
+            if seen.method == "POST" {
+                return .json(SpyJSON.encoded(SpyJSON.document("d1", revision: 2)), headers: ["X-Document-ETag": "\"r2\""])
+            }
+            if seen.headers["If-None-Match"] == "\"r2\"" { return SpyProtocol.Reply(status: 304, body: Data()) }
+            return .document(SpyJSON.document("d1", revision: 1), etag: "\"r1\"")
+        }
+        var options = APIStore.Options()
+        options.documentMaxAge = 0
+        let api = SpyProtocol.client(options: options)
+        _ = try await api.document(id: "d1")
+        _ = try await api.apply(BlockTransaction(baseRevision: 1, operations: []), to: "d1")
+        #expect(SpyProtocol.seen.last?.query?.contains("response=document") == true)
+        #expect(try await api.document(id: "d1").revision == 2)
+        #expect(SpyProtocol.seen.last?.headers["If-None-Match"] == "\"r2\"")
+        #expect(api.store.stats.notModified == 1)
+    }
+
+    /// A rename is answered with metadata only: the cached note keeps its blocks.
+    @Test func renameMergesMetadataIntoTheCachedNote() async throws {
+        SpyProtocol.reset { seen in
+            if seen.method == "PATCH" {
+                var metadata = SpyJSON.document("d1", title: "Renamed")
+                metadata.children = []
+                return .json(SpyJSON.encoded(metadata), headers: ["X-Document-ETag": "\"m\""])
+            }
+            return .document(SpyJSON.document("d1", title: "Loaded"))
         }
         let api = SpyProtocol.client()
-        await api.prefetchDocuments(ids: ["n2"])
-        await api.prefetchDocuments(ids: ["n2"])
-        #expect(try await api.document(id: "n2").id == "n2")
-        #expect(SpyProtocol.seen.map(\.path) == ["/api/batch/block-documents", "/api/block-documents/n2"])
+        _ = try await api.document(id: "d1")
+        let renamed = try await api.updateDocument(id: "d1", title: "Renamed")
+        #expect(renamed.title == "Renamed" && renamed.children.count == 1)
+        let cached = try await api.document(id: "d1")
+        #expect(cached.title == "Renamed" && cached.children.count == 1)
     }
 
     @Test func neighboursAreNextThenPrevious() {

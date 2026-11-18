@@ -68,9 +68,10 @@ public struct APIClient: Sendable {
 
     // MARK: Documents
 
-    /// The note, from memory when it was loaded (or saved) in the last few seconds,
-    /// otherwise from the server (revalidated with its ETag when it has one). Concurrent
-    /// reads of one note (the editor and the inspector) share one request.
+    /// The note. Freshness is the server's ETag: a cached copy is revalidated with
+    /// `If-None-Match` (a 304 answers from memory), except within a moment of being
+    /// loaded or saved (`documentMaxAge`, so the editor and inspector opening together
+    /// make one request). Concurrent reads of one note share one request.
     public func document(id: String) async throws -> BlockDocument {
         if let cached = store.freshDocument(id) { return cached }
         do {
@@ -113,18 +114,36 @@ public struct APIClient: Sendable {
     }
 
     public func createDocument(title: String = "", folderId: String? = nil) async throws -> BlockDocument {
-        let document: BlockDocument = try await send(
+        let request = try makeRequest(
             "POST", "api/block-documents",
-            body: ["title": .string(title), "folder_id": folderId.map(JSONValue.string) ?? .null])
-        store.store(document)
+            body: try JSONEncoder().encode(["title": .string(title), "folder_id": folderId.map(JSONValue.string) ?? .null] as [String: JSONValue]))
+        let (document, etag) = try await sendDocument(request)
+        store.store(document, etag: etag)
         return document
     }
 
+    /// Renames a note or changes its status. The server answers with the note's
+    /// metadata only (its content didn't change): it is merged into the cached copy,
+    /// and the merged note is returned (the metadata alone when nothing is cached).
     public func updateDocument(id: String, title: String? = nil, status: NoteStatus? = nil) async throws -> BlockDocument {
         var body: [String: JSONValue] = [:]
         if let title { body["title"] = .string(title) }
         if let status { body["status"] = .string(status.rawValue) }
-        return try await documentMutation(id) { try await send("PATCH", "api/block-documents/\(id)", body: body) }
+        let request = try makeRequest("PATCH", "api/block-documents/\(id)", body: try JSONEncoder().encode(body))
+        do {
+            let (metadata, _) = try await sendDocument(request)
+            return store.mergeMetadata(metadata)
+        } catch let error as APIError where error.status != 422 {
+            store.invalidateDocument(id)
+            throw error
+        }
+    }
+
+    /// Records that the person opened the note ("last opened" in the inspector).
+    /// Fire-and-forget: reads never write on the server, so opening is its own request.
+    public func markOpened(id: String) async {
+        guard let request = try? makeRequest("POST", "api/block-documents/\(id)/opened") else { return }
+        _ = try? await load(request)
     }
 
     public func trashDocument(id: String) async throws {
@@ -138,37 +157,46 @@ public struct APIClient: Sendable {
             body: ["folder_id": folderId.map(JSONValue.string) ?? .null])
     }
 
-    /// Applies block edits; the server answers with the updated document.
+    /// Applies block edits; the server answers with the whole updated document
+    /// (`?response=document`; without it the server answers metadata only).
     public func apply(_ transaction: BlockTransaction, to documentId: String) async throws -> BlockDocument {
-        try await documentMutation(documentId) {
-            try await send("POST", "api/block-documents/\(documentId)/transactions", encodable: transaction)
-        }
+        try await documentMutation(documentId, try makeRequest(
+            "POST", "api/block-documents/\(documentId)/transactions", query: ["response": "document"],
+            body: try JSONEncoder().encode(transaction)))
     }
 
     public func undo(documentId: String, revision: Int) async throws -> BlockDocument {
-        try await documentMutation(documentId) {
-            try await send("POST", "api/block-documents/\(documentId)/undo", body: ["base_revision": .number(Double(revision))])
-        }
+        try await documentMutation(documentId, try makeRequest(
+            "POST", "api/block-documents/\(documentId)/undo",
+            body: try JSONEncoder().encode(["base_revision": JSONValue.number(Double(revision))])))
     }
 
     public func redo(documentId: String, revision: Int) async throws -> BlockDocument {
-        try await documentMutation(documentId) {
-            try await send("POST", "api/block-documents/\(documentId)/redo", body: ["base_revision": .number(Double(revision))])
-        }
+        try await documentMutation(documentId, try makeRequest(
+            "POST", "api/block-documents/\(documentId)/redo",
+            body: try JSONEncoder().encode(["base_revision": JSONValue.number(Double(revision))])))
     }
 
-    /// Runs a change to one note: its answer becomes the cached copy; a rejection (409
+    /// Runs a change to one note: its answer becomes the cached copy, kept under the
+    /// `X-Document-ETag` it came with (so the next read is a 304); a rejection (409
     /// conflict, 404 gone) drops the cached copy so the next read asks the server.
-    private func documentMutation(
-        _ id: String, _ operation: () async throws -> BlockDocument
-    ) async throws -> BlockDocument {
+    private func documentMutation(_ id: String, _ request: URLRequest) async throws -> BlockDocument {
         do {
-            let document = try await operation()
-            store.store(document)
+            let (document, etag) = try await sendDocument(request)
+            store.store(document, etag: etag)
             return document
         } catch let error as APIError where error.status != 422 {
             store.invalidateDocument(id)
             throw error
+        }
+    }
+
+    /// A change answered with a note (or its metadata) and the ETag that note has now.
+    private func sendDocument(_ request: URLRequest) async throws -> (BlockDocument, String?) {
+        try await asMutation {
+            let (data, response) = try await load(request)
+            try check(response, body: data)
+            return (try Self.decode(BlockDocument.self, from: data), response.value(forHTTPHeaderField: "X-Document-ETag"))
         }
     }
 
@@ -336,10 +364,6 @@ public struct APIClient: Sendable {
 
     private func send<T: Decodable>(_ method: String, _ path: String, body: [String: JSONValue]) async throws -> T {
         try await perform(try makeRequest(method, path, body: try JSONEncoder().encode(body)))
-    }
-
-    private func send<T: Decodable, B: Encodable>(_ method: String, _ path: String, encodable: B) async throws -> T {
-        try await perform(try makeRequest(method, path, body: try JSONEncoder().encode(encodable)))
     }
 
     private func sendNoContent(_ method: String, _ path: String) async throws {
