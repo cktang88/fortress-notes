@@ -13,18 +13,18 @@ Evidence is code (paths under `mac/Sources/FortressKit/`) and the CI snapshots (
 | Area | Items | Pass | Fixed | Partial | Deferred | n.a. / elsewhere |
 |---|---|---|---|---|---|---|
 | B Liquid Glass and materials | 8 | 4 | 1 | 3 | 0 | 0 |
-| C Windows, split view, sidebar, inspector | 12 | 6 | 5 | 1 | 0 | 0 |
+| C Windows, split view, sidebar, inspector | 12 | 6 | 6 | 0 | 0 | 0 |
 | D Toolbar and search | 8 | 4 | 3 | 0 | 1 | 0 |
 | E Menu bar, commands, shortcuts | 11 | 2 | 8 | 1 | 0 | 0 |
-| F Focus and keyboard | 9 | 4 | 2 | 3 | 0 | 0 |
-| G Sheets, alerts, feedback, errors | 8 | 5 | 1 | 2 | 0 | 0 |
-| H Undo, drag and drop, data safety | 7 | 2 | 4 | 0 | 1 | 0 |
-| J Accessibility | 9 | 3 | 4 | 1 | 0 | 1 (J4 color) |
-| K Type, symbols, motion (not color) | 7 | 2 | 2 | 0 | 0 | 3 (K3–K5 color) |
-| M Restoration, lifecycle, Settings | 7 | 3 | 3 | 0 | 1 | 0 |
-| **Total** | **86** | **34** | **33** | **11** | **4** | **4** |
+| F Focus and keyboard | 9 | 6 | 1 | 2 | 0 | 0 |
+| G Sheets, alerts, feedback, errors | 8 | 6 | 1 | 1 | 0 | 0 |
+| H Undo, drag and drop, data safety | 7 | 1 | 5 | 0 | 1 | 0 |
+| J Accessibility | 9 | 1 | 6 | 1 | 0 | 1 (J4, color) |
+| K Type, symbols, motion | 7 | 2 | 2 | 0 | 0 | 3 (K3–K5, color) |
+| M Restoration, lifecycle, Settings | 7 | 2 | 4 | 0 | 1 | 0 |
+| **Total** | **86** | **34** | **37** | **8** | **3** | **4** |
 
-Before this branch, 41 of the 82 items in scope failed or only partly passed (33 fixed, 11 still partial or with a refinement left, 4 deferred).
+So 48 of the 82 items in scope failed or were only partly met. Of those, 37 are fixed on this branch, 8 are partial (the must-part holds, a refinement is left) and 3 are deferred with reasons. Of the 37 fixes, 33 were must-level failures. Items marked "Pass → Fixed" passed already and were hardened, and they count as fixed. Manual checks still needed on a Mac: F1 (Full Keyboard Access), J1/J6 (VoiceOver and the Accessibility Inspector audit), B4 (the settings toggled live) and E6 (each standard shortcut by hand).
 
 ## Most important fixes
 
