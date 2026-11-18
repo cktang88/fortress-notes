@@ -1,14 +1,19 @@
 import AppKit
+import CoreText
 import SwiftUI
 
-/// An editable table inside the note: a grid of small rich-text views, one per cell.
+/// An editable table inside the note. Cells are drawn by the grid from their styled
+/// text (no view per cell); a cell gets a text view only while it is being edited, made
+/// when it is clicked or reached with the keyboard. A 50 × 8 table is one view that
+/// draws 400 strings, not 400 text views to lay out when it scrolls into sight.
+///
 /// Tab and ⇧Tab move between cells (Tab in the last cell adds a row), ↑/↓ at a cell's
 /// edge move to the cell above or below, Esc leaves the table. Rows and columns are
 /// added and removed from the context menu, as one undo step each. Nested cell blocks
 /// (OneNote lists and pictures in cells) show read-only under the cell's text and are
-/// saved untouched.
+/// saved untouched. Accessibility sees rows of cells (`TableGridView`).
 @MainActor
-final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
+final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTextStorageDelegate {
     private(set) var table: TableContent
     let attrs: [String: JSONValue]
     weak var context: AttachmentContext?
@@ -16,14 +21,11 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     let grid = TableGridView()
     var view: NSView { grid }
 
-    /// The cell editors, made the first time the table is laid out or entered: a note
-    /// with twenty 50 × 8 tables would otherwise make 8,000 text views when it opens,
-    /// most of them never scrolled to.
-    var cells: [[CellTextView]] {
-        buildIfNeeded()
-        return cellViews
-    }
-    private var cellViews: [[CellTextView]] = []
+    /// Each cell's text, styled as its editor shows it (and as the grid draws it). Made
+    /// the first time the table is laid out or entered, not when the note opens.
+    private var texts: [[NSAttributedString]] = []
+    /// What the grid draws for each cell: its text with links in the link colour.
+    private var drawn: [[NSAttributedString]] = []
     private var isBuilt = false
     private var nested: [[NSView?]] = []
     /// Each cell's text height and nested blocks' height at the measured width, so an
@@ -35,7 +37,18 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     private(set) var rowEdges: [CGFloat] = []
     private var measuredWidth: CGFloat = -1
     private var measuredHeight: CGFloat = 0
+    /// The cell holding keyboard focus (its editor is the first responder).
     private(set) var focusedCell: CellTextView?
+    /// The one cell editor in the grid, if a cell is being edited.
+    private(set) var editor: CellTextView?
+    /// Editors of cells typed in earlier, kept out of the view tree so ⌘Z still undoes
+    /// that typing (it edits their text, which writes back to the table).
+    private var retired: [CellPosition: CellTextView] = [:]
+
+    struct CellPosition: Hashable {
+        var row: Int
+        var column: Int
+    }
 
     init(table: TableContent, attrs: [String: JSONValue], context: AttachmentContext, attachment: BlockAttachment) {
         self.table = table
@@ -85,27 +98,26 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         return cellTheme
     }
 
-    /// Creates the cell views for the current table (on first layout or a shape change).
+    /// A cell's styled text (what its editor starts from).
+    func text(row: Int, column: Int) -> NSAttributedString {
+        buildIfNeeded()
+        guard texts.indices.contains(row), texts[row].indices.contains(column) else { return NSAttributedString() }
+        return texts[row][column]
+    }
+
+    /// Makes every cell's text for the current table (on first layout or a shape change).
     private func rebuild() {
         let focus = focusedCell.map { ($0.row, $0.column) }
-        for row in cellViews { for cell in row { cell.removeFromSuperview() } }
+        dropEditors()
         for row in nested { for view in row { view?.removeFromSuperview() } }
-        cellViews = []
+        texts = []
+        drawn = []
         nested = []
         for (r, row) in table.rows.enumerated() {
-            var rowViews: [CellTextView] = []
+            var rowTexts: [NSAttributedString] = []
             var rowNested: [NSView?] = []
             for (c, cell) in row.cells.enumerated() {
-                let view = CellTextView.make()
-                view.table = self
-                view.row = r
-                view.column = c
-                view.cellTheme = cellTheme(row: r, column: c)
-                view.delegate = self
-                view.setAccessibilityLabel("Row \(r + 1), column \(c + 1)")
-                load(cell.runs, into: view)
-                grid.addSubview(view)
-                rowViews.append(view)
+                rowTexts.append(styledText(cell.runs, theme: cellTheme(row: r, column: c)))
                 if cell.nested.isEmpty {
                     rowNested.append(nil)
                 } else {
@@ -115,23 +127,35 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
                     rowNested.append(hosting)
                 }
             }
-            cellViews.append(rowViews)
+            texts.append(rowTexts)
+            drawn.append(rowTexts.map(Self.drawable))
             nested.append(rowNested)
         }
         measuredWidth = -1
-        if let focus { self.focus(row: min(focus.0, cellViews.count - 1), column: focus.1, atEnd: true) }
+        grid.cellsDidChange()
+        if let focus, !texts.isEmpty { self.focus(row: min(focus.0, texts.count - 1), column: focus.1, atEnd: true) }
     }
 
-    private func load(_ runs: [InlineRun], into view: CellTextView) {
-        guard let context, let storage = view.textStorage else { return }
+    private func styledText(_ runs: [InlineRun], theme: EditorTheme) -> NSAttributedString {
+        guard let context else { return NSAttributedString() }
         let text = NSMutableAttributedString(attributedString: DocumentText.inline(runs, info: Self.cellInfo, context: context))
-        if text.length == 0 {
-            storage.setAttributedString(NSAttributedString())
-        } else {
-            view.cellTheme.restyle(text, range: NSRange(location: 0, length: text.length))
-            storage.setAttributedString(text)
+        if text.length > 0 { theme.restyle(text, range: NSRange(location: 0, length: text.length)) }
+        return text
+    }
+
+    /// The text as the grid draws it: links in the link colour (a text view does that
+    /// with its link attributes; string drawing doesn't).
+    private static func drawable(_ text: NSAttributedString) -> NSAttributedString {
+        var hasLinks = false
+        text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length), options: []) { value, _, stop in
+            if value != nil { hasLinks = true; stop.pointee = true }
         }
-        view.typingAttributes = typingAttributes(for: view, marks: InlineMarks())
+        guard hasLinks else { return text }
+        let copy = NSMutableAttributedString(attributedString: text)
+        text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length), options: []) { value, range, _ in
+            if value != nil { copy.addAttribute(.foregroundColor, value: NSColor.controlAccentColor, range: range) }
+        }
+        return copy
     }
 
     private func typingAttributes(for view: CellTextView, marks: InlineMarks) -> [NSAttributedString.Key: Any] {
@@ -141,6 +165,81 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         if !marks.isPlain { attributes[.fnMarks] = MarksBox(marks) }
         attributes[.link] = nil
         return attributes
+    }
+
+    // MARK: The cell editor
+
+    /// The text view editing a cell, made (or brought back) for it now. Only one cell
+    /// has one at a time; the others are drawn.
+    @discardableResult
+    func editor(row: Int, column: Int) -> CellTextView? {
+        buildIfNeeded()
+        guard texts.indices.contains(row), texts[row].indices.contains(column) else { return nil }
+        if let editor, editor.row == row, editor.column == column { return editor }
+        retireEditor()
+        let position = CellPosition(row: row, column: column)
+        let view = retired.removeValue(forKey: position) ?? makeEditor(row: row, column: column)
+        editor = view
+        view.isHidden = false
+        if view.superview !== grid { grid.addSubview(view) }
+        placeEditor()
+        grid.setNeedsDisplay(cellFrame(row: row, column: column))
+        return view
+    }
+
+    private func makeEditor(row: Int, column: Int) -> CellTextView {
+        let view = CellTextView.make()
+        view.table = self
+        view.row = row
+        view.column = column
+        view.cellTheme = cellTheme(row: row, column: column)
+        view.delegate = self
+        view.setAccessibilityLabel("Row \(row + 1), column \(column + 1)")
+        isLoadingCell = true
+        view.textStorage?.setAttributedString(texts[row][column])
+        isLoadingCell = false
+        view.textStorage?.delegate = self
+        view.typingAttributes = typingAttributes(for: view, marks: InlineMarks())
+        return view
+    }
+
+    /// Takes the editor out of the grid (the cell is drawn again). One that was typed in
+    /// is kept for undo.
+    private func retireEditor() {
+        guard let view = editor else { return }
+        editor = nil
+        if focusedCell === view { focusedCell = nil }
+        if view.wasEdited {
+            // Hidden, not removed: a text view out of its window loses its undo steps.
+            view.isHidden = true
+            retired[CellPosition(row: view.row, column: view.column)] = view
+        } else {
+            view.removeFromSuperview()
+        }
+        grid.setNeedsDisplay(cellFrame(row: view.row, column: view.column))
+    }
+
+    /// Forgets every editor (the table's shape changed: their positions are stale).
+    private func dropEditors() {
+        retireEditor()
+        for view in retired.values { view.removeFromSuperview() }
+        retired = [:]
+        focusedCell = nil
+    }
+
+    /// The editor lost keyboard focus: once focus has settled elsewhere, the cell goes
+    /// back to being drawn.
+    func editorDidResign(_ view: CellTextView) {
+        BlockEditorController.later { [weak self, weak view] in
+            guard let self, let view, self.editor === view, view.window?.firstResponder !== view else { return }
+            self.retireEditor()
+        }
+    }
+
+    private func placeEditor() {
+        guard let view = editor, textHeights.indices.contains(view.row), textHeights[view.row].indices.contains(view.column) else { return }
+        let frame = textFrame(row: view.row, column: view.column)
+        if view.frame != frame { view.frame = frame }
     }
 
     // MARK: Layout
@@ -160,23 +259,23 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         for value in widths { columnEdges.append((columnEdges.last ?? 0) + CGFloat(value).rounded(.down)) }
         textHeights = []
         nestedHeights = []
-        for (r, row) in cellViews.enumerated() {
-            var texts: [CGFloat] = []
+        for (r, row) in texts.enumerated() {
+            var heights: [CGFloat] = []
             var nesteds: [CGFloat] = []
-            for (c, cell) in row.enumerated() {
+            for (c, text) in row.enumerated() {
                 let inner = innerWidth(row: r, column: c)
-                texts.append(textHeight(cell, width: inner))
+                heights.append(textHeight(text, theme: cellTheme(row: r, column: c), width: inner))
                 nesteds.append(nested[r][c] == nil ? 0 : nestedHeight(row: r, column: c, width: inner))
             }
-            textHeights.append(texts)
+            textHeights.append(heights)
             nestedHeights.append(nesteds)
         }
         updateRowEdges(from: 0)
         placeViews(fromRow: 0)
-        grid.needsDisplay = true
+        grid.cellsDidChange()
     }
 
-    /// Re-measures after an edit; tells the note when the table's height changed.
+    /// Re-measures after a shape change; tells the note when the table's height changed.
     private func remeasure() {
         let before = measuredHeight
         let width = measuredWidth
@@ -189,17 +288,18 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
 
     /// Re-measures one edited cell: its row, and the rows below only if its height changed.
     private func remeasure(row: Int, column: Int) {
-        guard measuredWidth > 0, textHeights.indices.contains(row), textHeights[row].indices.contains(column),
-              cellViews.indices.contains(row), cellViews[row].indices.contains(column) else { remeasure(); return }
+        guard measuredWidth > 0, textHeights.indices.contains(row), textHeights[row].indices.contains(column) else { remeasure(); return }
         let before = measuredHeight
         let rowBefore = rowEdges[row + 1] - rowEdges[row]
-        textHeights[row][column] = textHeight(cellViews[row][column], width: innerWidth(row: row, column: column))
+        textHeights[row][column] = textHeight(texts[row][column], theme: cellTheme(row: row, column: column),
+                                              width: innerWidth(row: row, column: column))
         if abs(rowHeight(row) - rowBefore) > 0.5 {
             updateRowEdges(from: row)
             placeViews(fromRow: row)
-            grid.needsDisplay = true
+            grid.cellsDidChange()
         } else {
             placeViews(row: row)
+            grid.setNeedsDisplay(CGRect(x: 0, y: rowEdges[row], width: tableWidth, height: rowEdges[row + 1] - rowEdges[row]))
         }
         if abs(before - measuredHeight) > 0.5, let attachment {
             context?.attachmentDidResize?(attachment)
@@ -240,28 +340,37 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         return ceil(controller.sizeThatFits(in: CGSize(width: width, height: 10_000)).height)
     }
 
-    private func textHeight(_ view: CellTextView, width: CGFloat) -> CGFloat {
-        let lineHeight = view.cellTheme.lineHeight(for: .paragraph)
-        guard (view.textStorage?.length ?? 0) > 0 else {
-            if abs(view.frame.width - width) > 0.5 { view.setFrameSize(NSSize(width: width, height: lineHeight)) }
-            return lineHeight
+    /// The height of a cell's text at `width`, from the string (no text view). Lines have
+    /// a fixed height (min = max), so this is what the cell's editor lays out. A cell
+    /// whose text fits on one line (most of them) is measured as one line of glyphs.
+    private func textHeight(_ text: NSAttributedString, theme: EditorTheme, width: CGFloat) -> CGFloat {
+        let lineHeight = theme.lineHeight(for: .paragraph)
+        guard text.length > 0 else { return lineHeight }
+        let string = text.string as NSString
+        let multiline = string.rangeOfCharacter(from: Self.lineSeparators).location != NSNotFound
+        if !multiline {
+            let line = CTLineCreateWithAttributedString(text as CFAttributedString)
+            if CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) <= width { return lineHeight }
         }
-        // Plain text (no inline attachments) is measured from the string: laying out each
-        // cell's text view to measure it made the first layout of a 50 × 8 table take a
-        // second. Lines have a fixed height (min = max), so both ways agree.
-        if let storage = view.textStorage, !storage.containsAttachments(in: NSRange(location: 0, length: storage.length)) {
-            let bounds = storage.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
-                                              options: [.usesLineFragmentOrigin, .usesFontLeading])
-            return max(lineHeight, ceil(bounds.height))
-        }
-        return max(lineHeight, view.fittingTextHeight(width: width))
+        let bounds = text.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                                       options: [.usesLineFragmentOrigin, .usesFontLeading])
+        return max(lineHeight, ceil(bounds.height))
     }
+
+    private static let lineSeparators = CharacterSet(charactersIn: "\n\r\u{2028}\u{2029}")
 
     /// The cell's rectangle (spans counted from the cells before it in the row).
     func cellFrame(row: Int, column: Int) -> CGRect {
         guard rowEdges.count > row + 1 else { return .zero }
         let span = horizontalSpan(row: row, column: column)
         return CGRect(x: span.x, y: rowEdges[row], width: span.width, height: rowEdges[row + 1] - rowEdges[row])
+    }
+
+    /// Where a cell's text sits (the editor's frame when it is edited).
+    func textFrame(row: Int, column: Int) -> CGRect {
+        guard textHeights.indices.contains(row), textHeights[row].indices.contains(column) else { return .zero }
+        let inner = cellFrame(row: row, column: column).insetBy(dx: padding.width, dy: padding.height)
+        return CGRect(x: inner.minX, y: inner.minY, width: max(20, inner.width), height: textHeights[row][column])
     }
 
     /// Where a cell sits across the table (known before row heights are).
@@ -279,39 +388,95 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     }
 
     private func placeViews(fromRow start: Int) {
-        guard start < cellViews.count else { return }
-        for row in start..<cellViews.count { placeViews(row: row) }
+        guard start < textHeights.count else { return }
+        for row in start..<textHeights.count { placeViews(row: row) }
     }
 
-    /// Frames for one row's cell views, from the measured heights (no measuring here).
+    /// Frames for one row's nested views and the editor if it is in that row (no measuring).
     private func placeViews(row r: Int) {
         guard textHeights.indices.contains(r) else { return }
-        for (c, cell) in cellViews[r].enumerated() where textHeights[r].indices.contains(c) {
-            let frame = cellFrame(row: r, column: c)
-            let inner = frame.insetBy(dx: padding.width, dy: padding.height)
-            let width = max(20, inner.width)
-            let textFrame = CGRect(x: inner.minX, y: inner.minY, width: width, height: textHeights[r][c])
-            if cell.frame != textFrame { cell.frame = textFrame }
-            if let extra = nested[r][c] {
-                extra.frame = CGRect(x: inner.minX, y: inner.minY + textHeights[r][c] + 4 * theme.scale, width: width,
-                                     height: nestedHeights[r][c])
+        for c in textHeights[r].indices {
+            guard nested.indices.contains(r), nested[r].indices.contains(c), let extra = nested[r][c] else { continue }
+            let text = textFrame(row: r, column: c)
+            extra.frame = CGRect(x: text.minX, y: text.maxY + 4 * theme.scale, width: text.width, height: nestedHeights[r][c])
+        }
+        if editor?.row == r { placeEditor() }
+    }
+
+    /// Rows whose rectangles meet `rect` (for drawing only what is dirty).
+    func rows(in rect: CGRect) -> Range<Int> {
+        guard rowEdges.count > 1 else { return 0..<0 }
+        let rows = rowEdges.count - 1
+        func firstRow(below y: CGFloat) -> Int {
+            // The first row whose bottom edge is below y.
+            var low = 0, high = rows
+            while low < high {
+                let mid = (low + high) / 2
+                if rowEdges[mid + 1] <= y { low = mid + 1 } else { high = mid }
+            }
+            return low
+        }
+        let start = firstRow(below: rect.minY)
+        let end = min(rows, firstRow(below: rect.maxY) + 1)
+        return start..<max(start, end)
+    }
+
+    /// Draws the cells' text in `rect` (the edited cell's editor draws its own).
+    func drawTexts(in rect: CGRect) {
+        for r in rows(in: rect) where drawn.indices.contains(r) {
+            for c in drawn[r].indices {
+                if let editor, editor.row == r, editor.column == c { continue }
+                let text = drawn[r][c]
+                guard text.length > 0 else { continue }
+                let frame = textFrame(row: r, column: c)
+                guard frame.intersects(rect) else { continue }
+                text.draw(with: frame, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
             }
         }
     }
 
+    // MARK: Editing (NSTextStorageDelegate, NSTextViewDelegate)
 
-    // MARK: Editing (NSTextViewDelegate)
+    private var isLoadingCell = false
 
-    func textDidChange(_ notification: Notification) {
-        guard let view = notification.object as? CellTextView, let storage = view.textStorage else { return }
-        let full = NSRange(location: 0, length: storage.length)
-        if storage.length > 0 {
+    /// The cell editor holding `storage` (the one in use, or one kept for undo).
+    private func cellView(for storage: NSTextStorage) -> CellTextView? {
+        if let editor, editor.textStorage === storage { return editor }
+        return retired.values.first { $0.textStorage === storage }
+    }
+
+    /// Every change of a cell's text (typing, paste, and undo, which doesn't always
+    /// tell the delegate `textDidChange`) restyles it and writes it to the table.
+    nonisolated func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
+                                 range editedRange: NSRange, changeInLength delta: Int) {
+        nonisolated(unsafe) let storage = textStorage
+        MainActor.assumeIsolated {
+            guard !isLoadingCell, storage.length > 0,
+                  let view = cellView(for: storage) else { return }
             // Pasted rich text becomes marks; presentation follows the marks.
-            storage.beginEditing()
-            view.cellTheme.restyle(storage, range: full)
-            storage.endEditing()
+            view.cellTheme.restyle(storage, range: NSRange(location: 0, length: storage.length))
         }
+    }
+
+    nonisolated func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+                                 range editedRange: NSRange, changeInLength delta: Int) {
+        nonisolated(unsafe) let storage = textStorage
+        MainActor.assumeIsolated {
+            guard !isLoadingCell, let view = cellView(for: storage) else { return }
+            cellTextDidChange(view)
+        }
+    }
+
+    private func cellTextDidChange(_ view: CellTextView) {
+        guard let storage = view.textStorage else { return }
+        let full = NSRange(location: 0, length: storage.length)
+        view.wasEdited = true
         table.setRuns(DocumentText.runs(in: storage, range: full), row: view.row, column: view.column)
+        if texts.indices.contains(view.row), texts[view.row].indices.contains(view.column) {
+            let copy = NSAttributedString(attributedString: storage)
+            texts[view.row][view.column] = copy
+            drawn[view.row][view.column] = Self.drawable(copy)
+        }
         remeasure(row: view.row, column: view.column)
         context?.contentDidChange?()
     }
@@ -323,6 +488,25 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         var marks = location > 0 && location <= storage.length ? storage.marks(at: location - 1) : InlineMarks()
         if marks.link != nil, location >= storage.length || storage.marks(at: location).link != marks.link { marks.link = nil }
         view.typingAttributes = typingAttributes(for: view, marks: marks)
+    }
+
+    func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRange old: NSRange, toCharacterRange new: NSRange) -> NSRange {
+        guard let storage = textView.textStorage else { return new }
+        return InlineNodes.snappedSelection(new, from: old, in: storage)
+    }
+
+    func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+        guard let storage = textView.textStorage, let replacementString, !textView.hasMarkedText() else { return true }
+        // A note link or block reference is changed whole, never inside its label.
+        let whole = InlineNodes.wholeNodes(range, in: storage)
+        guard whole != range else { return true }
+        let replacement = NSAttributedString(string: replacementString, attributes: textView.typingAttributes)
+        if textView.shouldChangeText(in: whole, replacementString: replacementString) {
+            storage.replaceCharacters(in: whole, with: replacement)
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: whole.location + replacement.length, length: 0))
+        }
+        return false
     }
 
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -372,7 +556,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     // MARK: Moving between cells
 
     func focus(atEnd: Bool) {
-        if atEnd, let row = cells.indices.last, let column = cells[row].indices.last {
+        if atEnd, let row = table.rows.indices.last, let column = table.rows[row].cells.indices.last {
             focus(row: row, column: column, atEnd: true)
         } else {
             focus(row: 0, column: 0, atEnd: false)
@@ -380,33 +564,36 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     }
 
     func focus(row: Int, column: Int, atEnd: Bool) {
-        guard cells.indices.contains(row), !cells[row].isEmpty else { return }
-        let cell = cells[row][min(max(0, column), cells[row].count - 1)]
+        guard table.rows.indices.contains(row), !table.rows[row].cells.isEmpty,
+              let cell = editor(row: row, column: min(max(0, column), table.rows[row].cells.count - 1)) else { return }
         cell.window?.makeFirstResponder(cell)
         let length = cell.textStorage?.length ?? 0
         cell.setSelectedRange(atEnd ? NSRange(location: length, length: 0) : NSRange(location: 0, length: length))
     }
 
+    private var positions: [CellPosition] {
+        table.rows.enumerated().flatMap { r, row in row.cells.indices.map { CellPosition(row: r, column: $0) } }
+    }
+
     private func move(from cell: CellTextView, by step: Int) {
-        let flat = cells.flatMap { $0 }
-        guard let index = flat.firstIndex(where: { $0 === cell }) else { return }
+        let flat = positions
+        guard let index = flat.firstIndex(of: CellPosition(row: cell.row, column: cell.column)) else { return }
         let target = index + step
         if target >= flat.count {
             // Tab in the last cell adds a row, like Numbers and Pages.
             perform("Add Row") { $0.insertRow(at: $0.rows.count); return true }
-            focus(row: cells.count - 1, column: 0, atEnd: false)
+            focus(row: table.rows.count - 1, column: 0, atEnd: false)
         } else if target < 0 {
             leave(forward: false)
         } else {
-            let next = flat[target]
-            focus(row: next.row, column: next.column, atEnd: false)
+            focus(row: flat[target].row, column: flat[target].column, atEnd: false)
         }
     }
 
     private func moveVertically(from cell: CellTextView, by step: Int) {
         let row = cell.row + step
         if row < 0 { leave(forward: false); return }
-        if row >= cells.count { leave(forward: true); return }
+        if row >= table.rows.count { leave(forward: true); return }
         focus(row: row, column: cell.column, atEnd: step < 0)
     }
 
@@ -421,13 +608,28 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     }
 
     /// The cell under a point in grid coordinates (for clicks between cells).
-    func cell(at point: CGPoint) -> CellTextView? {
-        for (r, row) in cells.enumerated() {
-            for (c, cell) in row.enumerated() where cellFrame(row: r, column: c).contains(point) {
-                return cell
+    func cell(at point: CGPoint) -> CellPosition? {
+        for r in rows(in: CGRect(x: point.x, y: point.y, width: 1, height: 1)) where table.rows.indices.contains(r) {
+            for c in table.rows[r].cells.indices where cellFrame(row: r, column: c).contains(point) {
+                return CellPosition(row: r, column: c)
             }
         }
         return nil
+    }
+
+    /// A click in a drawn cell: the cell gets its editor, which takes the click (caret
+    /// placement, a drag selection, a link).
+    func click(_ event: NSEvent, at point: CGPoint) -> Bool {
+        guard let position = cell(at: point), let view = editor(row: position.row, column: position.column) else { return false }
+        view.window?.makeFirstResponder(view)
+        if view.frame.contains(point) {
+            view.mouseDown(with: event)
+        } else {
+            // Below the text in a tall row: the caret goes to the end.
+            let length = view.textStorage?.length ?? 0
+            view.setSelectedRange(NSRange(location: length, length: 0))
+        }
+        return true
     }
 
     // MARK: Rows and columns
@@ -563,6 +765,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         guard view.shouldChangeText(in: selection, replacementString: nil) else { return }
         storage.beginEditing()
         storage.enumerateAttribute(.fnMarks, in: selection, options: []) { value, run, _ in
+            if storage.attribute(.fnNode, at: run.location, effectiveRange: nil) != nil { return }
             var marks = (value as? MarksBox)?.marks ?? InlineMarks()
             marks[keyPath: keyPath] = !allOn
             if !allOn, keyPath == \InlineMarks.sup { marks.sub = false }
@@ -594,15 +797,56 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         }
         return true
     }
+
+    // MARK: Accessibility
+
+    /// Rows of cells for VoiceOver: drawn cells are elements with their text as value
+    /// (pressing one edits it).
+    func accessibilityRows() -> [NSAccessibilityElement] {
+        buildIfNeeded()
+        if let cached = accessibilityCache { return cached }
+        var rows: [NSAccessibilityElement] = []
+        for (r, row) in table.rows.enumerated() {
+            let rowElement = TableAccessibilityElement(controller: self, row: r, column: nil)
+            rowElement.setAccessibilityParent(grid)
+            rowElement.setAccessibilityChildren(row.cells.indices.map { c in
+                let cell = TableAccessibilityElement(controller: self, row: r, column: c)
+                cell.setAccessibilityParent(rowElement)
+                return cell
+            })
+            rows.append(rowElement)
+        }
+        accessibilityCache = rows
+        return rows
+    }
+
+    /// Dropped when cells move or change.
+    var accessibilityCache: [NSAccessibilityElement]?
+
+    /// A row's or cell's rectangle on screen.
+    func screenFrame(row: Int, column: Int?) -> CGRect {
+        guard rowEdges.count > row + 1, let window = grid.window else { return .zero }
+        let rect = column.map { cellFrame(row: row, column: $0) }
+            ?? CGRect(x: 0, y: rowEdges[row], width: tableWidth, height: rowEdges[row + 1] - rowEdges[row])
+        return window.convertToScreen(grid.convert(rect, to: nil))
+    }
+
+    /// What a drawn cell reads as.
+    func accessibilityValue(row: Int, column: Int) -> String {
+        if let editor, editor.row == row, editor.column == column { return editor.string }
+        return text(row: row, column: column).string
+    }
 }
 
-/// One cell's text: a TextKit 2 text view without chrome; the table controller is its
-/// delegate.
+/// One cell's text while it is edited: a TextKit 2 text view without chrome; the table
+/// controller is its delegate.
 final class CellTextView: NSTextView {
     weak var table: TableBlockController?
     var row = 0
     var column = 0
     var cellTheme = EditorTheme()
+    /// Typed in (its undo steps refer to it).
+    var wasEdited = false
 
     static func make() -> CellTextView {
         let view = CellTextView(usingTextLayoutManager: true)
@@ -618,8 +862,7 @@ final class CellTextView: NSTextView {
         view.isAutomaticQuoteSubstitutionEnabled = true
         view.isAutomaticDashSubstitutionEnabled = true
         view.isAutomaticLinkDetectionEnabled = false
-        // Only the cell being edited is spell-checked (see becomeFirstResponder): with it on
-        // in every cell, scrolling a 50 × 8 table into view checked 400 views at once.
+        // Spell-checked while it is the first responder (see becomeFirstResponder).
         view.isContinuousSpellCheckingEnabled = false
         view.focusRingType = .none
         view.displaysLinkToolTips = true
@@ -640,6 +883,7 @@ final class CellTextView: NSTextView {
         let accepted = super.resignFirstResponder()
         if accepted { isContinuousSpellCheckingEnabled = false }
         if accepted, table?.focusedCell === self { table?.cellDidFocus(nil) }
+        if accepted { table?.editorDidResign(self) }
         return accepted
     }
 
@@ -670,8 +914,9 @@ final class CellTextView: NSTextView {
     @objc override func underline(_ sender: Any?) { table?.toggleMark(\.underline, in: self) }
 }
 
-/// Draws the table: cell backgrounds, the header tint, and borders (when the table has
-/// them; borderless tables show faint guides only while a cell is being edited).
+/// Draws the table: cell backgrounds, the header tint, every cell's text but the one
+/// being edited, and borders (when the table has them; borderless tables show faint
+/// guides only while a cell is being edited).
 final class TableGridView: NSView {
     weak var controller: TableBlockController?
 
@@ -682,15 +927,22 @@ final class TableGridView: NSView {
         controller?.layout(width: bounds.width)
     }
 
+    /// Cells moved or changed: redraw, and accessibility asks again.
+    func cellsDidChange() {
+        controller?.accessibilityCache = nil
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let controller, controller.tableWidth > 0 else { return }
         let table = controller.table
+        let rows = controller.rows(in: dirtyRect)
         let outline = CGRect(x: 0.5, y: 0.5, width: controller.tableWidth - 1, height: (controller.rowEdges.last ?? 0) - 1)
         let radius: CGFloat = 6
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(roundedRect: outline, xRadius: radius, yRadius: radius).addClip()
-        for (r, row) in table.rows.enumerated() {
-            for (c, cell) in row.cells.enumerated() {
+        for r in rows where table.rows.indices.contains(r) {
+            for (c, cell) in table.rows[r].cells.enumerated() {
                 let frame = controller.cellFrame(row: r, column: c)
                 if let name = cell.backgroundColor, let color = EditorTheme.cellBackground(named: name) {
                     color.setFill()
@@ -703,6 +955,8 @@ final class TableGridView: NSView {
         }
         NSGraphicsContext.restoreGraphicsState()
 
+        controller.drawTexts(in: dirtyRect)
+
         let editing = controller.focusedCell != nil
         guard controller.borders || editing else { return }
         let line = controller.borders ? NSColor.separatorColor : NSColor.tertiaryLabelColor.withAlphaComponent(0.25)
@@ -710,13 +964,11 @@ final class TableGridView: NSView {
         let grid = NSBezierPath()
         grid.lineWidth = 1
         if !controller.borders { grid.setLineDash([3, 3], count: 2, phase: 0) }
-        for (r, row) in table.rows.enumerated() {
-            for c in row.cells.indices {
+        for r in rows where table.rows.indices.contains(r) {
+            for c in table.rows[r].cells.indices where c > 0 {
                 let frame = controller.cellFrame(row: r, column: c)
-                if c > 0 {
-                    grid.move(to: CGPoint(x: frame.minX + 0.5, y: frame.minY))
-                    grid.line(to: CGPoint(x: frame.minX + 0.5, y: frame.maxY))
-                }
+                grid.move(to: CGPoint(x: frame.minX + 0.5, y: frame.minY))
+                grid.line(to: CGPoint(x: frame.minX + 0.5, y: frame.maxY))
             }
             if r > 0 {
                 let y = controller.rowEdges[r] + 0.5
@@ -733,11 +985,12 @@ final class TableGridView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if let cell = controller?.cell(at: point) {
-            controller?.focus(row: cell.row, column: cell.column, atEnd: true)
-        } else {
-            super.mouseDown(with: event)
-        }
+        if let controller, controller.click(event, at: point) { return }
+        super.mouseDown(with: event)
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .iBeam)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -751,6 +1004,65 @@ final class TableGridView: NSView {
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .table }
     override func accessibilityLabel() -> String? { "Table" }
+    override func accessibilityChildren() -> [Any]? { controller?.accessibilityRows() }
+    override func accessibilityRows() -> [Any]? { controller?.accessibilityRows() }
+    override func accessibilityRowCount() -> Int { controller?.table.rows.count ?? 0 }
+    override func accessibilityColumnCount() -> Int { controller?.table.columnCount ?? 0 }
+}
+
+/// A table row or cell for accessibility. A drawn cell reads its text; pressing or
+/// focusing it edits it.
+final class TableAccessibilityElement: NSAccessibilityElement {
+    weak var controller: TableBlockController?
+    let row: Int
+    let column: Int?
+
+    @MainActor init(controller: TableBlockController, row: Int, column: Int?) {
+        self.controller = controller
+        self.row = row
+        self.column = column
+        super.init()
+        if let column {
+            setAccessibilityRole(.cell)
+            setAccessibilityLabel("Row \(row + 1), column \(column + 1)")
+            setAccessibilityRowIndexRange(NSRange(location: row, length: 1))
+            setAccessibilityColumnIndexRange(NSRange(location: column, length: 1))
+        } else {
+            setAccessibilityRole(.row)
+            setAccessibilityIndex(row)
+        }
+    }
+
+    override func accessibilityFrame() -> NSRect {
+        nonisolated(unsafe) let controller = controller
+        let row = row, column = column
+        return MainActor.assumeIsolated { controller?.screenFrame(row: row, column: column) ?? .zero }
+    }
+
+    override func accessibilityValue() -> Any? {
+        nonisolated(unsafe) let controller = controller
+        guard let column else { return nil }
+        let row = row
+        let value: String? = MainActor.assumeIsolated { controller?.accessibilityValue(row: row, column: column) }
+        return value
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        nonisolated(unsafe) let controller = controller
+        guard let column else { return false }
+        let row = row
+        return MainActor.assumeIsolated {
+            controller?.focus(row: row, column: column, atEnd: true)
+            return controller != nil
+        }
+    }
+
+    override func setAccessibilityFocused(_ focused: Bool) {
+        nonisolated(unsafe) let controller = controller
+        guard focused, let column else { return }
+        let row = row
+        MainActor.assumeIsolated { controller?.focus(row: row, column: column, atEnd: true) }
+    }
 }
 
 /// What a OneNote cell holds besides its first line: list items, more paragraphs,

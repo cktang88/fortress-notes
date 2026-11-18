@@ -55,6 +55,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         super.init()
         if embedded {
             textView.isEmbedded = true
+            textView.isContinuousSpellCheckingEnabled = false
             textView.isVerticallyResizable = false
             textView.autoresizingMask = []
         } else {
@@ -188,29 +189,159 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     // MARK: Loading and reading
 
+    /// Shows `blocks`. A long note shows its first screens at once and the rest in
+    /// chunks over the next run loop turns (`appendPendingBlocks`), so opening it costs
+    /// what its first screens cost; until the rest is in, `currentBlocks()` reports it
+    /// as it will read back, so nothing is lost or saved twice. Anything that needs the
+    /// whole text (finding a block, select all, find) finishes loading first.
     func load(_ blocks: [EditorBlock]) {
+        let interval = Signposts.begin("Load text")
+        defer { Signposts.end("Load text", interval) }
+        loadGeneration += 1
+        let all = blocks.isEmpty ? [EditorBlock()] : blocks
+        let headCount = isEmbedded ? all.count : Self.headCount(all)
+        let head = Array(all[..<headCount])
         isLoading = true
         defer { isLoading = false }
-        let text = DocumentText.build(blocks, theme: theme, context: context)
+        let text = DocumentText.build(head, theme: theme, context: context)
         blockCache = [:]
         storage.setAttributedString(text)
-        // A text block just shown is what reading it back gives (unless building the text
-        // rewrote it): keep those, so the baseline right after opening and the first save
-        // don't read every block back. Tables, columns and embeds are read from the text.
-        var byId: [String: EditorBlock] = [:]
-        byId.reserveCapacity(blocks.count)
-        for block in blocks where Self.readsBackAsShown(block) { byId[block.id] = block }
-        var cache: [String: CachedBlock] = [:]
-        cache.reserveCapacity(blocks.count)
-        storage.enumerateAttribute(.fnBlock, in: NSRange(location: 0, length: storage.length), options: []) { value, range, _ in
-            guard let info = value as? BlockInfo, let block = byId[info.id], cache[info.id] == nil else { return }
-            cache[info.id] = CachedBlock(info: info, length: range.length, block: block)
-        }
-        blockCache = cache
+        blockCache = cachedBlocks(head, from: 0)
+        lastRead = []
         dirtyBlocks.removeAll()
+        dirtyInfos.removeAll()
+        pendingBlocks = headCount < all.count ? all[headCount...].map { Self.readBack($0, context: context) } : []
         textView.undoManager?.removeAllActions()
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         syncTypingAttributes()
+        if !pendingBlocks.isEmpty {
+            let generation = loadGeneration
+            Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+        }
+    }
+
+    /// A text block just shown is what reading it back gives (unless building the text
+    /// rewrote it): keep those, so the baseline right after opening and the first save
+    /// don't read every block back. Tables, columns and embeds are read from the text.
+    private func cachedBlocks(_ blocks: [EditorBlock], from start: Int) -> [String: CachedBlock] {
+        var byId: [String: EditorBlock] = [:]
+        byId.reserveCapacity(blocks.count)
+        for block in blocks where Self.readsBackAsShown(block) { byId[block.id] = block }
+        var cache = blockCache
+        cache.reserveCapacity(cache.count + blocks.count)
+        storage.enumerateAttribute(.fnBlock, in: NSRange(location: start, length: storage.length - start), options: []) { value, range, _ in
+            guard let info = value as? BlockInfo, let block = byId[info.id], cache[info.id]?.info !== info else { return }
+            cache[info.id] = CachedBlock(info: info, length: range.length, block: block)
+        }
+        return cache
+    }
+
+    /// Blocks not in the text yet (a long note still loading), in order.
+    private(set) var pendingBlocks: [EditorBlock] = []
+    private var loadGeneration = 0
+    /// Told when a long note's last blocks are in the text.
+    var onLoadComplete: (() -> Void)?
+
+    /// How many blocks fill the first screens (a little more than a tall window shows).
+    private static func headCount(_ blocks: [EditorBlock]) -> Int {
+        guard blocks.count > 150 else { return blocks.count }
+        var height: CGFloat = 0
+        for (index, block) in blocks.enumerated() {
+            height += estimatedHeight(block)
+            if height > 4000 || index >= 120 { return index + 1 }
+        }
+        return blocks.count
+    }
+
+    /// A rough height for choosing chunks (never used for layout).
+    private static func estimatedHeight(_ block: EditorBlock) -> CGFloat {
+        switch block.kind {
+        case .table: return CGFloat(block.table?.rows.count ?? 3) * 34
+        case .columns: return 240
+        case .image: return 320
+        case .divider, .file, .math, .embed: return 50
+        default:
+            let characters = block.runs.reduce(0) { $0 + $1.text.utf16.count }
+            return 26 * CGFloat(1 + characters / 70) + 10
+        }
+    }
+
+    /// `block` as reading it back from the text will give it (what `currentBlocks()`
+    /// reports for it while it waits to be shown).
+    private static func readBack(_ block: EditorBlock, context: AttachmentContext) -> EditorBlock {
+        guard block.kind.hasInlineText, !readsBackAsShown(block) else { return block }
+        var copy = block
+        let text = DocumentText.inline(block.runs, info: BlockInfo(block), context: context)
+        copy.runs = DocumentText.runs(in: text, range: NSRange(location: 0, length: text.length))
+        return copy
+    }
+
+    /// Puts the next chunk of a loading note into the text (about a screen's worth of
+    /// work per run loop turn, so typing and scrolling go on meanwhile).
+    private func appendPendingBlocks(generation: Int) {
+        guard generation == loadGeneration, !pendingBlocks.isEmpty else { return }
+        if textView.hasMarkedText() {
+            // Not while an input method is composing.
+            Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+            return
+        }
+        var height: CGFloat = 0
+        var count = 0
+        for block in pendingBlocks {
+            height += Self.estimatedHeight(block)
+            count += 1
+            if height > 3000 || count >= 80 { break }
+        }
+        append(Array(pendingBlocks.prefix(count)))
+        pendingBlocks.removeFirst(count)
+        if pendingBlocks.isEmpty {
+            onLoadComplete?()
+        } else {
+            Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+        }
+    }
+
+    /// Shows the rest of a loading note now.
+    func finishLoading() {
+        guard !pendingBlocks.isEmpty else { return }
+        let rest = pendingBlocks
+        pendingBlocks = []
+        append(rest)
+        onLoadComplete?()
+    }
+
+    /// Appends loaded blocks after the text (not an edit: no undo, no save).
+    private func append(_ blocks: [EditorBlock]) {
+        let interval = Signposts.begin("Append blocks")
+        defer { Signposts.end("Append blocks", interval) }
+        isLoading = true
+        defer { isLoading = false }
+        let start = storage.length
+        let text = DocumentText.build(blocks, theme: theme, context: context)
+        storage.append(text)
+        blockCache = cachedBlocks(blocks, from: start)
+        extendLastRead(from: start)
+    }
+
+    /// The paragraphs just appended join the last read (so the first save after a long
+    /// note loads doesn't walk all of it): read from the cache, or from the text.
+    private func extendLastRead(from start: Int) {
+        guard !lastRead.isEmpty, lastRead.reduce(0, { $0 + $1.length }) == start else { lastRead = []; return }
+        var added: [ReadBlock] = []
+        var valid = true
+        storage.enumerateAttribute(.fnBlock, in: NSRange(location: start, length: storage.length - start), options: []) { value, range, stop in
+            guard let info = value as? BlockInfo, string.character(at: NSMaxRange(range) - 1) == 0x0A,
+                  string.range(of: "\n", options: .literal, range: NSRange(location: range.location, length: range.length - 1)).location == NSNotFound
+            else { valid = false; stop.pointee = true; return }
+            let block: EditorBlock
+            if let cached = blockCache[info.id], cached.info === info, cached.length == range.length {
+                block = cached.block
+            } else {
+                block = DocumentText.block(in: storage, paragraph: range, info: info)
+            }
+            added.append(ReadBlock(info: info, length: range.length, block: block))
+        }
+        if valid { lastRead += added } else { lastRead = [] }
     }
 
     /// The blocks as they are now (fixing duplicate ids from pastes as a side effect).
@@ -220,8 +351,11 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// `BlockInfo`) are read again: a save after a keystroke reads one paragraph, not the
     /// note. Tables and columns hold their edits in the attachment and are always asked.
     func currentBlocks() -> [EditorBlock] {
+        if let blocks = readEditedBlocks() { return pendingBlocks.isEmpty ? blocks : blocks + pendingBlocks }
         let string = self.string
         var blocks: [EditorBlock] = []
+        var read: [ReadBlock] = []
+        read.reserveCapacity(lastRead.count)
         var renamed: [(NSRange, BlockInfo)] = []
         var seen = Set<String>()
         var cache: [String: CachedBlock] = [:]
@@ -239,21 +373,24 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             seen.insert(info.id)
             var block: EditorBlock
             if let cached = blockCache[info.id], cached.info === info, cached.length == paragraph.length,
-               !dirtyBlocks.contains(info.id) {
+               !dirtyBlocks.contains(info.id), !dirtyInfos.contains(ObjectIdentifier(info)) {
                 block = cached.block
             } else {
                 block = DocumentText.block(in: storage, paragraph: paragraph, info: info)
             }
+            cache[info.id] = CachedBlock(info: info, length: paragraph.length, block: block)
+            read.append(ReadBlock(info: info, length: paragraph.length, block: block))
             if !info.kind.hasInlineText,
                let attachment = storage.attribute(.attachment, at: paragraph.location, effectiveRange: nil) as? BlockAttachment,
                let live = attachment.live {
                 live.write(into: &block)
             }
-            cache[info.id] = CachedBlock(info: info, length: paragraph.length, block: block)
             blocks.append(block)
         }
         blockCache = cache
+        lastRead = renamed.isEmpty ? read : []
         dirtyBlocks.removeAll(keepingCapacity: true)
+        dirtyInfos.removeAll(keepingCapacity: true)
         if !renamed.isEmpty {
             isNormalizing = true
             storage.beginEditing()
@@ -261,8 +398,66 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             storage.endEditing()
             isNormalizing = false
         }
+        return pendingBlocks.isEmpty ? blocks : blocks + pendingBlocks
+    }
+
+    /// The blocks when the paragraphs are the ones last read, in the same order (only
+    /// their text changed): each kept block is checked where it should be (its block
+    /// info at its start, its "\n" at its end) and only edited ones are read again, with
+    /// no lookups by id. Nil when paragraphs were added, removed, split or joined since
+    /// (then everything is walked again).
+    private func readEditedBlocks() -> [EditorBlock]? {
+        guard !lastRead.isEmpty else { return nil }
+        let string = self.string
+        let length = string.length
+        let checkDirty = !dirtyInfos.isEmpty
+        var blocks: [EditorBlock] = []
+        blocks.reserveCapacity(lastRead.count)
+        var location = 0
+        for index in lastRead.indices {
+            guard location < length, let info = storage.blockInfo(at: location) else { return nil }
+            let entry = lastRead[index]
+            var block: EditorBlock
+            var paragraphLength = entry.length
+            if info === entry.info, !checkDirty || !dirtyInfos.contains(ObjectIdentifier(info)) {
+                let end = location + entry.length
+                guard end <= length, string.character(at: end - 1) == 0x0A else { return nil }
+                block = entry.block
+            } else {
+                // Edited (or given a new kind): the same block, read again. (A failed
+                // check below leaves `lastRead` half updated: the full walk replaces it.)
+                guard info.id == entry.info.id else { return nil }
+                let paragraph = string.paragraphRange(at: location)
+                guard paragraph.location == location else { return nil }
+                block = DocumentText.block(in: storage, paragraph: paragraph, info: info)
+                paragraphLength = paragraph.length
+                lastRead[index] = ReadBlock(info: info, length: paragraph.length, block: block)
+                blockCache[info.id] = CachedBlock(info: info, length: paragraph.length, block: block)
+            }
+            if !info.kind.hasInlineText,
+               let attachment = storage.attribute(.attachment, at: location, effectiveRange: nil) as? BlockAttachment,
+               let live = attachment.live {
+                live.write(into: &block)
+            }
+            blocks.append(block)
+            location += paragraphLength
+        }
+        guard location == length else { return nil }
+        dirtyBlocks.removeAll(keepingCapacity: true)
+        dirtyInfos.removeAll(keepingCapacity: true)
         return blocks
     }
+
+    private struct ReadBlock {
+        let info: BlockInfo
+        let length: Int
+        let block: EditorBlock
+    }
+
+    /// Every paragraph as last read, in order (empty: walk the text again).
+    private var lastRead: [ReadBlock] = []
+    /// Block infos of paragraphs edited since the last read (by identity: cheap to ask).
+    private var dirtyInfos: Set<ObjectIdentifier> = []
 
     /// Whether reading `block`'s paragraph back gives `block` itself: inline text only, with
     /// runs already normalized and no separators or stray attachment characters (building
@@ -282,6 +477,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// `currentBlocks()` reads every paragraph back from the text (tests of the round trip).
     func discardReadCache() {
         blockCache = [:]
+        lastRead = []
     }
 
     private struct CachedBlock {
@@ -314,6 +510,14 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     func range(ofBlock id: String) -> NSRange? {
+        if !pendingBlocks.isEmpty {
+            if let found = range(ofLoadedBlock: id) { return found }
+            finishLoading()
+        }
+        return range(ofLoadedBlock: id)
+    }
+
+    private func range(ofLoadedBlock id: String) -> NSRange? {
         var location = 0
         while location < string.length {
             let paragraph = string.paragraphRange(at: location)
@@ -548,7 +752,13 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             guard !isNormalizing, !isLoading else { return }
             isNormalizing = true
             defer { isNormalizing = false }
+            let start = EditorMetrics.now()
+            defer { EditorMetrics.normalize += EditorMetrics.since(start) }
             normalize(storage, editedRange)
+            if editedMask.contains(.editedCharacters) {
+                let context = context
+                InlineNodes.separateCopies(in: storage, range: editedRange) { DocumentText.label(of: $0, context: context) }
+            }
         }
     }
 
@@ -578,6 +788,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let end = min(text.length, NSMaxRange(editedRange) + 1)
         var location = start
         var previousId: String? = start > 0 ? storage.blockInfo(at: text.paragraphRange(at: start - 1).location)?.id : nil
+        var touched: [NSRange] = []
+        var touchedInfo: BlockInfo?
+        var uniform = true
         while location < text.length {
             let paragraph = text.paragraphRange(at: location)
             var info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
@@ -590,17 +803,63 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                     info = BlockInfo(kind: .paragraph, depth: info.depth)
                 }
             }
-            var needsTagging = false
-            storage.enumerateAttribute(.fnBlock, in: paragraph, options: []) { value, _, stop in
-                if (value as? BlockInfo) !== info { needsTagging = true; stop.pointee = true }
-            }
-            if needsTagging { storage.addAttribute(.fnBlock, value: info, range: paragraph) }
+            // One lookup: the info on the paragraph's first character, and how far it runs.
+            var tagged = NSRange()
+            let first = storage.attribute(.fnBlock, at: paragraph.location, longestEffectiveRange: &tagged, in: paragraph) as? BlockInfo
+            if first !== info || tagged != paragraph { storage.addAttribute(.fnBlock, value: info, range: paragraph) }
             dirtyBlocks.insert(info.id)
-            theme.restyle(storage, range: paragraph)
+            dirtyInfos.insert(ObjectIdentifier(info))
+            touched.append(paragraph)
+            if let firstInfo = touchedInfo {
+                if firstInfo.kind != info.kind || firstInfo.depth != info.depth || firstInfo.checked != info.checked { uniform = false }
+            } else {
+                touchedInfo = info
+            }
             previousId = info.id
             location = NSMaxRange(paragraph)
             if location >= end { break }
         }
+        let restyleStart = EditorMetrics.now()
+        defer { EditorMetrics.restyle += EditorMetrics.since(restyleStart) }
+        guard let first = touched.first, let last = touched.last else { return }
+        let whole = NSUnionRange(first, last)
+        if touched.count >= 16, uniform, let info = touchedInfo, Self.isPlainAndStyled(storage, whole),
+           Self.has(theme.cachedAttributes(info: info, marks: InlineMarks()), throughout: whole, in: storage) {
+            // Many paragraphs of one kind with no marks (pasted lines) already styled as
+            // that kind (they came with the typing attributes): nothing to restyle.
+            // Styling them paragraph by paragraph took a second for 25,000 lines.
+        } else {
+            for paragraph in touched { theme.restyle(storage, range: paragraph) }
+        }
+    }
+
+    /// Whether every presentation attribute in `range` is the one in `attributes` (and
+    /// none it lacks is set), checked a key at a time over the whole range.
+    private static func has(_ attributes: [NSAttributedString.Key: Any], throughout range: NSRange, in storage: NSTextStorage) -> Bool {
+        for key in EditorTheme.presentationKeys {
+            var effective = NSRange()
+            let value = storage.attribute(key, at: range.location, longestEffectiveRange: &effective, in: range)
+            guard effective == range else { return false }
+            switch (value, attributes[key]) {
+            case (nil, nil): continue
+            case (let found?, let expected?): if !(found as AnyObject).isEqual(expected) { return false }
+            default: return false
+            }
+        }
+        return true
+    }
+
+    /// No marks, nodes or attachments anywhere in `range`, and all of it styled by the
+    /// editor (not pasted rich text still to be read for its marks).
+    private static func isPlainAndStyled(_ storage: NSTextStorage, _ range: NSRange) -> Bool {
+        for key in [NSAttributedString.Key.fnMarks, .fnNode, .attachment] {
+            var effective = NSRange()
+            if storage.attribute(key, at: range.location, longestEffectiveRange: &effective, in: range) != nil || effective != range {
+                return false
+            }
+        }
+        var effective = NSRange()
+        return storage.attribute(.fnStyled, at: range.location, longestEffectiveRange: &effective, in: range) != nil && effective == range
     }
 
     // MARK: NSTextViewDelegate
@@ -612,7 +871,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         var range = newSelectedCharRange
         if range.location > limit { range.location = limit }
         if NSMaxRange(range) > limit { range.length = max(0, limit - range.location) }
-        return range
+        // Note links and block references are stepped over and selected whole.
+        return InlineNodes.snappedSelection(range, from: oldSelectedCharRange, in: storage)
     }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
@@ -620,6 +880,16 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         if !structuralEdit {
             structuralEdit = replacementString.map { $0.utf16.contains(0x0A) } ?? true
                 || (affectedCharRange.length > 0 && string.range(of: "\n", options: .literal, range: affectedCharRange).location != NSNotFound)
+        }
+        if !isApplyingEdit, let replacementString, !textView.hasMarkedText() {
+            // A note link or block reference changes whole (Delete removes it), and
+            // typing inside its label goes after it.
+            let whole = InlineNodes.wholeNodes(affectedCharRange, in: storage)
+            if whole != affectedCharRange {
+                let typed = NSAttributedString(string: replacementString, attributes: textView.typingAttributes)
+                replace(whole, with: typed, selecting: NSRange(location: whole.location + typed.length, length: 0))
+                return false
+            }
         }
         guard !isApplyingEdit, let replacementString, !replacementString.isEmpty, !textView.hasMarkedText() else { return true }
         // Typing next to an image or divider starts a new paragraph instead.

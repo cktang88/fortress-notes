@@ -464,12 +464,12 @@ private func paragraph(_ id: String, _ text: String, kind: BlockKind = .paragrap
         let (controller, window) = editor([paragraph("a", "Above"), table, paragraph("b", "Below")])
         let range = controller.range(ofBlock: "t")!
         let live = try #require((controller.storage.attribute(.attachment, at: range.location, effectiveRange: nil) as? BlockAttachment)?.live as? TableBlockController)
-        let last = live.cells[1][1]
-        window.makeFirstResponder(last)
-        last.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        live.focus(row: 1, column: 1, atEnd: true)
+        try #require(live.editor).doCommand(by: #selector(NSResponder.insertTab(_:)))
         #expect(live.table.rows.count == 3)
-        #expect(window.firstResponder === live.cells[2][0])
-        live.cells[2][0].insertText("new", replacementRange: NSRange(location: 0, length: 0))
+        let added = try #require(live.editor)
+        #expect(window.firstResponder === added && added.row == 2 && added.column == 0)
+        added.insertText("new", replacementRange: NSRange(location: 0, length: 0))
         let saved = controller.currentBlocks()[1]
         #expect(saved.table?.rows.count == 3)
         #expect(saved.table?.cell(row: 2, column: 0)?.plainText == "new")

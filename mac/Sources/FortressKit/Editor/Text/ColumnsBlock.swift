@@ -11,7 +11,14 @@ import AppKit
 @MainActor
 final class ColumnsBlockController: NSObject, LiveBlock {
     private var columns: [EditorColumn]
-    private(set) var editors: [BlockEditorController] = []
+    /// The column editors, made the first time the block is laid out or entered (a note
+    /// opening doesn't pay for columns it never scrolls to).
+    var editors: [BlockEditorController] {
+        buildIfNeeded()
+        return columnEditors
+    }
+    private var columnEditors: [BlockEditorController] = []
+    private var isBuilt = false
     weak var context: AttachmentContext?
     weak var attachment: BlockAttachment?
     let container = ColumnsView()
@@ -26,6 +33,11 @@ final class ColumnsBlockController: NSObject, LiveBlock {
         self.attachment = attachment
         super.init()
         container.controller = self
+    }
+
+    private func buildIfNeeded() {
+        guard !isBuilt, let context else { return }
+        isBuilt = true
         for column in columns {
             let editor = BlockEditorController(baseURL: context.baseURL, embedded: true)
             editor.theme = context.theme
@@ -38,7 +50,7 @@ final class ColumnsBlockController: NSObject, LiveBlock {
                 self?.leave(from: editor, forward: forward)
             }
             container.addSubview(editor.textView)
-            editors.append(editor)
+            columnEditors.append(editor)
         }
     }
 
@@ -47,7 +59,9 @@ final class ColumnsBlockController: NSObject, LiveBlock {
     var gutter: CGFloat { 32 * theme.scale }
 
     func write(into block: inout EditorBlock) {
-        block.columns = zip(columns, editors).map { column, editor in
+        // Never shown: the columns as they came.
+        guard isBuilt else { block.columns = columns; return }
+        block.columns = zip(columns, columnEditors).map { column, editor in
             var column = column
             column.blocks = editor.currentBlocks()
             return column

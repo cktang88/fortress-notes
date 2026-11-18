@@ -133,8 +133,8 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         let (controller, window) = editor(document)
         let base = SyncedTree(controller.currentBlocks())
         let table = try #require(live(controller, TableBlockController.self))
-        #expect(table.cells.count == 3)
-        let cell = table.cells[1][1]
+        #expect(table.table.rows.count == 3)
+        let cell = try #require(table.editor(row: 1, column: 1))
         window.makeFirstResponder(cell)
         cell.setSelectedRange(NSRange(location: cell.textStorage!.length, length: 0))
         cell.insertText(" (pale)", replacementRange: cell.selectedRange())
@@ -149,17 +149,20 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         let document = try RichPage.load()
         let (controller, window) = editor(document)
         let table = try #require(live(controller, TableBlockController.self))
-        window.makeFirstResponder(table.cells[0][0])
-        table.cells[0][0].doCommand(by: #selector(NSResponder.insertTab(_:)))
-        #expect(window.firstResponder === table.cells[0][1])
-        let last = table.cells[2][2]
-        window.makeFirstResponder(last)
-        last.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        table.focus(row: 0, column: 0, atEnd: false)
+        try #require(table.editor).doCommand(by: #selector(NSResponder.insertTab(_:)))
+        #expect(table.focusedCell?.row == 0 && table.focusedCell?.column == 1)
+        #expect(window.firstResponder === table.editor)
+        // One cell editor at a time: the others are drawn.
+        #expect(table.grid.subviews.filter { $0 is CellTextView }.count == 1)
+        table.focus(row: 2, column: 2, atEnd: true)
+        try #require(table.editor).doCommand(by: #selector(NSResponder.insertTab(_:)))
         #expect(table.table.rows.count == 4)
-        #expect(window.firstResponder === table.cells[3][0])
+        #expect(table.focusedCell?.row == 3 && table.focusedCell?.column == 0)
+        #expect(window.firstResponder === table.editor)
         // ⇧Tab from the first cell leaves the table.
-        window.makeFirstResponder(table.cells[0][0])
-        table.cells[0][0].doCommand(by: #selector(NSResponder.insertBacktab(_:)))
+        table.focus(row: 0, column: 0, atEnd: false)
+        try #require(table.editor).doCommand(by: #selector(NSResponder.insertBacktab(_:)))
         #expect(window.firstResponder === controller.textView)
     }
 
@@ -169,7 +172,7 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         let base = SyncedTree(controller.currentBlocks())
         let table = try #require(live(controller, TableBlockController.self))
         table.perform("Insert Column") { $0.insertColumn(at: 1); return true }
-        #expect(table.cells[0].count == 4)
+        #expect(table.table.rows[0].cells.count == 4)
         let (operations, _) = BlockDiff.operations(from: base, to: controller.currentBlocks())
         // The widths, and a new (empty) cell in each row; nothing deleted or rewritten.
         #expect(operations.map(\.operation) == [.update, .insert, .insert, .insert])
@@ -183,7 +186,7 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         let document = try RichPage.load()
         let (controller, window) = editor(document)
         let table = try #require(live(controller, TableBlockController.self))
-        let cell = table.cells[1][0]
+        let cell = try #require(table.editor(row: 1, column: 0))
         window.makeFirstResponder(cell)
         cell.setSelectedRange(NSRange(location: 0, length: 1))
         table.toggleMark(\.bold, in: cell)
@@ -217,13 +220,13 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         let (controller, _) = editor(document)
         let table = try #require(live(controller, TableBlockController.self))
         let height = table.height(forWidth: 640)
-        let cell = table.cells[1][1]
-        var fragments: [String] = []
-        cell.textLayoutManager?.enumerateTextLayoutFragments(from: cell.textLayoutManager!.documentRange.location, options: [.ensuresLayout]) {
-            fragments.append("\($0.layoutFragmentFrame)")
-            return true
-        }
-        let info = "rows \(table.rowEdges) columns \(table.columnEdges) cell frame \(cell.frame) container \(String(describing: cell.textContainer?.size)) fragments \(fragments) fitting \(cell.fittingTextHeight(width: cell.frame.width))"
+        // The height measured from the string is what the cell's editor lays out.
+        let cell = try #require(table.editor(row: 1, column: 1))
+        let frame = table.textFrame(row: 1, column: 1)
+        let fitting = cell.fittingTextHeight(width: frame.width)
+        let info = "rows \(table.rowEdges) columns \(table.columnEdges) text frame \(frame) fitting \(fitting)"
+        #expect(abs(fitting - frame.height) < 1, "\(info)")
+        #expect(cell.frame == frame, "\(info)")
         #expect(height < 200, "\(info)")
         #expect(table.rowEdges.count == 4)
         #expect(table.rowEdges[1] < 50, "\(info)")

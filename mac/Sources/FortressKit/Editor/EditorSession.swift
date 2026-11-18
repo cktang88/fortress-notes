@@ -44,7 +44,26 @@ public final class EditorSession {
     /// Told when a save can't reach the server (the app notices lost connections).
     @ObservationIgnored var onSaveError: ((Error) -> Void)?
 
-    @ObservationIgnored private(set) var base = SyncedTree()
+    /// What the server holds, as the last diff left it. Built when first needed (the
+    /// baseline of a note just opened is made after the note is on screen).
+    var base: SyncedTree {
+        get {
+            if let baseTree { return baseTree }
+            let interval = Signposts.begin("Baseline")
+            let tree = SyncedTree(baseBlocks ?? [], reusing: nil, lazily: true)
+            Signposts.end("Baseline", interval)
+            baseTree = tree
+            baseBlocks = nil
+            return tree
+        }
+        set {
+            baseTree = newValue
+            baseBlocks = nil
+        }
+    }
+    @ObservationIgnored private var baseTree: SyncedTree? = SyncedTree()
+    /// The blocks the baseline is to be made from (until it is).
+    @ObservationIgnored private var baseBlocks: [EditorBlock]?
     @ObservationIgnored private(set) var revision = 0
     @ObservationIgnored private var flushTask: Task<Void, Never>?
     @ObservationIgnored private var titleTask: Task<Void, Never>?
@@ -78,11 +97,36 @@ public final class EditorSession {
         self.documentId = document.id
         self.api = api
         persistsPendingEdits = false
-        adopt(document, replaceText: false)
+        adopt(document, decoded: BlockCodec.flatten(document.children, resolved: document.resolvedLinks), replaceText: false)
         Self.register(self)
     }
 
-    public var hasUnsavedChanges: Bool { dirty || inFlight || unsent != nil }
+    /// For tests: a session showing a document already decoded (as `load` decodes it,
+    /// off the main thread).
+    init(document: BlockDocument, decoded: [EditorBlock], api: APIClient = APIClient()) {
+        self.documentId = document.id
+        self.api = api
+        persistsPendingEdits = false
+        adopt(document, decoded: decoded, replaceText: false)
+        Self.register(self)
+    }
+
+    /// The note's blocks, decoded off the main thread (a long note's tree takes a while).
+    nonisolated static func decode(_ document: BlockDocument) async -> [EditorBlock] {
+        await Task.detached(priority: .userInitiated) {
+            let interval = Signposts.begin("Decode note")
+            defer { Signposts.end("Decode note", interval) }
+            return BlockCodec.flatten(document.children, resolved: document.resolvedLinks)
+        }.value
+    }
+
+    public var hasUnsavedChanges: Bool { dirty || inFlight || isDiffing || unsent != nil }
+
+    /// Notes with more blocks than this are diffed off the main thread.
+    static let diffOffMainAbove = 5000
+    @ObservationIgnored private var isDiffing = false
+    /// Changes whenever the baseline is replaced from outside a save (a load, a reset).
+    @ObservationIgnored private var baseGeneration = 0
 
     // MARK: Loading
 
@@ -94,11 +138,14 @@ public final class EditorSession {
             try? await Task.sleep(for: debounce)
             if Task.isCancelled { return }
         }
+        let interval = Signposts.begin("Note open")
+        defer { Signposts.end("Note open", interval) }
         do {
             let document = latest ? try await api.reloadDocument(id: documentId) : try await api.document(id: documentId)
+            let decoded = await Self.decode(document)
             loadError = nil
             let pending = persistsPendingEdits ? PendingEdits.load(documentId: documentId) : nil
-            adopt(document, replaceText: true, pending: pending)
+            adopt(document, decoded: decoded, replaceText: true, pending: pending)
         } catch {
             loadError = error.localizedDescription
         }
@@ -117,14 +164,13 @@ public final class EditorSession {
         if loadError == nil { saveState = .saved }
     }
 
-    private func adopt(_ document: BlockDocument, replaceText: Bool, pending: PendingEdits.Record? = nil) {
+    private func adopt(_ document: BlockDocument, decoded blocks: [EditorBlock], replaceText: Bool, pending: PendingEdits.Record? = nil) {
         self.document = document
         revision = document.revision
         titleAuto = document.titleAuto ?? false
         title = document.title
         status = document.status
         updatedAt = Timestamp.date(document.updatedAt)
-        let blocks = BlockCodec.flatten(document.children, resolved: document.resolvedLinks)
         loadedBlocks = blocks
         var shown = blocks
         savedBlocks = nil
@@ -139,10 +185,9 @@ public final class EditorSession {
         if replaceText, let showBlocks {
             showBlocks(shown)
             // The baseline is what the editor reads back, so an untouched note never saves.
-            base = recovered == nil ? SyncedTree((currentBlocks?() ?? nil) ?? blocks, reusing: nil, lazily: true)
-                : SyncedTree(blocks, reusing: nil, lazily: true)
+            setBaseLater(recovered == nil ? (currentBlocks?() ?? nil) ?? blocks : blocks)
         } else {
-            base = SyncedTree(blocks, reusing: nil, lazily: true)
+            setBaseLater(blocks)
         }
         if recovered != nil {
             dirty = true
@@ -163,7 +208,18 @@ public final class EditorSession {
         // Recovered edits stay pending against the server's version.
         guard recovered == nil else { return }
         // The baseline's fields are encoded only for blocks that change.
-        base = SyncedTree(blocks, reusing: nil, lazily: true)
+        setBaseLater(blocks)
+    }
+
+    /// The baseline becomes `blocks`: made on the next quiet run loop turn (or when a
+    /// save needs it first), not while the note is being put on screen.
+    private func setBaseLater(_ blocks: [EditorBlock]) {
+        baseGeneration += 1
+        baseTree = nil
+        baseBlocks = blocks
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            MainActor.assumeIsolated { _ = self?.base }
+        }
     }
 
     /// Lets go of the editor once the note is closed. What it shows last stays readable,
@@ -197,8 +253,8 @@ public final class EditorSession {
     /// Sends pending edits now. If a transaction is already in flight, the edits go
     /// after it (they are never dropped).
     public func flush() async {
-        guard !inFlight, saveState != .conflict else {
-            if inFlight, dirty { scheduleFlush(after: .milliseconds(50)) }
+        guard !inFlight, !isDiffing, saveState != .conflict else {
+            if inFlight || isDiffing, dirty { scheduleFlush(after: .milliseconds(50)) }
             return
         }
         let pending: (transaction: BlockTransaction, result: SyncedTree)
@@ -210,7 +266,28 @@ public final class EditorSession {
                 return
             }
             dirty = false
-            let (operations, result) = BlockDiff.operations(from: base, to: blocks)
+            let interval = Signposts.begin("Save diff")
+            let diffed: (operations: [BlockOperation], result: SyncedTree)
+            if blocks.count > Self.diffOffMainAbove {
+                // A huge note (a pasted log): the diff runs off the main thread, so typing
+                // goes on while it is worked out. The baseline must still be the one it
+                // started from when it is done, or it is worked out again.
+                let base = self.base
+                let generation = baseGeneration
+                isDiffing = true
+                diffed = await Task.detached(priority: .userInitiated) { BlockDiff.operations(from: base, to: blocks) }.value
+                isDiffing = false
+                guard generation == baseGeneration else {
+                    Signposts.end("Save diff", interval)
+                    dirty = true
+                    scheduleFlush(after: .milliseconds(50))
+                    return
+                }
+            } else {
+                diffed = BlockDiff.operations(from: base, to: blocks)
+            }
+            Signposts.end("Save diff", interval)
+            let (operations, result) = diffed
             guard !operations.isEmpty else {
                 base = result
                 recovered = nil
