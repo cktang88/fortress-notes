@@ -28,7 +28,8 @@ import Testing
         let results = try await [a, b, c]
         #expect(results.allSatisfy { $0.id == "d1" })
         #expect(SpyProtocol.count("GET", "/api/block-documents/d1") == 1)
-        #expect(api.store.stats.coalesced == 2)
+        // Joined the request in flight (or, on a busy machine, came late and found the cache).
+        #expect(api.store.stats.coalesced + api.store.stats.cacheHits == 2)
 
         // And reading it again right away comes from memory.
         _ = try await api.document(id: "d1")
@@ -114,11 +115,11 @@ import Testing
         SpyProtocol.reset { seen in
             seen.method == "POST"
                 ? .document(SpyJSON.document("d1", revision: 5, title: "New"))
-                : .document(SpyJSON.document("d1", revision: 4, title: "Old"), delay: 0.1)
+                : .document(SpyJSON.document("d1", revision: 4, title: "Old"), delay: 0.5)
         }
         let api = SpyProtocol.client()
         async let slowRead = api.document(id: "d1")
-        try await Task.sleep(for: .milliseconds(20))
+        try await waitUntil { SpyProtocol.seen.count >= 1 }
         _ = try await api.apply(BlockTransaction(baseRevision: 4, operations: []), to: "d1")
         _ = try await slowRead
         #expect(try await api.document(id: "d1").revision == 5)
@@ -129,11 +130,11 @@ import Testing
     @Test func readsAfterAChangeDontJoinReadsFromBeforeIt() async throws {
         SpyProtocol.reset { seen in
             if seen.method == "POST" { return .json(Data(#"{"id":"f1","parent_id":null,"name":"A","position":0}"#.utf8)) }
-            return .json(SpyJSON.navigation([]), delay: 0.1)
+            return .json(SpyJSON.navigation([]), delay: 0.5)
         }
         let api = SpyProtocol.client()
         async let before = api.navigation()
-        try await Task.sleep(for: .milliseconds(20))
+        try await waitUntil { SpyProtocol.seen.count >= 1 }
         _ = try await api.createFolder(name: "A")
         async let after = api.navigation()
         _ = try await [before, after]
@@ -149,7 +150,7 @@ import Testing
         let api = SpyProtocol.client()
         let model = makeModel(api)
         let task = Task { try await api.document(id: "d1") }
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntil { SpyProtocol.seen.count >= 1 }
         task.cancel()
         let result = await task.result
         #expect(throws: (any Error).self) { try result.get() }
@@ -161,11 +162,11 @@ import Testing
 
     /// One of two readers going away doesn't cancel the other's request.
     @Test func cancellingOneReaderKeepsTheSharedRequest() async throws {
-        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 0.15) }
+        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 0.5) }
         let api = SpyProtocol.client()
         let leaving = Task { try await api.document(id: "d1") }
         let staying = Task { try await api.document(id: "d1") }
-        try await Task.sleep(for: .milliseconds(30))
+        try await waitUntil { api.store.stats.coalesced >= 1 && SpyProtocol.seen.count >= 1 }
         leaving.cancel()
         #expect(try await staying.value.id == "d1")
         #expect(SpyProtocol.count("GET", "/api/block-documents/d1") == 1)
@@ -179,12 +180,12 @@ import Testing
         let new = SpyJSON.navigation([.document(SpyJSON.note("n1", title: "New"))])
         let calls = Counter()
         SpyProtocol.reset { _ in
-            calls.next() == 0 ? .json(old, delay: 0.2) : .json(new)
+            calls.next() == 0 ? .json(old, delay: 0.5) : .json(new)
         }
         // Without coalescing both refreshes go out (a mutation in between does the same).
         let model = makeModel(SpyProtocol.client(options: .uncached))
         async let first: Void = model.refreshNavigation()
-        try await Task.sleep(for: .milliseconds(30))
+        try await waitUntil { SpyProtocol.seen.count >= 1 }
         await model.refreshNavigation()
         await first
         #expect(model.navigation.items.first.map { if case .document(let n) = $0 { n.title } else { "" } } == "New")
@@ -194,11 +195,11 @@ import Testing
     /// (holding the tree from before the save) arrived.
     @Test func editDuringARefreshSurvivesIt() async throws {
         let before = SpyJSON.navigation([.document(SpyJSON.note("n1", title: "Before"))])
-        SpyProtocol.reset { _ in .json(before, delay: 0.15) }
+        SpyProtocol.reset { _ in .json(before, delay: 0.5) }
         let model = makeModel(SpyProtocol.client())
         model.navigation = NavigationResponse(items: [.document(SpyJSON.note("n1", title: "Before"))], recent: [])
         async let refresh: Void = model.refreshNavigation()
-        try await Task.sleep(for: .milliseconds(30))
+        try await waitUntil { SpyProtocol.seen.count >= 1 }
         model.noteDidChange(SpyJSON.document("n1", revision: 2, title: "After", updatedAt: "2026-11-18T10:00:00.000000+00:00"))
         await refresh
         #expect(model.openNoteTitle("n1") == "After")
@@ -303,14 +304,14 @@ import Testing
                     "documents": documents.map { try! JSONSerialization.jsonObject(with: SpyJSON.encoded($0)) },
                     "unchanged": [String](), "missing": [String](),
                 ])
-                return .json(body, delay: 0.05)
+                return .json(body, delay: 0.5)
             }
             return .document(SpyJSON.document(String(seen.path.split(separator: "/").last!)))
         }
         let api = SpyProtocol.client()
         let model = makeModel(api)
         let prefetch = Task { await model.prefetch(noteIds: ["n2", "n3"]) }
-        try await Task.sleep(for: .milliseconds(10))
+        try await waitUntil { api.store.isInFlight("GET document n2 @\(api.store.epoch)") }
         let joined = try await api.document(id: "n2")  // while the batch is in flight
         await prefetch.value
         let cached = try await api.document(id: "n3")
@@ -384,7 +385,7 @@ import Testing
         #expect(!model.isConnected)
         #expect(model.notice == nil)
         #expect(model.isReconnecting)
-        for _ in 0..<100 where !model.isConnected { try await Task.sleep(for: .milliseconds(20)) }
+        try await waitUntil { model.isConnected && model.navigation.items.count == 1 }
         #expect(model.isConnected)
         #expect(!model.isReconnecting)
         #expect(model.navigation.items.count == 1)
@@ -435,6 +436,16 @@ final class Counter: Sendable {
         }
     }
     var value: Int { state.withLock { $0 } }
+}
+
+/// Polls until `condition` holds (CI machines are busy: fixed sleeps race), up to 10 s.
+@MainActor
+func waitUntil(_ condition: () -> Bool) async throws {
+    let deadline = ContinuousClock.now + .seconds(10)
+    while !condition() {
+        try #require(ContinuousClock.now < deadline, "timed out waiting")
+        try await Task.sleep(for: .milliseconds(5))
+    }
 }
 
 extension AppModel {

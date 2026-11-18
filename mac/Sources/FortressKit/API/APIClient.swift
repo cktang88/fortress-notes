@@ -75,7 +75,9 @@ public struct APIClient: Sendable {
         if let cached = store.freshDocument(id) { return cached }
         do {
             return try await store.coalesced("GET document \(id) @\(store.epoch)") { [self] in
-                try await fetchDocument(id: id)
+                // A read that finished between the check above and here filled the cache.
+                if let cached = store.freshDocument(id) { return cached }
+                return try await fetchDocument(id: id)
             }
         } catch is PrefetchMiss {
             return try await fetchDocument(id: id)
