@@ -1005,7 +1005,8 @@ final class TableAccessibilityElement: NSAccessibilityElement {
 
     override func accessibilityValue() -> Any? {
         guard let column else { return nil }
-        return MainActor.assumeIsolated { controller?.accessibilityValue(row: row, column: column) }
+        let value: String? = MainActor.assumeIsolated { controller?.accessibilityValue(row: row, column: column) }
+        return value
     }
 
     override func accessibilityPerformPress() -> Bool {

@@ -130,12 +130,12 @@ enum DocumentText {
     static func runs(in text: NSAttributedString, range: NSRange) -> [InlineRun] {
         var runs: [InlineRun] = []
         let string = text.string as NSString
-        text.enumerateAttribute(.fnNode, in: range, options: [.longestEffectiveRange]) { value, segment, _ in
+        text.enumerateAttribute(.fnNode, in: range, options: []) { value, segment, _ in
             if let node = value as? NodeBox {
                 runs.append(.atomic(node.node))
                 return
             }
-            text.enumerateAttribute(.fnMarks, in: segment, options: [.longestEffectiveRange]) { marks, run, _ in
+            text.enumerateAttribute(.fnMarks, in: segment, options: []) { marks, run, _ in
                 var piece = string.substring(with: run)
                 // A stray attachment character (dropped file icon etc.) carries no text.
                 if piece.utf16.contains(where: { $0 == 0xFFFC || $0 == 0x0D }) {

@@ -82,7 +82,7 @@ enum InlineNodes {
         guard range.length > 0 else { return }
         let string = text.string as NSString
         var copies: [(NSRange, NodeBox)] = []
-        text.enumerateAttribute(.fnNode, in: range, options: [.longestEffectiveRange]) { value, run, _ in
+        text.enumerateAttribute(.fnNode, in: range, options: []) { value, run, _ in
             guard let box = value as? NodeBox else { return }
             let paragraph = string.paragraphRange(for: run)
             var whole = NSRange()
