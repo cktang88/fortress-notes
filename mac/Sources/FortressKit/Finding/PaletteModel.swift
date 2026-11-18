@@ -106,7 +106,7 @@ enum FuzzyMatch {
 // MARK: Palette contents
 
 enum PaletteCommand: String, CaseIterable, Sendable {
-    case newNote, newFolder, quickCapture, searchNotes, askNotes, allNotes, trash, backups, toggleInspector, reload
+    case newNote, newFolder, quickCapture, searchNotes, askNotes, allNotes, trash, backups, toggleInspector, reload, importOneNote
 
     var title: String {
         switch self {
@@ -120,6 +120,7 @@ enum PaletteCommand: String, CaseIterable, Sendable {
         case .backups: "Backups"
         case .toggleInspector: "Toggle Inspector"
         case .reload: "Reload Notes"
+        case .importOneNote: "Import from OneNote…"
         }
     }
 
@@ -136,6 +137,7 @@ enum PaletteCommand: String, CaseIterable, Sendable {
         case .backups: ["restore", "snapshot", "back up"]
         case .toggleInspector: ["related", "backlinks", "info", "sidebar"]
         case .reload: ["refresh", "sync"]
+        case .importOneNote: ["onenote", "microsoft", "notebook", "migrate", "export"]
         }
     }
 
@@ -151,6 +153,7 @@ enum PaletteCommand: String, CaseIterable, Sendable {
         case .backups: "clock.arrow.circlepath"
         case .toggleInspector: "sidebar.trailing"
         case .reload: "arrow.clockwise"
+        case .importOneNote: "square.and.arrow.down"
         }
     }
 

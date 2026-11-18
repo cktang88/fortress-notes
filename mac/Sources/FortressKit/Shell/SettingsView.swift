@@ -15,7 +15,7 @@ public struct SettingsView: View {
                     .padding(20)
             }
         }
-        .frame(width: 560, height: 440)
+        .frame(width: 560, height: 520)
     }
 }
 
@@ -83,6 +83,36 @@ struct BackendSettingsView: View {
             } footer: {
                 Text("When nothing answers at launch, Fortress starts the backend from this folder and stops it when you quit.")
                     .foregroundStyle(.secondary)
+            }
+
+            Section {
+                LabeledContent("Converter") {
+                    if let converter = backend.launch?.onenoteConverter {
+                        Text((converter.path as NSString).abbreviatingWithTildeInPath)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                            .help(converter.path)
+                    } else {
+                        Text("Not built")
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                HStack {
+                    Button("Import from OneNote…") { model.showOneNoteImport() }
+                        .disabled(!model.isConnected)
+                }
+            } header: {
+                Text("Importing from OneNote")
+            } footer: {
+                Group {
+                    if backend.launch?.onenoteConverter == nil {
+                        Text("Build the converter once with `cargo build --release` in tools/fortress-onenote; Fortress hands it to the backend it starts.")
+                    } else {
+                        Text("Use File ▸ Import ▸ From OneNote… to bring in exported notebooks. Importing again updates them and keeps your edits.")
+                    }
+                }
+                .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

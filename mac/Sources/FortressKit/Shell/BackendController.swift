@@ -9,6 +9,8 @@ public struct BackendLaunch: Hashable, Sendable {
     public var workingDirectory: URL
     /// PATH for the child: GUI apps start with a bare PATH that lacks Homebrew and ~/.local/bin.
     public var path: String
+    /// The `fortress-onenote` converter, passed to the backend as `FORTRESS_ONENOTE_BIN`.
+    public var onenoteConverter: URL? = nil
 
     /// The folder that holds `app/main.py`: `folder` itself, or its `backend/` subfolder
     /// when `folder` is the repository.
@@ -30,17 +32,37 @@ public struct BackendLaunch: Hashable, Sendable {
         let path = searchPath.joined(separator: ":")
         let serve = ["app.main:app", "--port", String(port)]
 
+        let converter = onenoteConverter(folder: folder, backend: directory, fileExists: fileExists)
         let venv = directory.appending(path: ".venv/bin/uvicorn")
         if fileExists(venv.path) {
-            return BackendLaunch(executable: venv, arguments: serve, workingDirectory: directory, path: path)
+            return BackendLaunch(executable: venv, arguments: serve, workingDirectory: directory, path: path,
+                                 onenoteConverter: converter)
         }
         let uv = searchPath.prefix(4).map { URL(fileURLWithPath: "\($0)/uv") }.first { fileExists($0.path) }
         if let uv {
-            return BackendLaunch(executable: uv, arguments: ["run", "uvicorn"] + serve, workingDirectory: directory, path: path)
+            return BackendLaunch(executable: uv, arguments: ["run", "uvicorn"] + serve, workingDirectory: directory, path: path,
+                                 onenoteConverter: converter)
         }
         return BackendLaunch(
             executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: ["uv", "run", "uvicorn"] + serve,
-            workingDirectory: directory, path: path)
+            workingDirectory: directory, path: path, onenoteConverter: converter)
+    }
+
+    /// Where the converter was built: `tools/fortress-onenote/target/release/fortress-onenote`
+    /// in the repository (the folder, or the parent of its `backend/`), else a copy
+    /// bundled with the app.
+    public static func onenoteConverter(
+        folder: URL, backend: URL? = nil, bundled: URL? = Bundle.main.url(forAuxiliaryExecutable: "fortress-onenote"),
+        fileExists: (String) -> Bool
+    ) -> URL? {
+        var roots = [folder.standardizedFileURL]
+        if let backend { roots.append(backend.standardizedFileURL.deletingLastPathComponent()) }
+        for root in roots {
+            let built = root.appending(path: "tools/fortress-onenote/target/release/fortress-onenote")
+            if fileExists(built.path) { return built }
+        }
+        if let bundled, fileExists(bundled.path) { return bundled }
+        return nil
     }
 
     /// The repository that contains `start` (e.g. the app running from `mac/.build/debug`).
@@ -161,6 +183,9 @@ public final class BackendController {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = launch.path
         environment["PYTHONUNBUFFERED"] = "1"
+        if let converter = launch.onenoteConverter, environment["FORTRESS_ONENOTE_BIN"] == nil {
+            environment["FORTRESS_ONENOTE_BIN"] = converter.path
+        }
         process.environment = environment
         if let log = openLog() {
             process.standardOutput = log

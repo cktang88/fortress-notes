@@ -387,6 +387,33 @@ extension AppModel {
 
     // MARK: Import and export
 
+    /// Opens the OneNote import sheet: a running or finished import shows where it is,
+    /// otherwise step 1 with the selected folder as the destination.
+    public func showOneNoteImport() {
+        let importer = oneNoteImport
+        if case .choosing = importer.phase, importer.file == nil {
+            importer.folderId = if case .folder(let id) = scope { id } else { nil }
+        }
+        importer.onFinished = { [weak self] job in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.refreshNavigation()
+                if !self.isOneNoteImportShown, let result = job.result {
+                    self.toast = Toast(message: OneNoteImport.headline(result))
+                }
+            }
+        }
+        isOneNoteImportShown = true
+    }
+
+    /// "Show in Sidebar" from the import report: selects the notebook's folder.
+    public func revealImportedFolder(_ folderId: String) async {
+        await refreshNavigation()
+        query = ""
+        select(.folder(id: folderId))
+        isOneNoteImportShown = false
+    }
+
     /// Opens the import sheet for these files (folders are searched for Markdown files).
     public func beginImport(_ urls: [URL], into folderId: String?) {
         let files = MarkdownFiles.collect(urls)

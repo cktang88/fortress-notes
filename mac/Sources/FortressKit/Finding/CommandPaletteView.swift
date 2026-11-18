@@ -245,6 +245,8 @@ struct CommandPaletteView: View {
             model.isInspectorShown.toggle()
         case .reload:
             Task { await model.refreshNavigation() }
+        case .importOneNote:
+            model.showOneNoteImport()
         }
     }
 

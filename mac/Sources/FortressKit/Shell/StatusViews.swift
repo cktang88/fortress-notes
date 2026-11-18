@@ -147,6 +147,9 @@ struct ShellPresentations: ViewModifier {
             .sheet(item: $model.pendingImport) { request in
                 ImportSheet(request: request)
             }
+            .sheet(isPresented: $model.isOneNoteImportShown) {
+                OneNoteImportSheet(importer: model.oneNoteImport)
+            }
             .fileImporter(
                 isPresented: $model.isImporterShown,
                 allowedContentTypes: [.markdownText, .plainText, .folder],

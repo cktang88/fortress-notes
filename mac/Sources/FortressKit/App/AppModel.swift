@@ -53,6 +53,10 @@ public final class AppModel {
     public var backups: [Backup] = []
     public var isBackupsShown = false
     public var isImporterShown = false
+    /// The OneNote import sheet (File ▸ Import ▸ From OneNote…) and its import, which keeps
+    /// running when the sheet is closed.
+    public var isOneNoteImportShown = false
+    public let oneNoteImport = OneNoteImporter()
     /// Markdown files waiting for the import sheet, with the folder they go into.
     public var pendingImport: MarkdownImportRequest?
     /// A note's Markdown ready for the save panel.
