@@ -1,0 +1,17 @@
+[package]
+name = "fortress-onenote"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+hex = "0.4.3"
+onenote_parser = { version = "2.1", features = ["onepkg"] }
+percent-encoding = "2.3.2"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+time = { version = "0.3.55", features = ["formatting", "parsing"] }
+typed-path = "0.12"
+zip = { version = "9.7.0", default-features = false, features = ["deflate", "deflate64"] }
