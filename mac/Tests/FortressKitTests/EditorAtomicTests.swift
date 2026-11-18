@@ -160,8 +160,11 @@ private func nodes(_ block: EditorBlock) -> Int { block.runs.filter { $0.node !=
         // Undo while the cell is being edited.
         cell.insertText(" x", replacementRange: cell.selectedRange())
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        window.undoManager?.undo()
-        #expect(live.table.cell(row: 0, column: 0)?.plainText == "R0C0", "undo in the cell: \(window.undoManager?.canUndo ?? false)")
+        let manager = cell.undoManager
+        let canUndo = manager?.canUndo ?? false
+        manager?.undo()
+        #expect(live.table.cell(row: 0, column: 0)?.plainText == "R0C0",
+                "undo in the cell: canUndo \(canUndo), same manager \(manager === window.undoManager), text now \(cell.string)")
         cell.setSelectedRange(NSRange(location: cell.string.utf16.count, length: 0))
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         cell.insertText(" edited", replacementRange: cell.selectedRange())

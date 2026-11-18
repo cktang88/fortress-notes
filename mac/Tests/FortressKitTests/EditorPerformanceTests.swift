@@ -255,6 +255,13 @@ final class PerfEditor {
         var blocks: [EditorBlock] = []
         // Decoding runs off the main thread (EditorSession.decode); timed on its own.
         let decode = milliseconds { blocks = BlockCodec.flatten(document.children, resolved: document.resolvedLinks) }
+        // The app has its window and an editor before a note opens: make one first, so
+        // AppKit's one-time setup (TextKit, fonts) isn't counted as opening this note.
+        let processWarmUp = milliseconds {
+            let empty = PerfEditor(document: LongNote.document(blocks: 3))
+            empty.open()
+        }
+        PerfLog.record("open.processWarmUp(empty editor, once per launch)", processWarmUp)
         var stages: [(String, Double)] = []
         let open = milliseconds {
             stages.append(("makeEditor", milliseconds { editor = PerfEditor(document: document, decoded: blocks) }))
