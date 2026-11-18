@@ -36,7 +36,7 @@ enum RichPage {
         .object([
             "type": .string("tableContent"), "columnWidths": .array([.number(150), .null, .number(110)]), "headerRows": .number(1),
             "rows": .array([
-                .object(["cells": .array([cell("Sample", header), cell("Observation", header), cell("pH", header, ["textAlignment": .string("right")].merging(header) { $1 })])]),
+                .object(["cells": .array([cell("Sample", header), cell("Observation", header), cell("pH", ["textAlignment": .string("right")].merging(header) { $1 })])]),
                 .object(["cells": .array([cell("A · HCl 0.1 M"), cell("Turned pink at 24.6 mL"), cell("8.2", ["textAlignment": .string("right")])])]),
                 .object(["cells": .array([cell("B · CH₃COOH"), cell("Faint pink, fades", styles: ["italic": .bool(true)],
                     blocks: .array([.object(["type": .string("list"), "attrs": .object([:]), "content": .object(["blocknote": .array([run("repeat with fresh indicator")])])])])),
