@@ -97,6 +97,7 @@ _BAD_LINK_SCHEMES = ("javascript:", "vbscript:", "data:")
 # stays plain text and is listed in the block's provenance (``dropped_links``).
 _SAFE_LINK_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps", "sftp", "news", "sms", "geo"})
 MAX_LINK_LENGTH = 2048
+MAX_TAG_LABEL = 100
 # C0/C1 control characters other than tab and newline (OneNote files can carry them;
 # they are invisible there and break Markdown/terminals here).
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff]")
@@ -487,7 +488,11 @@ def _note_tags(block: dict[str, Any]) -> list[str]:
             continue
         if block.get("type") == "check_item" and tag.get("checkable"):
             continue  # it is the checkbox
-        label = str(tag.get("label") or tag.get("shape") or "").strip()
+        # Labels can be empty (third-party writers), padded or very long.
+        label = " ".join(str(tag.get("label") or "").split())[:MAX_TAG_LABEL]
+        if not label:
+            shape = str(tag.get("shape") or "")
+            label = "" if shape in {"", "no_icon"} else shape.replace("_", " ").capitalize()
         if label and label not in labels:
             labels.append(label)
     return labels

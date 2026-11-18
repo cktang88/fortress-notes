@@ -1167,6 +1167,18 @@ class CompareFindingsTests(_Base):
         self.assertNotIn("](file:", visible.lower())
         self.assertNotIn("](data:", visible.lower())
 
+    def test_odd_tag_labels(self) -> None:
+        def tag(label, shape):
+            return {"label": label, "shape": shape, "checkable": False, "completed": False, "completed_at": None,
+                    "highlight_color": None, "text_color": None}
+
+        tree = self.import_blocks([{
+            "type": "paragraph", "indent": 0, "text": "Tagged",
+            "tags": [tag("   ", "yellow_star"), tag("Question ", "question_mark"), tag("", "no_icon"),
+                     tag("x" * 600, "flag")],
+        }])
+        self.assertEqual(tree["children"][0]["attrs"]["onenote_tags"], ["Yellow star", "Question", "x" * 100])
+
     def test_monospace_runs_become_inline_code(self) -> None:
         tree = self.import_blocks([{
             "type": "paragraph", "indent": 0, "text": "run ls -la now",
