@@ -463,6 +463,7 @@ class ImportManifestTests(_Base):
         self.assertEqual(hrefs["child"], f"[[{self.doc_id(P2)}|Child]]")
         self.assertNotIn("elsewhere", hrefs)  # unresolved: kept as text
         self.assertIn("elsewhere", paragraph["text"])
+        self.assertIn(UNKNOWN, paragraph["provenance"]["extra"]["unresolved_links"][0])
         backlinks = block_store.document_backlinks(self.db, self.doc_id(P3))
         self.assertTrue(backlinks)
         # The second run resolves everything in one pass: nothing changes.

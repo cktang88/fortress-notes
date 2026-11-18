@@ -444,7 +444,7 @@ async def start_onenote_import(request: Request):
                         size += len(chunk)
                         if size > MAX_ONENOTE_UPLOAD_BYTES:
                             raise HTTPException(413, "The file is larger than 2 GB.")
-                        handle.write(chunk)
+                        await asyncio.to_thread(handle.write, chunk)
             except BaseException:
                 shutil.rmtree(owned, ignore_errors=True)
                 raise
