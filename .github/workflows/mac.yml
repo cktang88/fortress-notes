@@ -2,7 +2,6 @@ name: macOS app
 
 on:
   push:
-    branches: [main]
     paths: ["mac/**", ".github/workflows/mac.yml"]
   workflow_dispatch:
 

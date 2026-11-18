@@ -6,7 +6,7 @@ import SwiftUI
 /// Writes `<name>.png` to $SNAPSHOT_DIR; does nothing when that isn't set.
 @MainActor
 func snapshot<V: View>(
-    _ view: V, named name: String, size: CGSize = CGSize(width: 1200, height: 760),
+    _ view: V, named name: String, size: CGSize = CGSize(width: 1000, height: 660),
     appearance: NSAppearance.Name = .aqua
 ) throws {
     guard let directory = ProcessInfo.processInfo.environment["SNAPSHOT_DIR"] else { return }
