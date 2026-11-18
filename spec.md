@@ -349,6 +349,8 @@ was created with). Provenance is never part of block text, FTS or embeddings.
              "document_title": "…", "block_id": "…", "at": "…"},
   "extra": {},                   // importer-specific
   // server-maintained on blocks: "source_hash", "conflict", "source_removed", "dismissed_hash";
+  // on notes: "source_removed" + "source_removed_at" (the source no longer has the page;
+  // sources.mark_documents_source_removed, cleared by the next upsert);
   // "backfilled": true marks the migration's guess
 }
 ```
@@ -464,7 +466,8 @@ app bundle), else `PATH`. Converter timeout: `FORTRESS_ONENOTE_TIMEOUT_S`
   `provenance.extra.onenote.title_derived`), `source_path` "Notebook › Section ›
   Page", `source_url` (pasted-from citation), source created/modified (also the
   note's `created_at`/`updated_at`), importer `{name: "fortress-onenote-import",
-  version}`, `extra.onenote: {level, order, parent_page_id, section_path, author}`.
+  version}`, `extra.onenote: {level, order, parent_page_id, section_path, author,
+  notebook_id, section_id}` (the folder source keys the page was imported under).
 - **Subpages** stay in the section folder in OneNote order (right after their
   parent); the parent gets a trailing **Subpages** paragraph with a list of
   `[[id|Title]]` links to its direct subpages. (Folders list before notes in
@@ -488,13 +491,26 @@ app bundle), else `PATH`. Converter timeout: `FORTRESS_ONENOTE_TIMEOUT_S`
 - Marks → runs: bold/italic/underline/strike/superscript/subscript, `color`,
   `highlight`, links; monospace fonts → `code`; inline equations keep OneNote's
   linear text; font sizes are dropped.
-- Block source ids: `<page>/<type>:<hash of the block's content>` (the manifest
-  has no paragraph object ids); duplicates get `#n`. An unchanged block matches
-  wherever it moved; a paragraph edited in OneNote becomes a new block (the old
-  one is removed, or kept and marked `source_removed` if edited in Fortress).
+- Block source ids: `<page>/obj:<object_id>` when the manifest block has a
+  OneNote object id (ExGUID `{GUID}&N`, stable across edits — SCHEMA.md
+  "Object ids"), so a paragraph edited in OneNote updates the **same** Fortress
+  block (id, links, backlinks and history kept; a block edited here keeps the
+  local text and records the source's version as a conflict, §7a). Blocks
+  without one (older manifests, ambiguous content) use `<page>/<type>:<hash of
+  the block's content>` (duplicates get `#n`; a paragraph edited in OneNote then
+  becomes a new block). The hash id is passed as the block's previous id
+  (`SourceBlock.previous_external_ids`, dict key `previous_ids`), so notes
+  imported before object ids existed are matched and re-keyed in place. Block
+  provenance keeps `extra.onenote: {object_id, element_id}` (a table also
+  `nested`: the ids of the blocks in its cells).
 - `onenote:` links → `[[document_id|Title]]` when the target page (by
-  `link_target_id`) is in this export or an earlier import; paragraph-level
-  targets (`object-id`) link to their page (`links.block_links_as_page_links`).
+  `link_target_id`) is in this export or an earlier import. Paragraph links
+  (`object-id={GUID}&N`, manifest `onenote.object_ref`) become block references
+  `(( block_id ))` — the link previews the paragraph's current text and records
+  a backlink — when the target page has a block whose `element_id`/`object_id`
+  (or, for a paragraph inside a table cell, the table's `nested` ids) matches
+  (`links.block_references`); otherwise they link to the page
+  (`links.block_links_as_page_links`).
   Targets created later in the same run are resolved in a second pass (status
   `linking`), so a re-run resolves everything in one pass and stays `unchanged`.
   Unresolved links stay as plain text (the URL is kept in the block's
@@ -505,6 +521,27 @@ app bundle), else `PATH`. Converter timeout: `FORTRESS_ONENOTE_TIMEOUT_S`
   with `Content-Security-Policy: sandbox`.
 - The same page GUID in two different exports is the same note: the later import
   updates it (and moves it to its folder unless moved locally).
+- **Removed in OneNote**: for each notebook in the export, notes imported from
+  it earlier (by `extra.onenote.notebook_id`, or for older imports by their
+  folder chain) whose page is not in the export are **not deleted**: the note's
+  provenance gets `source_removed: true` and `source_removed_at` (first run that
+  missed it), and the notebook's report lists it in `pages_removed_in_source`
+  (every run while it stays missing; `newly_removed` on the first). Importing
+  the page again clears both keys. Section and section-group folders of the
+  notebook that the export no longer has are listed in
+  `sections_removed_in_source` (folders are kept). Pages of sections that failed
+  to read this time are never counted as removed; notebooks not in the export
+  are not looked at.
+- **Images without OneNote OCR text** (png/jpeg/gif/webp) are queued for the
+  app's local caption + OCR (`images.extract_and_store`, one at a time on a
+  background thread, after the import; skipped if the asset already has text)
+  so their text becomes searchable; `images_ocr_queued` counts them.
+- **Text coverage**: per page, the words of the manifest's text (text blocks,
+  table cells, image alt/OCR and ink text; math excluded) are compared with the
+  imported note's blocks (case-folded words weighted by length, as a multiset;
+  importer-added subpage lists excluded). Pages below 98 % are listed in
+  `low_coverage_pages` so nothing is lost silently (a page edited here can show
+  up too).
 
 **Jobs**: `POST /api/import/onenote` takes multipart `file` (`.zip`, `.onepkg`,
 `.one`, `.onetoc2`; streamed to `NOTES_DIR/.fortress-imports/<job_id>-upload/`,
@@ -512,15 +549,27 @@ max 2 GB, 413 above, 415 other types) or JSON `{"path": "/local/file/or/folder"}
 (local server: any readable path; 400 if missing), plus optional `folder_id`
 (404 if unknown), and returns `202 {"job_id", "status": "queued"}`. Jobs run one
 at a time in a background thread; uploads and converter output are deleted
-afterwards, and the final job record is written to
-`NOTES_DIR/.fortress-imports/<job_id>.json` (so `GET` still finds it after a
-restart).
+afterwards. The job record is written to
+`NOTES_DIR/.fortress-imports/<job_id>.json` when queued, on every status
+change, about once a second while it runs, and at the end, so `GET` still finds
+it after a restart. A record a restart left `queued`/`converting`/`importing`/
+`linking` reads as `failed` with `"interrupted": true` and the error "The import
+was interrupted by a restart. Import the export again; pages that were already
+imported are kept and updated in place." (re-running is idempotent; leftover
+upload/work folders are removed).
+
+`POST /api/import/onenote/{job_id}/cancel` → `202` with the record: a queued
+job becomes `cancelled` at once; a running one gets `"cancel_requested": true`,
+stops the converter or stops between pages, then reads `cancelled` with error
+"Import cancelled. Pages imported before cancelling are kept." (pass 2 link
+updates are skipped; import again to finish). `404` unknown job, `409` already
+ended.
 
 ```jsonc
 // GET /api/import/onenote/{job_id}   (GET /api/import/onenote → [job, …] newest first)
 {
   "job_id": "01J…",
-  "status": "queued|converting|importing|linking|done|failed",
+  "status": "queued|converting|importing|linking|done|failed|cancelled",
   "progress": {"pages_total": 120, "pages_done": 37, "current": "Work › Meetings › Standup"},
   "result": null | {
     "notebooks": [{
@@ -528,17 +577,26 @@ restart).
       "pages_created", "pages_updated", "pages_unchanged", "pages_skipped",  // skipped: trashed here or failed
       "images", "files", "tables", "columns_pages",
       "ink", "math", "check_items", "conflicts",                            // extras
+      "images_ocr_queued": 2,
+      "low_coverage_pages": [{"page": "Work › A › Page", "document_id", "coverage": 0.93,
+                              "manifest_chars": 1200, "imported_chars": 1116}],
+      "pages_removed_in_source": [{"document_id", "title", "source_path",
+                                   "source_removed_at", "newly_removed": true}],
+      "sections_removed_in_source": [{"folder_id", "name", "path": "Work › Old",
+                                      "kind": "section|section_group"}],
       "warnings": ["Page title: message", …],
       "failed_sections": [{"path": "Work › Locked", "reason", "hint"}]
     }],
-    "links": {"rewritten": 3, "block_links_as_page_links": 1,
+    "links": {"rewritten": 3, "block_references": 2, "block_links_as_page_links": 1,
               "unresolved": [{"page": "Work › A › Page", "target": "onenote:…", "title": "…"}]},
     "errors_txt": "…",             // OneNote web export's errors.txt, if any
     "input_warnings": [], "skipped_files": [], "pages_total": 120,
     "duration_ms": 5321
   },
   "error": null | "message",
-  "input_name": "Work.zip", "folder_id": null, "created_at": "…", "finished_at": null | "…"
+  "input_name": "Work.zip", "folder_id": null, "created_at": "…", "finished_at": null | "…",
+  "cancel_requested": true,   // only after a cancel request on a running job
+  "interrupted": true          // only on a job a restart cut short
 }
 ```
 

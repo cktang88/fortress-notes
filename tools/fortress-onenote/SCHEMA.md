@@ -21,6 +21,10 @@ importer. Rules for evolving it:
 - A field documented as nullable is always present (as `null`); fields marked
   *(omitted when empty)* may be missing.
 
+Additions without a version bump: converter 0.2.0 added block `object_id` /
+`element_id` and link `onenote.object_ref` (see *Object ids*). Older
+manifests simply lack them.
+
 ## Conventions
 
 | Topic | Rule |
@@ -40,7 +44,7 @@ importer. Rules for evolving it:
 {
   "format": "fortress-onenote-manifest",
   "format_version": 1,
-  "generator": {"name": "fortress-onenote", "version": "0.1.0", "parser": "onenote_parser 2.1"},
+  "generator": {"name": "fortress-onenote", "version": "0.2.0", "parser": "onenote_parser 2.1"},
   "units": {"text_offsets": "code_points", "geometry": "half_inch", "px_per_geometry_unit": 48.0},
   "input": {"kind": "zip|directory|onetoc2|one|onepkg", "name": "<input base name>"},
   "notebooks": [Notebook],
@@ -154,6 +158,8 @@ Common fields on every block:
 | `tags` | [Tag] | *(omitted when empty)* Note tags on this paragraph/object. |
 | `align` | string | *(omitted when left)* `center` or `right`. |
 | `source_url` | string | *(omitted when none)* Source citation of the outline this block belongs to. |
+| `object_id` | string | *(omitted when unknown)* OneNote ExGUID of the content node (rich text, table, image, attachment, ink), `{GUID}&N` (see *Object ids*). Stable across edits of the paragraph: **use it as the block's idempotency key.** Unique within a page. |
+| `element_id` | string | *(omitted when unknown)* ExGUID of the enclosing outline element (the paragraph); this is what paragraph links (`object-id=`) name. |
 
 Text-bearing blocks (`paragraph`, `heading`, `list_item`, `check_item`,
 `quote`) also carry **rich text**: `text` (string, hidden field codes removed,
@@ -201,14 +207,50 @@ the same mark are merged; marks may overlap; sorted by `start`.
 | `color` | `color` (font colour) |
 | `font` | `family` — only when not the default `Calibri` |
 | `font_size` | `pt` — only when not the default 11 pt |
-| `link` | `href` (as stored); `onenote` *(only for OneNote links)*: `{"page_id", "section_id", "object_id", "section_file", "page_title"}` (GUIDs normalised, all nullable); `auto: true` *(omitted when false)* when the URL was found in plain text rather than stored as a link. |
+| `link` | `href` (as stored); `onenote` *(only for OneNote links)*: `{"page_id", "section_id", "object_id", "object_ref", "section_file", "page_title"}` (GUIDs normalised, all nullable; `object_id` is the GUID of `object-id=` alone, `object_ref` the full target `{GUID}&N` when the link carries the counter); `auto: true` *(omitted when false)* when the URL was found in plain text rather than stored as a link. |
 | `math` | inline equation: `latex`, `mathml` *(each omitted when rendering failed)* |
 
 **Rewriting OneNote links**: for a link mark with `onenote.page_id`, look up
 the page whose `link_target_id` equals it (case-insensitive) — in this
 manifest or in earlier imports — and replace the link with an internal
-document link; `object_id` names a paragraph (keep as page link). Unresolved
-links (other notebooks) should keep `href` and be listed in the import report.
+document link. A paragraph link (`object_ref` set) targets the block of that
+page whose `element_id` (else `object_id`) equals `object_ref`; a block inside
+a table cell stands for its table. Fall back to the page link when no block
+matches. Unresolved links (other notebooks) should keep `href` and be listed
+in the import report.
+
+### Object ids
+
+OneNote gives every object an extended GUID: a GUID plus a counter `N`. It is
+the object's identity in the revision store and survives edits (an edit writes
+a new revision of the same object). Paragraph links use it:
+`onenote:…&page-id={P}&object-id={GUID}&3C` names the outline element
+`{GUID}` / `N = 0x3C`. The manifest writes ExGUIDs in that form:
+`{GUID}&N` — upper-case GUID with braces, `&`, `N` in upper-case hexadecimal
+without leading zeros. Compare as strings.
+
+`onenote_parser` 2.1 resolves these ids internally but does not expose them
+on its content types, so the converter reads them from the parser's public
+`Parser::dump_onestore` view (`src/objectids.rs`; the crate version is pinned
+with `=` in `Cargo.toml` because that text format is not a stable API) and
+matches them to the converted content per page:
+
+| field | how it is found |
+|---|---|
+| `object_id` of rich text (paragraph, heading, list/check item, quote, code, math) | the page's `RichTextNode` whose text equals the paragraph text (whitespace-normalised), when exactly one does |
+| `object_id` of a file / image | the `EmbeddedFileNode` / `ImageNode` with that file name / alt text (or file name), else the page's only one |
+| `object_id` of a table | the page's only `TableNode` with that row and column count |
+| `object_id` of ink | the page's only ink container (page-level drawings merged from several ink objects get none) |
+| `element_id` | the `OutlineElementNode` OneNote created with the content: same GUID and last-modified time; within such a group, elements and content nodes pair up in counter order (or by counter `n − 1` when the numbers differ) |
+
+Anything ambiguous (two paragraphs with identical text on a page, a merged
+code block's later lines, the second embed of one picture) gets no id, and an
+id is never given to two blocks of a page. Table cells and items have no ids
+(their blocks do). Sections inside a `.onepkg` are not on disk and get no ids.
+On the public samples about 90 % of text blocks get an `object_id`, and
+the ids are identical across two downloads of the same section. Importers
+must fall back to their own keys (e.g. a content hash) when a block has no
+`object_id`.
 
 ## Reports
 

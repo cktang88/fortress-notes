@@ -163,7 +163,7 @@ Paragraph element: `{"kind":"p","style":"h2|p|cite|code|…","align":"left|cente
 Table: `{"kind":"table","borders":true,"colWidths":[…],"rows":[[{"bg":"#DEEAF6","children":[…]}]]}`. Image: `{"kind":"image","asset":"…","mime":"image/png","w":…,"h":…,"alt":"…","link":"…","printoutPage":3|null}`. File: `{"kind":"file","asset":"…","name":"Contract.pdf","mime":"application/pdf","status":"ok|missing|invalid"}`. Ink: `{"kind":"ink","svgAsset":"…","bbox":[…],"recognized":"…"}`. Math: run with `"math":1` plus `"mathml":"<math…>"` (port one2html's math renderer, MIT).
 
 ### Python side: `backend/app/onenote_import.py` + `POST /api/import/onenote` (upload zip/onepkg; job id; progress via polling)
-**Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, content-hash block ids since the manifest has no paragraph object ids, two-pass link rewrite) and the job API.
+**Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, two-pass link rewrite) and the job API. Update (Nov 2026): blocks are keyed by OneNote object ids (ExGUIDs, stable across edits; `onenote_parser` 2.1 keeps them internal, so the converter reads them from `Parser::dump_onestore` and matches them to content — tools/fortress-onenote/SCHEMA.md "Object ids"), paragraph links become block references, pages deleted in OneNote are marked `source_removed`, jobs persist/cancel, and each page gets a text-coverage check.
 Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff against mapping table) → apply in one transaction per page (existing block transaction machinery) → second pass link rewrite → report.
 
 **Mapping**
@@ -207,7 +207,7 @@ Keep raw geometry in each column's attrs (`onenote_x/y/w`) so we can re-run with
 
 **Idempotent re-import**
 - New table `import_sources(source TEXT, external_id TEXT, kind TEXT /*notebook|group|section|page|block|asset*/, local_id TEXT, content_hash TEXT, source_modified TEXT, imported_at TEXT, PRIMARY KEY(source, external_id))` with `source = 'onenote'`.
-- Keys: notebook/section/group → `file_identity` (stable across rename/move; fall back to path); page → `link_target_id` GUID; paragraphs → hash of (page GUID, outline index, element path) if no object id is exposed.
+- Keys: notebook/section/group → `file_identity` (stable across rename/move; fall back to path); page → `link_target_id` GUID; paragraphs → object id (ExGUID) where the converter can match one, else a content hash.
 - Re-run: page unchanged (same `source_modified` and `content_hash` of the generated block tree) → skip; changed in OneNote and **untouched in Fortress** (document revision == revision recorded at import) → replace blocks; changed on both sides → import as a new revision and keep Fortress edits in history (or create "Title (OneNote update)" and report a conflict). Renamed/moved sections → move folders. Deleted in OneNote → never auto-delete; list in report.
 - Assets content-addressed by sha256 → no duplicate files.
 - Job state persisted (`import_jobs` table: phase, current section/page, counts) so a worker restart resumes from the last committed page. Each page is its own transaction.
