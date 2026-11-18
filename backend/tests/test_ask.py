@@ -169,6 +169,29 @@ class AskYourNotesTests(unittest.TestCase):
         self.assertEqual(ask.grep_blocks("kyoto"), [])
         self.assertTrue(ask.grep_blocks("osaka"))
 
+    def test_grep_ignores_accents_like_search(self) -> None:
+        from app import ask
+
+        self.client.post(
+            "/api/block-documents",
+            json={"title": "Pâtisserie", "body": "The best café crème is at Société Rue."},
+        )
+        self.client.post("/api/block-documents", json={"title": "Kaffee", "body": "Order a cafe latte."})
+        expected = "The best café crème is at Société Rue."
+        # The question's words are folded, so the prefetch finds the accented note...
+        self.assertEqual(ask.key_terms("Where is the cafe creme?"), ["creme", "cafe"])
+        self.assertIn(expected, [row["text"] for row in ask.grep_terms(ask.key_terms("cafe creme"))])
+        # ...and the model's regex matches with or without accents, either way round.
+        self.assertIn(expected, [row["text"] for row in ask.grep_blocks("cafe creme")])
+        self.assertIn(expected, [row["text"] for row in ask.grep_blocks("SOCIETE|nothing")])
+        self.assertIn("Order a cafe latte.", [row["text"] for row in ask.grep_blocks("café latte")])
+        self.assertIn(expected, [row["text"] for row in ask.grep_blocks("p[aâ]tisserie")])
+        # ASCII escapes keep their meaning (folding must not lowercase \D into \d).
+        self.assertEqual(ask.grep_blocks(r"\Dcafe\D\D\D\D\Dcr"), ask.grep_blocks("é cafe cr"))
+        # The passage shown to the model is cut around the folded match.
+        long = ("Filler words about nothing much at all. " * 40) + "Société Rue. " + ("More. " * 200)
+        self.assertIn("Société Rue.", ask._window(long, ["societe"]))
+
     def test_prefetch_greps_exact_names_before_any_model_call(self) -> None:
         miguel = self.client.post(
             "/api/block-documents", json={"title": "Contractors", "body": "Miguel quoted 12k for the deck."}

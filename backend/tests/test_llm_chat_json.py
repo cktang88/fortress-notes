@@ -7,7 +7,7 @@ class ParseJsonObjectTests(unittest.TestCase):
     """The model's reply text is turned into a dict (what Ask's stream parses)."""
 
     def reply(self, content) -> dict:
-        return llm._parse_json_object(content)
+        return llm.parse_json_object(content)
 
     def test_plain_json_object(self) -> None:
         self.assertEqual(self.reply('{"action": "answer"}'), {"action": "answer"})
