@@ -53,8 +53,8 @@ public struct QuickCaptureShortcut: Equatable, @unchecked Sendable {  // plain v
         return flags
     }
 
-    private var eventModifiers: EventModifiers {
-        var flags: EventModifiers = []
+    private var eventModifiers: SwiftUI.EventModifiers {
+        var flags: SwiftUI.EventModifiers = []
         if modifiers.contains(.command) { flags.insert(.command) }
         if modifiers.contains(.shift) { flags.insert(.shift) }
         if modifiers.contains(.option) { flags.insert(.option) }
