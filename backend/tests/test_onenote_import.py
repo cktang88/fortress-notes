@@ -601,7 +601,7 @@ class ImportJobApiTests(_Base):
         job = self.client.get(f"/api/import/onenote/{response.json()['job_id']}").json()
         self.assertEqual(job["status"], "done", job)
         self.assertEqual(job["input_name"], "My Notebook.zip")
-        self.assertEqual(self.converted_inputs[-1].suffix, ".zip")
+        self.assertEqual(self.converted_inputs[-1].name, "My Notebook.zip")
         self.assertFalse(self.converted_inputs[-1].exists())  # the upload is cleaned up
 
         bad_type = self.client.post("/api/import/onenote", files={"file": ("notes.txt", b"x", "text/plain")})

@@ -435,8 +435,10 @@ async def start_onenote_import(request: Request):
                 raise HTTPException(415, "Choose a OneNote export: a .zip, .onepkg or .one file.")
             _check_import_folder(folder_id)
             owned = onenote_import.imports_dir(settings.notes_path) / f"{job_id}-upload"
-            owned.mkdir(parents=True, exist_ok=True)
-            input_path = owned / f"export{suffix}"
+            # The converter names things after the file (a loose .one's section) and
+            # its folder (that section's notebook): keep the user's file name.
+            (owned / "OneNote").mkdir(parents=True, exist_ok=True)
+            input_path = owned / "OneNote" / input_name
             size = 0
             try:
                 with input_path.open("wb") as handle:
