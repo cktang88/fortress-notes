@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Convert exported Microsoft OneNote notebooks into a JSON manifest and asset files for Fortress Notes"
-license = "MIT"
 publish = false
 
 [dependencies]

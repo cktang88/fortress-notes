@@ -1,0 +1,85 @@
+name: OneNote converter
+
+on:
+  push:
+    paths: ["tools/fortress-onenote/**", ".github/workflows/onenote-tool.yml"]
+  pull_request:
+    paths: ["tools/fortress-onenote/**", ".github/workflows/onenote-tool.yml"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tools/fortress-onenote
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          rustc --version
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/fortress-onenote/target
+          key: linux-cargo-${{ hashFiles('tools/fortress-onenote/Cargo.lock') }}
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --locked
+
+  macos-universal:
+    name: Build universal macOS binary
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    defaults:
+      run:
+        working-directory: tools/fortress-onenote
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/fortress-onenote/target
+          key: macos-cargo-${{ hashFiles('tools/fortress-onenote/Cargo.lock') }}
+      - name: Build
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+      - name: Lipo
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/fortress-onenote \
+            target/aarch64-apple-darwin/release/fortress-onenote \
+            target/x86_64-apple-darwin/release/fortress-onenote
+          lipo -info dist/fortress-onenote
+          ./dist/fortress-onenote --version
+          cp README.md SCHEMA.md dist/
+          cp -R LICENSES dist/
+      - name: Test (macOS)
+        run: cargo test --locked --release --target aarch64-apple-darwin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fortress-onenote-macos-universal
+          path: tools/fortress-onenote/dist
+          if-no-files-found: error
