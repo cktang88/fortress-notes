@@ -12,6 +12,8 @@ let package = Package(
         // Models, the API client and every view; the app target is just the entry point.
         .target(name: "FortressKit"),
         .executableTarget(name: "FortressNotes", dependencies: ["FortressKit"]),
-        .testTarget(name: "FortressKitTests", dependencies: ["FortressKit"]),
+        .testTarget(
+            name: "FortressKitTests", dependencies: ["FortressKit"],
+            resources: [.copy("Fixtures")]),
     ]
 )

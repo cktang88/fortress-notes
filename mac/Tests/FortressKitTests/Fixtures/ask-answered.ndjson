@@ -1,0 +1,3 @@
+{"type": "step", "step": {"action": "grep", "detail": "ryokan|hotel"}}
+{"type": "sentence", "sentence": {"text": "You're staying at a ryokan in Gion.", "citations": [{"block_id": "01M7NZXNE1DFCAQMW15HEBDN4H", "document_id": "01M7NZXNDZHSR801AP2K15KMAQ", "document_title": "Kyoto trip", "quote": "ryokan in Gion"}]}}
+{"type": "done", "result": {"status": "answered", "answer": [{"text": "You're staying at a ryokan in Gion.", "citations": [{"block_id": "01M7NZXNE1DFCAQMW15HEBDN4H", "document_id": "01M7NZXNDZHSR801AP2K15KMAQ", "document_title": "Kyoto trip", "quote": "ryokan in Gion"}]}], "sources": [], "steps": [{"action": "grep", "detail": "ryokan|hotel"}], "elapsed_ms": 812}}
