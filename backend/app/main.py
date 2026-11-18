@@ -61,6 +61,7 @@ from .models import (
     AskRequest,
     CaptureRequest,
     SourceConflictResolution,
+    ExternalOcrResult,
 )
 
 def _db() -> Path:
@@ -295,6 +296,65 @@ def ocr_status() -> dict:
     """Background reading of pictures and PDFs: model, queued/done/failed counts."""
 
     return {"enabled": get_settings().vision_enabled, **ocr.status_counts(_db())}
+
+
+def _external_model(model: str) -> str:
+    if not ocr.is_external_model(model):
+        raise HTTPException(400, f"Unknown OCR reader {model!r}")
+    return model
+
+
+@app.get("/api/ocr/pending")
+def ocr_pending(
+    model: str = Query(..., max_length=64), limit: int = Query(8, ge=0, le=100)
+) -> dict:
+    """Pictures and PDFs an external reader (the Mac app's Apple Vision, ``model`` like
+    ``apple-vision/26``) has yet to read, newest first. Asking marks the reader active,
+    so this process's own OCR leaves the backlog to it (app/ocr.py)."""
+
+    model = _external_model(model)
+    ocr.note_external_reader(model)
+    total, rows = ocr.external_pending(_db(), model, limit)
+    return {
+        "model": model,
+        "total": total,
+        "items": [
+            {
+                "content_hash": row["content_hash"],
+                "media_url": f"/media/{quote(row['media_name'])}",
+                "mime_type": row["mime_type"],
+                "attempts": row["attempts"],
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.get("/api/ocr/{content_hash}")
+def ocr_reading(content_hash: str) -> dict:
+    """All the text read from a picture or PDF (the note's info carries only its start)."""
+
+    found = ocr.reading(_db(), content_hash)
+    if found is None:
+        raise HTTPException(404, "No text has been read from that picture yet")
+    return found
+
+
+@app.put("/api/ocr/{content_hash}")
+def ocr_store(content_hash: str, result: ExternalOcrResult) -> dict:
+    """Store an external reader's text for a picture or PDF (by content hash). Its text
+    outranks this process's model and reaches search, ColBERT and Ask the same way."""
+
+    model = _external_model(result.model)
+    ocr.note_external_reader(model)
+    try:
+        return ocr.store_external(
+            _db(), content_hash, model, status=result.status, text=result.text,
+            method=result.method, pages=result.pages, error=result.error,
+            duration_ms=result.duration_ms,
+        )
+    except KeyError:
+        raise HTTPException(404, "No picture or PDF with that content") from None
 
 
 @app.get("/api/block-schema")

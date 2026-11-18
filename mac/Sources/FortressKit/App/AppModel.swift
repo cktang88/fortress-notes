@@ -210,6 +210,8 @@ public final class AppModel {
     /// The open note's blocks as last saved: block id → a version of its text. Set by
     /// `noteDidChange` (via `recordBlockVersions`); "Seen before" caches per block text.
     public internal(set) var savedBlockVersions: [String: Int] = [:]
+    /// Reads the text in pictures and PDFs with Apple Vision (Finding/PictureText).
+    public let pictureText = PictureTextReader()
 
     // MARK: -
 

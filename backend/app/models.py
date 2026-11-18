@@ -185,6 +185,18 @@ class CaptureRequest(BaseModel):
     provenance: dict[str, Any] | None = None
 
 
+class ExternalOcrResult(BaseModel):
+    """The text another reader (the Mac app's Apple Vision) found in a picture or PDF."""
+
+    model: str = Field(min_length=3, max_length=64)  # e.g. "apple-vision/26"
+    status: Literal["done", "failed"] = "done"
+    text: str = Field(default="", max_length=400_000)
+    method: str = Field(default="ocr", max_length=32)  # ocr, pdf-text, pdf-text+ocr
+    pages: int | None = Field(default=None, ge=0, le=100_000)
+    error: str | None = Field(default=None, max_length=2_000)
+    duration_ms: int | None = Field(default=None, ge=0)
+
+
 class SourceConflictResolution(BaseModel):
     # "source": take the source's newer version; "local": keep the local edit.
     keep: Literal["source", "local"]

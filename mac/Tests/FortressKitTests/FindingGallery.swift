@@ -17,6 +17,8 @@ enum FindingFixtures {
     static let japan = "01M7NZXNJAPAN2024SPRING0001"
     static let onsen = "01M7NZXNONSENETIQUETTE00001"
     static let cafes = "01M7NZXNCAFESKYOTO00000001"
+    /// A note of scans and photos whose text was read (Text in pictures).
+    static let scans = "01M7NZXNSCANSRECEIPTS00001"
 
     /// UTF-16 ranges of every case-insensitive occurrence of `word`, like the backend sends.
     static func ranges(of word: String, in text: String) -> [[Int]] {
@@ -133,6 +135,34 @@ enum FindingFixtures {
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
     }
 
+    static var pictures: [[String: Any]] { [
+        ["block_id": "01M7NZXNSCANB1", "media_name": "01M7NZXNSCANIMG1.png", "content_hash": "a1", "mime_type": "image/png",
+         "status": "done", "method": "ocr", "model": "apple-vision/26", "read_at": "2026-11-18T09:12:00+00:00",
+         "text": "Ryokan Gion Hatanaka\nCheck-in 15:00 · Check-out 10:00\n2 guests · 3 nights\nTotal ¥186,000 (tax incl.)",
+         "text_chars": 92],
+        ["block_id": "01M7NZXNSCANB2", "media_name": "01M7NZXNSCANIMG2.jpg", "content_hash": "a2", "mime_type": "image/jpeg",
+         "status": "done", "method": "ocr", "model": "apple-vision/26", "read_at": "2026-11-18T09:12:04+00:00",
+         "text": "Привет из Санкт-Петербурга!\nУвидимся в пятницу — Маша", "text_chars": 52],
+        ["block_id": "01M7NZXNSCANB3", "media_name": "01M7NZXNSCANPDF1.pdf", "content_hash": "a3", "mime_type": "application/pdf",
+         "status": "done", "method": "pdf-text+ocr", "pages": 3, "model": "apple-vision/26", "read_at": "2026-11-18T09:13:00+00:00",
+         "text": "JR Pass exchange order\nName: TANAKA MEI\nValid 14 days from first use\nExchange at any JR ticket office before 2027-02-01.",
+         "text_chars": 1204],
+        ["block_id": "01M7NZXNSCANB4", "media_name": "01M7NZXNSCANIMG3.png", "content_hash": "a4", "mime_type": "image/png",
+         "status": "queued", "model": "rapidocr-ppocrv6-small/1", "text": "", "text_chars": 0],
+    ] }
+
+    /// `/info` for the scans note: three pictures read, one waiting.
+    static var scansInfo: Data {
+        guard let data = try? findingFixture("info-imported.json"),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return Data("{}".utf8) }
+        object["id"] = scans
+        object["title"] = "Receipts and tickets"
+        object["provenance"] = ["source": "paste"]
+        object["blocks_by_source"] = ["paste": 6]
+        object["picture_text"] = pictures
+        return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+    }
+
     static func navigation() -> NavigationResponse {
         (try? JSONDecoder().decode(NavigationResponse.self, from: findingFixture("navigation.json")))
             ?? NavigationResponse(items: [], recent: [])
@@ -174,7 +204,9 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
         if path.hasSuffix("/api/navigation") { return (try? findingFixture("navigation.json")) ?? Data() }
         if path.hasSuffix("/api/unified-search") { return encoded(FindingFixtures.search) }
         if path.hasSuffix("/api/ask") { return FindingFixtures.askStream }
-        if path.hasSuffix("/info") { return FindingFixtures.info }
+        if path.hasSuffix("/info") {
+            return path.contains(FindingFixtures.scans) ? FindingFixtures.scansInfo : FindingFixtures.info
+        }
         if path.hasSuffix("/backlinks") { return encoded(FindingFixtures.backlinks) }
         if path.hasSuffix("/related") {
             let hasBlock = query.contains { $0.name == "block_id" }
@@ -330,6 +362,42 @@ extension GallerySnapshotTests {
                 .environment(model)
                 .tint(.fortressEmber)
                 .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
+    @Test func findingInspectorPictures() async throws {
+        try await both("finding-inspector-pictures", size: CGSize(width: 300, height: 760), seconds: 8) {
+            let model = FindingFixtures.model()
+            model.route = .note(id: FindingFixtures.scans, focusBlockId: nil)
+            return InspectorView()
+                .environment(model)
+                .tint(.fortressEmber)
+                .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
+    @Test func findingPictureTextStates() async throws {
+        try await both("finding-picture-text-states", size: CGSize(width: 300, height: 760)) {
+            let pictures = [
+                PictureText(blockId: "b1", mediaName: "a.png", contentHash: "h1", mimeType: "image/png", status: "queued",
+                            model: "rapidocr-ppocrv6-small/1"),
+                PictureText(blockId: "b2", mediaName: "b.png", contentHash: "h2", mimeType: "image/png", status: "queued",
+                            model: "apple-vision/26", text: "Old reading of a whiteboard"),
+                PictureText(blockId: "b3", mediaName: "c.pdf", contentHash: "h3", mimeType: "application/pdf", status: "failed",
+                            error: "PdfiumError: Failed to load document (PDFium: Incorrect password error)."),
+                PictureText(blockId: "b4", mediaName: "d.png", contentHash: "h4", mimeType: "image/png", status: "done",
+                            method: "ocr", model: "apple-vision/26"),
+                PictureText(blockId: "b5", mediaName: "e.png", contentHash: "h5", mimeType: "image/png", status: "done",
+                            method: "ocr", model: "rapidocr-ppocrv6-small/1",
+                            text: "Shopping list\nmilk\neggs\nbread\ncoffee beans\nbasil\nlemons\nolive oil\nparmesan", textChars: 2400),
+            ]
+            return ScrollView {
+                PictureTextSection(pictures: pictures, reading: ["h2"], remaining: 1204)
+                    .padding(16)
+            }
+            .environment(FindingFixtures.model())
+            .tint(.fortressEmber)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 

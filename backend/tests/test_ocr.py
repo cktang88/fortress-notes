@@ -196,6 +196,115 @@ class QueueAndCacheTests(_Workspace):
         self.assertEqual(set(self.asset_texts().values()), {"worker text"})
 
 
+VISION = "apple-vision/26"
+
+
+class ExternalReaderTests(_Workspace):
+    """The Mac app's Apple Vision results: one precedence rule, and no double work."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        ocr._forget_external_readers()
+        self.addCleanup(ocr._forget_external_readers)
+
+    def cpu_reads(self, text: str) -> int:
+        with patch.object(ocr, "read_asset", return_value=ocr.Result(text, "ocr")):
+            return self.drain()
+
+    def test_vision_text_wins_whichever_reader_finishes_first(self) -> None:
+        _p, first = self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
+        _p, second = self.asset("01JBBBBBBBBBBBBBBBBBBBBBBB.png", b"two", "image/png")
+        # Vision first: the CPU then reads only the other asset.
+        ocr.store_external(self.db, second, VISION, status="done", text="Привет мир")
+        self.assertEqual(self.cpu_reads("Kanmepa koome"), 1)
+        # CPU first, then Vision: Vision's text replaces the CPU's.
+        ocr.store_external(self.db, first, VISION, status="done", text="Καλημέρα κόσμε")
+        texts = self.asset_texts()
+        self.assertEqual(texts["01JAAAAAAAAAAAAAAAAAAAAAAA.png"], "Καλημέρα κόσμε")
+        self.assertEqual(texts["01JBBBBBBBBBBBBBBBBBBBBBBB.png"], "Привет мир")
+        status = ocr.asset_status(self.db, [first, second])
+        self.assertEqual({state["model"] for state in status.values()}, {VISION})
+        self.assertEqual({state["status"] for state in status.values()}, {"done"})
+        # The CPU row of the first asset stays (it would serve again without Vision's).
+        with block_store.connection_scope(self.db) as connection:
+            models = sorted(row[0] for row in connection.execute(
+                "SELECT model FROM ocr_results WHERE content_hash = ?", (first,)))
+        self.assertEqual(models, sorted([ocr.MODEL, VISION]))
+
+    def test_cpu_never_reads_what_vision_read_even_for_a_new_cpu_model(self) -> None:
+        _p, digest = self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
+        ocr.store_external(self.db, digest, VISION, status="done", text="vision text")
+        self.assertEqual(ocr.pending(self.db), [])
+        self.assertEqual(ocr.status_counts(self.db)["queued"], 0)
+        with patch.object(ocr, "MODEL", "next-model/1"):
+            self.assertEqual(ocr.pending(self.db), [])
+        self.assertEqual(self.asset_texts()["01JAAAAAAAAAAAAAAAAAAAAAAA.png"], "vision text")
+
+    def test_a_newer_vision_replaces_the_older_one(self) -> None:
+        _p, digest = self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
+        ocr.store_external(self.db, digest, VISION, status="done", text="old vision")
+        total, rows = ocr.external_pending(self.db, "apple-vision/27", 10)
+        self.assertEqual((total, [row["content_hash"] for row in rows]), (1, [digest]))
+        ocr.store_external(self.db, digest, "apple-vision/27", status="done", text="new vision")
+        self.assertEqual(self.asset_texts()["01JAAAAAAAAAAAAAAAAAAAAAAA.png"], "new vision")
+        with block_store.connection_scope(self.db) as connection:
+            models = [row[0] for row in connection.execute("SELECT model FROM ocr_results")]
+        self.assertEqual(models, ["apple-vision/27"])
+
+    def test_the_vision_queue_includes_what_the_cpu_read_and_shrinks_as_it_reads(self) -> None:
+        _p, a = self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
+        _p, b = self.asset("01JBBBBBBBBBBBBBBBBBBBBBBB.pdf", b"%PDF two", "application/pdf")
+        self.asset("01JCCCCCCCCCCCCCCCCCCCCCCC.mp3", b"audio", "audio/mpeg")
+        self.cpu_reads("cpu text")
+        total, rows = ocr.external_pending(self.db, VISION, 1)
+        self.assertEqual((total, len(rows)), (2, 1))
+        self.assertEqual(rows[0]["media_name"], "01JBBBBBBBBBBBBBBBBBBBBBBB.pdf")  # newest first
+        ocr.store_external(self.db, b, VISION, status="done", text="pdf text", method="pdf-text", pages=2)
+        ocr.store_external(self.db, a, VISION, status="failed", error="Vision could not decode it")
+        self.assertEqual(ocr.external_pending(self.db, VISION, 10), (0, []))
+        status = ocr.asset_status(self.db, [a, b])
+        # Vision gave up on a: the CPU reading still serves it.
+        self.assertEqual((status[a]["status"], status[a]["model"]), ("done", ocr.MODEL))
+        self.assertEqual((status[b]["method"], status[b]["pages"]), ("pdf-text", 2))
+
+    def test_while_vision_is_active_the_cpu_reads_only_what_it_gave_up_on(self) -> None:
+        _p, a = self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
+        _p, b = self.asset("01JBBBBBBBBBBBBBBBBBBBBBBB.png", b"two", "image/png")
+        ocr.note_external_reader(VISION)
+        self.assertEqual(ocr.external_reader(), VISION)
+        self.assertEqual(ocr.pending(self.db, defer=True), [])
+        self.assertEqual(ocr.status_counts(self.db)["external"]["queued"], 2)
+        ocr.store_external(self.db, a, VISION, status="failed", error="unsupported")
+        self.assertEqual([row["content_hash"] for row in ocr.pending(self.db, 10, defer=True)], [a])
+
+        # The worker defers too; once the lease lapses it takes the rest.
+        queue = ocr.OcrQueue()
+        queue.db_path = self.db
+        with patch.object(ocr, "read_asset", return_value=ocr.Result("cpu text", "ocr")):
+            while queue.step() is not None:
+                pass
+            self.assertEqual(self.asset_texts()["01JBBBBBBBBBBBBBBBBBBBBBBB.png"], "")
+            self.assertEqual(self.asset_texts()["01JAAAAAAAAAAAAAAAAAAAAAAA.png"], "cpu text")
+            with patch.object(ocr, "EXTERNAL_LEASE_SECONDS", 0.0):
+                self.assertIsNone(ocr.external_reader())
+                self.assertIsNone(ocr.status_counts(self.db)["external"])
+                while queue.step() is not None:
+                    pass
+        self.assertEqual(self.asset_texts()["01JBBBBBBBBBBBBBBBBBBBBBBB.png"], "cpu text")
+
+    def test_unknown_assets_and_models_are_refused(self) -> None:
+        _p, digest = self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
+        _p, audio = self.asset("01JCCCCCCCCCCCCCCCCCCCCCCC.mp3", b"audio", "audio/mpeg")
+        with self.assertRaises(KeyError):
+            ocr.store_external(self.db, "0" * 64, VISION, status="done", text="x")
+        with self.assertRaises(KeyError):
+            ocr.store_external(self.db, audio, VISION, status="done", text="x")
+        for model in (ocr.MODEL, "apple-vision", "apple-vision/", "tesseract/5", "apple-vision/\n"):
+            with self.assertRaises(ValueError):
+                ocr.store_external(self.db, digest, model, status="done", text="x")
+        self.assertEqual(self.asset_texts()["01JAAAAAAAAAAAAAAAAAAAAAAA.png"], "")
+
+
 class PdfTests(_Workspace):
     def test_text_layer_is_used_and_only_image_pages_are_ocrd(self) -> None:
         from PIL import Image
@@ -366,6 +475,82 @@ class OcrTextIsSearchableTests(unittest.TestCase):
         )
         self.assertEqual(again.status_code, 200)
         self.assertIn("gate B", again.json()["picture_text"][0]["text"])
+
+
+class VisionTextIsSearchableTests(OcrTextIsSearchableTests):
+    """Then the Mac app's Apple Vision reads the same picture better (Cyrillic): its
+    text replaces the CPU model's in search, ColBERT and Ask, through the API."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        ocr._forget_external_readers()
+        self.addCleanup(ocr._forget_external_readers)
+        self.cpu_versions = {b: v for b, _d, v, _t in corpus.embedding_documents(self.db)}
+        pending = self.client.get("/api/ocr/pending", params={"model": VISION}).json()
+        self.assertEqual(pending["total"], 1)
+        [item] = pending["items"]
+        self.assertEqual(item["media_url"], self.url)
+        self.assertEqual(item["mime_type"], "image/png")
+        response = self.client.put(f"/api/ocr/{item['content_hash']}", json={
+            "model": VISION, "text": "Boarding pass\nZeppelin NT flight 7731 to Friedrichshafen\nПосадочный талон",
+            "method": "ocr", "duration_ms": 120,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "done")
+
+    def test_the_cyrillic_only_vision_read_is_searchable_and_reindexed_alone(self) -> None:
+        results = self.client.get("/api/unified-search", params={"q": "посадочный"}).json()
+        self.assertEqual([r["block_id"] for r in results], [self.image_block])
+        after = {b: v for b, _d, v, _t in corpus.embedding_documents(self.db)}
+        self.assertEqual([b for b, v in after.items() if self.cpu_versions.get(b) != v], [self.image_block])
+        from app import ask
+
+        self.assertIn("Посадочный", ask.grep_blocks("посадочн")[0]["asset_text"])
+
+    def test_info_names_the_reader_and_status_shows_it_working(self) -> None:
+        [picture] = self.client.get(f"/api/block-documents/{self.document_id}/info").json()["picture_text"]
+        self.assertEqual((picture["status"], picture["model"]), ("done", VISION))
+        self.assertIn("Посадочный", picture["text"])
+        self.assertEqual(len(picture["content_hash"]), 64)
+        status = self.client.get("/api/ocr").json()
+        self.assertEqual(status["external"], {"model": VISION, "queued": 0, "done": 1, "failed": 0})
+
+    def test_the_whole_text_by_content_hash(self) -> None:
+        digest = hashlib.sha256(b"\x89PNG fake screenshot").hexdigest()
+        reading = self.client.get(f"/api/ocr/{digest}").json()
+        self.assertEqual(reading["model"], VISION)
+        self.assertTrue(reading["text"].endswith("Посадочный талон"))
+        self.assertEqual(self.client.get(f"/api/ocr/{'0' * 64}").status_code, 404)
+
+    def test_bad_requests(self) -> None:
+        digest = hashlib.sha256(b"\x89PNG fake screenshot").hexdigest()
+        self.assertEqual(self.client.put(f"/api/ocr/{'0' * 64}", json={"model": VISION, "text": "x"}).status_code, 404)
+        self.assertEqual(self.client.put(f"/api/ocr/{digest}", json={"model": "tesseract/5", "text": "x"}).status_code, 400)
+        self.assertEqual(self.client.put(f"/api/ocr/{digest}", json={"model": VISION, "status": "running"}).status_code, 422)
+        self.assertEqual(self.client.get("/api/ocr/pending", params={"model": ocr.MODEL}).status_code, 400)
+
+    def test_the_endpoints_need_the_token(self) -> None:
+        from app import auth
+
+        digest = hashlib.sha256(b"\x89PNG fake screenshot").hexdigest()
+        with patch.dict(os.environ, {auth.TOKEN_ENV: "secret-token"}):
+            self.assertEqual(self.client.get("/api/ocr/pending", params={"model": VISION}).status_code, 401)
+            self.assertEqual(self.client.put(f"/api/ocr/{digest}", json={"model": VISION, "text": "x"}).status_code, 401)
+            ok = self.client.get("/api/ocr/pending", params={"model": VISION},
+                                 headers={"X-Fortress-Token": "secret-token"})
+            self.assertEqual(ok.status_code, 200)
+
+    # The inherited CPU-only expectation no longer holds once Vision's text is in.
+    def test_info_shows_the_text_and_status_and_its_etag_changes(self) -> None:
+        response = self.client.get(f"/api/block-documents/{self.document_id}/info")
+        etag = response.headers["etag"]
+        digest = hashlib.sha256(b"\x89PNG fake screenshot").hexdigest()
+        self.client.put(f"/api/ocr/{digest}", json={"model": "apple-vision/27", "text": "gate B"})
+        again = self.client.get(
+            f"/api/block-documents/{self.document_id}/info", headers={"If-None-Match": etag}
+        )
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()["picture_text"][0]["text"], "gate B")
 
 
 class EndToEndTests(unittest.TestCase):

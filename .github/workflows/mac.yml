@@ -67,6 +67,7 @@ jobs:
       - name: Integration tests
         working-directory: mac
         run: |
+          set -o pipefail
           FORTRESS_INTEGRATION_URL=http://127.0.0.1:8000 swift test --filter IntegrationTests 2>&1 | tee "$RUNNER_TEMP/integration.log"
           grep "\[perf\]" "$RUNNER_TEMP/integration.log" >> "$GITHUB_STEP_SUMMARY" || true
       - name: Backend log

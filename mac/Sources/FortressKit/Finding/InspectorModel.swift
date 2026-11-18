@@ -22,6 +22,8 @@ final class InspectorModel {
     /// Set when related notes or backlinks couldn't load (offline): the empty states
     /// mustn't claim there are none.
     private(set) var loadError: String?
+    /// The workspace's background reading of pictures and PDFs (`GET /api/ocr`).
+    private(set) var ocrStatus: OCRStatus?
 
     struct SeenKey: Hashable, Sendable {
         var noteId: String
@@ -168,6 +170,27 @@ final class InspectorModel {
                 entry.revision = revision
                 self.notes.insert(entry, for: noteId)
             }
+        }
+    }
+
+    // MARK: Text in pictures
+
+    /// Reloads Info now (a picture of this note was just read).
+    func reloadInfo(api: APIClient) {
+        guard let noteId else { return }
+        refreshInfo(noteId: noteId, revision: revision, api: api, after: .zero)
+    }
+
+    /// While the inspector is shown: how far the workspace's picture reading is, and the
+    /// open note's pictures while any is still to be read (their reading isn't an edit, so
+    /// nothing else would reload them). Every `busy` while there's work, else every `idle`.
+    func watchPictureReading(api: APIClient, busy: Duration = .seconds(5), idle: Duration = .seconds(30)) async {
+        while !Task.isCancelled {
+            if let status = try? await api.ocrStatus(), status != ocrStatus { ocrStatus = status }
+            if Task.isCancelled { return }
+            if info.isReadingPictures { reloadInfo(api: api) }
+            let working = (ocrStatus?.remaining ?? 0) > 0 || info.isReadingPictures
+            try? await Task.sleep(for: working ? busy : idle)
         }
     }
 

@@ -22,11 +22,21 @@ struct InspectorView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         InfoSection(info: info, provenance: info.provenance)
+                        if !info.pictures.isEmpty {
+                            PictureTextSection(
+                                pictures: info.pictures, reading: model.pictureText.reading,
+                                remaining: readingRemaining,
+                                onShow: { model.open(noteId: noteId ?? "", blockId: $0.blockId) },
+                                onCopy: { PictureText.copy($0, api: model.api) })
+                        }
                         if !seenBefore.isEmpty {
                             seenBeforeSection.transition(.opacity)
                         }
                         relatedSection
                         backlinksSection
+                        if info.pictures.isEmpty, let remaining = readingRemaining, remaining > 0 {
+                            PictureReadingProgress(remaining: remaining)
+                        }
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -49,6 +59,27 @@ struct InspectorView: View {
         .onChange(of: focus, initial: true) { _, focus in
             inspector.focus(blockId: focus.blockId, version: focus.version, api: model.api)
         }
+        .onChange(of: info.isReadingPictures, initial: true) { _, waiting in
+            // A picture of this note is still to be read (just pasted): look for it now.
+            if waiting { model.pictureText.wake() }
+        }
+        .onChange(of: model.pictureText.storedCount) {
+            // This Mac just read a picture: if it is one of this note's, show its text.
+            if let hash = model.pictureText.lastStored, info.pictures.contains(where: { $0.contentHash == hash }) {
+                inspector.reloadInfo(api: model.api)
+            }
+        }
+        .task(id: model.api.baseURL) {
+            guard model.connectsOnAppear else { return }  // previews, snapshots, tests
+            await inspector.watchPictureReading(api: model.api)
+        }
+    }
+
+    /// Pictures and PDFs in the workspace still to be read: this Mac's own count while
+    /// it reads (live), else the backend's.
+    private var readingRemaining: Int? {
+        if model.pictureText.isWorking, let remaining = model.pictureText.remaining { return remaining }
+        return inspector.ocrStatus?.remaining
     }
 
     private struct NoteKey: Equatable {

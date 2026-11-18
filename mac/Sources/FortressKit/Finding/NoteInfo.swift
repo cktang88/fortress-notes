@@ -18,6 +18,8 @@ struct NoteInfo: Hashable, Sendable {
     var blocksBySource: [String: Int] = [:]
     var provenance: NoteProvenance?
     var conflicts = 0
+    /// The note's pictures and PDFs with the text read from them.
+    var pictures: [PictureText] = []
 
     init() {}
 
@@ -34,7 +36,11 @@ struct NoteInfo: Hashable, Sendable {
         blocksBySource = info.blocksBySource ?? [:]
         conflicts = info.conflicts?.count ?? 0
         provenance = info.provenance.map { NoteProvenance($0, sync: info.sync) }
+        pictures = info.pictureText ?? []
     }
+
+    /// Whether a picture is still to be read (the inspector then checks back).
+    var isReadingPictures: Bool { pictures.contains { !$0.isFinished } }
 
     /// What the sidebar tree already knows.
     static func from(navigation: NavigationResponse, documentId: String) -> NoteInfo {
