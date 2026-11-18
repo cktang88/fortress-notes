@@ -55,6 +55,11 @@ public final class EditorSession {
     @ObservationIgnored private var retryDelay: Double = 0
     /// Edits from an earlier visit replayed onto the loaded note (shown, not yet saved).
     @ObservationIgnored private var recovered: [EditorBlock]?
+    /// The blocks of the transaction being sent, and of the last one the server took.
+    /// Saves answer with metadata only, so these (not `document.children`) are the
+    /// note's content as the server holds it.
+    @ObservationIgnored private var sendingBlocks: [EditorBlock]?
+    @ObservationIgnored private var savedBlocks: [EditorBlock]?
     /// Debounce for edits.
     @ObservationIgnored var saveDelay: Duration = .milliseconds(400)
     /// Whether unconfirmed edits are written to disk (off for previews and most tests).
@@ -103,6 +108,7 @@ public final class EditorSession {
         unsent = nil
         dirty = false
         recovered = nil
+        savedBlocks = nil
         if persistsPendingEdits { PendingEdits.remove(documentId: documentId) }
         // From the server: the cached copy is the one that conflicted.
         await load(latest: true)
@@ -118,6 +124,7 @@ public final class EditorSession {
         updatedAt = Timestamp.date(document.updatedAt)
         let blocks = BlockCodec.flatten(document.children, resolved: document.resolvedLinks)
         var shown = blocks
+        savedBlocks = nil
         recovered = nil
         if let pending, !pending.operations.isEmpty {
             // Edits from last time that never reached the server: show them on top of
@@ -143,6 +150,7 @@ public final class EditorSession {
     /// The blocks to show when the editor appears.
     var initialBlocks: [EditorBlock] {
         if let recovered { return recovered }
+        if let savedBlocks { return savedBlocks }
         return document.map { BlockCodec.flatten($0.children, resolved: $0.resolvedLinks) } ?? []
     }
 
@@ -205,6 +213,7 @@ public final class EditorSession {
                 return
             }
             pending = (BlockTransaction(baseRevision: revision, operations: operations), result)
+            sendingBlocks = blocks
         }
         // Durable before it is sent: quitting or losing the connection now loses nothing.
         if persistsPendingEdits {
@@ -220,13 +229,23 @@ public final class EditorSession {
             for waiter in waiters { waiter.resume() }
         }
         do {
-            let document = try await api.apply(pending.transaction, to: documentId)
+            // Metadata only: the editor already has the content.
+            var document = try await api.applyReturningMeta(pending.transaction, to: documentId)
             unsent = nil
             retryDelay = 0
             base = pending.result
             recovered = nil
+            if let sendingBlocks { savedBlocks = sendingBlocks }
             revision = document.revision
+            // Keep the loaded tree; the list's snippet comes from the first saved block.
+            let firstText = savedBlocks?.first { $0.kind.hasInlineText }?.plainText
+            document.children = self.document?.children ?? []
             self.document = document
+            if let firstText {
+                document.children = [BlockNode(id: "", documentId: documentId, parentId: nil, position: 0, type: "paragraph",
+                                               attrs: [:], userAttrs: [:], content: .object([:]), text: firstText,
+                                               createdAt: "", updatedAt: "", children: [])]
+            }
             updatedAt = Timestamp.date(document.updatedAt)
             if document.titleAuto ?? false, titleTask == nil {
                 titleAuto = true
