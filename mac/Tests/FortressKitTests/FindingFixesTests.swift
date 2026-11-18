@@ -151,7 +151,9 @@ import Testing
 
     @Test func disconnectSaysTheAnswerWasCutOff() async {
         let stub = FindingStub { _ in
-            FindingStub.Reply(chunks: [(0.02, PerfData.sentenceLine(0)), (0.05, Data())], failure: .networkConnectionLost)
+            // The drop comes well after the first sentence: on a busy machine, a line and an
+            // error arriving together can reach the client as the error alone.
+            FindingStub.Reply(chunks: [(0.02, PerfData.sentenceLine(0)), (1.0, Data())], failure: .networkConnectionLost)
         }
         let turn = AskTurn(question: "q")
         turn.start(stub.api.ask("q"))
