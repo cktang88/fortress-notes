@@ -6,8 +6,8 @@ year. Their validator is the SHA-256 for content-addressed names (the same
 bytes always have the same ETag), otherwise the file's size and modification
 time. Range requests (seeking in audio and video, resuming big attachments)
 and ``If-None-Match`` / ``If-Modified-Since`` come from Starlette's
-``FileResponse``. Text sidecars (``<id>.txt``, OCR text rewritten as models
-improve) are revalidated instead.
+``FileResponse``. Text sidecars (``<id>.txt``, left by older versions'
+OCR) are revalidated instead.
 """
 
 from __future__ import annotations

@@ -218,7 +218,6 @@ class ApiWorkTests(unittest.TestCase):
             patch.object(assets, "get_settings", lambda: settings),
             patch.object(images, "get_settings", lambda: settings),
             patch.object(search, "get_settings", lambda: settings),
-            patch.object(images, "extract_and_store", lambda _path: None),
         ):
             item.start()
             self.addCleanup(item.stop)
@@ -328,14 +327,14 @@ class ApiWorkTests(unittest.TestCase):
         url = f"/api/block-documents/{mine['id']}/related"
         calls: list[int] = []
 
-        def scores(texts, docs):
+        def scores(docs, *, query=None, texts=None):
             calls.append(1)
-            return {bid: 1.0 for bid, _version, text in docs if "kyoto" in text}
+            return {bid: 1.0 for bid, _version, text in docs if "kyoto" in text}, None
 
         with (
-            patch.object(embeddings, "_get_model", lambda: None),
+            patch.object(embeddings, "_get_model", lambda wait=False: None),
             patch.object(embeddings._cache, "failed", True),
-            patch.object(search.relevance, "related_note_scores", scores),
+            patch.object(search.relevance, "related", scores),
             patch.object(block_store, "document_tree", side_effect=AssertionError("built")),
         ):
             first = self.client.get(url).json()

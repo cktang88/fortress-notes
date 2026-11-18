@@ -229,7 +229,7 @@ and `content.markdown`.
 | `order`, `position` | placement in operations |
 | Markdown | rendered from the canonical blocks on export and for the mirror (§7) |
 | links and backlinks | `docLink`/`blockRef` nodes in `content` (block_refs, document_refs tables) |
-| full-text index | `text` plus OCR/caption text of the images a block shows |
+| full-text index, ColBERT input, Ask corpus | `text` plus the text read from the images and PDFs a block shows (`assets.text`, filled by the OCR queue, `backend/app/ocr.py`; never part of `text` or the visible content; listed per block as `picture_text` in `…/info`) |
 | asset links | `/media/...` URLs in attrs |
 | `revision`, `created_at`, `updated_at` | the transaction that wrote the block |
 | re-import state | the importer (block_sync table, §6) |

@@ -632,7 +632,7 @@ class ProvenanceApiTests(unittest.TestCase):
             set(body),
             {"id", "title", "status", "created_at", "updated_at", "last_opened_at", "revision",
              "folder_id", "folder_path", "provenance", "counts", "blocks_by_source", "can_undo",
-             "can_redo", "sync", "conflicts"},
+             "can_redo", "sync", "conflicts", "picture_text"},
         )
         self.assertEqual(body["counts"]["words"], 2)
         self.assertEqual(self.client.get("/api/block-documents/nope/info").status_code, 404)

@@ -183,6 +183,22 @@ CREATE TABLE IF NOT EXISTS block_assets (
         REFERENCES assets(content_hash, media_name) ON DELETE CASCADE
 );
 
+-- Text read from image/PDF assets (app/ocr.py), one row per content and model;
+-- assets lacking a finished row for the current model are its queue.
+CREATE TABLE IF NOT EXISTS ocr_results (
+    content_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+    text TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL DEFAULT '',
+    pages INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    duration_ms INTEGER,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (content_hash, model)
+);
+
 CREATE TABLE IF NOT EXISTS transaction_receipts (
     transaction_id TEXT PRIMARY KEY,
     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -553,6 +569,16 @@ _CHANGE_TRIGGERS = {
         "AFTER DELETE ON document_history", _bump("OLD.document_id")
     ),
 }
+# A picture's OCR state and text show in the info of every note that contains it.
+for _event, _row in (("insert", "NEW"), ("update", "NEW")):
+    _CHANGE_TRIGGERS[f"ocr_results_changed_{_event}"] = (
+        f"AFTER {_event.upper()} ON ocr_results",
+        _bump(
+            "SELECT blocks.document_id FROM block_assets"
+            " JOIN blocks ON blocks.id = block_assets.block_id"
+            f" WHERE block_assets.content_hash = {_row}.content_hash"
+        ),
+    )
 for _table, _column in (
     ("block_user_attrs", "block_id"),
     ("block_sync", "block_id"),
@@ -669,7 +695,9 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
     """Register older generated media files and migrate their text sidecars.
 
     Only ULID-named upload files with a supported media extension are considered.
-    Existing asset rows and hash sidecars are preserved, making startup retries safe.
+    A ``<id>.txt`` sidecar (written by the OCR before ``ocr.py``) fills an empty
+    row's text until the OCR queue reads the file again. Existing rows are
+    preserved, making startup retries safe.
     """
     initialize(db_path)
     if not assets_path.is_dir():
@@ -738,13 +766,6 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
                     registered_at,
                 ),
             )
-            if text:
-                hash_sidecar = assets_path / f"{content_hash}.txt"
-                if not hash_sidecar.exists() and not hash_sidecar.is_symlink():
-                    try:
-                        hash_sidecar.write_text(text, encoding="utf-8")
-                    except OSError:
-                        pass
             registered += 1
         if changed:
             document_ids = connection.execute("SELECT id FROM documents").fetchall()
@@ -1677,97 +1698,6 @@ def _rebuild_fts(connection: sqlite3.Connection) -> None:
                JOIN documents ON documents.id = blocks.document_id
               WHERE documents.deleted_at IS NULL"""
     )
-
-
-_corpus_cache: dict[Path, tuple[tuple, list[tuple[str, str, str, str]]]] = {}
-
-
-def _corpus_fingerprint(connection: sqlite3.Connection) -> tuple:
-    """Changes whenever any block, document or asset text changes (a few ms).
-
-    Every block edit bumps its document's revision, so the revision total catches
-    edits that the timestamp maxima miss (e.g. another note dated in the future).
-    """
-
-    return tuple(
-        connection.execute(
-            """SELECT (SELECT COUNT(*) FROM blocks),
-                      (SELECT MAX(updated_at) FROM blocks),
-                      (SELECT COUNT(*) FROM documents WHERE deleted_at IS NULL),
-                      (SELECT MAX(updated_at) FROM documents),
-                      -- Every block edit bumps a revision; timestamps alone miss
-                      -- edits when an imported note carries a later timestamp.
-                      (SELECT TOTAL(revision) FROM documents),
-                      (SELECT MAX(text_updated_at) FROM assets),
-                      (SELECT COUNT(*) FROM block_assets)"""
-        ).fetchone()
-    )
-
-
-def embedding_documents(path: Path) -> list[tuple[str, str, str, str]]:
-    """Active blocks as (block_id, document_id, version, text), cached until notes change."""
-
-    initialize(path)
-    key = path.resolve()
-    with connection_scope(path) as connection:
-        fingerprint = _corpus_fingerprint(connection)
-    cached = _corpus_cache.get(key)
-    if cached is not None and cached[0] == fingerprint:
-        return cached[1]
-    corpus = _load_embedding_documents(path)
-    _corpus_cache[key] = (fingerprint, corpus)
-    return corpus
-
-
-def _load_embedding_documents(path: Path) -> list[tuple[str, str, str, str]]:
-    """Return active canonical blocks as embedding inputs.
-
-    The final document ID keeps the compatibility search layer able to fold
-    block scores back into note-shaped responses.
-    """
-
-    initialize(path)
-    with connection_scope(path) as connection:
-        rows = connection.execute(
-            """SELECT blocks.id, blocks.document_id,
-                      blocks.updated_at || '|' || COALESCE((
-                          SELECT group_concat(asset_version.version, '|')
-                            FROM (
-                                SELECT block_assets.media_name || ':' ||
-                                       COALESCE(assets.text_updated_at, '') AS version
-                                  FROM block_assets
-                                  JOIN assets USING (content_hash, media_name)
-                                 WHERE block_assets.block_id = blocks.id
-                                 ORDER BY block_assets.media_name
-                            ) AS asset_version
-                      ), '') AS updated_at,
-                      blocks.text,
-                      (SELECT group_concat(assets.text, char(10))
-                         FROM block_assets
-                         JOIN assets USING (content_hash, media_name)
-                        WHERE block_assets.block_id = blocks.id AND trim(assets.text) <> '')
-                          AS asset_text
-                 FROM blocks
-                 JOIN documents ON documents.id = blocks.document_id
-                WHERE documents.deleted_at IS NULL
-                  AND (trim(blocks.text) <> '' OR EXISTS (
-                      SELECT 1 FROM block_assets
-                      JOIN assets USING (content_hash, media_name)
-                      WHERE block_assets.block_id = blocks.id AND trim(assets.text) <> ''
-                  ))
-                ORDER BY blocks.document_id, blocks.order_key, blocks.id"""
-        ).fetchall()
-    return [
-        (
-            str(row["id"]),
-            str(row["document_id"]),
-            str(row["updated_at"]),
-            "\n\n".join(
-                part for part in (str(row["text"]), row["asset_text"] or "") if part
-            ),
-        )
-        for row in rows
-    ]
 
 
 def ensure_fts_integrity(path: Path) -> bool:

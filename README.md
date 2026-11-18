@@ -35,10 +35,10 @@ notes with a citation for every sentence.
 - **Nested folders** — drag notes and folders into folders or back to All notes.
   Right-click to create items, and double-click a sidebar name to rename it.
 - **Paste & resize images** — paste an image straight into the editor; it's uploaded
-  and inserted instantly, and is drag-resizable. OCR runs once per image in the
-  background so **image text is searchable** by both full-text and embedding search.
-  The small VLM adds local captions, and content-hash caching reuses OCR and captions
-  for duplicate image bytes.
+  and inserted instantly, and is drag-resizable. A background OCR queue (PP-OCRv6 via
+  RapidOCR/ONNX, local) reads every picture and PDF once per content hash, so **text in
+  images and PDFs is searchable** by full-text, ColBERT and Ask; PDFs use their own
+  text layer and only image-only pages are OCR'd.
 
 - **Titles that write themselves** — a new note opens ready for typing and its title
   follows the first line until you choose one; clear the title to hand it back.
@@ -66,14 +66,14 @@ backend  (FastAPI, Python)
         ├── block_store   SQLite documents, blocks, references, FTS5, migrations
         ├── documents     note lifecycle + read-only Markdown mirrors
         ├── search        full-text + ColBERT late-interaction (PyLate)
-        ├── vision        SmolVLM-256M caption + RapidOCR for pasted images
+        ├── ocr           background OCR queue for pictures and PDFs (PP-OCRv6)
         ├── ask           Ask your notes (cited answers)
         └── llm           OpenRouter chat completions
         │
         ▼
    ./notes/.fortress.sqlite3 ← the canonical local store
    ./notes/*.md            ← read-only Markdown mirrors (one per note)
-   ./notes/assets/*.{png,…}  ← pasted images (+ <id>.txt caption/OCR cache)
+   ./notes/assets/*.{png,…}  ← pasted images (OCR text cached in SQLite by content hash)
    ./notes/.fortress-backups ← daily / manual / pre-restore SQLite snapshots
 ```
 
@@ -121,9 +121,8 @@ Backend `.env` (see `backend/.env.example`):
 | `EMBEDDINGS_ENABLED` | `true` | Turn off to skip the ColBERT model |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
 | `REINDEX_INTERVAL_S` | `5` | Background re-encode interval for changed notes |
-| `VISION_ENABLED` | `true` | Image OCR (fast, ~1s/image) — makes image text searchable |
-| `VLM_CAPTION_ENABLED` | `true` | Run local image captioning with OCR |
-| `VLM_MODEL` | `HuggingFaceTB/SmolVLM-256M-Instruct` | Small local VLM used for captions |
+| `VISION_ENABLED` | `true` | Background OCR of pictures and PDFs — makes their text searchable |
+| `OCR_THREADS` | `0` | ONNX Runtime threads for OCR (0 = half the cores, at most 4) |
 | `AUTO_BACKUP_ENABLED` | `true` | Keep a daily SQLite snapshot in `NOTES_DIR/.fortress-backups` |
 
 ## Tech choices (short version)

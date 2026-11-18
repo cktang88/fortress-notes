@@ -27,10 +27,10 @@ class Settings(BaseSettings):
     # background) so "related to this paragraph" skips the model entirely.
     precompute_query_embeddings: bool = True
     reindex_interval_s: float = 5.0
-    vision_enabled: bool = True  # OCR (fast); makes image text searchable
-    # Captions and OCR run locally in the background and reuse cached image text.
-    vlm_caption_enabled: bool = True
-    vlm_model: str = "HuggingFaceTB/SmolVLM-256M-Instruct"
+    # Read the text in pictures and PDFs (app/ocr.py: local, background, cached by
+    # content) so it is searchable. OCR_THREADS 0 = half the cores, at most 4.
+    vision_enabled: bool = True
+    ocr_threads: int = 0
     block_db_import_on_startup: bool = True
     # Keep a daily SQLite snapshot in NOTES_DIR/.fortress-backups (last 7 kept).
     auto_backup_enabled: bool = True
