@@ -94,6 +94,19 @@ pub fn sniff(head: &[u8]) -> Option<(&'static str, &'static str)> {
     }
 }
 
+const ZIP_BASED: &[&str] = &[
+    "xps", "oxps", "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "jar", "apk",
+];
+
+/// Whether an asset name is an image type browsers display natively.
+pub fn is_web_image(asset: &str) -> bool {
+    let ext = asset.rsplit('.').next().unwrap_or("");
+    matches!(
+        ext,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp"
+    )
+}
+
 /// MIME type for a (sanitised) extension.
 pub fn mime_for_ext(ext: &str) -> &'static str {
     match ext {
@@ -194,7 +207,15 @@ impl AssetStore {
             let _ = fs::remove_file(&tmp);
             return Ok(Some(existing.clone()));
         }
-        let sniffed = sniff(&head);
+        let mut sniffed = sniff(&head);
+        // Zip-based formats (XPS, Office documents) sniff as zip; trust the
+        // hint for those.
+        if sniffed.map(|s| s.0) == Some("zip")
+            && let Some(h) = ext_hint
+            && ZIP_BASED.contains(&h)
+        {
+            sniffed = None;
+        }
         let (ext, mime): (String, String) = match (prefer_hint, ext_hint, sniffed) {
             (true, Some(h), _) => (h.to_string(), mime_for_ext(h).to_string()),
             (_, _, Some((e, m))) => (e.to_string(), m.to_string()),

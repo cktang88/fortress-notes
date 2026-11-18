@@ -379,6 +379,9 @@ pub enum Block {
         is_background: bool,
         /// Sanitised original file name, for display only.
         original_name: Option<String>,
+        /// The stored original when `asset` is OneNote's browser-compatible
+        /// fallback picture (e.g. EMF, XPS printout page).
+        original_asset: Option<String>,
     },
     Embed {
         #[serde(flatten)]

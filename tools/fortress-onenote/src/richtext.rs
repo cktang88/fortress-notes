@@ -59,6 +59,8 @@ pub struct RunFmt {
     pub subscript: bool,
     pub hidden: bool,
     pub math: bool,
+    /// Visible display text of a hyperlink field.
+    pub hyperlink: bool,
     pub font: Option<String>,
     /// Points.
     pub size_pt: Option<f32>,
@@ -77,6 +79,7 @@ impl RunFmt {
             subscript: st.subscript(),
             hidden: st.hidden(),
             math: st.math_formatting(),
+            hyperlink: st.hyperlink_protected(),
             font: st.font().map(str::to_string),
             size_pt: st.font_size().map(|s| s as f32 / 2.0),
             color: color_hex(st.font_color()),
@@ -105,6 +108,8 @@ pub struct Converted {
     pub links_web: usize,
     pub links_onenote: usize,
     pub math_count: usize,
+    /// Human-readable notes about lossy conversions.
+    pub notes: Vec<String>,
     /// Math groups as (first run, end run exclusive, cp start, cp end).
     math_groups: Vec<(usize, usize, usize, usize)>,
 }
@@ -186,6 +191,10 @@ fn run_bounds(indices: &[usize], len16: usize) -> Vec<(usize, usize)> {
     out
 }
 
+static FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("\u{FDDF}HYPERLINK\\s+\"([^\"]*)\"").expect("valid field regex")
+});
+
 static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\b(?:https?://|www\.)[^\s<>"]+"#).expect("valid url regex")
 });
@@ -203,6 +212,20 @@ pub fn convert_runs(
     let bounds = run_bounds(indices, utf16.len());
     let fmt_of = |ri: usize| fmts.get(ri).and_then(|f| f.as_ref());
 
+    // Hyperlink field markers (`\u{FDDF}HYPERLINK "url"`) that were not
+    // flagged hidden: hide them and remember the URL for the next run.
+    let mut forced_hidden = vec![false; utf16.len()];
+    let mut field_links: Vec<(usize, String)> = Vec::new(); // (utf16 end, url)
+    for c in FIELD_RE.captures_iter(text) {
+        let m = c.get(0).expect("match");
+        let s16 = text[..m.start()].encode_utf16().count();
+        let e16 = s16 + m.as_str().encode_utf16().count();
+        for h in forced_hidden.iter_mut().take(e16).skip(s16) {
+            *h = true;
+        }
+        field_links.push((e16, c[1].to_string()));
+    }
+
     // Visible chars (with their run) and a UTF-16 index -> visible code point map.
     let mut chars: Vec<(char, usize)> = Vec::new();
     let mut map16 = vec![0usize; utf16.len() + 1];
@@ -219,7 +242,7 @@ pub fn convert_runs(
         }
         // OneNote uses the noncharacters U+FDD0..U+FDEF as structure markers
         // in equations (and U+FDDF for hyperlink fields); never show them.
-        let marker = ('\u{FDD0}'..='\u{FDEF}').contains(&ch);
+        let marker = ('\u{FDD0}'..='\u{FDEF}').contains(&ch) || forced_hidden[pos16];
         if !marker && !fmt_of(ri).map(|f| f.hidden).unwrap_or(false) {
             let ch = match ch {
                 '\u{000B}' | '\r' => '\n',
@@ -346,6 +369,38 @@ pub fn convert_runs(
 
     // Stored hyperlinks.
     let mut link_ranges: Vec<(usize, usize)> = Vec::new();
+    // Field markers the parser did not associate: link the visible display
+    // run that follows the marker.
+    let mut links: Vec<Link16> = links
+        .iter()
+        .map(|l| Link16 {
+            target: l.target.clone(),
+            start: l.start,
+            end: l.end,
+        })
+        .collect();
+    for (end16, url) in field_links {
+        let Some(ri) = bounds.iter().position(|(s, e)| *s <= end16 && end16 < *e) else {
+            continue;
+        };
+        // The display run starts at the marker end (same run) or is the next run.
+        let (start, end) = if end16 > bounds[ri].0 && end16 < bounds[ri].1 {
+            (end16, bounds[ri].1)
+        } else {
+            bounds[ri]
+        };
+        let is_display = fmt_of(ri).map(|f| f.hyperlink && !f.hidden).unwrap_or(false);
+        let covered = links.iter().any(|l| l.start < end && l.end > start);
+        if is_display && !covered && end > start {
+            links.push(Link16 {
+                target: url,
+                start,
+                end,
+            });
+        } else if !covered {
+            out.notes.push(format!("hyperlink field without display text dropped: {url}"));
+        }
+    }
     for link in links {
         let s = map16[link.start.min(utf16.len())];
         let e = map16[link.end.min(utf16.len())];
@@ -644,6 +699,39 @@ mod tests {
             }
         }));
         assert_eq!(c.links_web, 1);
+    }
+
+    #[test]
+    fn unflagged_hyperlink_field_markers_are_hidden_and_linked() {
+        let marker = "\u{fddf}HYPERLINK \"https://x.example/\"";
+        let text = format!("see {marker}here now");
+        let m16 = marker.encode_utf16().count();
+        let fmts = vec![
+            fmt(|_| {}),
+            fmt(|_| {}), // marker run, not flagged hidden
+            fmt(|f| f.hyperlink = true),
+            fmt(|_| {}),
+        ];
+        let c = convert_runs(
+            &text,
+            &[4, 4 + m16, 4 + m16 + 4],
+            &fmts,
+            &[],
+            Options::default(),
+        );
+        assert_eq!(c.rich.text, "see here now");
+        assert_eq!(
+            c.rich.marks,
+            vec![Mark {
+                start: 4,
+                end: 8,
+                kind: MarkKind::Link {
+                    href: "https://x.example/".into(),
+                    onenote: None,
+                    auto: false
+                }
+            }]
+        );
     }
 
     #[test]

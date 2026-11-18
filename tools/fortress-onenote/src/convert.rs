@@ -230,6 +230,9 @@ impl PageCtx<'_, '_> {
             c.links_onenote += conv.links_onenote;
             c.math += conv.math_count;
         }
+        for n in &conv.notes {
+            self.warn(n.clone());
+        }
         let align = match rt.paragraph_alignment() {
             ParagraphAlignment::Center => Some("center".to_string()),
             ParagraphAlignment::Right => Some("right".to_string()),
@@ -356,18 +359,23 @@ impl PageCtx<'_, '_> {
         let status = img.data_status();
         let original = img.image_filename().map(assets::display_name);
         let mut asset = None;
+        let mut original_asset = None;
         if let Some(mut r) = img.read() {
-            let hint = img.extension().and_then(assets::sanitize_ext);
+            let mut hint = img.extension().and_then(assets::sanitize_ext);
+            // Printout pages of XPS documents are stored as XPS (a zip).
+            if img.displayed_page_number().is_some() {
+                hint = Some("xps".into());
+            }
             match self.nb.assets.put_reader(&mut r, hint.as_deref(), false) {
                 Ok(a) => asset = a,
                 Err(e) => self.warn(format!("image could not be written: {e:#}")),
             }
         }
         // Fall back to the browser-compatible picture if the primary is
-        // missing or not something browsers display (EMF/WMF/TIFF).
+        // missing or not something browsers display (EMF/WMF/TIFF/XPS...).
         let needs_web = asset
             .as_ref()
-            .map(|a| a.ends_with(".emf") || a.ends_with(".wmf") || a.ends_with(".tiff"))
+            .map(|a| !assets::is_web_image(a))
             .unwrap_or(true);
         if needs_web
             && let Some(p) = img.web_picture()
@@ -375,6 +383,7 @@ impl PageCtx<'_, '_> {
         {
             let hint = p.extension().and_then(assets::sanitize_ext);
             if let Ok(Some(a)) = self.nb.assets.put_reader(&mut p.read(), hint.as_deref(), false) {
+                original_asset = asset.take();
                 asset = Some(a);
             }
         }
@@ -430,6 +439,7 @@ impl PageCtx<'_, '_> {
             printout_page_number: page_no,
             is_background: img.is_background(),
             original_name: original,
+            original_asset,
         });
     }
 
@@ -1227,7 +1237,7 @@ pub fn convert_notebook(
             }
             let _ = dir;
             Notebook {
-                id: path_id("notebook", rel),
+                id: loose_id(&children, rel),
                 file_identity: None,
                 name: name.clone(),
                 color: None,
@@ -1441,6 +1451,24 @@ fn parse_best_toc(
         (Some(b), _) => Ok(b),
         (None, Some(e)) => Err(e),
         (None, None) => parser.parse_notebook(TypedPath::derive(&typed(toc))),
+    }
+}
+
+/// Id for a set of loose sections: derived from the sections' file
+/// identities (stable across re-exports and moves), else from the path.
+fn loose_id(children: &[Entry], rel: &str) -> String {
+    let mut idents: Vec<&str> = children
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Section(s) => s.file_identity.as_deref(),
+            Entry::SectionGroup(_) => None,
+        })
+        .collect();
+    idents.sort();
+    if idents.is_empty() {
+        path_id("notebook", rel)
+    } else {
+        path_id("loose", &idents.join(","))
     }
 }
 
