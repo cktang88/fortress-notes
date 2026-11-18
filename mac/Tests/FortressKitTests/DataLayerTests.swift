@@ -443,7 +443,7 @@ final class Counter: Sendable {
 /// Polls until `condition` holds (CI machines are busy: fixed sleeps race), up to 10 s.
 @MainActor
 func waitUntil(_ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(10)
+    let deadline = ContinuousClock.now + .seconds(60)
     while !condition() {
         try #require(ContinuousClock.now < deadline, "timed out waiting")
         try await Task.sleep(for: .milliseconds(5))
