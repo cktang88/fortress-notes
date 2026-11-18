@@ -249,11 +249,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         _ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
         range editedRange: NSRange, changeInLength delta: Int
     ) {
+        nonisolated(unsafe) let storage = textStorage
         MainActor.assumeIsolated {
             guard !isNormalizing else { return }
             isNormalizing = true
             defer { isNormalizing = false }
-            normalize(textStorage, editedRange)
+            normalize(storage, editedRange)
         }
     }
 

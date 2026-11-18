@@ -101,11 +101,12 @@ final class BlockAttachment: NSTextAttachment {
 
 final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
     override func loadView() {
+        nonisolated(unsafe) let provider = self
         MainActor.assumeIsolated {
-            guard let attachment = textAttachment as? BlockAttachment else { return }
+            guard let attachment = provider.textAttachment as? BlockAttachment else { return }
             let hosting = NSHostingView(rootView: BlockEmbedView(info: attachment.info, context: attachment.context, width: nil))
             hosting.sizingOptions = []
-            view = hosting
+            provider.view = hosting
         }
     }
 
@@ -113,8 +114,9 @@ final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
         for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
         textContainer: NSTextContainer?, proposedLineFragment: CGRect, position: CGPoint
     ) -> CGRect {
-        MainActor.assumeIsolated {
-            guard let attachment = textAttachment as? BlockAttachment else { return .zero }
+        nonisolated(unsafe) let attachment = textAttachment as? BlockAttachment
+        return MainActor.assumeIsolated {
+            guard let attachment else { return .zero }
             let width = max(40, proposedLineFragment.width - position.x - 2)
             return CGRect(x: 0, y: 0, width: width, height: attachment.height(forWidth: width))
         }
@@ -339,8 +341,11 @@ final class InlineNodeAttachment: NSTextAttachment {
         for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
         textContainer: NSTextContainer?, proposedLineFragment: CGRect, position: CGPoint
     ) -> CGRect {
-        MainActor.assumeIsolated {
-            let attrs = textAttributes(attributes)
+        nonisolated(unsafe) let this = self
+        nonisolated(unsafe) let attributes = attributes
+        return MainActor.assumeIsolated {
+            let attrs = this.textAttributes(attributes)
+            let label = this.label
             let size = (label as NSString).size(withAttributes: attrs)
             let font = attrs[.font] as! NSFont
             return CGRect(x: 0, y: font.descender, width: ceil(size.width) + 2, height: ceil(font.ascender - font.descender))
@@ -348,9 +353,11 @@ final class InlineNodeAttachment: NSTextAttachment {
     }
 
     override func image(for bounds: CGRect, attributes: [NSAttributedString.Key: Any], location: any NSTextLocation, textContainer: NSTextContainer?) -> NSImage? {
-        MainActor.assumeIsolated {
-            let font = textAttributes(attributes)[.font] as! NSFont
-            let label = self.label
+        nonisolated(unsafe) let this = self
+        nonisolated(unsafe) let attributes = attributes
+        return MainActor.assumeIsolated {
+            let font = this.textAttributes(attributes)[.font] as! NSFont
+            let label = this.label
             return NSImage(size: bounds.size, flipped: false) { rect in
                 (label as NSString).draw(at: CGPoint(x: 1, y: -font.descender), withAttributes: [.font: font, .foregroundColor: NSColor.textColor])
                 NSColor.controlAccentColor.withAlphaComponent(0.35).setFill()
