@@ -44,38 +44,4 @@ struct KeystrokeProfile {
                          round, a.median, a.insert, b.median, b.insert))
         }
     }
-
-    @Test func sampleTyping() throws {
-        let editor = PerfEditor(document: LongNote.document())
-        editor.open()
-        editor.settle()
-        let output = FileManager.default.temporaryDirectory.appendingPathComponent("keystroke-sample.txt")
-        try? FileManager.default.removeItem(at: output)
-        let sampler = Process()
-        sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
-        sampler.arguments = [String(getpid()), "6", "1", "-mayDie", "-file", output.path]
-        try sampler.run()
-        // `sample` needs a moment to attach.
-        Thread.sleep(forTimeInterval: 1)
-        let deadline = Date().addingTimeInterval(6)
-        var typed = 0
-        let middle = editor.range(ofBlock: editor.middleParagraph)
-        editor.controller.textView.setSelectedRange(NSRange(location: middle.location + 10, length: 0))
-        while Date() < deadline {
-            editor.controller.textView.insertText(typed % 8 == 7 ? " " : "a",
-                                                 replacementRange: editor.controller.textView.selectedRange())
-            editor.layoutViewport()
-            typed += 1
-        }
-        sampler.waitUntilExit()
-        print("PROFILE typed \(typed) keystrokes in 6 s: \(String(format: "%.2f", 6000 / Double(max(typed, 1)))) ms each")
-        let text = (try? String(contentsOf: output, encoding: .utf8)) ?? "no sample output"
-        // The call graph of the main thread, trimmed, then the top-of-stack summary.
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false).prefix(1200) {
-            print("PROFILE \(line)")
-        }
-        if let summary = text.range(of: "Sort by top of stack") {
-            for line in text[summary.lowerBound...].split(separator: "\n").prefix(80) { print("PROFILE \(line)") }
-        }
-    }
 }

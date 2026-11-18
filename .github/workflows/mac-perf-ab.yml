@@ -1,34 +1,32 @@
-# TEMPORARY (mac-code-audit): A/B of keystroke latency across commits on one runner (run 2).
+# TEMPORARY (mac-code-audit): where keystroke time goes, before (2780045) and now (HEAD),
+# sampled on one runner. Removed before merging.
 name: mac perf A/B
 on:
   push:
     branches: [mac-code-audit]
     paths: [".github/workflows/mac-perf-ab.yml"]
-  workflow_dispatch:
 jobs:
   ab:
     runs-on: macos-26
-    timeout-minutes: 75
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 0 }
-      - name: Build each commit's tests
+      - name: Build both
         run: |
-          for c in 2780045 463d616 origin/main HEAD; do
-            d="$RUNNER_TEMP/ab-$(echo $c | tr '/' '_')"
+          for c in 2780045 HEAD; do
+            d="$RUNNER_TEMP/ab-$c"
             git worktree add --detach "$d" "$c"
-            (cd "$d/mac" && swift build --build-tests 2>&1 | grep -E "error:|Compiling|Build complete" | tail -5) || echo "build failed: $c"
+            cp mac/Tests/FortressKitTests/KeystrokeSample.swift "$d/mac/Tests/FortressKitTests/"
+            (cd "$d/mac" && swift build --build-tests 2>&1 | grep -E "error:|Build complete" | tail -5) || echo "build failed: $c"
           done
-      - name: Profile HEAD
-        working-directory: mac
-        run: KEYSTROKE_PROFILE=1 swift test --skip-build --filter KeystrokeProfile 2>&1 | grep -E "PROFILE|✘|error" | head -1500 || true
-        continue-on-error: true
-      - name: Keystroke latency, interleaved
+      - name: Sample typing
         run: |
-          for round in 1 2 3; do
-            for c in 2780045 463d616 origin/main HEAD; do
-              d="$RUNNER_TEMP/ab-$(echo $c | tr '/' '_')"
-              v=$(cd "$d/mac" && swift test --skip-build --filter "EditorPerformanceTests/keystrokeLatency" 2>&1 | grep -E "PERF keystroke\.(middle|long50k)\.(median|part\.insert\.median)" | tr '\n' ' ')
-              echo "AB round $round $c: $v" | tee -a "$GITHUB_STEP_SUMMARY"
-            done
+          for c in 2780045 HEAD; do
+            out="$RUNNER_TEMP/sample-$c.txt"
+            (cd "$RUNNER_TEMP/ab-$c/mac" && KEYSTROKE_PROFILE=1 KEYSTROKE_SAMPLE_OUT="$out" swift test --skip-build --filter "KeystrokeSample|KeystrokeProfile" 2>&1 | grep -E "PROFILE|✘|error" || true)
+            echo "===== $c: heaviest frames (top of stack)"
+            sed -n '/Sort by top of stack/,$p' "$out" | head -45
+            echo "===== $c: main thread call graph, nodes with >= 150 samples"
+            awk '/Call graph:/{f=1} /Total number in stack/{f=0} f' "$out" | awk '{for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) { if ($i+0 >= 150) print; break }}' | cut -c1-230 | head -400
           done
