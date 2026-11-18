@@ -226,6 +226,99 @@ pub fn extract_zip(zip_path: &Path, dest: &Path, report: &mut InputReport) -> Re
     Ok(())
 }
 
+/// Maximum number of files we are willing to extract from one `.onepkg`.
+const MAX_CAB_ENTRIES: usize = 100_000;
+
+/// Extract a `.onepkg` package (a Microsoft cabinet) into `dest`, with the
+/// same name checks and size limits as zip extraction. Entries that cannot
+/// be read are skipped with a warning (their sections are then reported as
+/// missing), so one damaged entry does not lose the whole package.
+pub fn extract_cab(cab_path: &Path, dest: &Path) -> Result<Vec<String>> {
+    let file = File::open(cab_path).with_context(|| format!("opening {}", cab_path.display()))?;
+    // A corrupt cabinet must never abort the whole conversion, even if the
+    // decompressor panics (vendor/PATCHES.md, C1, fixes the known cases).
+    let cabinet = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cab::Cabinet::new(io::BufReader::new(file))
+    }))
+    .map_err(|_| anyhow::anyhow!("the package is damaged (cabinet reader crashed)"))?
+    .map_err(|e| anyhow::anyhow!("the package is not a readable cabinet file: {e}"))?;
+    let mut cabinet = cabinet;
+    let names: Vec<(String, u64)> = cabinet
+        .folder_entries()
+        .flat_map(|f| f.file_entries())
+        .map(|e| (e.name().to_string(), u64::from(e.uncompressed_size())))
+        .collect();
+    if names.len() > MAX_CAB_ENTRIES {
+        bail!("package has too many entries ({})", names.len());
+    }
+    fs::create_dir_all(dest)?;
+    let mut warnings = Vec::new();
+    let mut total: u64 = 0;
+    for (name, size) in names {
+        let comps = match safe_components(&name) {
+            Ok(c) => c,
+            Err(reason) => {
+                warnings.push(format!(
+                    "unsafe package entry rejected ({reason}): {name:?}"
+                ));
+                continue;
+            }
+        };
+        if comps.iter().any(|c| is_skipped_component(c)) {
+            continue;
+        }
+        if total.saturating_add(size) > MAX_ZIP_TOTAL_BYTES {
+            bail!("package expands to more than {MAX_ZIP_TOTAL_BYTES} bytes");
+        }
+        let rel = comps.join("/");
+        let mut target = dest.to_path_buf();
+        for c in &comps[..comps.len() - 1] {
+            target.push(c);
+        }
+        fs::create_dir_all(&target)?;
+        target.push(&comps[comps.len() - 1]);
+        let mut out = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                warnings.push(format!("duplicate package entry skipped: {rel}"));
+                continue;
+            }
+            Err(e) => return Err(e).with_context(|| format!("creating {}", target.display())),
+        };
+        let copied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut reader = cabinet.read_file(&name)?;
+            io::copy(&mut (&mut reader).take(size.saturating_add(1)), &mut out)
+        }));
+        match copied {
+            Ok(Ok(n)) if n == size => total += n,
+            Ok(Ok(n)) => {
+                warnings.push(format!(
+                    "package entry {rel} is damaged ({n} bytes instead of {size}); skipped"
+                ));
+                drop(out);
+                let _ = fs::remove_file(&target);
+            }
+            Ok(Err(e)) => {
+                warnings.push(format!("package entry {rel} could not be extracted: {e}"));
+                drop(out);
+                let _ = fs::remove_file(&target);
+            }
+            Err(_) => {
+                warnings.push(format!(
+                    "package entry {rel} could not be extracted (decompressor crashed)"
+                ));
+                drop(out);
+                let _ = fs::remove_file(&target);
+            }
+        }
+    }
+    Ok(warnings)
+}
+
 /// A notebook (or notebook-like set of sections) found in the input.
 #[derive(Debug, Clone)]
 pub enum NotebookSource {

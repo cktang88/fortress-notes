@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: C1).
+// Modified by fortress-onenote (vendor/PATCHES.md: C1, C2).
 use std::io::{self, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::slice;
@@ -83,7 +83,7 @@ impl FolderEntry {
     }
 
     /// Returns an iterator over the file entries in this folder.
-    pub fn file_entries(&self) -> FileEntries {
+    pub fn file_entries(&self) -> FileEntries<'_> {
         FileEntries { iter: self.files.iter() }
     }
 }

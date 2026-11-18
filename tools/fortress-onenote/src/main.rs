@@ -147,19 +147,25 @@ pub fn run_conversion(
     let prepared = input::prepare(input, kind, &work, &mut in_report);
     let result = prepared.map(|prepared| {
         let mut notebooks = Vec::new();
-        let mut queue: std::collections::VecDeque<input::NotebookSource> =
-            prepared.notebooks.into_iter().collect();
-        while let Some(src) = queue.pop_front() {
+        let root = convert::InputRoot::new(&prepared.root);
+        let mut queue: std::collections::VecDeque<(input::NotebookSource, convert::InputRoot)> =
+            prepared
+                .notebooks
+                .into_iter()
+                .map(|n| (n, root.clone()))
+                .collect();
+        while let Some((src, src_root)) = queue.pop_front() {
             let mut extra = Vec::new();
             let mut nb =
-                convert::convert_notebook(&src, &prepared.root, &mut store, log, &mut extra);
+                convert::convert_notebook(&src, &src_root, &work, &mut store, log, &mut extra);
             convert::finalize(&mut nb);
             notebooks.push(nb);
             queue.extend(extra);
         }
         notebooks
     });
-    if kind == input::InputKind::Zip && !keep_extracted {
+    // Unpacked zip and .onepkg contents.
+    if !keep_extracted {
         let _ = fs::remove_dir_all(&work);
     }
     let mut notebooks = result?;

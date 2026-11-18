@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: C2).
 use crate::checksum::Checksum;
 use crate::consts;
 use crate::ctype::CompressionType;
@@ -329,7 +330,7 @@ impl<W: Write + Seek> CabinetWriter<W> {
 
     /// Returns a `FileWriter` for the next file within that cabinet that needs
     /// data to be written, or `None` if all files are now complete.
-    pub fn next_file(&mut self) -> io::Result<Option<FileWriter<W>>> {
+    pub fn next_file(&mut self) -> io::Result<Option<FileWriter<'_, W>>> {
         let num_folders = self.builder.folders.len();
         while self.current_folder_index < num_folders {
             if self.next_file_index > 0 {

@@ -17,7 +17,7 @@ use onenote_parser::page::{Page as OnePage, PageContent};
 use onenote_parser::property::common::Color;
 use onenote_parser::property::embedded_file::FileType;
 use onenote_parser::property::rich_text::ParagraphAlignment;
-use onenote_parser::section::{Section as OneSection, SectionEntry};
+use onenote_parser::section::Section as OneSection;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1158,31 +1158,52 @@ fn failed(
 
 // ---- notebooks --------------------------------------------------------------------
 
+/// Where relative paths in the manifest are measured from: a directory on
+/// disk, plus a display prefix (the package's own path for sections that
+/// were extracted from a `.onepkg`).
+#[derive(Clone, Debug)]
+pub struct InputRoot {
+    pub dir: PathBuf,
+    pub prefix: String,
+}
+
+impl InputRoot {
+    pub fn new(dir: &Path) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            prefix: String::new(),
+        }
+    }
+
+    fn rel(&self, p: &Path) -> String {
+        let r = rel_path(p, &self.dir);
+        match (self.prefix.is_empty(), r.is_empty()) {
+            (true, _) => r,
+            (false, true) => self.prefix.clone(),
+            (false, false) => format!("{}/{r}", self.prefix),
+        }
+    }
+}
+
+/// Notebook structure from the tables of contents.
 enum Skel {
     Group {
-        identity: String,
+        identity: Option<String>,
         name: String,
+        dir: PathBuf,
         children: Vec<Skel>,
     },
     Section {
-        identity: String,
+        file: PathBuf,
     },
 }
 
-fn skeleton(entries: &[SectionEntry]) -> Vec<Skel> {
-    entries
-        .iter()
-        .map(|e| match e {
-            SectionEntry::Section(s) => Skel::Section {
-                identity: s.file_identity().to_string(),
-            },
-            SectionEntry::SectionGroup(g) => Skel::Group {
-                identity: g.file_identity().to_string(),
-                name: g.display_name().to_string(),
-                children: skeleton(g.entries()),
-            },
-        })
-        .collect()
+/// A table-of-contents entry that has no file or folder on disk.
+struct MissingEntry {
+    /// Display path of the entry (notebook, groups…, entry name).
+    path: Vec<String>,
+    /// Where the file was expected (for the report).
+    file: PathBuf,
 }
 
 fn rel_path(p: &Path, root: &Path) -> String {
@@ -1194,18 +1215,210 @@ fn rel_path(p: &Path, root: &Path) -> String {
         .join("/")
 }
 
+/// Run third-party parsing code; a panic (damaged input that the parser
+/// does not handle) becomes an error for that one file instead of aborting
+/// the whole conversion.
+fn guard<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|payload| {
+        let msg = payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        Err(format!(
+            "the parser crashed while reading this {what}: {msg}"
+        ))
+    })
+}
+
+fn parse_section_file(
+    parser: &Parser,
+    f: &Path,
+) -> Result<(OneSection, Option<SectionIds>), String> {
+    let section = guard("section", || {
+        parser
+            .parse_section(TypedPath::derive(&typed(f)))
+            .map_err(|e| e.to_string())
+    })?;
+    let ids = guard("section", || Ok(SectionIds::from_file(parser, f))).unwrap_or(None);
+    Ok((section, ids))
+}
+
 /// A section parsed from a file on disk, waiting to be placed in the tree.
 struct Parsed {
     dir: PathBuf,
     section: Section,
 }
 
+/// The child `name` of `dir`: exact match first, else the only entry whose
+/// name matches ignoring case (tables of contents are written on Windows,
+/// whose file names are case-insensitive).
+fn find_child(dir: &Path, name: &str) -> Option<PathBuf> {
+    let exact = dir.join(name);
+    if std::fs::symlink_metadata(&exact)
+        .map(|m| !m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Some(exact);
+    }
+    let lower = name.to_lowercase();
+    let matches: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| !t.is_symlink()).unwrap_or(false))
+        .filter(|e| e.file_name().to_string_lossy().to_lowercase() == lower)
+        .map(|e| e.path())
+        .collect();
+    if matches.len() == 1 {
+        matches.into_iter().next()
+    } else {
+        None
+    }
+}
+
+/// A TOC entry name must be a single path component: entries are untrusted
+/// and must not reach outside the notebook folder.
+fn valid_entry_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':'])
+        && !name.chars().any(char::is_control)
+}
+
+fn tocs_in(dir: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.is_file() && input::ext_lower(p) == "onetoc2")
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+/// Read the table of contents of `dir`. OneDrive downloads sometimes
+/// contain several `.onetoc2` files in a folder (e.g. an empty `.onetoc2`
+/// next to `Open Notebook.onetoc2`); use the one that lists the most
+/// entries. `preferred` is tried first.
+fn read_best_toc(
+    parser: &Parser,
+    dir: &Path,
+    preferred: Option<&Path>,
+) -> Result<onenote_parser::notebook::TableOfContents, String> {
+    let mut candidates = tocs_in(dir);
+    if let Some(p) = preferred
+        && !candidates.iter().any(|c| c == p)
+    {
+        candidates.insert(0, p.to_path_buf());
+    }
+    let mut best: Option<onenote_parser::notebook::TableOfContents> = None;
+    let mut first_err = None;
+    for c in candidates {
+        let r = guard("table of contents", || {
+            parser
+                .parse_toc(TypedPath::derive(&typed(&c)))
+                .map_err(|e| e.to_string())
+        });
+        match r {
+            Ok(t) => {
+                if best
+                    .as_ref()
+                    .map(|b| t.entries().len() > b.entries().len())
+                    .unwrap_or(true)
+                {
+                    best = Some(t);
+                }
+            }
+            Err(e) => {
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+    best.ok_or_else(|| first_err.unwrap_or_else(|| "no table of contents".into()))
+}
+
+/// Build the notebook structure from the table of contents of `dir`, and
+/// recursively from those of its section groups. Entries without a file on
+/// disk are collected in `missing`.
+fn toc_skeleton(
+    parser: &Parser,
+    toc: &onenote_parser::notebook::TableOfContents,
+    dir: &Path,
+    path: &[String],
+    depth: usize,
+    missing: &mut Vec<MissingEntry>,
+    warnings: &mut Vec<String>,
+) -> Vec<Skel> {
+    let mut out = Vec::new();
+    for name in toc.entries() {
+        if name.eq_ignore_ascii_case(input::RECYCLE_BIN) {
+            continue;
+        }
+        if !valid_entry_name(name) {
+            warnings.push(format!(
+                "the table of contents lists an invalid file name {name:?}; ignored"
+            ));
+            continue;
+        }
+        let mut epath = path.to_vec();
+        let Some(p) = find_child(dir, name) else {
+            epath.push(name.trim_end_matches(".one").to_string());
+            missing.push(MissingEntry {
+                path: epath,
+                file: dir.join(name),
+            });
+            continue;
+        };
+        if p.is_dir() {
+            epath.push(name.clone());
+            let (identity, children) = match read_best_toc(parser, &p, None) {
+                Ok(t) if depth < 64 => (
+                    Some(t.file_identity().to_string()),
+                    toc_skeleton(parser, &t, &p, &epath, depth + 1, missing, warnings),
+                ),
+                Ok(t) => (Some(t.file_identity().to_string()), Vec::new()),
+                Err(_) => (None, Vec::new()),
+            };
+            out.push(Skel::Group {
+                identity,
+                name: name.clone(),
+                dir: p,
+                children,
+            });
+        } else if input::ext_lower(&p) == "one" {
+            out.push(Skel::Section { file: p });
+        }
+    }
+    out
+}
+
+fn missing_section(m: &MissingEntry, root: &InputRoot) -> FailedSection {
+    FailedSection {
+        path: m.path.clone(),
+        file: Some(root.rel(&m.file)),
+        reason: "The section is listed in the notebook but its file is missing from the export."
+            .into(),
+        hint: "Open the notebook in OneNote, let it finish syncing, then export it again.".into(),
+        error: format!(
+            "table of contents entry {:?} has no file",
+            m.file
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ),
+    }
+}
+
 pub fn convert_notebook(
     src: &NotebookSource,
-    input_root: &Path,
+    input_root: &InputRoot,
+    work: &Path,
     assets: &mut AssetStore,
     log: &mut dyn FnMut(&str),
-    extra: &mut Vec<NotebookSource>,
+    extra: &mut Vec<(NotebookSource, InputRoot)>,
 ) -> Notebook {
     let mut nb = NotebookCtx {
         assets,
@@ -1215,34 +1428,90 @@ pub fn convert_notebook(
     match src {
         NotebookSource::Package { path, name, rel } => {
             log(&format!("package {rel}"));
-            let mut out = Notebook {
-                id: path_id("notebook", rel),
+            let rel = input_root.rel(path);
+            let empty = |report: NotebookReport| Notebook {
+                id: path_id("notebook", &rel),
                 file_identity: None,
                 name: name.clone(),
                 color: None,
                 source_kind: "onepkg".into(),
                 source_path: rel.clone(),
                 children: Vec::new(),
-                report: NotebookReport::default(),
+                report: finish_report(report),
             };
-            match parser.parse_package(TypedPath::derive(&typed(path))) {
-                Ok(n) => {
-                    let ident = n.file_identity().to_string();
-                    out.id = ident.clone();
-                    out.file_identity = Some(ident);
-                    out.color = color_argb(n.color());
-                    let base = vec![name.clone()];
-                    out.children = package_entries(&mut nb, n.entries(), &base);
-                    absorb_notebook_warnings(&mut nb, n.report().warnings(), &base, None, rel);
+            // Extract the package and convert its contents like a folder,
+            // so that every section that cannot be read (or is missing) is
+            // reported, exactly as for a folder or zip.
+            let dest = work.join(".onepkg").join(&path_id("p", &rel)[2..]);
+            let _ = std::fs::remove_dir_all(&dest);
+            let warnings = match input::extract_cab(path, &dest) {
+                Ok(w) => w,
+                Err(e) => {
+                    nb.report.failed_sections.push(FailedSection {
+                        path: vec![name.clone()],
+                        file: Some(rel.clone()),
+                        reason: "The notebook package could not be opened (damaged or not a .onepkg file).".into(),
+                        hint: "Export the notebook again, or export it from OneNote for the web as a .zip.".into(),
+                        error: format!("{e:#}"),
+                    });
+                    return empty(nb.report);
                 }
-                Err(e) => nb.report.failed_sections.push(failed(
-                    vec![name.clone()],
-                    Some(rel.clone()),
-                    Some(path),
-                    format!("{e}"),
-                )),
+            };
+            let inner_root = InputRoot {
+                dir: dest.clone(),
+                prefix: rel.clone(),
+            };
+            let mut rep = input::InputReport::default();
+            let found = input::discover(&dest, &mut rep);
+            // The package's own notebook: its top-level table of contents,
+            // else (packages written without one) all of its sections.
+            let main = found
+                .iter()
+                .position(|s| matches!(s, NotebookSource::Toc { rel, .. } if rel.is_empty()))
+                .or_else(|| {
+                    found
+                        .iter()
+                        .position(|s| matches!(s, NotebookSource::Toc { .. }))
+                });
+            let inner = match main {
+                Some(i) => found[i].clone(),
+                None => NotebookSource::Loose {
+                    dir: dest.clone(),
+                    sections: input::list_sections(&dest),
+                    name: name.clone(),
+                    rel: String::new(),
+                },
+            };
+            let mut out = convert_notebook(&inner, &inner_root, work, nb.assets, log, extra);
+            if let Some(i) = main {
+                for (j, s) in found.into_iter().enumerate() {
+                    if j != i && !matches!(s, NotebookSource::Package { .. }) {
+                        extra.push((s, inner_root.clone()));
+                    }
+                }
             }
-            out.report = finish_report(nb.report);
+            if main.is_none() {
+                out.report.warnings.push(Warning {
+                    message: "the package has no table of contents (.onetoc2); its sections are listed by file name".into(),
+                    page_id: None,
+                    page_title: None,
+                });
+            }
+            for w in warnings {
+                out.report.warnings.push(Warning {
+                    message: w,
+                    page_id: None,
+                    page_title: None,
+                });
+            }
+            out.report.failed_sections.extend(nb.report.failed_sections);
+            out.report = finish_report(out.report);
+            if out.file_identity.is_none() {
+                out.id = path_id("notebook", &rel);
+            }
+            out.name = name.clone();
+            out.source_kind = "onepkg".into();
+            out.source_path = rel;
             out
         }
         NotebookSource::Loose {
@@ -1258,16 +1527,16 @@ pub fn convert_notebook(
             let base = vec![name.clone()];
             let mut children = Vec::new();
             for f in sections {
-                let frel = rel_path(f, input_root);
-                match parser.parse_section(TypedPath::derive(&typed(f))) {
-                    Ok(s) => children.push(Entry::Section(convert_section(
+                let frel = input_root.rel(f);
+                match parse_section_file(&parser, f) {
+                    Ok((s, ids)) => children.push(Entry::Section(convert_section(
                         &mut nb,
                         &s,
                         &base,
                         None,
                         Some(&frel),
                         false,
-                        SectionIds::from_file(&parser, f),
+                        ids,
                     ))),
                     Err(e) => nb.report.failed_sections.push(failed(
                         {
@@ -1277,7 +1546,7 @@ pub fn convert_notebook(
                         },
                         Some(frel),
                         Some(f),
-                        format!("{e}"),
+                        e,
                     )),
                 }
             }
@@ -1304,37 +1573,41 @@ pub fn convert_notebook(
                 if rel.is_empty() { name } else { rel }
             ));
             let base = vec![name.clone()];
-            // 1. Structure from the table of contents.
-            let (skel, identity, color) = match parse_best_toc(&parser, toc, root) {
-                Ok(n) => {
-                    let s = skeleton(n.entries());
-                    absorb_notebook_warnings(
-                        &mut nb,
-                        n.report().warnings(),
-                        &base,
-                        Some(root),
-                        rel,
-                    );
-                    (Some(s), Some(n.file_identity().to_string()), n.color())
+            // 1. Structure from the tables of contents.
+            let mut missing = Vec::new();
+            let mut toc_warnings = Vec::new();
+            let (skel, identity, color) = match read_best_toc(&parser, root, Some(toc)) {
+                Ok(t) => {
+                    let s =
+                        toc_skeleton(&parser, &t, root, &base, 0, &mut missing, &mut toc_warnings);
+                    (Some(s), Some(t.file_identity().to_string()), t.color())
                 }
                 Err(e) => {
-                    nb.report.warnings.push(Warning {
-                            message: format!(
-                                "table of contents could not be read ({e}); sections are listed by folder"
-                            ),
-                            page_id: None,
-                            page_title: None,
-                        });
+                    toc_warnings.push(format!(
+                        "table of contents could not be read ({e}); sections are listed by folder"
+                    ));
                     (None, None, None)
                 }
             };
+            for message in toc_warnings {
+                nb.report.warnings.push(Warning {
+                    message,
+                    page_id: None,
+                    page_title: None,
+                });
+            }
+            for m in &missing {
+                nb.report
+                    .failed_sections
+                    .push(missing_section(m, input_root));
+            }
             // Sub-folders with their own TOC that the notebook does not list
             // as section groups are separate notebooks (e.g. a notebook
             // folder that also holds other notebooks).
             let mut foreign: Vec<PathBuf> = Vec::new();
             if let Some(s) = skel.as_ref().filter(|s| !s.is_empty()) {
                 let mut group_dirs = Vec::new();
-                skel_group_dirs(s, root, &mut group_dirs);
+                skel_group_dirs(s, &mut group_dirs);
                 input::walk(root, &mut |p, is_dir| {
                     if !is_dir
                         || foreign.iter().any(|f| p.starts_with(f))
@@ -1342,48 +1615,36 @@ pub fn convert_notebook(
                     {
                         return;
                     }
-                    let has_toc = std::fs::read_dir(p)
-                        .map(|rd| {
-                            rd.filter_map(|e| e.ok())
-                                .any(|e| input::ext_lower(&e.path()) == "onetoc2")
-                        })
-                        .unwrap_or(false);
-                    if has_toc {
+                    if !tocs_in(p).is_empty() {
                         foreign.push(p.to_path_buf());
                     }
                 });
             }
             for f in &foreign {
-                let toc = std::fs::read_dir(f)
-                    .ok()
-                    .and_then(|rd| {
-                        let mut v: Vec<PathBuf> = rd
-                            .filter_map(|e| e.ok())
-                            .map(|e| e.path())
-                            .filter(|p| input::ext_lower(p) == "onetoc2")
-                            .collect();
-                        v.sort();
-                        v.into_iter().next()
-                    })
+                let toc = tocs_in(f)
+                    .into_iter()
+                    .next()
                     .unwrap_or_else(|| f.join(".onetoc2"));
-                extra.push(NotebookSource::Toc {
-                    toc,
-                    root: f.clone(),
-                    name: f
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                    rel: rel_path(f, input_root),
-                });
+                extra.push((
+                    NotebookSource::Toc {
+                        toc,
+                        root: f.clone(),
+                        name: f
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        rel: input_root.rel(f),
+                    },
+                    input_root.clone(),
+                ));
             }
             // 2. Parse every section file on disk.
-            let mut parsed: HashMap<String, Vec<Parsed>> = HashMap::new();
-            let mut no_identity: Vec<Parsed> = Vec::new();
+            let mut parsed: HashMap<PathBuf, Parsed> = HashMap::new();
             for f in input::list_sections(root)
                 .into_iter()
                 .filter(|f| !foreign.iter().any(|d| f.starts_with(d)))
             {
-                let frel = rel_path(&f, input_root);
+                let frel = input_root.rel(&f);
                 let dir = f.parent().unwrap_or(root).to_path_buf();
                 let mut parent = base.clone();
                 parent.extend(
@@ -1392,45 +1653,38 @@ pub fn convert_notebook(
                         .components()
                         .map(|c| c.as_os_str().to_string_lossy().into_owned()),
                 );
-                match parser.parse_section(TypedPath::derive(&typed(&f))) {
-                    Ok(s) => {
+                match parse_section_file(&parser, &f) {
+                    Ok((s, ids)) => {
                         let ident = s.file_identity().to_string();
                         let sec = convert_section(
                             &mut nb,
                             &s,
                             &parent,
-                            Some(ident.clone()),
+                            Some(ident),
                             Some(&frel),
                             true,
-                            SectionIds::from_file(&parser, &f),
+                            ids,
                         );
-                        parsed
-                            .entry(ident)
-                            .or_default()
-                            .push(Parsed { dir, section: sec });
+                        parsed.insert(f, Parsed { dir, section: sec });
                     }
                     Err(e) => {
                         let mut p = parent.clone();
                         p.push(file_stem(&f));
-                        nb.report.failed_sections.push(failed(
-                            p,
-                            Some(frel),
-                            Some(&f),
-                            format!("{e}"),
-                        ));
+                        nb.report
+                            .failed_sections
+                            .push(failed(p, Some(frel), Some(&f), e));
                     }
                 }
             }
-            // 3. Assemble.
+            // 3. Assemble: listed entries in TOC order, then the rest by folder.
             let mut children = match &skel {
-                Some(s) => place(s, &mut parsed, root, &base),
+                Some(s) => place(s, &mut parsed, &base),
                 None => Vec::new(),
             };
-            let mut leftovers: Vec<Parsed> = parsed.into_values().flatten().collect();
-            leftovers.append(&mut no_identity);
+            let mut leftovers: Vec<Parsed> = parsed.into_values().collect();
             leftovers.sort_by(|a, b| a.section.path.cmp(&b.section.path));
             for mut p in leftovers {
-                p.section.in_toc = skel.is_none();
+                p.section.in_toc = false;
                 insert_by_dir(&mut children, p, root, &base);
             }
             let nb_ident = identity;
@@ -1448,70 +1702,12 @@ pub fn convert_notebook(
     }
 }
 
-fn skel_group_dirs(skel: &[Skel], dir: &Path, out: &mut Vec<PathBuf>) {
+fn skel_group_dirs(skel: &[Skel], out: &mut Vec<PathBuf>) {
     for s in skel {
-        if let Skel::Group { name, children, .. } = s {
-            let d = dir.join(name);
-            skel_group_dirs(children, &d, out);
-            out.push(d);
+        if let Skel::Group { dir, children, .. } = s {
+            skel_group_dirs(children, out);
+            out.push(dir.clone());
         }
-    }
-}
-
-fn count_skel_entries(entries: &[SectionEntry]) -> usize {
-    entries
-        .iter()
-        .map(|e| match e {
-            SectionEntry::Section(_) => 1,
-            SectionEntry::SectionGroup(g) => 1 + count_skel_entries(g.entries()),
-        })
-        .sum()
-}
-
-/// Parse the notebook TOC. OneDrive downloads sometimes contain several
-/// `.onetoc2` files in the notebook folder (e.g. an empty `.onetoc2` next to
-/// `Open Notebook.onetoc2`); use the one that lists the most entries.
-fn parse_best_toc(
-    parser: &Parser,
-    toc: &Path,
-    root: &Path,
-) -> onenote_parser::errors::Result<onenote_parser::notebook::Notebook> {
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(root)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.is_file() && input::ext_lower(p) == "onetoc2")
-                .collect()
-        })
-        .unwrap_or_default();
-    candidates.sort();
-    if !candidates.iter().any(|c| c == toc) {
-        candidates.insert(0, toc.to_path_buf());
-    }
-    let mut best: Option<onenote_parser::notebook::Notebook> = None;
-    let mut first_err = None;
-    for c in candidates {
-        match parser.parse_notebook(TypedPath::derive(&typed(&c))) {
-            Ok(n) => {
-                let better = best
-                    .as_ref()
-                    .map(|b| count_skel_entries(n.entries()) > count_skel_entries(b.entries()))
-                    .unwrap_or(true);
-                if better {
-                    best = Some(n);
-                }
-            }
-            Err(e) => {
-                if first_err.is_none() {
-                    first_err = Some(e);
-                }
-            }
-        }
-    }
-    match (best, first_err) {
-        (Some(b), _) => Ok(b),
-        (None, Some(e)) => Err(e),
-        (None, None) => parser.parse_notebook(TypedPath::derive(&typed(toc))),
     }
 }
 
@@ -1539,112 +1735,36 @@ fn file_stem(p: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Turn the parser's top-level "failed to import section" warnings into
-/// failed-section entries (for packages; for folders the per-file pass
-/// reports failures itself), keep other warnings.
-fn absorb_notebook_warnings(
-    nb: &mut NotebookCtx,
-    warnings: &[onenote_parser::warn::Warning],
-    base: &[String],
-    disk_root: Option<&Path>,
-    rel: &str,
-) {
-    for w in warnings {
-        let msg = w.message();
-        if let Some(rest) = msg.strip_prefix("failed to import section ") {
-            if disk_root.is_some() {
-                // Reported by the per-file pass.
-                continue;
-            }
-            let (file, err) = rest.split_once(": ").unwrap_or((rest, ""));
-            let name = file.rsplit(['/', '\\']).next().unwrap_or(file);
-            let mut path = base.to_vec();
-            path.push(name.trim_end_matches(".one").to_string());
-            let _ = rel;
-            nb.report.failed_sections.push(failed(
-                path,
-                Some(file.to_string()),
-                None,
-                err.to_string(),
-            ));
-        } else {
-            nb.report.warnings.push(Warning {
-                message: msg.to_string(),
-                page_id: None,
-                page_title: None,
-            });
-        }
-    }
-}
-
-fn package_entries(
-    nb: &mut NotebookCtx,
-    entries: &[SectionEntry],
-    parent: &[String],
-) -> Vec<Entry> {
-    entries
-        .iter()
-        .map(|e| match e {
-            SectionEntry::Section(s) => {
-                // Sections inside a .onepkg are not on disk: no object ids.
-                Entry::Section(convert_section(nb, s, parent, None, None, true, None))
-            }
-            SectionEntry::SectionGroup(g) => {
-                nb.report.counts.section_groups += 1;
-                let mut path = parent.to_vec();
-                path.push(g.display_name().to_string());
-                let ident = g.file_identity().to_string();
-                Entry::SectionGroup(SectionGroup {
-                    id: ident.clone(),
-                    file_identity: Some(ident),
-                    name: g.display_name().to_string(),
-                    children: package_entries(nb, g.entries(), &path),
-                    path,
-                })
-            }
-        })
-        .collect()
-}
-
-fn place(
-    skel: &[Skel],
-    parsed: &mut HashMap<String, Vec<Parsed>>,
-    dir: &Path,
-    parent: &[String],
-) -> Vec<Entry> {
+fn place(skel: &[Skel], parsed: &mut HashMap<PathBuf, Parsed>, parent: &[String]) -> Vec<Entry> {
     let mut out = Vec::new();
     for s in skel {
         match s {
-            Skel::Section { identity } => {
-                let list = parsed.get_mut(identity);
-                if let Some(list) = list
-                    && !list.is_empty()
-                {
-                    // Prefer the file in the expected directory.
-                    let idx = list.iter().position(|p| p.dir == dir).unwrap_or(0);
-                    let p = list.remove(idx);
+            Skel::Section { file } => {
+                if let Some(p) = parsed.remove(file) {
                     out.push(Entry::Section(p.section));
                 }
             }
             Skel::Group {
                 identity,
                 name,
+                dir,
                 children,
             } => {
                 let mut path = parent.to_vec();
                 path.push(name.clone());
-                let gdir = dir.join(name);
                 out.push(Entry::SectionGroup(SectionGroup {
-                    id: identity.clone(),
-                    file_identity: Some(identity.clone()),
+                    id: identity
+                        .clone()
+                        .unwrap_or_else(|| path_id("group", &path.join("/"))),
+                    file_identity: identity.clone(),
                     name: name.clone(),
-                    children: place(children, parsed, &gdir, &path),
+                    children: place(children, parsed, &path),
                     path,
                 }));
+                let _ = dir;
             }
         }
     }
-    parsed.retain(|_, v| !v.is_empty());
     out
 }
 
