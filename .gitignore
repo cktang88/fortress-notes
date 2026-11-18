@@ -15,3 +15,6 @@ notes/.fortress.sqlite3*
 # Swift
 mac/.build/
 mac/snapshots/
+.coverage
+.coverage.*
+htmlcov/
