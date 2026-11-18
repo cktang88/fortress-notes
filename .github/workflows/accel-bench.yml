@@ -26,7 +26,10 @@ jobs:
       - name: Fetch the ColBERT model
         run: .venv/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('lightonai/Agent-ModernColBERT')"
       - name: Bench (CPU, CoreML EP, MPS)
-        run: .venv/bin/python scripts/bench_accel.py all --out "$RUNNER_TEMP/accel" --reps 5 --tag main
+        run: |
+          .venv/bin/python scripts/bench_accel.py all --out "$RUNNER_TEMP/accel" --reps 5 --tag main \
+            --ocr-configs cpu,cpu_allcores,coreml_mlprogram_all,coreml_mlprogram_all+cached,coreml_mlprogram_gpu,coreml_mlprogram_gpu+cached,coreml_mlprogram_ne \
+            --colbert-configs cpu_fp32,cpu_fp32_allcores,mps_fp16
       - name: Bench MLX
         if: success() || failure()
         run: |

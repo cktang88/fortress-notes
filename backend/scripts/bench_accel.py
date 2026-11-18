@@ -127,12 +127,12 @@ def make_images() -> list[tuple[str, object, list[str]]]:
     truth = []
     for i in range(44):
         words = _rng_words(rng, 11)
-        d.text((140, 160 + i * 46), " ".join(words), fill=(20, 20, 20), font=font(30))
+        d.text((140, 160 + i * 46), " ".join(words), fill=(20, 20, 20), font=font(34))
         truth += words
-    img = img.rotate(0.6, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
-    img = img.filter(ImageFilter.GaussianBlur(0.7))
-    noise = Image.effect_noise(img.size, 12).convert("RGB")
-    img = Image.blend(img, noise, 0.06)
+    img = img.rotate(0.4, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
+    img = img.filter(ImageFilter.GaussianBlur(0.4))
+    noise = Image.effect_noise(img.size, 10).convert("RGB")
+    img = Image.blend(img, noise, 0.03)
     images.append(("printout_a4_scan", img, truth))
 
     # 4. Receipt / table with numbers.
@@ -189,6 +189,7 @@ def _recall(text: str, truth: list[str]) -> float:
 
 OCR_CONFIGS = {
     "cpu": None,
+    "cpu_allcores": None,
     "coreml_mlprogram_all": {"ModelFormat": "MLProgram", "MLComputeUnits": "ALL"},
     "coreml_mlprogram_gpu": {"ModelFormat": "MLProgram", "MLComputeUnits": "CPUAndGPU"},
     "coreml_mlprogram_ne": {"ModelFormat": "MLProgram", "MLComputeUnits": "CPUAndNeuralEngine"},
@@ -197,6 +198,8 @@ OCR_CONFIGS = {
         "ModelFormat": "MLProgram", "MLComputeUnits": "ALL", "RequireStaticInputShapes": "1",
     },
 }
+# "<config>+cached": the same configuration in a new process reusing the first one's
+# compiled-model cache (what every app start after the first sees).
 
 
 def _coreml_options(options: dict, cache_dir: str) -> dict:
@@ -293,16 +296,19 @@ def _raw_sessions(options: dict | None, cache_dir: str, threads: int) -> dict:
     return out
 
 
-def run_ocr(config: str, reps: int) -> dict:
+def run_ocr(config: str, reps: int, out_dir: Path) -> dict:
     from app.config import Settings
     from rapidocr import ModelType, OCRVersion, RapidOCR
 
     import numpy as np
     import onnxruntime as ort
 
-    options = OCR_CONFIGS[config]
-    threads = Settings.default_threads(0)
-    cache_dir = tempfile.mkdtemp(prefix="coreml-cache-")
+    base = config.split("+")[0]
+    options = OCR_CONFIGS[base]
+    threads = os.cpu_count() if base == "cpu_allcores" else Settings.default_threads(0)
+    cache_root = (out_dir / "coreml-cache" / base).resolve()
+    cache_root.mkdir(parents=True, exist_ok=True)
+    cache_dir = str(cache_root / "raw")
     result: dict = {"config": config, "threads": threads,
                     "available_providers": ort.get_available_providers()}
     if options is not None and "CoreMLExecutionProvider" not in ort.get_available_providers():
@@ -323,7 +329,7 @@ def run_ocr(config: str, reps: int) -> dict:
     }
     if options is not None:
         params["EngineConfig.onnxruntime.use_coreml"] = True
-        for key, value in _coreml_options(options, tempfile.mkdtemp(prefix="coreml-e2e-")).items():
+        for key, value in _coreml_options(options, str(cache_root / "e2e")).items():
             params[f"EngineConfig.onnxruntime.coreml_ep_cfg.{key}"] = value
     from app import ocr as app_ocr
 
@@ -532,8 +538,13 @@ def _run_mlx(result, precision, paragraphs, para_query, reps, out_dir) -> dict:
     started = time.perf_counter()
     try:
         ref = models.ColBERT(model_name_or_path="lightonai/Agent-ModernColBERT", device="cpu")
-        path = snapshot_download("lightonai/Agent-ModernColBERT")
-        mlx_model, _tok = mlx_load(path)
+        snapshot = Path(snapshot_download("lightonai/Agent-ModernColBERT"))
+        # The transformer alone (mlx-embeddings would also pick up 1_Dense's weights).
+        path = Path(tempfile.mkdtemp(prefix="mlx-modernbert-"))
+        for item in snapshot.iterdir():
+            if item.is_file():
+                (path / item.name).symlink_to(item.resolve())
+        mlx_model, _tok = mlx_load(str(path))
         if mdtype != mx.float32:
             mlx_model.set_dtype(mdtype)
         dense = ref[1].linear
@@ -847,7 +858,7 @@ def main() -> None:
         print("RESULT " + json.dumps(app_probe()))
         return
     if args.command == "ocr":
-        print("RESULT " + json.dumps(run_ocr(args.config, args.reps)))
+        print("RESULT " + json.dumps(run_ocr(args.config, args.reps, out_dir)))
         return
     if args.command == "colbert":
         print("RESULT " + json.dumps(run_colbert(args.config, args.reps, out_dir)))
