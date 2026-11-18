@@ -213,7 +213,7 @@ extension AppModel {
     /// The window title: the open note's title.
     public var windowTitle: String {
         switch route {
-        case .note: openNote.map { NoteListing.displayTitle($0.title) } ?? "Fortress Notes"
+        case .note: NoteListing.displayTitle(openNote?.title ?? "")  // Never the app's name (HIG).
         case .ask: "Ask"
         case .empty: scopeTitle
         }

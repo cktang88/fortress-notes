@@ -269,6 +269,7 @@ final class QuickCapturePanel: NSPanel {
         isMovableByWindowBackground = true
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
+        isExcludedFromWindowsMenu = true
     }
 
     override var canBecomeKey: Bool { true }

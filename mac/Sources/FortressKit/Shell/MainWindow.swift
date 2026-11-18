@@ -269,8 +269,9 @@ struct DetailToolbar: ToolbarContent {
     @Environment(AppModel.self) private var model
 
     var body: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            if model.openNoteId != nil {
+        // The whole group comes and goes (hiding only its contents leaves an empty capsule).
+        if model.openNoteId != nil {
+            ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     Task { await model.exportOpenNote() }
                 } label: {

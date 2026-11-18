@@ -166,6 +166,8 @@ struct CommandPaletteView: View {
             let current = items.firstIndex { $0.id == currentSelection(in: items) } ?? 0
             let next = event.keyCode == KeyCode.down ? min(current + 1, items.count - 1) : max(current - 1, 0)
             selectedID = items[next].id
+            // The field keeps focus, so tell VoiceOver which row is highlighted.
+            AccessibilityNotification.Announcement(items[next].title).post()
             return true
         case KeyCode.returnKey, KeyCode.keypadEnter:
             if modifiers == .command {
@@ -310,6 +312,8 @@ private struct PaletteRow: View {
         .padding(.horizontal, 10)
         .frame(height: CommandPaletteView.rowHeight)
         .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(isSelected ? AnyShapeStyle(.primary.opacity(0.08)) : AnyShapeStyle(.clear)))
