@@ -1449,8 +1449,31 @@ function applyLinkCheckMarkers(
   return () => observer.disconnect();
 }
 
+/**
+ * Stored content in a form this editor can load: runs may carry styles BlockNote
+ * lacks (superscript/subscript from imports), and table cells may hold nested
+ * blocks it cannot show. Both are left out of the editor's copy only; the server
+ * keeps a table's nested cell blocks when an edit leaves the table's shape alone.
+ */
+export function editorSafeContent(content: unknown): unknown {
+  if (Array.isArray(content)) return content.map(editorSafeContent);
+  if (!content || typeof content !== "object") return content;
+  const value = content as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "styles" && item && typeof item === "object") {
+      result.styles = Object.fromEntries(
+        Object.entries(item).filter(([name]) => Object.hasOwn(editorSchema.styleSchema, name)),
+      );
+    } else if (!(key === "blocks" && value.type === "tableCell")) {
+      result[key] = editorSafeContent(item);
+    }
+  }
+  return result;
+}
+
 export function toPartialBlock(node: BlockNode): AppPartialBlock {
-  const storedContent = node.content.blocknote;
+  const storedContent = editorSafeContent(node.content.blocknote);
   const content = storedContent === undefined ? markdownText(node) : storedContent;
   const children = node.children.map(toPartialBlock);
 
@@ -1501,10 +1524,13 @@ export function toPartialBlock(node: BlockNode): AppPartialBlock {
       id: node.id,
       type,
       props: typeof checked === "boolean" ? { checked } : undefined,
-      content: markdownText(node)
-        .split("\n")
-        .map((line) => line.replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, ""))
-        .join("\n"),
+      // Imported rich items carry their runs; plain ones only their Markdown.
+      content: Array.isArray(storedContent)
+        ? linkifyDocumentLinks(storedContent)
+        : markdownText(node)
+            .split("\n")
+            .map((line) => line.replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, ""))
+            .join("\n"),
       children,
     } as PartialBlock;
   }

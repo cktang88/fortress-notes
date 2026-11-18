@@ -794,6 +794,39 @@ def _table_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
     return attrs
 
 
+def keep_cell_blocks(old: object, new: object) -> object:
+    """``new`` table content with each cell's nested blocks carried over from ``old``.
+
+    An editor that cannot show nested cell blocks (the web editor) saves cells
+    without a ``blocks`` key; while the table keeps its shape, those blocks stay.
+    A cell sent with ``"blocks": []`` clears them.
+    """
+
+    if not (isinstance(old, dict) and isinstance(new, dict)):
+        return new
+    old_rows, new_rows = old.get("rows"), new.get("rows")
+    if not (isinstance(old_rows, list) and isinstance(new_rows, list)):
+        return new
+
+    def cells(rows: list) -> list[int]:
+        return [len(row.get("cells") or []) if isinstance(row, dict) else -1 for row in rows]
+
+    if cells(old_rows) != cells(new_rows):
+        return new
+    rows = []
+    for old_row, new_row in zip(old_rows, new_rows):
+        merged = []
+        for old_cell, new_cell in zip(old_row["cells"], new_row["cells"]):
+            if (
+                isinstance(old_cell, dict) and old_cell.get("blocks")
+                and isinstance(new_cell, dict) and "blocks" not in new_cell
+            ):
+                new_cell = {**new_cell, "blocks": old_cell["blocks"]}
+            merged.append(new_cell)
+        rows.append({**new_row, "cells": merged})
+    return {**new, "rows": rows}
+
+
 def table_plain_text(table: dict[str, Any]) -> str:
     """Rows on lines, cells separated by tabs (what search and Ask read)."""
 

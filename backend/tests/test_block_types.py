@@ -214,6 +214,19 @@ class BlockTypeStoreTests(unittest.TestCase):
         self.assertEqual(copy["type"], "table")
         self.assertEqual(copy["attrs"], {"borders": False})
         self.assertEqual(copy["content"]["blocknote"], block["content"]["blocknote"])
+        # An editor that cannot show nested cell blocks saves the table without
+        # them; while the table keeps its shape they stay. "blocks": [] clears.
+        web_copy = json.loads(json.dumps(block["content"]["blocknote"]))
+        del web_copy["rows"][1]["cells"][0]["blocks"]
+        web_copy["rows"][0]["cells"][1]["content"] = [{"type": "text", "text": "Edited", "styles": {}}]
+        tree = self.apply(BlockOperation(operation="update", block_id=block["id"],
+                                         content={"blocknote": web_copy}))
+        cell = tree["children"][1]["content"]["blocknote"]["rows"][1]["cells"][0]
+        self.assertEqual(len(cell["blocks"]), 5)
+        web_copy["rows"][1]["cells"][0]["blocks"] = []
+        tree = self.apply(BlockOperation(operation="update", block_id=block["id"],
+                                         content={"blocknote": web_copy}))
+        self.assertNotIn("blocks", tree["children"][1]["content"]["blocknote"]["rows"][1]["cells"][0])
 
     def test_gfm_tables_import_as_tables(self) -> None:
         body = "Intro\n\n| A | B |\n|:-:|---|\n| *x* | y \\| z |\n| <u>u</u> |  |\n"

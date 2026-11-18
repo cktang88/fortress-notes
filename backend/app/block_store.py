@@ -2647,6 +2647,12 @@ def _apply_operation(
             and isinstance(content.get("blocknote"), list)
         ):
             text = None  # derived from the new runs
+        if block_type == "table" == row["type"] and isinstance(content, dict):
+            old_content = json.loads(row["content_json"])
+            content = {**content, "blocknote": _types.keep_cell_blocks(
+                old_content.get("blocknote") if isinstance(old_content, dict) else None,
+                content.get("blocknote"),
+            )}
         attrs, content, text = _types.normalize_block(block_type, attrs, content, text)
         provenance_json = (
             row["provenance_json"]
