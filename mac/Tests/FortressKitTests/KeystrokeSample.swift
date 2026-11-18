@@ -39,4 +39,27 @@ struct KeystrokeSample {
         sampler.waitUntilExit()
         print("PROFILE \(mode) typed \(typed) keystrokes in 6 s: \(String(format: "%.2f", 6000 / Double(max(typed, 1)))) ms each")
     }
+
+    /// Samples the run loop turns after an open (the rest of a long note loading).
+    @Test func sampleSettle() throws {
+        let base = ProcessInfo.processInfo.environment["KEYSTROKE_SAMPLE_OUT"]
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("keystroke-sample.txt").path
+        let output = URL(fileURLWithPath: (base as NSString).deletingPathExtension + "-settle.txt")
+        try? FileManager.default.removeItem(at: output)
+        let editor = PerfEditor(document: LongNote.document())
+        editor.open()
+        let sampler = Process()
+        sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+        sampler.arguments = [String(getpid()), "3", "1", "-mayDie", "-file", output.path]
+        try sampler.run()
+        Thread.sleep(forTimeInterval: 1)
+        var first = 0.0
+        var turns: [Double] = []
+        repeat {
+            turns.append(milliseconds { _ = RunLoop.main.run(mode: .default, before: Date()) })
+            if turns.count == 1 { first = turns[0] }
+        } while !editor.controller.pendingBlocks.isEmpty && turns.count < 1000
+        sampler.waitUntilExit()
+        print(String(format: "PROFILE settle first turn %.1f longest %.1f turns %d", first, turns.max() ?? 0, turns.count))
+    }
 }
