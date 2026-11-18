@@ -1213,6 +1213,35 @@ class CompareFindingsTests(_Base):
         for n in range(20):
             self.assertIn(f"top {n}", text)
 
+    def test_attachment_names_and_asset_paths_cannot_escape(self) -> None:
+        self.manifest["assets"]["e" * 64 + ".png"] = {**PNG_INFO, "path": "../../../etc/passwd"}
+        tree = self.import_blocks([
+            {"type": "file", "indent": 0, "asset": PDF_NAME, "filename": "..\\..\\Windows\\System32\\evil.exe",
+             "extension": "exe", "mime": "application/pdf", "size": len(PDF), "data_status": "available",
+             "media_kind": "other", "icon_asset": None},
+            {"type": "file", "indent": 0, "asset": PDF_NAME, "filename": "../..", "extension": "",
+             "mime": "application/pdf", "size": len(PDF), "data_status": "available", "media_kind": "other",
+             "icon_asset": None},
+            {"type": "file", "indent": 0, "asset": PDF_NAME, "filename": "x" * 5000 + ".pdf", "extension": "pdf",
+             "mime": "application/pdf", "size": len(PDF), "data_status": "available", "media_kind": "other",
+             "icon_asset": None},
+            {"type": "image", "indent": 0, "asset": "e" * 64 + ".png", "data_status": "available", "alt_text": "",
+             "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
+             "is_background": False, "original_name": "/tmp/../x.png", "original_asset": None},
+            {"type": "image", "indent": 0, "asset": "../" + PNG_NAME, "data_status": "available", "alt_text": "",
+             "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
+             "is_background": False, "original_name": None, "original_asset": None},
+        ])
+        names = [child["attrs"].get("name") for child in tree["children"][:3]]
+        self.assertEqual(names[0], "evil.exe")
+        self.assertEqual(names[1], "attachment")
+        self.assertTrue(names[2].endswith(".pdf") and len(names[2]) <= onenote_import.MAX_FILE_NAME, len(names[2]))
+        # Neither the asset outside the export nor a non content-addressed name is copied.
+        self.assertTrue(all(child["type"] == "paragraph" for child in tree["children"][3:]))
+        self.assertIn("Image missing", tree["children"][3]["text"])
+        for path in self.settings.assets_path.iterdir():
+            self.assertRegex(path.name, r"^[0-9a-f]{64}\.[a-z0-9]+$")
+
     def test_clean_text(self) -> None:
         self.assertEqual(onenote_import._clean("form\x0cfeed bell\x07 nul\x00 a\r\nb‮RTL"),
                          "form feed bell nul a\nb‮RTL")

@@ -73,7 +73,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from . import block_store, documents, provenance, sources
+from . import assets, block_store, documents, provenance, sources
 
 SOURCE = "onenote_import"
 IMPORTER_NAME = "fortress-onenote-import"
@@ -836,7 +836,7 @@ def _image(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
         if value:
             result[key] = value
     if name:
-        result["name"] = str(name)
+        result["name"] = _file_name(name)
     attrs: dict[str, Any] = {}
     if block.get("hyperlink"):
         link = safe_link(block["hyperlink"])
@@ -876,7 +876,7 @@ def _ink(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
 
 def _file(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
     ctx.count("files")
-    name = str(block.get("filename") or "attachment")
+    name = _file_name(block.get("filename"))
     result: dict[str, Any] = {"type": "file", "name": name}
     url = ctx.importer.asset_url(block.get("asset"))
     if url is None:
@@ -894,6 +894,25 @@ def _file(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
     if "caption" in result:
         result.setdefault("attrs", {})["caption"] = result.pop("caption")
     return result
+
+
+MAX_FILE_NAME = 200
+
+
+def _file_name(value: object) -> str:
+    """A display/download name for an attachment: no folders (``..\\..\\x.exe`` is
+    ``x.exe``), no control characters, at most MAX_FILE_NAME characters (extension kept)."""
+
+    name = assets.safe_filename(str(value or "")) if value else "attachment"
+    if name == "file":
+        name = "attachment"
+    if len(name) > MAX_FILE_NAME:
+        stem, dot, extension = name.rpartition(".")
+        if dot and stem and len(extension) <= 16:
+            name = stem[: MAX_FILE_NAME - len(extension) - 2] + "…." + extension
+        else:
+            name = name[: MAX_FILE_NAME - 1] + "…"
+    return name
 
 
 def _layout(rows: list[dict[str, Any]], items: dict[str, dict[str, Any]], used: set[str],
