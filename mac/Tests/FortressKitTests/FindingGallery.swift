@@ -245,13 +245,15 @@ func settledSnapshot<V: View>(
 }
 
 extension GallerySnapshotTests {
-    private func both<V: View>(_ name: String, size: CGSize = CGSize(width: 1000, height: 660), _ make: () -> V) async throws {
-        try await settledSnapshot(make(), named: "\(name)-light", size: size, appearance: .aqua)
-        try await settledSnapshot(make(), named: "\(name)-dark", size: size, appearance: .darkAqua)
+    private func both<V: View>(
+        _ name: String, size: CGSize = CGSize(width: 1000, height: 660), seconds: Double = 2.5, _ make: () -> V
+    ) async throws {
+        try await settledSnapshot(make(), named: "\(name)-light", size: size, appearance: .aqua, seconds: seconds)
+        try await settledSnapshot(make(), named: "\(name)-dark", size: size, appearance: .darkAqua, seconds: seconds)
     }
 
     @Test func findingSearchResults() async throws {
-        try await both("finding-search") {
+        try await both("finding-search", seconds: 6) {
             let model = FindingFixtures.model()
             model.query = "ryokan"
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: FindingFixtures.kyotoRyokanBlock)
@@ -260,10 +262,22 @@ extension GallerySnapshotTests {
     }
 
     @Test func findingAskAnswered() async throws {
-        try await both("finding-ask") {
+        // Streamed through the fake backend (other suites may hold the main thread, so wait longer).
+        try await both("finding-ask", seconds: 6) {
             let model = FindingFixtures.model()
             model.route = .ask(question: FindingFixtures.question)
             return MainWindow().environment(model)
+        }
+        // The finished answer, deterministic.
+        try await both("finding-ask-answered", size: CGSize(width: 760, height: 660)) {
+            var state = AskState()
+            FindingFixtures.steps.forEach { state.apply(.step($0)) }
+            state.apply(.done(AskResponse(status: .answered, answer: FindingFixtures.sentences,
+                                          steps: FindingFixtures.steps, elapsedMs: 1840)))
+            let turn = AskTurn(question: FindingFixtures.question, state: state)
+            return AskView(question: FindingFixtures.question, turns: [turn])
+                .environment(FindingFixtures.model())
+                .tint(.fortressEmber)
         }
     }
 
@@ -274,6 +288,7 @@ extension GallerySnapshotTests {
             FindingFixtures.sentences.prefix(2).forEach { state.apply(.sentence($0)) }
             let turn = AskTurn(question: FindingFixtures.question, state: state, started: .now.addingTimeInterval(-1.2))
             return AskView(question: FindingFixtures.question, turns: [turn]).environment(FindingFixtures.model())
+                .tint(.fortressEmber)
         }
         try await both("finding-ask-states", size: CGSize(width: 760, height: 660)) {
             var notConfigured = AskState()
@@ -291,6 +306,7 @@ extension GallerySnapshotTests {
                 AskTurn(question: "When does my passport expire?", state: notFound),
                 AskTurn(question: "What did Mei recommend?", state: failed),
             ]).environment(FindingFixtures.model())
+                .tint(.fortressEmber)
         }
     }
 
@@ -311,19 +327,21 @@ extension GallerySnapshotTests {
     }
 
     @Test func findingInspector() async throws {
-        try await both("finding-inspector-window") {
+        try await both("finding-inspector-window", seconds: 5) {
             let model = FindingFixtures.model()
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
             model.focusedBlockId = FindingFixtures.kyotoRyokanBlock
             model.isInspectorShown = true
+            model.isFocusMode = true  // Note + inspector only, so it fits in 1000 pt.
             return MainWindow().environment(model)
         }
-        try await both("finding-inspector", size: CGSize(width: 300, height: 660)) {
+        try await both("finding-inspector", size: CGSize(width: 300, height: 660), seconds: 5) {
             let model = FindingFixtures.model()
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
             model.focusedBlockId = FindingFixtures.kyotoRyokanBlock
             return InspectorView()
                 .environment(model)
+                .tint(.fortressEmber)
                 .background(Color(nsColor: .windowBackgroundColor))
         }
     }
@@ -333,12 +351,14 @@ extension GallerySnapshotTests {
             ZStack {
                 DesktopBackdrop()
                 QuickCaptureView(state: QuickCaptureState(text: "Call the dentist about the cleaning\nAsk about the Tuesday slot"))
+                    .tint(.fortressEmber)
             }
         }
         try await both("finding-capture-saved", size: CGSize(width: 720, height: 300)) {
             ZStack {
                 DesktopBackdrop()
                 QuickCaptureView(state: QuickCaptureState(phase: .saved(title: "Call the dentist about the cleaning", folder: "Uncategorized")))
+                    .tint(.fortressEmber)
             }
         }
     }
