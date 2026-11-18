@@ -150,7 +150,7 @@ def _inline(value: object) -> list[dict[str, Any]]:
                 continue
             inner = [node for node in _inline(item.get("content", item.get("text", "")))
                      if node["type"] == "text"]
-            if href and inner:
+            if schema.safe_href(href) and inner:
                 nodes.append({"type": "link", "href": href, "content": schema.merge_inline(inner)})
             else:
                 nodes.extend(inner)
@@ -163,7 +163,7 @@ def _inline(value: object) -> list[dict[str, Any]]:
         compact = {key: val for key, val in item.items() if key not in ("type", "text", "styles", "marks")}
         marks = _marks(item.get("styles"), item.get("marks"), compact)
         href = item.get("href", item.get("link"))
-        if isinstance(href, str) and href.strip():
+        if schema.safe_href(href):
             ref = _href_ref(href)
             if ref is not None:
                 nodes.append(ref)

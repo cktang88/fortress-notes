@@ -588,7 +588,7 @@ def _nodes_from_html(
                 inner: list[dict[str, Any]] = []
                 walk(item.children, marks, inner, True)
                 inner = schema.merge_inline(inner)
-                if href and inner:
+                if schema.safe_href(href) and inner:
                     target.append({"type": "link", "href": href, "content": inner})
                 else:
                     target.extend(inner)

@@ -299,6 +299,19 @@ def text_node(text: str, marks: dict[str, Any] | None = None) -> dict[str, Any]:
     return node
 
 
+_UNSAFE_SCHEME_RE = re.compile(r"^\s*(javascript|vbscript|data)\s*:", re.IGNORECASE)
+
+
+def safe_href(href: object) -> bool:
+    """A link target a client may open: not empty, not script or inline data."""
+
+    if not isinstance(href, str) or not href.strip():
+        return False
+    # Browsers ignore control characters and whitespace inside a scheme.
+    squeezed = re.sub(r"[\x00-\x20]", "", href)
+    return not _UNSAFE_SCHEME_RE.match(squeezed)
+
+
 def normalize_inline(value: object, *, plain: bool = False) -> list[dict[str, Any]]:
     """Canonical inline nodes (docs/block-model.md §3); ``plain`` for code blocks."""
 
@@ -324,6 +337,8 @@ def normalize_inline(value: object, *, plain: bool = False) -> list[dict[str, An
             href = item.get("href")
             if not isinstance(href, str) or not href.strip():
                 raise BlockShapeError("a link needs an href")
+            if not safe_href(href):
+                raise BlockShapeError("a link can't run script or embed data")
             inner = normalize_inline(item.get("content"))
             if any(node["type"] != "text" for node in inner):
                 raise BlockShapeError("a link holds only text")
