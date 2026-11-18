@@ -179,8 +179,12 @@ final class PerfEditor {
     /// Lets the run loop do what follows an open (the rest of a long note goes in, the
     /// baseline is made), timing each turn: the longest is the longest the app can't
     /// answer a key while a note finishes loading.
+    ///
+    /// `first` is the first turn on its own: what follows any open (AppKit's continuous
+    /// spell check of the first screens, the save baseline, the window's first layout),
+    /// long note or not; `longestAfterFirst` is the longest of the others (loading the rest).
     @discardableResult
-    func settle() -> (total: Double, longest: Double, turns: Int, slowest: [Double]) {
+    func settle() -> (total: Double, longest: Double, turns: Int, slowest: [Double], first: Double, longestAfterFirst: Double) {
         var total = 0.0, turns = 0
         var all: [Double] = []
         repeat {
@@ -193,7 +197,7 @@ final class PerfEditor {
         total += baseline
         all.append(baseline)
         let slowest = Array(all.sorted(by: >).prefix(3))
-        return (total, slowest.first ?? 0, turns, slowest)
+        return (total, slowest.first ?? 0, turns, slowest, all.first ?? 0, all.dropFirst().max() ?? 0)
     }
 
     func layoutViewport() {
@@ -281,6 +285,8 @@ final class PerfEditor {
         let rest = editor.settle()
         PerfLog.record("open.rest.total(later turns)", rest.total)
         PerfLog.record("open.rest.longestTurn", rest.longest, budget: 50)
+        PerfLog.record("open.rest.firstTurn(spell check, baseline, first layout)", rest.first)
+        PerfLog.record("open.rest.longestTurnAfterFirst(loading the rest)", rest.longestAfterFirst, budget: 50)
         PerfLog.record("open.rest.turns", Double(rest.turns), unit: "turns")
         PerfLog.record("open.rest.slowestTurns[\(rest.slowest.map { String(format: "%.0f", $0) }.joined(separator: ","))]", rest.slowest.dropFirst().first ?? 0)
         PerfLog.record("open.memory", footprintMB() - before, unit: "MB")

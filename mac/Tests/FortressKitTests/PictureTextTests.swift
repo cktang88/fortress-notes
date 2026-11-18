@@ -79,7 +79,7 @@ final class FakeRecognizer: TextRecognizer, Sendable {
 // MARK: The reader
 
 @MainActor
-@Suite struct PictureTextReaderTests {
+@Suite(.timeLimit(.minutes(3))) struct PictureTextReaderTests {
     @Test func readsTheBacklogWithBoundedConcurrencyAndStoresEachReading() async {
         let backend = FakeOCRBackend()
         for index in 0..<11 { await backend.add("h\(index)", Data("text \(index)".utf8)) }
@@ -87,7 +87,9 @@ final class FakeRecognizer: TextRecognizer, Sendable {
         let reader = PictureTextReader(recognizer: recognizer, concurrency: 3, batchSize: 4,
                                        idleDelay: .seconds(60), retryDelay: .seconds(60))
         reader.start(backend: backend, key: "test")
-        await eventually(timeout: 20) { reader.remaining == 0 && !reader.isWorking }
+        // No wall-clock limit: the reader runs on the main actor, which other suites can
+        // hold for a minute on CI (a 20 s limit gave up after two of three batches).
+        await until { reader.remaining == 0 && !reader.isWorking }
         reader.stop()
 
         let stored = await backend.stored
@@ -141,12 +143,12 @@ final class FakeRecognizer: TextRecognizer, Sendable {
         #expect(reader.lastError != nil)
 
         reader.start(backend: backend, key: "test")
-        await eventually(timeout: 10) { reader.lastError != nil }
+        await until { reader.lastError != nil }
         let asks = await backend.pendingAsks
         await backend.setOffline(false)
         await backend.add("new", Data("pasted".utf8))
         reader.wake()  // instead of waiting ten minutes
-        await eventually(timeout: 10) { reader.storedCount == 1 }
+        await until { reader.storedCount == 1 }
         #expect(await backend.pendingAsks > asks)
         #expect(reader.lastError == nil)
         reader.stop()
@@ -157,7 +159,7 @@ final class FakeRecognizer: TextRecognizer, Sendable {
         let backend = FakeOCRBackend()
         let reader = PictureTextReader(recognizer: FakeRecognizer(delay: .zero), idleDelay: .seconds(600))
         reader.start(backend: backend, key: "a")
-        await eventually(timeout: 10) { reader.remaining == 0 }
+        await until { reader.remaining == 0 }
         reader.start(backend: backend, key: "a")
         try? await Task.sleep(for: .milliseconds(100))
         #expect(await backend.pendingAsks == 1)

@@ -7,8 +7,22 @@ import Observation
 @MainActor
 @Observable
 final class ImageSlot {
-    var image: NSImage?
+    private(set) var image: NSImage?
+    @ObservationIgnored private var waiting: [(NSImage) -> Void] = []
     init(image: NSImage? = nil) { self.image = image }
+
+    /// The picture arrived: shown by every view waiting for it.
+    func fill(_ image: NSImage) {
+        self.image = image
+        let waiting = waiting
+        self.waiting = []
+        for body in waiting { body(image) }
+    }
+
+    /// Runs `body` with the picture when it arrives (now, if it has).
+    func whenLoaded(_ body: @escaping (NSImage) -> Void) {
+        if let image { body(image) } else { waiting.append(body) }
+    }
 }
 
 /// Loads pictures for the editor: the bytes through `MediaCache`'s session (its disk URL

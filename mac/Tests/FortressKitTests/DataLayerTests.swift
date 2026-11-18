@@ -295,6 +295,9 @@ import Testing
     /// Prefetching the neighbours is one request; opening them is then instant, and a
     /// note opened while its prefetch is in flight joins it.
     @Test func prefetchLoadsNeighboursInOneRequest() async throws {
+        // The batch answers when the test says so (after the open has joined it), not
+        // after a delay a busy machine could outlast before the test looks.
+        let answer = StubGate()
         SpyProtocol.reset { seen in
             if seen.path == "/api/batch/block-documents" {
                 struct Asked: Decodable { var ids: [String] }
@@ -305,7 +308,7 @@ import Testing
                     "etags": Dictionary(uniqueKeysWithValues: ids.map { ($0, "\"e-\($0)\"") }),
                     "unchanged": [String](), "missing": [String](),
                 ])
-                return .json(body, delay: 0.5)
+                return .json(body, gate: answer)
             }
             return .document(SpyJSON.document(String(seen.path.split(separator: "/").last!)))
         }
@@ -313,7 +316,11 @@ import Testing
         let model = makeModel(api)
         let prefetch = Task { await model.prefetch(noteIds: ["n2", "n3"]) }
         try await waitUntil { api.store.isInFlight("GET document n2 @\(api.store.epoch)") }
-        let joined = try await api.document(id: "n2")  // while the batch is in flight
+        let coalescedBefore = api.store.stats.coalesced
+        let opening = Task { try await api.document(id: "n2") }  // while the batch is in flight
+        try await waitUntil { api.store.stats.coalesced > coalescedBefore }
+        answer.open()
+        let joined = try await opening.value
         await prefetch.value
         let cached = try await api.document(id: "n3")
         #expect(joined.id == "n2" && cached.id == "n3")

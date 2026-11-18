@@ -15,9 +15,12 @@ final class SpyProtocol: URLProtocol, @unchecked Sendable {
         var delay: Double = 0
         /// Fail with this instead of answering.
         var failure: URLError.Code?
+        /// Answer only once this is open (a request the test holds in flight for as long as it needs).
+        var gate: StubGate?
 
-        static func json(_ body: Data, status: Int = 200, headers: [String: String] = [:], delay: Double = 0) -> Reply {
-            Reply(status: status, body: body, headers: headers, delay: delay)
+        static func json(_ body: Data, status: Int = 200, headers: [String: String] = [:], delay: Double = 0,
+                         gate: StubGate? = nil) -> Reply {
+            Reply(status: status, body: body, headers: headers, delay: delay, gate: gate)
         }
 
         static func document(_ document: BlockDocument, etag: String? = nil, delay: Double = 0) -> Reply {
@@ -77,7 +80,11 @@ final class SpyProtocol: URLProtocol, @unchecked Sendable {
             return (state.handler(seen), state.seen.count - 1)
         }
         self.index.withLock { $0 = index }
-        if reply.delay > 0 {
+        if let gate = reply.gate {
+            let loader = self
+            let held = { var held = reply; held.gate = nil; return held }()
+            gate.whenOpen { DispatchQueue.global().async { loader.deliver(held) } }
+        } else if reply.delay > 0 {
             let loader = self
             DispatchQueue.global().asyncAfter(deadline: .now() + reply.delay) {
                 loader.deliver(reply)
@@ -131,6 +138,31 @@ final class SpyProtocol: URLProtocol, @unchecked Sendable {
             data.append(buffer, count: count)
         }
         return data
+    }
+}
+
+/// Holds back a fake server's answer until the test opens it: the request stays in
+/// flight for exactly as long as the test needs, however slow the machine is.
+final class StubGate: Sendable {
+    private let state = Mutex<(open: Bool, waiting: [@Sendable () -> Void])>((false, []))
+
+    func open() {
+        let waiting = state.withLock { state -> [@Sendable () -> Void] in
+            state.open = true
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for body in waiting { body() }
+    }
+
+    /// Runs `body` once the gate is open (now, if it is).
+    func whenOpen(_ body: @escaping @Sendable () -> Void) {
+        let now = state.withLock { state -> Bool in
+            if state.open { return true }
+            state.waiting.append(body)
+            return false
+        }
+        if now { body() }
     }
 }
 

@@ -189,15 +189,16 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     // MARK: Loading and reading
 
-    /// Shows `blocks`. A long note shows its first screens at once and the rest in
-    /// chunks over the next run loop turns (`appendPendingBlocks`), so opening it costs
-    /// what its first screens cost; until the rest is in, `currentBlocks()` reports it
+    /// Shows `blocks`. A long note shows its first screens at once; the rest is built in
+    /// chunks over the next run loop turns and then appended in one go
+    /// (`appendPendingBlocks`), so opening it costs what its first screens cost; until the rest is in, `currentBlocks()` reports it
     /// as it will read back, so nothing is lost or saved twice. Anything that needs the
     /// whole text (finding a block, select all, find) finishes loading first.
     func load(_ blocks: [EditorBlock]) {
         let interval = Signposts.begin("Load text")
         defer { Signposts.end("Load text", interval) }
         loadGeneration += 1
+        loading = nil
         let all = blocks.isEmpty ? [EditorBlock()] : blocks
         let headCount = isEmbedded ? all.count : Self.headCount(all)
         let head = Array(all[..<headCount])
@@ -206,7 +207,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let text = DocumentText.build(head, theme: theme, context: context)
         blockCache = [:]
         storage.setAttributedString(text)
-        blockCache = cachedBlocks(head, from: 0)
+        blockCache = cachedBlocks(head, in: storage, adding: [:])
         lastRead = []
         dirtyBlocks.removeAll()
         dirtyInfos.removeAll()
@@ -215,8 +216,11 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         syncTypingAttributes()
         if !pendingBlocks.isEmpty {
+            // Starts a pass of the run loop later: the first one after an open makes the
+            // save baseline, spell checks the first screens and lays the window out
+            // (the run loop runs its queued blocks twice per pass, hence two hops).
             let generation = loadGeneration
-            Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+            Self.later { Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) } }
         }
         // Touching `layoutManager` or inserting an NSTextTable anywhere silently switches
         // the view to TextKit 1 (and every later open to the slow path): catch it in debug.
@@ -226,13 +230,15 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// A text block just shown is what reading it back gives (unless building the text
     /// rewrote it): keep those, so the baseline right after opening and the first save
     /// don't read every block back. Tables, columns and embeds are read from the text.
-    private func cachedBlocks(_ blocks: [EditorBlock], from start: Int) -> [String: CachedBlock] {
+    /// `text` holds `blocks`' paragraphs (the note's text, or the part still loading).
+    private func cachedBlocks(_ blocks: [EditorBlock], in text: NSAttributedString,
+                              adding cache: [String: CachedBlock]) -> [String: CachedBlock] {
         var byId: [String: EditorBlock] = [:]
         byId.reserveCapacity(blocks.count)
         for block in blocks where Self.readsBackAsShown(block) { byId[block.id] = block }
-        var cache = blockCache
+        var cache = cache
         cache.reserveCapacity(cache.count + blocks.count)
-        storage.enumerateAttribute(.fnBlock, in: NSRange(location: start, length: storage.length - start), options: []) { value, range, _ in
+        text.enumerateAttribute(.fnBlock, in: NSRange(location: 0, length: text.length), options: []) { value, range, _ in
             guard let info = value as? BlockInfo, let block = byId[info.id], cache[info.id]?.info !== info else { return }
             cache[info.id] = CachedBlock(info: info, length: range.length, block: block)
         }
@@ -279,72 +285,119 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         return copy
     }
 
-    /// Puts the next chunk of a loading note into the text (about a screen's worth of
-    /// work per run loop turn, so typing and scrolling go on meanwhile).
+    /// The rest of a loading note, built a chunk per run loop turn but not shown yet:
+    /// it goes into the text in one append once it is all built (`showLoaded`).
+    ///
+    /// Why one append: every edit of an NSTextStorage makes NSTextContentStorage update
+    /// the ranges of each text element (paragraph) it has cached after the edit
+    /// (`processEditingForTextStorage` → `updateRangesForTextElement:locationDelta:`).
+    /// Appending a note in ~40 pieces left an element cached for every paragraph of it
+    /// (each append lays out and estimates around the end of the text it just added), so
+    /// afterwards every keystroke shifted ~2,000 elements: TextKit's share of a key went
+    /// from ~2 to ~6 ms. One append of the same text costs ~1.5 ms and caches nothing
+    /// beyond the viewport, so typing is as fast as after opening the note whole.
+    /// Building is what takes the time (~2 ms per chunk), and it needs no text view.
+    private struct Loading {
+        var text = NSMutableAttributedString()
+        /// How many of `pendingBlocks` are in `text`.
+        var built = 0
+        var cache: [String: CachedBlock] = [:]
+        /// The built paragraphs as read back, in order (nil: one didn't read back cleanly).
+        var read: [ReadBlock]? = []
+    }
+    private var loading: Loading?
+
+    /// Builds the next chunk of a loading note (about a screen's worth of work per run
+    /// loop turn, so typing and scrolling go on meanwhile); when all is built, shows it.
     private func appendPendingBlocks(generation: Int) {
         guard generation == loadGeneration, !pendingBlocks.isEmpty else { return }
-        if textView.hasMarkedText() {
+        var state = loading ?? Loading()
+        if state.built < pendingBlocks.count {
+            var height: CGFloat = 0
+            var count = 0
+            for block in pendingBlocks[state.built...] {
+                height += Self.estimatedHeight(block)
+                count += 1
+                if height > 3000 || count >= 80 { break }
+            }
+            build(&state, count: count)
+            loading = state
+            // The next chunk, or (on a step of its own) showing them all.
+            Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+        } else if textView.hasMarkedText() {
             // Not while an input method is composing.
             Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
-            return
-        }
-        var height: CGFloat = 0
-        var count = 0
-        for block in pendingBlocks {
-            height += Self.estimatedHeight(block)
-            count += 1
-            if height > 3000 || count >= 80 { break }
-        }
-        append(Array(pendingBlocks.prefix(count)))
-        pendingBlocks.removeFirst(count)
-        if pendingBlocks.isEmpty {
-            onLoadComplete?()
         } else {
-            Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+            showLoaded()
         }
+    }
+
+    /// Builds the next `count` pending blocks into `state`.
+    private func build(_ state: inout Loading, count: Int) {
+        let interval = Signposts.begin("Append blocks")
+        defer { Signposts.end("Append blocks", interval) }
+        let blocks = Array(pendingBlocks[state.built..<(state.built + count)])
+        let chunk = DocumentText.build(blocks, theme: theme, context: context)
+        state.cache = cachedBlocks(blocks, in: chunk, adding: state.cache)
+        if state.read != nil, let added = readBlocks(in: chunk, cache: state.cache) {
+            state.read?.append(contentsOf: added)
+        } else {
+            state.read = nil
+        }
+        state.text.append(chunk)
+        state.built += count
     }
 
     /// Shows the rest of a loading note now.
     func finishLoading() {
         guard !pendingBlocks.isEmpty else { return }
-        let rest = pendingBlocks
-        pendingBlocks = []
-        append(rest)
-        onLoadComplete?()
+        var state = loading ?? Loading()
+        if state.built < pendingBlocks.count { build(&state, count: pendingBlocks.count - state.built) }
+        loading = state
+        showLoaded()
     }
 
-    /// Appends loaded blocks after the text (not an edit: no undo, no save).
-    private func append(_ blocks: [EditorBlock]) {
-        let interval = Signposts.begin("Append blocks")
-        defer { Signposts.end("Append blocks", interval) }
+    /// Appends the built rest of a loading note after the text in one edit (not an edit
+    /// of the note: no undo, no save). (Takes what is built so far: `finishLoading` builds
+    /// the rest first.)
+    private func showLoaded() {
+        guard let state = loading else { return }
+        loading = nil
+        pendingBlocks.removeFirst(state.built)
         isLoading = true
         defer { isLoading = false }
         let start = storage.length
-        let text = DocumentText.build(blocks, theme: theme, context: context)
-        storage.append(text)
-        blockCache = cachedBlocks(blocks, from: start)
-        extendLastRead(from: start)
+        storage.append(state.text)
+        blockCache.merge(state.cache) { _, loaded in loaded }
+        // The appended paragraphs join the last read (so the first save after a long note
+        // loads doesn't walk all of it).
+        if let read = state.read, !lastRead.isEmpty, lastRead.reduce(0, { $0 + $1.length }) == start {
+            lastRead += read
+        } else {
+            lastRead = []
+        }
+        if pendingBlocks.isEmpty { onLoadComplete?() }
     }
 
-    /// The paragraphs just appended join the last read (so the first save after a long
-    /// note loads doesn't walk all of it): read from the cache, or from the text.
-    private func extendLastRead(from start: Int) {
-        guard !lastRead.isEmpty, lastRead.reduce(0, { $0 + $1.length }) == start else { lastRead = []; return }
+    /// `text`'s paragraphs as read back (from `cache` when it has them); nil when one
+    /// isn't a single well-formed paragraph.
+    private func readBlocks(in text: NSAttributedString, cache: [String: CachedBlock]) -> [ReadBlock]? {
+        let string = text.nsString
         var added: [ReadBlock] = []
         var valid = true
-        storage.enumerateAttribute(.fnBlock, in: NSRange(location: start, length: storage.length - start), options: []) { value, range, stop in
+        text.enumerateAttribute(.fnBlock, in: NSRange(location: 0, length: text.length), options: []) { value, range, stop in
             guard let info = value as? BlockInfo, string.character(at: NSMaxRange(range) - 1) == 0x0A,
                   string.range(of: "\n", options: .literal, range: NSRange(location: range.location, length: range.length - 1)).location == NSNotFound
             else { valid = false; stop.pointee = true; return }
             let block: EditorBlock
-            if let cached = blockCache[info.id], cached.info === info, cached.length == range.length {
+            if let cached = cache[info.id], cached.info === info, cached.length == range.length {
                 block = cached.block
             } else {
-                block = DocumentText.block(in: storage, paragraph: range, info: info)
+                block = DocumentText.block(in: text, paragraph: range, info: info)
             }
             added.append(ReadBlock(info: info, length: range.length, block: block))
         }
-        if valid { lastRead += added } else { lastRead = [] }
+        return valid ? added : nil
     }
 
     /// The blocks as they are now (fixing duplicate ids from pastes as a side effect).

@@ -60,7 +60,7 @@ final class AttachmentContext {
             Task { [weak self, weak slot] in
                 let image = await pipeline.image(for: url, session: session)
                 guard let image, let slot else { return }
-                slot.image = image
+                slot.fill(image)
                 self?.imageDidLoad?(url)
             }
         }
@@ -117,6 +117,8 @@ final class BlockAttachment: NSTextAttachment {
     nonisolated(unsafe) var live: (any LiveBlock)?
     /// Last measured (width, height) of a hosted embed or math view (measuring hosts a view).
     nonisolated(unsafe) private var measured: (width: CGFloat, height: CGFloat)?
+    /// See `blockView`.
+    nonisolated(unsafe) private var shownView: NSView?
 
     @MainActor init(info: BlockInfo, context: AttachmentContext, block: EditorBlock? = nil) {
         self.info = info
@@ -140,6 +142,31 @@ final class BlockAttachment: NSTextAttachment {
         let provider = BlockAttachmentViewProvider(textAttachment: self, parentView: parentView, textLayoutManager: textContainer?.textLayoutManager, location: location)
         provider.tracksTextAttachmentViewBounds = true
         return provider
+    }
+
+    /// The view this block shows: made the first time TextKit asks, then the same view
+    /// for as long as the attachment lives. TextKit asks again whenever it lays the
+    /// paragraph out and re-adds the view to the viewport on every layout pass (each
+    /// keystroke); a fresh view each time re-rendered it each time. Pictures and dividers
+    /// are drawn by AppKit, because a hosting view re-renders its SwiftUI whenever it
+    /// moves to a window (and TextKit's re-adding is such a move); the rarer kinds
+    /// (files, math, embeds) keep one hosting view each.
+    @MainActor var blockView: NSView {
+        if let live { return live.view }
+        if let shownView { return shownView }
+        let view: NSView
+        switch info.kind {
+        case .image:
+            view = ImageAttachmentView(attrs: info.origin?.origin.attrs ?? [:], context: context)
+        case .divider:
+            view = DividerAttachmentView()
+        default:
+            let hosting = NSHostingView(rootView: BlockEmbedView(info: info, context: context, width: nil))
+            hosting.sizingOptions = []
+            view = hosting
+        }
+        shownView = view
+        return view
     }
 
     /// Height for the available width.
@@ -221,6 +248,125 @@ enum ImageLayout {
     }
 }
 
+/// A picture block, drawn by AppKit: the image at its stored size (never wider than the
+/// column), rounded, its caption below, its alt text as hover help and accessibility
+/// label. Not SwiftUI on purpose: TextKit re-adds attachment views to the viewport on
+/// every layout pass (each keystroke), and a hosting view re-renders its SwiftUI each
+/// time it moves to a window; this view only redraws when its picture arrives.
+final class ImageAttachmentView: NSView {
+    private let attrs: [String: JSONValue]
+    private let url: URL?
+    private weak var context: AttachmentContext?
+    private(set) var image: NSImage?
+
+    init(attrs: [String: JSONValue], context: AttachmentContext?) {
+        self.attrs = attrs
+        self.context = context
+        url = attrs["url"]?.stringValue.flatMap { context?.url(for: $0) }
+        super.init(frame: .zero)
+        toolTip = alt.isEmpty ? name : alt
+        setAccessibilityElement(true)
+        setAccessibilityRole(.image)
+        setAccessibilityLabel(label)
+        if let url, let context {
+            let slot = context.slot(for: url)
+            image = slot.image
+            if image == nil { slot.whenLoaded { [weak self] image in self?.show(image) } }
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var isFlipped: Bool { true }
+
+    private var alt: String { attrs["alt"]?.stringValue ?? "" }
+    private var caption: String { attrs["caption"]?.stringValue ?? "" }
+    private var name: String { attrs["name"]?.stringValue ?? "" }
+    private var label: String {
+        let text = [alt, caption, name].first { !$0.isEmpty } ?? ""
+        return text.isEmpty ? String(localized: "Image") : text
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    private func show(_ image: NSImage) {
+        guard image !== self.image else { return }
+        self.image = image
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let theme = context?.theme ?? EditorTheme()
+        let size = ImageLayout.size(attrs: attrs, image: image, width: bounds.width, theme: theme)
+        let frame = CGRect(origin: .zero, size: size)
+        if let image, image.size.width > 0, image.size.height > 0 {
+            // Fit (the stored size can differ a little from the picture's own).
+            let scale = min(size.width / image.size.width, size.height / image.size.height)
+            let fitted = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            let rect = CGRect(x: 0, y: (size.height - fitted.height) / 2, width: fitted.width, height: fitted.height)
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).addClip()
+            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
+                       hints: [.interpolation: NSImageInterpolation.high.rawValue])
+            NSGraphicsContext.restoreGraphicsState()
+        } else {
+            NSColor.themeSurface.setFill()
+            NSBezierPath(roundedRect: frame, xRadius: 8, yRadius: 8).fill()
+            let configuration = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
+                .applying(.init(paletteColors: [.themeTertiaryText]))
+            if let symbol = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)?.withSymbolConfiguration(configuration) {
+                let rect = CGRect(x: frame.midX - symbol.size.width / 2, y: frame.midY - symbol.size.height / 2,
+                                  width: symbol.size.width, height: symbol.size.height)
+                symbol.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            }
+        }
+        if !caption.isEmpty {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 12 * theme.scale),
+                .foregroundColor: NSColor.themeSecondaryText,
+                .paragraphStyle: ImageLayout.captionStyle(theme),
+            ]
+            let rect = CGRect(x: 0, y: size.height + 6 * theme.scale, width: size.width,
+                              height: max(0, bounds.height - size.height - 6 * theme.scale))
+            (caption as NSString).draw(with: rect, options: [.usesLineFragmentOrigin], attributes: attributes)
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard image != nil else { return nil }
+        let menu = NSMenu()
+        if url != nil {
+            menu.addItem(withTitle: String(localized: "Open Image"), action: #selector(openImage), keyEquivalent: "").target = self
+        }
+        if !alt.isEmpty {
+            menu.addItem(withTitle: String(localized: "Copy Text in Image"), action: #selector(copyText), keyEquivalent: "").target = self
+        }
+        return menu.items.isEmpty ? nil : menu
+    }
+
+    @objc private func openImage() {
+        if let url { context?.openURL?(url) }
+    }
+
+    @objc private func copyText() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(alt, forType: .string)
+    }
+}
+
+/// A divider block: a one-point rule across the column, centered.
+final class DividerAttachmentView: NSView {
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.themeBorder.setFill()
+        CGRect(x: 0, y: (bounds.height / 2).rounded(.down), width: bounds.width, height: 1).fill()
+    }
+}
+
 /// TextKit calls these from its (main-thread) layout of an NSTextView; the overrides are
 /// nonisolated in the SDK, so each hops into the main actor with `assumeIsolated` (a
 /// checked assertion, not a hop). `nonisolated(unsafe)` lets the non-Sendable provider
@@ -230,13 +376,7 @@ final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
         nonisolated(unsafe) let provider = self
         MainActor.assumeIsolated {
             guard let attachment = provider.textAttachment as? BlockAttachment else { return }
-            if let live = attachment.live {
-                provider.view = live.view
-                return
-            }
-            let hosting = NSHostingView(rootView: BlockEmbedView(info: attachment.info, context: attachment.context, width: nil))
-            hosting.sizingOptions = []
-            provider.view = hosting
+            provider.view = attachment.blockView
         }
     }
 
@@ -253,7 +393,8 @@ final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
     }
 }
 
-/// The SwiftUI view inside a block attachment.
+/// The SwiftUI view inside a file, math or embed block's attachment (pictures and
+/// dividers are AppKit views: `BlockAttachment.blockView`).
 struct BlockEmbedView: View {
     let info: BlockInfo
     let context: AttachmentContext?
@@ -270,12 +411,6 @@ struct BlockEmbedView: View {
     @ViewBuilder private var themedBody: some View {
         Group {
             switch info.kind {
-            case .divider:
-                Rectangle().fill(ThemeStyle(.border)).frame(height: 1)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .image:
-                ImageBlockView(url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
-                               attrs: attrs, context: context, width: width)
             case .file:
                 FileChip(name: fileName, url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
                          size: fileSize, context: context)
@@ -297,74 +432,6 @@ struct BlockEmbedView: View {
         if let name = attrs["name"]?.stringValue, !name.isEmpty { return name }
         if let url = attrs["url"]?.stringValue { return (url as NSString).lastPathComponent }
         return "File"
-    }
-}
-
-/// An image at its stored size (never wider than the column), its caption below, and
-/// its alt text (OCR or a description) as the hover help and accessibility label.
-private struct ImageBlockView: View {
-    let url: URL?
-    let attrs: [String: JSONValue]
-    let context: AttachmentContext?
-    let width: CGFloat?
-
-    private var alt: String { attrs["alt"]?.stringValue ?? "" }
-    private var caption: String { attrs["caption"]?.stringValue ?? "" }
-    private var name: String { attrs["name"]?.stringValue ?? "" }
-    private var label: String {
-        let text = [alt, caption, name].first { !$0.isEmpty } ?? ""
-        return text.isEmpty ? "Image" : text
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            content(width: width ?? proxy.size.width)
-        }
-    }
-
-    @ViewBuilder private func content(width: CGFloat) -> some View {
-        let theme = context?.theme ?? EditorTheme()
-        let image = url.flatMap { context?.slot(for: $0).image }
-        let size: CGSize? = ImageLayout.size(attrs: attrs, image: image, width: width, theme: theme)
-        VStack(alignment: .leading, spacing: 6 * theme.scale) {
-            Group {
-                if let image {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .contextMenu {
-                            if let url { Button("Open Image") { context?.openURL?(url) } }
-                            if !alt.isEmpty {
-                                Button("Copy Text in Image") {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(alt, forType: .string)
-                                }
-                            }
-                        }
-                } else {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(ThemeStyle(.surface))
-                        .overlay {
-                            Image(systemName: "photo").font(.title2).foregroundStyle(.themeTertiary)
-                        }
-                }
-            }
-            .frame(width: size?.width, height: size?.height)
-            .help(alt.isEmpty ? name : alt)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(label)
-            .accessibilityAddTraits(.isImage)
-            if !caption.isEmpty {
-                Text(caption)
-                    .font(.system(size: 12 * theme.scale))
-                    .lineSpacing(2)
-                    .foregroundStyle(.themeSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: size?.width ?? .infinity, alignment: .leading)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

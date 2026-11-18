@@ -14,16 +14,20 @@ final class FindingStub: Sendable {
         var chunks: [(delay: TimeInterval, data: Data)]
         /// Fail with this error (after the delay of the first chunk) instead of finishing.
         var failure: URLError.Code?
+        /// The last piece waits (after its delay) until this opens: a stream that stays
+        /// open for as long as the test needs, however slow the machine is.
+        var gate: StubGate?
 
         init(status: Int = 200, delay: TimeInterval = 0, body: Data) {
             self.status = status
             chunks = [(delay, body)]
         }
 
-        init(status: Int = 200, chunks: [(delay: TimeInterval, data: Data)], failure: URLError.Code? = nil) {
+        init(status: Int = 200, chunks: [(delay: TimeInterval, data: Data)], failure: URLError.Code? = nil, gate: StubGate? = nil) {
             self.status = status
             self.chunks = chunks
             self.failure = failure
+            self.gate = gate
         }
 
         static func json<T: Encodable>(_ value: T, delay: TimeInterval = 0) -> Reply {
@@ -115,7 +119,7 @@ final class FindingStubProtocol: URLProtocol, @unchecked Sendable {
             let failsHere = isLast && reply.failure != nil
             let needsResponse = !sentResponse && !(failsHere && chunk.data.isEmpty)
             sentResponse = sentResponse || needsResponse
-            queue.asyncAfter(deadline: .now() + delay) { [self] in
+            let send: @Sendable () -> Void = { [self] in
                 guard !flags.withLock({ $0.stopped }) else { return }
                 if isLast { flags.withLock { $0.done = true } }
                 if let failure = reply.failure, isLast {
@@ -131,6 +135,13 @@ final class FindingStubProtocol: URLProtocol, @unchecked Sendable {
                     client?.urlProtocolDidFinishLoading(self)
                 }
             }
+            queue.asyncAfter(deadline: .now() + delay) {
+                if isLast, let gate = reply.gate {
+                    gate.whenOpen { queue.async(execute: send) }
+                } else {
+                    send()
+                }
+            }
         }
     }
 
@@ -142,6 +153,17 @@ final class FindingStubProtocol: URLProtocol, @unchecked Sendable {
         guard cutShort, let url = request.url, let host = url.host(),
               let stub = Self.stubs.withLock({ $0[host] }) else { return }
         stub.didCancel(url)
+    }
+}
+
+/// Polls until `condition` holds, however long a busy machine keeps the main actor (the
+/// snapshot suites can hold it for over a minute on CI, so a wall-clock deadline here
+/// fails tests that would pass). Only for conditions that stay true once they hold; the
+/// test's `.timeLimit` bounds one that never does.
+@MainActor
+func until(_ condition: () -> Bool) async {
+    while !condition(), !Task.isCancelled {
+        try? await Task.sleep(for: .milliseconds(5))
     }
 }
 

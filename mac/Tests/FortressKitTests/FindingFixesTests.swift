@@ -120,15 +120,18 @@ import Testing
     }
 
     /// Asking something else (a follow-up, or leaving the page) stops the stream on the wire.
-    @Test func stoppingCancelsTheRequest() async {
+    @Test(.timeLimit(.minutes(3))) func stoppingCancelsTheRequest() async {
+        // The stream stays open until stopped (its end is held back, not just late: a busy
+        // machine could otherwise reach the end before the test stops it).
+        let end = StubGate()
         let stub = FindingStub { _ in
-            FindingStub.Reply(chunks: [(0.02, PerfData.sentenceLine(0)), (5, PerfData.doneLine())])
+            FindingStub.Reply(chunks: [(0.02, PerfData.sentenceLine(0)), (0, PerfData.doneLine())], gate: end)
         }
         let turn = AskTurn(question: "q")
         turn.start(stub.api.ask("q"))
-        await eventually { !turn.state.sentences.isEmpty }
+        await until { !turn.state.sentences.isEmpty }
         turn.stop()
-        await eventually { stub.cancelledCount("/api/ask") == 1 }
+        await until { stub.cancelledCount("/api/ask") == 1 }
         #expect(stub.cancelledCount("/api/ask") == 1)
         #expect(turn.state.phase == .stopped)
         #expect(turn.timeToFirstSentence != nil)
