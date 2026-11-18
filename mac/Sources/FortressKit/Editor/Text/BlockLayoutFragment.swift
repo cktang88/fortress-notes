@@ -86,7 +86,8 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
     private func decorationRect(_ info: BlockInfo) -> CGRect {
         let content = contentRect.isNull ? CGRect(x: 0, y: 0, width: 0, height: theme.lineHeight(for: info.kind)) : contentRect
         let nesting = CGFloat(info.depth) * theme.indentStep - leading
-        let width = layoutFragmentFrame.width + leading - CGFloat(info.depth) * theme.indentStep
+        let columnWidth = textLayoutManager?.textContainer?.size.width ?? (layoutFragmentFrame.maxX)
+        let width = columnWidth - CGFloat(info.depth) * theme.indentStep
         switch info.kind {
         case .code:
             return CGRect(x: nesting, y: content.minY - theme.codePadding, width: max(0, width),
