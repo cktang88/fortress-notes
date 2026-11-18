@@ -113,8 +113,15 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     /// Puts the caret at the start of a block, scrolls it to the middle and flashes it.
-    func focus(blockId: String) {
+    func focus(blockId: String, attempts: Int = 20) {
         guard let range = range(ofBlock: blockId) else { return }
+        // Wait until the view is in a sized window, or the scroll position is lost.
+        if attempts > 0, textView.window == nil || scrollView.contentView.bounds.height < 100 {
+            RunLoop.main.perform(inModes: [.common]) { [weak self] in
+                MainActor.assumeIsolated { self?.focus(blockId: blockId, attempts: attempts - 1) }
+            }
+            return
+        }
         textView.window?.makeFirstResponder(textView)
         textView.setSelectedRange(NSRange(location: range.location, length: 0))
         scrollToCenter(range)
@@ -148,6 +155,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         if textView.frame.height < frame.maxY + visible / 2 {
             textView.setFrameSize(NSSize(width: textView.frame.width, height: frame.maxY + visible / 2))
         }
+        textView.scrollRangeToVisible(range)
         let y = max(0, frame.midY - visible / 2)
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
         scrollView.reflectScrolledClipView(scrollView.contentView)
