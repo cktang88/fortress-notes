@@ -58,6 +58,9 @@ _log = logging.getLogger("fortress")
 INLINE_ENCODE_LIMIT = 8
 # Paragraphs per model batch and per commit while indexing in the background.
 ENCODE_BATCH = 16
+# Background batches hold about this much text (~500 tokens), so a search queued
+# behind one waits a few tens of milliseconds, not seconds.
+BACKGROUND_BATCH_CHARS = 2000
 INDEX_CHUNK = 64
 QUERY_CACHE_SIZE = 256
 # Query encodings of paragraph texts (focused related, whole-note queries) and of
@@ -451,10 +454,27 @@ def _encode(model, texts: list[str], *, is_query: bool, background: bool | None 
             )
 
     out: list = []
-    for start in range(0, len(texts), ENCODE_BATCH):
-        batch = texts[start : start + ENCODE_BATCH]
+    for batch in _batches(texts, BACKGROUND_BATCH_CHARS if background else None):
         out.extend(_encoder.run(lambda batch=batch: run(batch), priority))
     return [_tensor(embedding) for embedding in out]
+
+
+def _batches(texts: list[str], max_chars: int | None):
+    """Up to ``ENCODE_BATCH`` texts per batch and, with ``max_chars``, about that much
+    text: a search waits for at most one background batch, so keep them short."""
+
+    batch: list[str] = []
+    size = 0
+    for text in texts:
+        if batch and (
+            len(batch) >= ENCODE_BATCH or (max_chars is not None and size + len(text) > max_chars)
+        ):
+            yield batch
+            batch, size = [], 0
+        batch.append(text)
+        size += len(text)
+    if batch:
+        yield batch
 
 
 def tokenized_lengths(texts: list[str], *, is_query: bool = True) -> list[int] | None:

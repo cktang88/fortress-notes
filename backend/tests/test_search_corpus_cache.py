@@ -58,7 +58,8 @@ def _edit(database, document_id: str, text: str, index: int = 0) -> None:
     apply_transaction(
         database,
         document_id,
-        [BlockOperation(operation="update", block_id=tree["children"][index]["id"], text=text)],
+        [BlockOperation(operation="update", block_id=tree["children"][index]["id"],
+                        content=[{"type": "text", "text": text}])],
         tree["revision"],
     )
 

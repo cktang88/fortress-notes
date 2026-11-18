@@ -156,7 +156,7 @@ class RelatedRelevanceApiTests(unittest.TestCase):
                     f"/api/block-documents/{ids['Tiles']}/transactions",
                     json={"base_revision": tiles["revision"], "operations": [{
                         "operation": "update", "block_id": tiles["children"][0]["id"],
-                        "text": "rye flour sourdough starter fed this morning"}]},
+                        "content": [{"type": "text", "text": "rye flour sourdough starter fed this morning"}]}]},
                 )
                 related = [names[r["note"]["id"]] for r in client.get(url).json()]
                 self.assertEqual(sorted(related), ["Bread", "Tiles"])
@@ -170,7 +170,7 @@ class RelatedRelevanceApiTests(unittest.TestCase):
                     f"/api/block-documents/{draft}/transactions",
                     json={"base_revision": note["revision"], "operations": [{
                         "operation": "update", "block_id": note["children"][0]["id"],
-                        "text": "vet vaccines for the cat"}]},
+                        "content": [{"type": "text", "text": "vet vaccines for the cat"}]}]},
                 )
                 self.assertEqual([names[r["note"]["id"]] for r in client.get(url).json()], ["Cat"])
                 self.assertGreaterEqual(scored[-1], full)
