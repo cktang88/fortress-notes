@@ -817,27 +817,31 @@ def _manifest_text(blocks: list[Any]) -> list[str]:
     return parts
 
 
-def _char_counts(text: str) -> dict[str, int]:
+_WORD_RE = re.compile(r"[^\W_]+")
+
+
+def _word_counts(text: str) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for char in text.casefold():
-        if char.isalnum():
-            counts[char] = counts.get(char, 0) + 1
+    for word in _WORD_RE.findall(text.casefold()):
+        counts[word] = counts.get(word, 0) + 1
     return counts
 
 
 def text_coverage(expected: str, actual: str) -> tuple[float, int, int]:
-    """(share of ``expected``'s letters/digits found in ``actual``, counts).
+    """(share of ``expected``'s characters found in ``actual``, chars expected, chars found).
 
-    Compared as multisets of case-folded alphanumerics, so formatting, order,
-    whitespace and link syntax do not matter; only lost characters do.
+    Both texts are split into case-folded words (letters/digits); a word counts
+    with its length, as often as it occurs in both. Formatting, order,
+    whitespace, punctuation and link syntax do not matter; lost words do.
     """
 
-    want, have = _char_counts(expected), _char_counts(actual)
-    total = sum(want.values())
+    want, have = _word_counts(expected), _word_counts(actual)
+    total = sum(len(word) * count for word, count in want.items())
+    found = sum(len(word) * count for word, count in have.items())
     if total == 0:
-        return 1.0, 0, sum(have.values())
-    covered = sum(min(count, have.get(char, 0)) for char, count in want.items())
-    return covered / total, total, sum(have.values())
+        return 1.0, 0, found
+    covered = sum(len(word) * min(count, have.get(word, 0)) for word, count in want.items())
+    return covered / total, total, found
 
 
 class _Importer:
@@ -1188,10 +1192,14 @@ class _Importer:
             )
             with block_store.connection_scope(self.db_path) as connection:
                 rows = connection.execute(
-                    "SELECT text, attrs_json FROM blocks WHERE document_id = ?", (state["document_id"],)
+                    "SELECT text, attrs_json, provenance_json FROM blocks WHERE document_id = ?",
+                    (state["document_id"],),
                 ).fetchall()
             imported = []
             for row in rows:
+                external = str(provenance.loads(row["provenance_json"]).get("external_id") or "")
+                if "/subpage" in external or "/ink_text" in external:
+                    continue  # added by the importer, not page text
                 imported.append(str(row["text"] or ""))
                 try:
                     attrs = json.loads(row["attrs_json"] or "{}")
