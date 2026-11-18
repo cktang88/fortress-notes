@@ -57,6 +57,14 @@ def save_upload(
     return f"/media/{path.name}", name, path
 
 
+def upload_path(content_type: str | None, extension: str | None = None) -> Path:
+    """Where a new upload of this type goes: a fresh ULID name, never reused."""
+
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    extension = extension or _EXTENSIONS_BY_TYPE.get(media_type, ".bin")
+    return get_settings().assets_path / f"{ULID()}{extension}"
+
+
 def content_hash(data: bytes) -> str:
     """Return the stable SHA-256 key used for asset metadata."""
     return sha256(data).hexdigest()

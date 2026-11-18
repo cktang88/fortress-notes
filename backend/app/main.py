@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
+import os
 import shutil
 import sqlite3
 from contextlib import asynccontextmanager
@@ -156,6 +158,7 @@ async def lifespan(_app: FastAPI):
                 running.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await running
+        await asyncio.to_thread(documents.flush_mirrors)
 
 
 app = FastAPI(title="Fortress Notes", lifespan=lifespan)
@@ -277,10 +280,24 @@ def _document_response(request: Request, document_id: str) -> Response:
     return http_cache.json_response(rendered[1], rendered[0])
 
 
-def _tree_response(tree: dict) -> Response:
-    """A tree a write just returned; cached for the GET that usually follows."""
+def _tree_response(
+    document_id: str, tree: dict, validator: tuple | None = None, cache: bool = True
+) -> Response:
+    """A tree a write just returned, rendered once (no jsonable_encoder pass).
 
-    return JSONResponse(tree)
+    With its validator (read in the write's own transaction) the body is
+    cached for the GETs that follow, and ``X-Document-ETag`` carries the ETag
+    ``GET /api/block-documents/{id}`` now answers 304 to.
+    """
+
+    body = http_cache.render(tree)
+    response = http_cache.json_response(body)
+    if validator is not None:
+        tag = http_cache.etag("document", document_id, *validator)
+        if cache:
+            _document_cache.put((settings.block_db_path, document_id), tag, body)
+        response.headers["X-Document-ETag"] = tag
+    return response
 
 
 def _workspace_response(request: Request, name: str, build, *key_parts) -> Response:
@@ -557,10 +574,26 @@ async def import_uploaded_markdown(
     """Create one new note per uploaded Markdown file."""
 
     folder_id = folder_id or None
-    if folder_id is not None and not block_store.folder_exists(settings.block_db_path, folder_id):
+    if folder_id is not None and not await run_in_threadpool(
+        block_store.folder_exists, settings.block_db_path, folder_id
+    ):
         raise HTTPException(404, "folder not found")
     imported: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
+
+    def create_note(name: str, raw: bytes):
+        parsed = parse_uploaded_markdown(name, raw)
+        return documents.create(
+            NoteCreate(
+                title=parsed.title,
+                body=parsed.body,
+                status=parsed.status,
+                folder_id=folder_id,
+            ),
+            created_at=parsed.created_at,
+            source=parsed.provenance,
+        )
+
     for upload in files:
         name = upload.filename or "untitled.md"
         raw = await upload.read(MAX_IMPORT_BYTES + 1)
@@ -568,17 +601,7 @@ async def import_uploaded_markdown(
             errors.append({"name": name, "detail": "file is larger than 5 MB"})
             continue
         try:
-            parsed = parse_uploaded_markdown(name, raw)
-            note = documents.create(
-                NoteCreate(
-                    title=parsed.title,
-                    body=parsed.body,
-                    status=parsed.status,
-                    folder_id=folder_id,
-                ),
-                created_at=parsed.created_at,
-                source=parsed.provenance,
-            )
+            note = await run_in_threadpool(create_note, name, raw)
         except ValueError as exc:
             errors.append({"name": name, "detail": str(exc)})
             continue
@@ -612,7 +635,7 @@ async def start_onenote_import(request: Request):
             suffix = Path(input_name).suffix.lower()
             if suffix not in _ONENOTE_UPLOAD_SUFFIXES:
                 raise HTTPException(415, "Choose a OneNote export: a .zip, .onepkg or .one file.")
-            _check_import_folder(folder_id)
+            await run_in_threadpool(_check_import_folder, folder_id)
             owned = onenote_import.imports_dir(settings.notes_path) / f"{job_id}-upload"
             # The converter names things after the file (a loose .one's section) and
             # its folder (that section's notebook): keep the user's file name.
@@ -642,9 +665,10 @@ async def start_onenote_import(request: Request):
         input_path = Path(payload["path"]).expanduser()
         if not input_path.exists():
             raise HTTPException(400, "That file or folder does not exist.")
-        _check_import_folder(folder_id)
+        await run_in_threadpool(_check_import_folder, folder_id)
         input_name = input_path.name
-    record = onenote_import.jobs.submit(
+    record = await run_in_threadpool(
+        onenote_import.jobs.submit,
         job_id,
         input_path=input_path,
         input_name=input_name,
@@ -984,17 +1008,28 @@ async def check_block_document_links(document_id: str):
 
 
 @app.post("/api/block-documents/{document_id}/transactions")
-def apply_block_transaction(document_id: str, transaction: BlockTransaction):
+def apply_block_transaction(
+    document_id: str,
+    transaction: BlockTransaction,
+    response: str = Query("document", pattern="^(document|meta)$"),
+):
+    """Apply a transaction. ``?response=meta`` answers without ``children``."""
+
     try:
+        validator: list = []
         tree = block_store.apply_transaction(
             settings.block_db_path,
             document_id,
             transaction.operations,
             transaction.base_revision,
             transaction.transaction_id,
+            validator_out=validator,
+            include_children=response == "document",
         )
-        documents.write_mirror(document_id)
-        return tree
+        documents.schedule_mirror(document_id)
+        return _tree_response(
+            document_id, tree, validator[0] if validator else None, cache=response == "document"
+        )
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -1012,8 +1047,8 @@ def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
         tree = block_store.undo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
-        documents.write_mirror(document_id)
-        return tree
+        documents.schedule_mirror(document_id)
+        return _tree_response(document_id, tree)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -1028,8 +1063,8 @@ def redo_block_transaction(document_id: str, request: BlockHistoryRequest):
         tree = block_store.redo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
-        documents.write_mirror(document_id)
-        return tree
+        documents.schedule_mirror(document_id)
+        return _tree_response(document_id, tree)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -1058,20 +1093,52 @@ async def _read_upload(file: UploadFile, limit: int | None = None) -> bytes:
     return b"".join(chunks)
 
 
+async def _stream_upload(file: UploadFile, path: Path, limit: int | None = None) -> str:
+    """Copy an upload to ``path`` in chunks (never whole in memory); its SHA-256.
+
+    Refuses it (413) as soon as it passes the limit; nothing is left behind.
+    File writes run in worker threads, not on the event loop.
+    """
+
+    limit = MAX_UPLOAD_BYTES if limit is None else limit
+    partial = path.with_name(f".{path.name}.part")
+    digest = hashlib.sha256()
+    size = 0
+    handle = await run_in_threadpool(partial.open, "wb")
+    try:
+        try:
+            while chunk := await file.read(_UPLOAD_CHUNK):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(
+                        413,
+                        f"File is larger than {limit // (1024 * 1024)} MB; choose a smaller one.",
+                    )
+                digest.update(chunk)
+                await run_in_threadpool(handle.write, chunk)
+        finally:
+            await run_in_threadpool(handle.close)
+        await run_in_threadpool(os.replace, partial, path)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    return digest.hexdigest()
+
+
 @app.post("/api/images")
 async def upload_image(file: UploadFile = File(...)):
     if not assets.is_supported_image_type(file.content_type):
         raise HTTPException(400, "Unsupported image type")
-    data = await _read_upload(file)
+    media_type = (file.content_type or "image/png").split(";", 1)[0].strip().lower()
+    path = assets.upload_path(media_type, images.image_extension(media_type))
+    digest = await _stream_upload(file, path)
     # Save the file and return immediately so the image appears instantly. Caption + OCR
     # (slow, only needed for search) run in the background to populate the sidecar cache.
-    url, path = images.save_bytes(data, file.content_type or "image/png")
-    block_store.register_asset(
-        settings.block_db_path, path, assets.content_hash(data),
-        (file.content_type or "image/png").split(";", 1)[0].strip().lower(),
+    await run_in_threadpool(
+        block_store.register_asset, settings.block_db_path, path, digest, media_type
     )
     _spawn(asyncio.to_thread(images.extract_and_store, path))
-    return {"url": url, "text": ""}
+    return {"url": f"/media/{path.name}", "text": ""}
 
 
 @app.post("/api/files")
@@ -1079,11 +1146,13 @@ async def upload_file(file: UploadFile = File(...)):
     media_type = (file.content_type or "").split(";", 1)[0].strip().lower()
     if media_type.startswith("image/") and not assets.is_supported_image_type(media_type):
         raise HTTPException(415, "Unsupported image type")
-    data = await _read_upload(file)
-    url, name, path = assets.save_upload(data, file.filename, file.content_type)
-    block_store.register_asset(
-        settings.block_db_path, path, assets.content_hash(data),
-        (file.content_type or "application/octet-stream").split(";", 1)[0].strip().lower(),
+    path = assets.upload_path(media_type)
+    digest = await _stream_upload(file, path)
+    name = assets.safe_filename(file.filename)
+    url = f"/media/{path.name}"
+    await run_in_threadpool(
+        block_store.register_asset, settings.block_db_path, path, digest,
+        media_type or "application/octet-stream",
     )
     if assets.is_supported_image_type(file.content_type):
         _spawn(asyncio.to_thread(images.extract_and_store, path))
@@ -1159,7 +1228,7 @@ def related(note_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None =
 
 @app.post("/api/notes/{note_id}/review", response_model=ReviewResponse)
 async def review(note_id: str, kind: ReviewKind = "factcheck"):
-    note = documents.get_note(note_id)
+    note = await run_in_threadpool(documents.get_note, note_id)
     if note is None:
         raise HTTPException(404, "Note not found")
     return await llm.review_note(kind, note.title, note.body)
@@ -1171,8 +1240,8 @@ async def review(note_id: str, kind: ReviewKind = "factcheck"):
 )
 async def review_block(document_id: str, block_id: str, kind: ReviewKind = "factcheck"):
     try:
-        result = block_store.document_subtree(
-            settings.block_db_path, document_id, block_id
+        result = await run_in_threadpool(
+            block_store.document_subtree, settings.block_db_path, document_id, block_id
         )
     except KeyError as exc:
         raise HTTPException(404, "Block not found") from exc
@@ -1188,8 +1257,9 @@ async def review_block(document_id: str, block_id: str, kind: ReviewKind = "fact
 )
 async def review_block_context(document_id: str, request: BlockReviewContextRequest):
     try:
-        resolved = block_store.document_review_context(
-            settings.block_db_path, document_id, request.context, request.block_ids
+        resolved = await run_in_threadpool(
+            block_store.document_review_context,
+            settings.block_db_path, document_id, request.context, request.block_ids,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
