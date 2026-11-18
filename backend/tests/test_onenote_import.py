@@ -1031,6 +1031,32 @@ class OneNoteSamplesTests(_Base):
         for nb in second["notebooks"]:
             self.assertEqual((nb["pages_created"], nb["pages_updated"]), (0, 0), nb["name"])
         self.assertEqual(sum(nb["pages_unchanged"] for nb in second["notebooks"]), summary["pages"])
+        # Nothing lost silently.
+        self.assertEqual([page for nb in notebooks for page in nb["low_coverage_pages"]], [])
+
+        # Simulate an edit in OneNote: the paragraph keeps its object id, so the
+        # same Fortress block is updated.
+        edited = next((
+            (page, block) for page in _pages(manifest).values() for item in page["items"]
+            for block in item["blocks"]
+            if block.get("type") == "paragraph" and block.get("object_id") and block.get("text")
+        ), None)
+        self.assertIsNotNone(edited, "the converter found no object ids")
+        page, block = edited
+        with block_store.connection_scope(self.db) as connection:
+            [before] = [row["id"] for row in connection.execute(
+                "SELECT blocks.id, blocks.provenance_json FROM blocks JOIN documents ON documents.id = blocks.document_id"
+                " WHERE documents.source_external_id = ?", (page["id"],))
+                if block["object_id"] in (row["provenance_json"] or "")]
+        block["text"] += " (edited)"
+        block.pop("marks", None)
+        (out / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        third = onenote_import.import_manifest(
+            out, db_path=self.db, notes_path=self.notes, assets_path=self.settings.assets_path)
+        self.assertEqual(sum(nb["pages_updated"] for nb in third["notebooks"]), 1)
+        with block_store.connection_scope(self.db) as connection:
+            row = connection.execute("SELECT text FROM blocks WHERE id = ?", (before,)).fetchone()
+        self.assertTrue(row["text"].endswith("(edited)"))
 
 
 def _manifest_blocks(notebook):
