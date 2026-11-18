@@ -31,7 +31,6 @@ class Settings(BaseSettings):
     # content) so it is searchable. OCR_THREADS 0 = half the cores, at most 4.
     vision_enabled: bool = True
     ocr_threads: int = 0
-    frontend_origin: str = "http://localhost:5173"
     block_db_import_on_startup: bool = True
     # Keep a daily SQLite snapshot in NOTES_DIR/.fortress-backups (last 7 kept).
     auto_backup_enabled: bool = True

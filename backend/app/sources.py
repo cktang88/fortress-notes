@@ -630,10 +630,10 @@ def _create(
     created = created_at or now
     position = _document_insert_position(connection, folder_id, None)
     connection.execute(
-        """INSERT INTO documents(id, title, status, tags_json, folder_id, position,
+        """INSERT INTO documents(id, title, status, folder_id, position,
                created_at, updated_at, provenance_json, source_kind, source_external_id,
                sync_json)
-           VALUES (?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             document_id, title,
             status if status in {"rough", "polished"} else "rough",

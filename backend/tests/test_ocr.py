@@ -94,7 +94,7 @@ class _Workspace(unittest.TestCase):
         return path, digest
 
     def note_with(self, title: str, media: list[str], alt: str = "") -> tuple[str, list[str]]:
-        document = block_store.create_block_document(self.db, title, "rough", [], "")
+        document = block_store.create_block_document(self.db, title, "rough", "")
         tree = block_store.apply_transaction(
             self.db,
             document["id"],
@@ -288,16 +288,16 @@ class OcrTextIsSearchableTests(unittest.TestCase):
 
         # A pasted screenshot in a note whose own words say nothing about it.
         upload = self.client.post(
-            "/api/images", files={"file": ("shot.png", b"\x89PNG fake screenshot", "image/png")}
+            "/api/files", files={"file": ("shot.png", b"\x89PNG fake screenshot", "image/png")}
         )
         self.assertEqual(upload.status_code, 200, upload.text)
-        self.url = upload.json()["url"]
+        self.url = upload.json()["props"]["url"]
         self.document_id = self.client.post(
             "/api/block-documents", json={"title": "Screenshots", "body": "Pasted from my phone"}
         ).json()["id"]
         tree = self.client.get(f"/api/block-documents/{self.document_id}").json()
         response = self.client.post(
-            f"/api/block-documents/{self.document_id}/transactions",
+            f"/api/block-documents/{self.document_id}/transactions?response=document",
             json={"base_revision": tree["revision"], "operations": [
                 {"operation": "insert", "type": "image", "attrs": {"url": self.url}}
             ]},
@@ -421,8 +421,8 @@ class EndToEndTests(unittest.TestCase):
             text_image(["Quarterly offsite in Reykjavik", "Budget approved 48,000"]).save(buffer, "PNG")
             with TestClient(main.app) as client:
                 url = client.post(
-                    "/api/images", files={"file": ("shot.png", buffer.getvalue(), "image/png")}
-                ).json()["url"]
+                    "/api/files", files={"file": ("shot.png", buffer.getvalue(), "image/png")}
+                ).json()["props"]["url"]
                 document_id = client.post(
                     "/api/block-documents", json={"title": "Pasted", "body": ""}
                 ).json()["id"]
@@ -450,7 +450,7 @@ class RealColbertTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            document = block_store.create_block_document(database, "Trips", "rough", [], "")
+            document = block_store.create_block_document(database, "Trips", "rough", "")
             assets = Path(directory)
             names = []
             for name, data in (("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"a"), ("01JBBBBBBBBBBBBBBBBBBBBBBB.png", b"b")):

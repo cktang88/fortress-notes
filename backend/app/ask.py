@@ -322,13 +322,6 @@ def _semantic(question: str) -> list[dict[str, object]]:
     return [details[str(hit["block_id"])] for hit in hits if str(hit["block_id"]) in details]
 
 
-def prefetch(question: str, sources: _Sources) -> list[str]:
-    """Literal grep for key words, then meaning-based search, merged (no model call)."""
-
-    literal = grep_terms(key_terms(question))
-    return sources.add([*literal, *_semantic(question)])
-
-
 async def _prefetch_parallel(question: str, sources: _Sources) -> list[str]:
     # Both are synchronous (SQLite, ColBERT); run them side by side off the event
     # loop so other requests aren't stalled while Ask looks things up.

@@ -10,46 +10,9 @@ from datetime import datetime, timezone
 
 from . import block_query, block_store, documents, embeddings, relevance
 from .config import get_settings
-from .models import RelatedResult, SearchResult
+from .models import RelatedResult
 
 _RELATED_EXCERPT_LENGTH = 240
-
-
-def full_text_search(q: str) -> list[SearchResult]:
-    if not q.strip():
-        return []
-    hits = block_store.search_blocks(get_settings().block_db_path, q)
-    scores: dict[str, float] = {}
-    for hit in hits:
-        document_id = str(hit["document_id"])
-        scores[document_id] = max(scores.get(document_id, 0.0), float(hit["score"]))
-    return _ranked(scores)
-
-
-def embedding_search(q: str, k: int = 20) -> list[SearchResult]:
-    if not q.strip():
-        return []
-    block_docs = block_store.embedding_documents(get_settings().block_db_path)
-    scores = embeddings.score_documents(
-        q, [(block_id, updated_at, text) for block_id, _, updated_at, text in block_docs]
-    )
-    document_ids = {block_id: document_id for block_id, document_id, _, _ in block_docs}
-    note_scores: dict[str, float] = {}
-    for block_id, score in scores.items():
-        document_id = document_ids[block_id]
-        note_scores[document_id] = max(note_scores.get(document_id, 0.0), score)
-    return _ranked(note_scores)[:k]
-
-
-def _ranked(scores: dict[str, float]) -> list[SearchResult]:
-    summaries = documents.summaries()
-    results = [
-        SearchResult(note=summaries[document_id], score=score)
-        for document_id, score in scores.items()
-        if document_id in summaries and score > 0
-    ]
-    results.sort(key=lambda r: r.score, reverse=True)
-    return results
 
 
 # Related results per (note, k, block) for one corpus and scoring state: opening

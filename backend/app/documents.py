@@ -13,14 +13,13 @@ import os
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import frontmatter
 
 from . import block_store, duplicates, images, provenance, workspace
 from .config import get_settings
-from .models import Note, NoteCreate, NoteStatus, NoteSummary, NoteUpdate
+from .models import NoteCreate, NoteSummary, NoteUpdate
 
 
 def _paths() -> tuple[Path, Path]:
@@ -31,43 +30,14 @@ def _paths() -> tuple[Path, Path]:
 # --- Reads -------------------------------------------------------------------
 
 
-def list_notes(status: NoteStatus | None = None) -> list[NoteSummary]:
-    db_path, _ = _paths()
-    return [
-        NoteSummary(**{key: item[key] for key in NoteSummary.model_fields})
-        for item in block_store.list_documents(db_path)
-        if status is None or item["status"] == status
-    ]
+def summaries(ids: list[str]) -> dict[str, NoteSummary]:
+    """Summaries of the active notes among ``ids``."""
 
-
-def summaries(ids: list[str] | None = None) -> dict[str, NoteSummary]:
-    """Summaries of every active note, or just of ``ids`` (much cheaper for a few)."""
-
-    if ids is None:
-        return {summary.id: summary for summary in list_notes()}
     db_path, _ = _paths()
     return {
         str(item["id"]): NoteSummary(**{key: item[key] for key in NoteSummary.model_fields})
         for item in block_store.list_documents(db_path, list(ids))
     }
-
-
-def get_note(document_id: str) -> Note | None:
-    db_path, _ = _paths()
-    tree = block_store.document_tree(db_path, document_id)
-    if tree is None:
-        return None
-    body = block_store.render_markdown(tree["children"])
-    return Note(
-        id=tree["id"],
-        title=tree["title"],
-        status=tree["status"],
-        tags=tree["tags"],
-        created_at=tree["created_at"],
-        updated_at=tree["updated_at"],
-        snippet=" ".join(body.split())[:160],
-        body=body,
-    )
 
 
 # --- Writes ------------------------------------------------------------------
@@ -77,8 +47,8 @@ def create(
     data: NoteCreate,
     created_at: object | None = None,
     source: dict[str, object] | None = None,
-) -> Note:
-    """Create a note; raises KeyError when the folder does not exist.
+) -> dict:
+    """Create a note and return its tree; raises KeyError when the folder does not exist.
 
     ``source`` is server-side provenance (an import); otherwise the client's
     ``data.provenance`` is validated (ValueError when unusable), defaulting to
@@ -92,7 +62,6 @@ def create(
         db_path,
         data.title or block_store.derive_title(data.body),
         data.status,
-        data.tags,
         data.body,
         folder_id=data.folder_id,
         created_at=created_at,
@@ -101,40 +70,21 @@ def create(
         provenance=source,
     )
     write_mirror(tree["id"])
-    note = get_note(tree["id"])
-    assert note is not None
-    return note
+    return tree
 
 
-def update(document_id: str, data: NoteUpdate) -> Note:
-    """Change title, status, tags or (whole-document) body; KeyError if missing."""
+def update(document_id: str, data: NoteUpdate) -> tuple[dict, tuple]:
+    """Change title and/or status; the metadata payload and validator. KeyError if missing.
+
+    The mirror is rewritten in the background (coalesced), not inline.
+    """
 
     db_path, _ = _paths()
-    current = block_store.document_tree(db_path, document_id)
-    if current is None:
-        raise KeyError("document not found")
-    # Clearing the title hands it back to the first line of the note.
-    clearing_title = data.title is not None and data.title.strip() in ("", "Untitled")
-    if clearing_title:
-        data = data.model_copy(update={"title": None})
-    title = data.title if data.title is not None else current["title"]
-    status = data.status if data.status is not None else current["status"]
-    tags = data.tags if data.tags is not None else current["tags"]
-    now = datetime.now(timezone.utc).isoformat()
-    if data.body is not None:
-        block_store.replace_document_from_markdown(
-            db_path, document_id, title, status, tags, data.body, current["created_at"], now
-        )
-    else:
-        block_store.update_document_metadata(
-            db_path, document_id, title, status, tags, now, title_chosen=data.title is not None
-        )
-    if clearing_title:
-        block_store.use_auto_title(db_path, document_id)
-    write_mirror(document_id)
-    note = get_note(document_id)
-    assert note is not None
-    return note
+    result = block_store.update_document_metadata(
+        db_path, document_id, title=data.title, status=data.status
+    )
+    schedule_mirror(document_id)
+    return result
 
 
 def trash(document_id: str) -> None:
@@ -192,7 +142,6 @@ def capture(text: str, extra_provenance: dict | None = None) -> dict[str, object
         db_path,
         block_store.derive_title(body)[:80],
         "rough",
-        [],
         body,
         folder_id=folder_id,
         provenance=source,
@@ -337,11 +286,11 @@ def _mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
             metadata = dict(frontmatter.loads(target.read_text(encoding="utf-8")).metadata)
         except Exception:  # A damaged mirror is simply rewritten.
             metadata = {}
+    metadata.pop("tags", None)  # retired; dropped from older mirrors too
     metadata.update(
         id=tree["id"],
         title=tree["title"],
         status=tree["status"],
-        tags=tree["tags"],
         created_at=tree["created_at"],
         updated_at=tree["updated_at"],
         images=images.collect_image_texts(body),

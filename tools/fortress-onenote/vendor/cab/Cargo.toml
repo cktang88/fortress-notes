@@ -1,0 +1,34 @@
+# Vendored copy of cab 0.6.0 (MIT) with fortress-onenote hardening
+# patches; see ../PATCHES.md. Normalised from the crates.io package:
+# examples, tests and dev-dependencies removed.
+
+[package]
+edition = "2021"
+name = "cab"
+version = "0.6.0"
+authors = ["Matthew D. Steele <mdsteele@alum.mit.edu>"]
+description = "Read/write Windows cabinet (CAB) files"
+readme = "README.md"
+keywords = [
+    "archive",
+    "cab",
+    "cabinet",
+    "windows",
+]
+license = "MIT"
+repository = "https://github.com/mdsteele/rust-cab"
+
+[dependencies.byteorder]
+version = "1"
+
+[dependencies.flate2]
+version = "1"
+features = ["rust_backend"]
+default-features = false
+
+[dependencies.lzxd]
+version = "0.2.5"
+
+[dependencies.time]
+version = "0.3"
+

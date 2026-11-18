@@ -39,7 +39,7 @@ class AutoTitleTests(unittest.TestCase):
     def write(self, document: dict, text: str) -> dict:
         block = document["children"][0]
         response = self.client.post(
-            f"/api/block-documents/{document['id']}/transactions",
+            f"/api/block-documents/{document['id']}/transactions?response=document",
             json={
                 "base_revision": document["revision"],
                 "operations": [{"operation": "update", "block_id": block["id"], "text": text}],

@@ -39,7 +39,7 @@ class NoteFolderCreationTests(unittest.TestCase):
                 ).json()
 
                 created = client.post(
-                    "/api/notes",
+                    "/api/block-documents",
                     json={"title": "Research notes", "body": "", "folder_id": child["id"]},
                 )
                 self.assertEqual(created.status_code, 201)
@@ -50,7 +50,7 @@ class NoteFolderCreationTests(unittest.TestCase):
                 self.assertEqual(research["children"][0]["id"], note_id)
 
                 missing = client.post(
-                    "/api/notes",
+                    "/api/block-documents",
                     json={"title": "Orphan", "body": "", "folder_id": "missing-folder"},
                 )
 

@@ -12,8 +12,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -25,6 +24,7 @@ from . import (
     block_store,
     embeddings,
     documents,
+    document_service,
     duplicates,
     http_cache,
     llm,
@@ -36,34 +36,21 @@ from . import (
     workspace,
 )
 from .portability import (
-    export_all_markdown,
     export_document_markdown,
     parse_uploaded_markdown,
     safe_filename,
-    import_markdown_directory,
     import_markdown_if_empty,
-    preview_markdown_directory,
 )
 from .block_types import BlockShapeError
 from .config import get_settings
-from . import link_checks
 from .models import (
-    Note,
     NoteCreate,
     NoteStatus,
-    NoteSummary,
     NoteUpdate,
     BlockTransaction,
     BlockHistoryRequest,
-    BlockSearchResult,
     BlockLinkTarget,
     Backlink,
-    ReviewKind,
-    ReviewResponse,
-    BlockReviewResponse,
-    BlockReviewContextRequest,
-    BlockReviewContextResponse,
-    SearchResult,
     RelatedResult,
     DocumentMove,
     DocumentOrganization,
@@ -73,7 +60,6 @@ from .models import (
     FolderRename,
     AskRequest,
     CaptureRequest,
-    SavedSearchCreate,
     SourceConflictResolution,
 )
 
@@ -136,6 +122,8 @@ async def lifespan(_app: FastAPI):
         block_store.backfill_assets, settings.block_db_path, settings.assets_path
     )
     await asyncio.to_thread(block_store.ensure_fts_integrity, settings.block_db_path)
+    # Older data may hold notes with no blocks; reads never add the paragraph.
+    await asyncio.to_thread(block_store.ensure_editable_block, settings.block_db_path)
     backup_task = (
         asyncio.create_task(_backup_loop())
         if getattr(settings, "auto_backup_enabled", True)
@@ -162,14 +150,6 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Fortress Notes", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 class ResponseHeadersMiddleware:
     """Headers every response of a kind needs (plain ASGI: no body buffering).
@@ -241,66 +221,59 @@ async def unexpected_error(_request: Request, exc: Exception) -> JSONResponse:
 # Serve stored files at /media/<file> (immutable caching, ranges, real types).
 app.mount("/media", media.MediaFiles(directory=settings.assets_path), name="media")
 
-# Rendered bodies by validator: a repeated GET skips SQLite and JSON encoding.
-_document_cache = http_cache.ResponseCache(max_entries=256, max_bytes=64 * 1024 * 1024)
-_api_cache = http_cache.ResponseCache(max_entries=256, max_bytes=32 * 1024 * 1024)
+# Rendered note bodies and the one document ETag live in app/document_service.py
+# (shared with the batch read); it reads settings through main so tests that patch
+# ``main.settings`` reach it.
+document_service.use_settings(lambda: settings)
+_api_cache = document_service.responses
 
 
 def _clear_response_caches() -> None:
-    _document_cache.clear()
-    _api_cache.clear()
-
-
-def _document_body(document_id: str, validator: tuple | None = None) -> tuple[str, bytes] | None:
-    """(ETag, rendered tree) of a note, rendered at most once per validator."""
-
-    db = settings.block_db_path
-    key = (db, document_id)
-    if validator is not None:
-        tag = http_cache.etag("document", document_id, *validator)
-        body = _document_cache.get(key, tag)
-        if body is not None:
-            return tag, body
-    result = block_store.document_tree_with_validator(db, document_id)
-    if result is None:
-        return None
-    validator, tree = result
-    tag = http_cache.etag("document", document_id, *validator)
-    body = http_cache.render(tree)
-    _document_cache.put(key, tag, body)
-    return tag, body
+    document_service.clear_caches()
 
 
 def _document_response(request: Request, document_id: str) -> Response:
-    validator = block_store.document_validator(settings.block_db_path, document_id)
-    if validator is None:
+    """The note's tree, or 304 when ``If-None-Match`` has its ETag. Never writes."""
+
+    tag = document_service.current_etag(document_id)
+    if tag is None:
         raise HTTPException(404, "Block document not found")
-    tag = http_cache.etag("document", document_id, *validator)
     if http_cache.if_none_match(request.headers.get("if-none-match"), tag):
         return http_cache.not_modified(tag)
-    rendered = _document_body(document_id, validator)
+    rendered = document_service.body(document_id, tag)
     if rendered is None:
         raise HTTPException(404, "Block document not found")
     return http_cache.json_response(rendered[1], rendered[0])
 
 
-def _tree_response(
-    document_id: str, tree: dict, validator: tuple | None = None, cache: bool = True
-) -> Response:
-    """A tree a write just returned, rendered once (no jsonable_encoder pass).
+def _written_response(document_id: str, status_code: int = 200) -> Response:
+    """The note as it is now, after a write, with ``X-Document-ETag``.
 
-    With its validator (read in the write's own transaction) the body is
-    cached for the GETs that follow, and ``X-Document-ETag`` carries the ETag
-    ``GET /api/block-documents/{id}`` now answers 304 to.
+    The body and its ETag come from one read snapshot (never a tree from the
+    write paired with a validator read later), so a client may keep the body
+    under that ETag and revalidate it with ``If-None-Match``.
     """
 
-    body = http_cache.render(tree)
+    rendered = document_service.body(document_id)
+    if rendered is None:
+        raise HTTPException(404, "Block document not found")
+    response = http_cache.json_response(rendered[1], status_code=status_code)
+    response.headers["X-Document-ETag"] = rendered[0]
+    return response
+
+
+def _tree_response(
+    document_id: str, tree: dict, validator: tuple, cache: bool = True
+) -> Response:
+    """A tree (or metadata payload) a write returned with the validator it read.
+
+    ``X-Document-ETag`` is the ETag ``GET /api/block-documents/{id}`` now
+    answers 304 to; a full tree is cached for the GETs that follow.
+    """
+
+    tag, body = document_service.remember(document_id, tree, validator, cache=cache)
     response = http_cache.json_response(body)
-    if validator is not None:
-        tag = http_cache.etag("document", document_id, *validator)
-        if cache:
-            _document_cache.put((settings.block_db_path, document_id), tag, body)
-        response.headers["X-Document-ETag"] = tag
+    response.headers["X-Document-ETag"] = tag
     return response
 
 
@@ -414,33 +387,30 @@ def move_block_document(document_id: str, data: DocumentMove):
         raise HTTPException(404, str(exc)) from exc
 
 
-@app.get("/api/block-documents")
-def list_block_documents():
-    return block_store.list_documents(settings.block_db_path)
-
-
 @app.post("/api/block-documents", status_code=201)
 def create_block_document(data: NoteCreate):
     try:
-        note = documents.create(data)
+        tree = documents.create(data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return block_store.document_tree(settings.block_db_path, note.id)
+    return _written_response(tree["id"], status_code=201)
 
 
 @app.patch("/api/block-documents/{document_id}")
 def update_block_document(document_id: str, data: NoteUpdate):
-    """Change a document's title and/or status (the body changes through transactions)."""
+    """Change a document's title and/or status (the body changes through transactions).
 
-    if data.body is not None:
-        raise HTTPException(422, "edit the body with block transactions")
+    Answers the metadata payload (``children`` empty, as ``?response=meta`` of a
+    transaction) with ``X-Document-ETag``; the note's content did not change.
+    """
+
     try:
-        documents.update(document_id, data)
+        meta, validator = documents.update(document_id, data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return block_store.document_tree(settings.block_db_path, document_id)
+    return _tree_response(document_id, meta, validator, cache=False)
 
 
 @app.delete("/api/block-documents/{document_id}", status_code=204)
@@ -454,14 +424,27 @@ def delete_block_document(document_id: str):
 
 @app.get("/api/block-documents/{document_id}")
 def get_block_document(document_id: str, request: Request):
-    """The note's block tree; ``If-None-Match`` with its ETag answers 304."""
+    """The note's block tree; ``If-None-Match`` with its ETag answers 304.
 
-    db = settings.block_db_path
-    # The editor needs a block to type into, even in a note that has none.
-    block_store.ensure_editable_block(db, document_id)
-    # Debounced, and skipped rather than waited for while a writer is busy.
-    block_store.mark_opened(db, document_id, wait=False)
+    A read only: opening is recorded by ``POST .../opened``, and the paragraph
+    an empty note needs is made when the note is created, imported or restored.
+    """
+
     return _document_response(request, document_id)
+
+
+@app.post("/api/block-documents/{document_id}/opened", status_code=204)
+def record_opened(document_id: str):
+    """The person opened the note (for "last opened"); the app sends it fire-and-forget.
+
+    Debounced per note and skipped rather than waited for while a writer holds
+    the database. Not part of the note's ETag.
+    """
+
+    if not block_store.document_exists(settings.block_db_path, document_id):
+        raise HTTPException(404, "Block document not found")
+    block_store.mark_opened(settings.block_db_path, document_id, wait=False)
+    return Response(status_code=204)
 
 
 @app.get("/api/block-documents/{document_id}/info")
@@ -503,19 +486,6 @@ def resolve_block_source_conflict(
         raise HTTPException(409, str(exc)) from exc
     documents.write_mirror(document_id)
     return tree
-
-
-@app.get("/api/block-documents/{document_id}/subtree")
-def get_block_subtree(document_id: str, block_id: str | None = None):
-    try:
-        subtree = block_store.document_subtree(
-            settings.block_db_path, document_id, block_id
-        )
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    if subtree is None:
-        raise HTTPException(404, "Block document not found")
-    return subtree
 
 
 @app.get("/api/block-documents/{document_id}/markdown")
@@ -573,7 +543,7 @@ async def import_uploaded_markdown(
         except ValueError as exc:
             errors.append({"name": name, "detail": str(exc)})
             continue
-        imported.append({"name": name, "id": note.id, "title": note.title})
+        imported.append({"name": name, "id": note["id"], "title": note["title"]})
     return {"imported": imported, "errors": errors}
 
 
@@ -749,33 +719,6 @@ def empty_trash():
     return {"deleted": documents.empty_trash()}
 
 
-# --- Saved searches ------------------------------------------------------------
-
-
-@app.get("/api/saved-searches")
-def list_saved_searches():
-    return workspace.list_saved_searches(settings.block_db_path)
-
-
-@app.post("/api/saved-searches", status_code=201)
-def create_saved_search(data: SavedSearchCreate):
-    try:
-        return workspace.create_saved_search(
-            settings.block_db_path, data.name, data.query, data.mode, data.filters
-        )
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
-@app.delete("/api/saved-searches/{search_id}", status_code=204)
-def delete_saved_search(search_id: str):
-    try:
-        workspace.delete_saved_search(settings.block_db_path, search_id)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    return Response(status_code=204)
-
-
 # --- Backups -------------------------------------------------------------------
 
 
@@ -794,15 +737,6 @@ def create_backup():
     return next(item for item in backups.list_backups(directory) if item["name"] == path.name)
 
 
-@app.get("/api/backups/{name}/download")
-def download_backup(name: str):
-    try:
-        path = backups.resolve_backup(backups.backup_directory(settings.notes_path), name)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    return FileResponse(path, media_type="application/vnd.sqlite3", filename=name)
-
-
 @app.post("/api/backups/{name}/restore")
 def restore_backup(name: str):
     directory = backups.backup_directory(settings.notes_path)
@@ -815,75 +749,6 @@ def restore_backup(name: str):
     _clear_response_caches()
     documents.rebuild_mirrors(directory / f"mirrors-before-{safety.stem}")
     return {"restored": name, "safety_backup": safety.name}
-
-
-@app.get("/api/markdown-export")
-def export_all_block_markdown():
-    return export_all_markdown(settings.block_db_path)
-
-
-@app.get("/api/markdown-import/preview")
-def preview_workspace_markdown_import():
-    preview = preview_markdown_directory(settings.block_db_path, settings.notes_path)
-    return {
-        "items": [
-            {
-                "source_path": item.source_path.name,
-                "document_id": item.document_id,
-                "status": item.status,
-                "detail": item.detail,
-            }
-            for item in preview.items
-        ],
-        "ready": preview.ready_count,
-        "skipped": preview.skipped_count,
-        "conflicts": preview.conflict_count,
-        "errors": preview.error_count,
-    }
-
-
-@app.post("/api/markdown-import")
-def import_workspace_markdown():
-    report = import_markdown_directory(settings.block_db_path, settings.notes_path)
-    return {
-        "backup_directory": f".fortress-import-backups/{report.backup_directory.name}",
-        "items": [
-            {
-                "source_path": item.source_path.name,
-                "document_id": item.document_id,
-                "status": item.status,
-                "detail": item.detail,
-            }
-            for item in report.items
-        ],
-        "imported": report.imported_count,
-        "skipped": report.skipped_count,
-        "errors": report.error_count,
-    }
-
-
-@app.get("/api/block-search", response_model=list[BlockSearchResult])
-def search_blocks(
-    q: str,
-    limit: int = Query(50, ge=1, le=200),
-    document_id: str | None = None,
-    block_type: str | None = None,
-    status: NoteStatus | None = None,
-    updated_after: str | None = None,
-    updated_before: str | None = None,
-):
-    return block_query.search_blocks(
-        settings.block_db_path,
-        q,
-        block_query.BlockSearchFilters(
-            document_id=document_id,
-            block_type=block_type,
-            status=status,
-            updated_after=updated_after,
-            updated_before=updated_before,
-        ),
-        limit=limit,
-    )
 
 
 @app.get("/api/unified-search")
@@ -937,12 +802,6 @@ async def ask(data: AskRequest, request: Request):
     )
 
 
-@app.post("/api/block-search/rebuild")
-def rebuild_block_search_index():
-    block_store.rebuild_fts(settings.block_db_path)
-    return {"ok": block_store.fts_is_consistent(settings.block_db_path)}
-
-
 @app.get("/api/block-link-targets", response_model=list[BlockLinkTarget])
 def block_link_targets(q: str = "", limit: int = Query(50, ge=1, le=200)):
     return block_store.block_link_targets(settings.block_db_path, q, limit)
@@ -965,23 +824,15 @@ def get_backlinks(document_id: str, request: Request, limit: int = Query(100, ge
     )
 
 
-@app.post("/api/block-documents/{document_id}/link-checks")
-async def check_block_document_links(document_id: str):
-    try:
-        return await link_checks.check_document_links(
-            settings.block_db_path, document_id
-        )
-    except KeyError as exc:
-        raise HTTPException(404, "Block document not found") from exc
-
-
 @app.post("/api/block-documents/{document_id}/transactions")
 def apply_block_transaction(
     document_id: str,
     transaction: BlockTransaction,
-    response: str = Query("document", pattern="^(document|meta)$"),
+    response: str = Query("meta", pattern="^(document|meta)$"),
 ):
-    """Apply a transaction. ``?response=meta`` answers without ``children``."""
+    """Apply a transaction. Answers the metadata payload (``children`` empty) by
+    default, or the whole tree with ``?response=document``; ``X-Document-ETag``
+    either way."""
 
     try:
         validator: list = []
@@ -995,9 +846,9 @@ def apply_block_transaction(
             include_children=response == "document",
         )
         documents.schedule_mirror(document_id)
-        return _tree_response(
-            document_id, tree, validator[0] if validator else None, cache=response == "document"
-        )
+        if not validator:
+            return _written_response(document_id)
+        return _tree_response(document_id, tree, validator[0], cache=response == "document")
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -1012,11 +863,11 @@ def apply_block_transaction(
 @app.post("/api/block-documents/{document_id}/undo")
 def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
     try:
-        tree = block_store.undo_transaction(
+        block_store.undo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
         documents.schedule_mirror(document_id)
-        return _tree_response(document_id, tree)
+        return _written_response(document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -1028,11 +879,11 @@ def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
 @app.post("/api/block-documents/{document_id}/redo")
 def redo_block_transaction(document_id: str, request: BlockHistoryRequest):
     try:
-        tree = block_store.redo_transaction(
+        block_store.redo_transaction(
             settings.block_db_path, document_id, request.base_revision
         )
         documents.schedule_mirror(document_id)
-        return _tree_response(document_id, tree)
+        return _written_response(document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:
@@ -1093,21 +944,6 @@ async def _stream_upload(file: UploadFile, path: Path, limit: int | None = None)
     return digest.hexdigest()
 
 
-@app.post("/api/images")
-async def upload_image(file: UploadFile = File(...)):
-    if not assets.is_supported_image_type(file.content_type):
-        raise HTTPException(400, "Unsupported image type")
-    media_type = (file.content_type or "image/png").split(";", 1)[0].strip().lower()
-    path = assets.upload_path(media_type)
-    digest = await _stream_upload(file, path)
-    # Return at once so the image appears instantly; its text is read in the background.
-    await run_in_threadpool(
-        block_store.register_asset, settings.block_db_path, path, digest, media_type
-    )
-    ocr.wake()
-    return {"url": f"/media/{path.name}", "text": ""}
-
-
 @app.post("/api/files")
 async def upload_file(file: UploadFile = File(...)):
     media_type = (file.content_type or "").split(";", 1)[0].strip().lower()
@@ -1127,113 +963,15 @@ async def upload_file(file: UploadFile = File(...)):
     return {"props": {"url": url, "name": name}}
 
 
-@app.get("/api/notes", response_model=list[NoteSummary])
-def list_notes(status: NoteStatus | None = None):
-    return documents.list_notes(status)
+@app.get("/api/block-documents/{document_id}/related", response_model=list[RelatedResult])
+def related(document_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None = None):
+    """Notes like this one (or like one of its blocks, with ``block_id``)."""
 
-
-@app.post("/api/notes", response_model=Note, status_code=201)
-def create_note(data: NoteCreate):
+    if not block_store.document_exists(settings.block_db_path, document_id):
+        raise HTTPException(404, "Block document not found")
     try:
-        return documents.create(data)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
-@app.get("/api/notes/{note_id}", response_model=Note)
-def get_note(note_id: str):
-    note = documents.get_note(note_id)
-    if note is None:
-        raise HTTPException(404, "Note not found")
-    return note
-
-
-@app.put("/api/notes/{note_id}", response_model=Note)
-def update_note(note_id: str, data: NoteUpdate):
-    try:
-        return documents.update(note_id, data)
-    except KeyError as exc:
-        raise HTTPException(404, "Note not found") from exc
-
-
-@app.delete("/api/notes/{note_id}", status_code=204)
-def delete_note(note_id: str):
-    try:
-        documents.trash(note_id)
-    except KeyError as exc:
-        raise HTTPException(404, "Note not found") from exc
-    return Response(status_code=204)
-
-
-@app.post("/api/notes/{note_id}/promote", response_model=Note)
-def promote_note(note_id: str):
-    try:
-        return documents.update(note_id, NoteUpdate(status="polished"))
-    except KeyError as exc:
-        raise HTTPException(404, "Note not found") from exc
-
-
-@app.get("/api/search", response_model=list[SearchResult])
-def search_notes(q: str, mode: str = Query("text", pattern="^(text|embedding)$")):
-    if mode == "embedding":
-        return search.embedding_search(q)
-    return search.full_text_search(q)
-
-
-@app.get("/api/notes/{note_id}/related", response_model=list[RelatedResult])
-def related(note_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None = None):
-    if not block_store.document_exists(settings.block_db_path, note_id):
-        raise HTTPException(404, "Note not found")
-    try:
-        return search.related_notes(note_id, k, block_id)
+        return search.related_notes(document_id, k, block_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
 
-@app.post("/api/notes/{note_id}/review", response_model=ReviewResponse)
-async def review(note_id: str, kind: ReviewKind = "factcheck"):
-    note = await run_in_threadpool(documents.get_note, note_id)
-    if note is None:
-        raise HTTPException(404, "Note not found")
-    return await llm.review_note(kind, note.title, note.body)
-
-
-@app.post(
-    "/api/block-documents/{document_id}/blocks/{block_id}/review",
-    response_model=BlockReviewResponse,
-)
-async def review_block(document_id: str, block_id: str, kind: ReviewKind = "factcheck"):
-    try:
-        result = await run_in_threadpool(
-            block_store.document_subtree, settings.block_db_path, document_id, block_id
-        )
-    except KeyError as exc:
-        raise HTTPException(404, "Block not found") from exc
-    if result is None:
-        raise HTTPException(404, "Block document not found")
-    block = result["subtree"]
-    return await llm.review_block(kind, block_id, block["text"], block["content"])
-
-
-@app.post(
-    "/api/block-documents/{document_id}/review-context",
-    response_model=BlockReviewContextResponse,
-)
-async def review_block_context(document_id: str, request: BlockReviewContextRequest):
-    try:
-        resolved = await run_in_threadpool(
-            block_store.document_review_context,
-            settings.block_db_path, document_id, request.context, request.block_ids,
-        )
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    if resolved is None:
-        raise HTTPException(404, "Block document not found")
-    return await llm.review_blocks(
-        request.kind,
-        request.context,
-        resolved["targets"],
-        resolved["linked_context"],
-    )

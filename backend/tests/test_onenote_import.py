@@ -713,7 +713,7 @@ class LivingDocumentTests(_Base):
         self.assertEqual(before["provenance"]["extra"]["onenote"],
                          {"object_id": oid(0x1B), "element_id": oid(0x1A)})
         # Another note references the paragraph.
-        other = block_store.create_block_document(self.db, "Elsewhere", "rough", [], f"See (( {before['id']} ))")
+        other = block_store.create_block_document(self.db, "Elsewhere", "rough", f"See (( {before['id']} ))")
 
         def references() -> list:
             return [(link["source_document_id"], link["target_block_id"])

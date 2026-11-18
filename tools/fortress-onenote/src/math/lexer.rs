@@ -18,45 +18,53 @@ pub(super) enum Token {
 }
 
 pub(super) struct Lexer {
-    tokens: VecDeque<(String, MathInlineObject)>,
+    tokens: VecDeque<Token>,
 }
 
 impl Lexer {
-    pub(super) fn new(tokens: Vec<(String, MathInlineObject)>) -> Lexer {
-        Lexer {
-            tokens: VecDeque::from(tokens),
+    /// fortress-onenote change: tokenise every start/separator/end mark
+    /// wherever it sits in a text run, and take the object type of a
+    /// separator or end from the innermost open object. OneNote puts each
+    /// mark in a run of its own object's formatting; other writers (e.g.
+    /// NoteCraft) put a whole equation's arguments in one plain math run,
+    /// which the upstream lexer could not read (`latex: null`).
+    pub(super) fn new(segments: Vec<(String, MathInlineObject)>) -> Lexer {
+        let mut tokens = VecDeque::new();
+        let mut open: Vec<MathObjectType> = Vec::new();
+        for (text, object) in segments {
+            let mut buf = String::new();
+            for ch in text.chars() {
+                let mark = [TOK_START, TOK_SEP, TOK_END]
+                    .iter()
+                    .position(|t| t.starts_with(ch));
+                let Some(mark) = mark else {
+                    buf.push(ch);
+                    continue;
+                };
+                if !buf.is_empty() {
+                    tokens.push_back(Token::Text(std::mem::take(&mut buf)));
+                }
+                let current = open.last().copied().unwrap_or(object.object_type());
+                match mark {
+                    0 => {
+                        open.push(object.object_type());
+                        tokens.push_back(Token::Start(object));
+                    }
+                    1 => tokens.push_back(Token::Sep(current)),
+                    _ => {
+                        open.pop();
+                        tokens.push_back(Token::End(current));
+                    }
+                }
+            }
+            if !buf.is_empty() {
+                tokens.push_back(Token::Text(buf));
+            }
         }
+        Lexer { tokens }
     }
 
     pub(super) fn next(&mut self) -> Result<Token> {
-        let (text, object) = match self.tokens.pop_front() {
-            Some(tok) => tok,
-            None => return Ok(Token::Eof),
-        };
-
-        match text.as_str() {
-            TOK_START => Ok(Token::Start(object)),
-            TOK_SEP => Ok(Token::Sep(object.object_type())),
-            TOK_END => Ok(Token::End(object.object_type())),
-            t if t.starts_with(TOK_START) => {
-                let remainder = t[TOK_START.len()..].to_string();
-                self.tokens.push_front((remainder, object));
-
-                Ok(Token::Start(object))
-            }
-            t if t.ends_with(TOK_SEP) => {
-                let content = t[..t.len() - TOK_SEP.len()].to_string();
-                self.tokens.push_front((TOK_SEP.to_string(), object));
-
-                Ok(Token::Text(content))
-            }
-            t if t.ends_with(TOK_END) => {
-                let content = t[..t.len() - TOK_END.len()].to_string();
-                self.tokens.push_front((TOK_END.to_string(), object));
-
-                Ok(Token::Text(content))
-            }
-            t => Ok(Token::Text(t.to_string())),
-        }
+        Ok(self.tokens.pop_front().unwrap_or(Token::Eof))
     }
 }
