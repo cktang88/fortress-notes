@@ -1,6 +1,6 @@
 # Title **bold** <u>under</u>
 
-Para with [link](https://x.y) and [[01ABC]] and ((B1)) and \[\[no\]\] x^2 <sup>sup</sup>
+Para with [link](https://x.y) and [[01ABC]] and ((01J00000000000000000000B10)) and \[\[no\]\] x^2 <sup>sup</sup>
 second line
 
 > quoted line one

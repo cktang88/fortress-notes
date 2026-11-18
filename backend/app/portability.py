@@ -199,7 +199,7 @@ def _fallback_id(relative: str) -> str:
     id-shaped (files written by older versions), else one made from its path."""
 
     stem = Path(relative).stem
-    if "/" not in relative and _ID_RE.match(stem):
+    if "/" not in relative and re.fullmatch(r"[a-z0-9_-]{1,128}|[0-7][0-9A-HJKMNP-TV-Z]{25}", stem):
         return stem
     return "md-" + hashlib.sha1(relative.encode("utf-8")).hexdigest()[:24]
 
