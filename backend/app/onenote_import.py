@@ -451,9 +451,33 @@ def _strip_math_delimiters(latex: str) -> str:
     return latex
 
 
+def _apply_tag_colors(runs: list[dict[str, Any]], tags: object) -> None:
+    """Note tags such as "Highlight" or "Critical" colour their paragraph in OneNote
+    (highlight / font colour): give that colour to runs without their own."""
+
+    highlight = color = None
+    for tag in tags if isinstance(tags, list) else []:
+        if not isinstance(tag, dict):
+            continue
+        if highlight is None and isinstance(tag.get("highlight_color"), str) and _COLOR_RE.match(tag["highlight_color"]):
+            highlight = tag["highlight_color"].upper()
+        if color is None and isinstance(tag.get("text_color"), str) and _COLOR_RE.match(tag["text_color"]):
+            color = tag["text_color"].upper()
+    if highlight is None and color is None:
+        return
+    for run in runs:
+        if "code" in run:
+            continue
+        if highlight and "highlight" not in run:
+            run["highlight"] = highlight
+        if color and "color" not in run:
+            run["color"] = color
+
+
 def _text_block(block: dict[str, Any], ctx: _PageContext) -> tuple[dict[str, Any], list[str]]:
     block_links: list[str] = []
     runs = _runs(str(block.get("text") or ""), block.get("marks"), ctx, block_links)
+    _apply_tag_colors(runs, block.get("tags"))
     kind = block.get("type")
     result: dict[str, Any] = {"inline": runs}
     if kind == "heading":

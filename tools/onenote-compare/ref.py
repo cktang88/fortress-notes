@@ -121,7 +121,13 @@ def _marks_of(text_parent: Node) -> frozenset[str]:
         if node.tag in {"body", "#root"} or "container-outline" in node.classes:
             break
         if node.tag in BLOCK_STYLE_TAGS:
-            continue  # paragraph-style formatting (heading colours, ...) is not a run mark
+            # Paragraph-style formatting (heading colours, ...) is not a run mark, but a
+            # paragraph background is what a highlighting note tag looks like.
+            if node.tag in {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "cite"}:
+                background = norm_color(node.style().get("background-color"))
+                if background and not any(m.startswith("highlight:") for m in marks):
+                    marks.add(f"highlight:{background}")
+            continue
         style = node.style()
         if style.get("font-weight") == "bold":
             marks.add("bold")
@@ -231,6 +237,7 @@ class _State:
         self.tables = 0
         self.checked_paragraphs: set[int] = set()
         self.tagged_paragraphs: set[int] = set()
+        self.aligned_paragraphs: set[int] = set()
 
     def flush(self) -> None:
         if self.pieces:
@@ -313,10 +320,13 @@ def _element(child: Node, tag: str, classes: set[str], st: _State) -> None:
         depth = sum(1 for a in _ancestors(child) if a.tag in {"ul", "ol"} and "tagged-list" not in a.classes) - 1
         parent_style = child.parent.style().get("list-style-type", "decimal" if child.parent.tag == "ol" else "bullet")
         model.list_items.append((norm_text(_own_text(child)), child.parent.tag == "ol", depth, parent_style))
-    if "outline-element" in classes or tag in {"p", "h1", "h2", "h3", "h4", "h5", "h6"}:
-        align = child.style().get("text-align")
-        if align in {"center", "right"}:
-            model.aligned.append((align, norm_text(_own_text(child))))
+    align = child.style().get("text-align")
+    if align in {"center", "right"} and tag != "td":
+        # On the paragraph element, or (inside lists / tagged paragraphs) on its wrapper span.
+        para = _paragraph(child) or child
+        if id(para) not in st.aligned_paragraphs:
+            st.aligned_paragraphs.add(id(para))
+            model.aligned.append((align, norm_text(_own_text(para))))
     if tag == "a" and child.attrs.get("href"):
         model.links.append((norm_text(child.text_content()), child.attrs["href"]))
     if tag == "table":
