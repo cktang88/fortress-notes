@@ -186,6 +186,21 @@ private func tableNode(_ id: String = "t1", attrs: [String: JSONValue] = ["borde
                 .flatMap { if case .array(let cells) = $0 { cells[0]["content"] } else { nil } } == .array([run("one\ntwo!")]))
     }
 
+    @Test func columnWidthsFitTheSpace() throws {
+        let table = try #require(TableContent(blockNote: oneNoteTable))
+        // 200 stored, one automatic column takes the rest.
+        #expect(table.layoutWidths(available: 640) == [200, 440])
+        // Too narrow: the automatic column keeps its minimum, the stored one shrinks.
+        #expect(table.layoutWidths(available: 200, minimum: 64) == [136, 64])
+        var fixed = table
+        fixed.columnWidths = [100, 150]
+        #expect(fixed.layoutWidths(available: 640) == [100, 150])
+        #expect(fixed.layoutWidths(available: 125) == [50, 75])
+        var automatic = table
+        automatic.columnWidths = []
+        #expect(automatic.layoutWidths(available: 600) == [300, 300])
+    }
+
     @Test func blankTableHasAHeaderRow() {
         let table = TableContent.blank(rows: 2, columns: 3)
         #expect(table.rows.count == 2)
@@ -344,5 +359,19 @@ private func columnsNode() -> BlockNode {
         let (operations, _) = BlockDiff.operations(from: SyncedTree([BlockCodec.decode(node)]), to: [block])
         // Provenance is never sent on update (the server keeps it).
         #expect(operations.first?.provenance == nil)
+    }
+}
+
+@Suite struct MathFormatterTests {
+    @Test func formatsCommonLatex() {
+        #expect(MathFormatter.format("E = mc^2") == [.text("E = mc"), .sup([.text("2")])])
+        #expect(MathFormatter.format(#"\alpha + \beta \le \infty"#) == [.text("α + β ≤ ∞")])
+        #expect(MathFormatter.format("x_{i+1}") == [.text("x"), .sub([.text("i+1")])])
+        #expect(MathFormatter.format(#"\frac{a}{b}"#) == [.sup([.text("a")]), .text("⁄"), .sub([.text("b")])])
+        #expect(MathFormatter.format(#"\sqrt{2}"#) == [.text("√2")])
+        #expect(MathFormatter.format(#"\sqrt{x+1}"#) == [.text("√(x+1)")])
+        #expect(MathFormatter.format(#"\text{if } x"#) == [.text("if  x")])
+        #expect(MathFormatter.format(#"\unknown{x}"#) == [.text(#"\unknownx"#)])
+        #expect(MathFormatter.plain(MathFormatter.format("a^{10}")) == "a^(10)")
     }
 }

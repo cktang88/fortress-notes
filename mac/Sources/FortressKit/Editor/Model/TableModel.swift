@@ -286,6 +286,36 @@ public struct TableContent: Hashable, Sendable {
     public mutating func toggleHeaderRow() {
         headerRows = headerRows > 0 ? 0 : 1
     }
+
+    /// Column widths in points for `available` width: stored widths (CSS px ≈ points) as
+    /// given, automatic columns share what is left; everything shrinks to fit, but no
+    /// column below `minimum` unless even that doesn't fit. A table of fixed columns
+    /// narrower than the space stays that narrow.
+    public func layoutWidths(available: Double, minimum: Double = 64) -> [Double] {
+        let count = max(1, columnCount)
+        let stored = (0..<count).map { index in
+            columnWidths.indices.contains(index) ? columnWidths[index].flatMap { $0 > 0 ? $0 : nil } : nil
+        }
+        let fixedTotal = stored.compactMap { $0 }.reduce(0, +)
+        let automatic = stored.filter { $0 == nil }.count
+        var widths: [Double]
+        if automatic == 0 {
+            let scale = fixedTotal > available ? available / fixedTotal : 1
+            widths = stored.map { ($0 ?? 0) * scale }
+        } else {
+            let left = available - fixedTotal
+            if left >= Double(automatic) * minimum {
+                widths = stored.map { $0 ?? left / Double(automatic) }
+            } else {
+                let room = max(0, available - Double(automatic) * minimum)
+                let scale = fixedTotal > 0 ? min(1, room / fixedTotal) : 1
+                widths = stored.map { $0.map { $0 * scale } ?? minimum }
+            }
+        }
+        let total = widths.reduce(0, +)
+        if total > available, total > 0 { widths = widths.map { $0 * available / total } }
+        return widths
+    }
 }
 
 // MARK: Columns
