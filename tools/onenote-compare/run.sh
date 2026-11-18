@@ -2,7 +2,7 @@
 # Compare a OneNote export with what Fortress imports from it.
 #
 #   tools/onenote-compare/run.sh <export.zip | notebook folder | file.one | file.onepkg>... [-o REPORT_DIR]
-#   tools/onenote-compare/run.sh --each <folder of .one/.onepkg/.zip files> -o REPORT_DIR
+#   tools/onenote-compare/run.sh --each <folder of .one/.onepkg/.zip files> -o REPORT_DIR [--shots failing --sample 20] [--skip TEXT]
 #
 # Builds the converter (release), installs one2html (MIT) into a cache folder if
 # it is not on PATH, then runs compare.py in the backend's uv environment with
@@ -18,6 +18,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -o|--out) OUT="$2"; shift 2 ;;
     --each) ARGS+=("--each" "$(realpath "$2")"); shift 2 ;;
+    --shots|--sample|--skip) ARGS+=("$1" "$2"); shift 2 ;;
+    --prune) ARGS+=("$1"); shift ;;
     -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     *) ARGS+=("$(realpath "$1")"); shift ;;
   esac

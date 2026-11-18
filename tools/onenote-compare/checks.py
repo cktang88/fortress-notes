@@ -12,7 +12,7 @@ from collections import Counter
 from model import Model, words
 
 CHECKS = ("title", "text", "marks", "headings", "lists", "checks", "links", "tables", "images", "image_alt",
-          "files", "math", "ink", "tags", "align", "layout")
+          "files", "math", "ink", "tags", "align", "layout", "export")
 MAX_DETAILS = 40
 
 
@@ -357,7 +357,24 @@ def _columns(ours: Model):
     return {tuple(c["path"][:-2]) for c in ours.containers if len(c["path"]) > 1}
 
 
-def run_all(ref: Model, ours: Model, boxes, imported_pages: set[str]) -> list[dict]:
+def check_export(ref: Model, export: dict | None, tree: dict | None):
+    """The Markdown export, rendered by a CommonMark viewer, still shows every word,
+    makes no code block out of non-code content and keeps list nesting."""
+
+    if export is None or tree is None:
+        return _result("export", True, "no export", applicable=False)
+    missing = Counter(ref.word_list()) - Counter(export["words"])
+    details = [f"missing ×{n}: {_context(ref.text, w)}" for w, n in sorted(missing.items())]
+    if export["pre"] > tree["code"]:
+        details.append(f"{export['pre'] - tree['code']} code block(s) in the rendered export that are not code in the note")
+    if export["list_depth"] < tree["list_depth"]:
+        details.append(f"list nesting {tree['list_depth']} in the note but {export['list_depth']} in the rendered export")
+    return _result("export", not details, f"{len(export['words'])} words, {export['pre']} code blocks, list depth {export['list_depth']}",
+                   details, applicable=bool(ref.tokens))
+
+
+def run_all(ref: Model, ours: Model, boxes, imported_pages: set[str], export: dict | None = None,
+            tree: dict | None = None) -> list[dict]:
     return [
         check_title(ref, ours),
         check_text(ref, ours),
@@ -375,4 +392,5 @@ def run_all(ref: Model, ours: Model, boxes, imported_pages: set[str]) -> list[di
         check_tags(ref, ours),
         check_align(ref, ours),
         check_layout(ref, ours, boxes),
+        check_export(ref, export, tree),
     ]

@@ -167,13 +167,14 @@ class Renderer:
         # Offline: only file:// (one2html pages reference a MathJax CDN and a polyfill).
         self.context.route(re.compile(r"^(https?|wss?):"), lambda route: route.abort())
 
-    def render(self, html_path: Path, png: Path, pdf: Path | None = None, boxes: bool = False):
+    def render(self, html_path: Path, png: Path | None, pdf: Path | None = None, boxes: bool = False):
         page = self.context.new_page()
         try:
             page.goto(html_path.resolve().as_uri(), wait_until="load", timeout=60000)
             page.wait_for_timeout(50)
             result = page.evaluate(BOXES_JS) if boxes else None
-            page.screenshot(path=str(png), full_page=True)
+            if png is not None:
+                page.screenshot(path=str(png), full_page=True)
             if pdf is not None:
                 page.pdf(path=str(pdf), print_background=True, width="1100px")
             return result
@@ -285,7 +286,7 @@ def process_unit(unit: Path, out: Path, args, renderer: Renderer) -> dict:
             if ref_path is not None:
                 _, ref_model, _ = refmod.load(ref_path)
                 entry["title"] = entry["title"] or ref_model.title
-                boxes = renderer.render(ref_path, page_dir / "ref.png", page_dir / "ref.pdf", boxes=True)
+                boxes = renderer.render(ref_path, None, boxes=True)
                 entry["ref_html"] = os.path.relpath(ref_path, out)
             if doc_id is not None:
                 tree = notes.tree(doc_id)
@@ -296,11 +297,11 @@ def process_unit(unit: Path, out: Path, args, renderer: Renderer) -> dict:
                 (page_dir / "tree.html").write_text(renderer_html.document(tree), encoding="utf-8")
                 (page_dir / "md.html").write_text(fortress.markdown_html(markdown, tree.get("title") or "", media_prefix),
                                                   encoding="utf-8")
-                renderer.render(page_dir / "tree.html", page_dir / "tree.png", page_dir / "tree.pdf")
-                renderer.render(page_dir / "md.html", page_dir / "md.png", page_dir / "md.pdf")
                 our_model = fortress.tree_model(notes, tree)
+                export = fortress.export_summary((page_dir / "md.html").read_text(encoding="utf-8"))
+                tree_info = fortress.tree_summary(tree)
             else:
-                our_model = Model()
+                our_model, export, tree_info = Model(), None, None
             if ref_path is None:
                 entry["checks"] = [checks._result("page", True, "page not rendered by one2html (no reference to compare)",
                                                   applicable=False)]
@@ -313,18 +314,30 @@ def process_unit(unit: Path, out: Path, args, renderer: Renderer) -> dict:
                     # Untitled in OneNote: Fortress names the note after its first line.
                     our_model.notes.append(f"untitled page named {our_model.title!r}")
                     ref_model.title = our_model.title
-                entry["checks"] = checks.run_all(ref_model, our_model, boxes, imported_pages)
+                entry["checks"] = checks.run_all(ref_model, our_model, boxes, imported_pages, export, tree_info)
                 entry["status"] = "ok"
             entry["words"] = len(ref_model.tokens)
-            composite([("OneNote (one2html reference)", page_dir / "ref.png"),
-                       ("Fortress block tree", page_dir / "tree.png"),
-                       ("Fortress Markdown export", page_dir / "md.png")], page_dir / "side.png")
+            failing = any(c["status"] == "fail" for c in entry["checks"])
+            if args.shots == "all" or failing or (args.sample and index % args.sample == 0):
+                if ref_path is not None:
+                    renderer.render(ref_path, page_dir / "ref.png", page_dir / "ref.pdf")
+                if doc_id is not None:
+                    renderer.render(page_dir / "tree.html", page_dir / "tree.png", page_dir / "tree.pdf")
+                    renderer.render(page_dir / "md.html", page_dir / "md.png", page_dir / "md.pdf")
+                composite([("OneNote (one2html reference)", page_dir / "ref.png"),
+                           ("Fortress block tree", page_dir / "tree.png"),
+                           ("Fortress Markdown export", page_dir / "md.png")], page_dir / "side.png")
+                entry["side"] = True
             entry["notes"] = our_model.notes[:20]
         except Exception as exc:  # noqa: BLE001
             entry["checks"] = [checks._result("page", False, f"pipeline error: {exc}", [traceback.format_exc()[-1500:]])]
             entry["status"] = "error"
         write_detail(out, entry)
     notes.close()
+    if args.prune:
+        # Keep the per-page results and images; drop converted files, notes and reference assets.
+        for name in ("input", "manifest", "fortress", "ref"):
+            shutil.rmtree(work / name, ignore_errors=True)
     return result
 
 
@@ -366,7 +379,8 @@ def write_detail(out: Path, entry: dict) -> None:
         f"<p><a href='{os.path.relpath(out / 'index.html', page_dir)}'>← index</a></p>"
         f"<h2>{html.escape(entry['title'])}</h2><p class=small>{html.escape(entry['section'])} · {entry['page_id']}</p>"
         f"<p>{links}{ref_link}</p><table>{''.join(rows)}</table><ul class=small>{notes}</ul>"
-        f"<p><img class=side src='side.png'></p>", encoding="utf-8")
+        + ("<p><img class=side src='side.png'></p>" if entry.get("side") else "<p class=small>(no images: all checks passed)</p>"),
+        encoding="utf-8")
 
 
 def write_index(out: Path, results: list[dict], started: float) -> dict:
@@ -421,11 +435,19 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--converter", required=True)
     parser.add_argument("--one2html", required=True)
+    parser.add_argument("--shots", choices=("all", "failing"), default="all",
+                        help="screenshots/PDFs/composites for every page (default) or only pages with a failing check")
+    parser.add_argument("--sample", type=int, default=0,
+                        help="with --shots failing: also shoot every Nth page")
+    parser.add_argument("--prune", action="store_true",
+                        help="after each input, delete its converted files, notes and reference HTML (saves disk)")
+    parser.add_argument("--skip", action="append", default=[],
+                        help="with --each: skip inputs whose path contains this text")
     args = parser.parse_args()
     units = list(args.inputs)
     seen: set[str] = set()
     for folder in args.each:
-        units += units_from_each(folder, seen)
+        units += [u for u in units_from_each(folder, seen) if not any(text in str(u) for text in args.skip)]
     if not units:
         parser.error("no inputs")
     args.out.mkdir(parents=True, exist_ok=True)

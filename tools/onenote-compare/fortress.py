@@ -539,3 +539,75 @@ def markdown_html(markdown: str, title: str, media_prefix: str) -> str:
 
 def make_notes(root: Path | None = None) -> FortressNotes:
     return FortressNotes(Path(root or tempfile.mkdtemp(prefix="fortress-compare-")))
+
+
+# --- Markdown export, as rendered ---------------------------------------------------------------
+
+
+def export_summary(md_html: str) -> dict:
+    """What a Markdown viewer shows of the export: visible words (no comments, no
+    title, no inline ``$LaTeX$`` / display math), code blocks and list nesting."""
+
+    from html.parser import HTMLParser  # noqa: PLC0415
+
+    class _Parser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.pieces: list[str] = []
+            self.skip = 0
+            self.stack: list[str] = []
+            self.pre = 0
+            self.max_list_depth = 0
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            classes = (attrs.get("class") or "").split()
+            if tag in {"style", "script", "title"} or "doc-title" in classes or "f-math" in classes:
+                self.skip += 1
+                self.stack.append("skip:" + tag)
+                return
+            if tag in {"br", "img", "hr", "input", "col", "meta"}:
+                self.pieces.append(" ")
+                return
+            if tag == "pre":
+                self.pre += 1
+            self.stack.append(tag)
+            depth = sum(1 for t in self.stack if t in {"ul", "ol"})
+            self.max_list_depth = max(self.max_list_depth, depth)
+            self.pieces.append(" ")
+
+        def handle_endtag(self, tag):
+            if not self.stack:
+                return
+            top = self.stack.pop()
+            if top.startswith("skip:"):
+                self.skip -= 1
+            self.pieces.append(" ")
+
+        def handle_data(self, data):
+            if not self.skip:
+                self.pieces.append(data)
+
+    parser = _Parser()
+    parser.feed(md_html)
+    text = "".join(parser.pieces)
+    text = re.sub(r"\$[^$\n]+\$", " ", text)  # inline equations
+    return {"words": words(text), "pre": parser.pre, "list_depth": parser.max_list_depth, "text": norm_text(text)}
+
+
+def tree_summary(tree: dict) -> dict:
+    """Code blocks and deepest list nesting of the block tree (what the export should show)."""
+
+    found = {"code": 0, "list_depth": 0}
+
+    def visit(blocks, depth):
+        for block in blocks or []:
+            kind = block.get("type")
+            if kind == "code":
+                found["code"] += 1
+            inner = depth + 1 if kind == "list" else depth
+            found["list_depth"] = max(found["list_depth"], inner)
+            visit(block.get("children") or [], inner if kind == "list" else 0)
+
+    visit(tree.get("children") or [], 0)
+    return found
