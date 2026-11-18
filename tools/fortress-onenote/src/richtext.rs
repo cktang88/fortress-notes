@@ -86,6 +86,107 @@ impl RunFmt {
             highlight: color_hex(st.highlight()),
         }
     }
+
+    /// This run's formatting with every character property the run does not
+    /// store (`stored`) taken from `base`, the paragraph style's formatting.
+    /// Run-only flags (hidden, math, hyperlink) are never inherited.
+    pub fn inherit(self, stored: Stored, base: &RunFmt) -> RunFmt {
+        let pick = |own: bool, set: bool, inherited: bool| if set { own } else { inherited };
+        RunFmt {
+            bold: pick(self.bold, stored.bold, base.bold),
+            italic: pick(self.italic, stored.italic, base.italic),
+            underline: pick(self.underline, stored.underline, base.underline),
+            strikethrough: pick(self.strikethrough, stored.strikethrough, base.strikethrough),
+            superscript: pick(self.superscript, stored.superscript, base.superscript),
+            subscript: pick(self.subscript, stored.subscript, base.subscript),
+            font: if stored.font {
+                self.font
+            } else {
+                base.font.clone()
+            },
+            size_pt: if stored.size {
+                self.size_pt
+            } else {
+                base.size_pt
+            },
+            color: if stored.color {
+                self.color
+            } else {
+                base.color.clone()
+            },
+            highlight: if stored.highlight {
+                self.highlight
+            } else {
+                base.highlight.clone()
+            },
+            ..self
+        }
+    }
+}
+
+/// Which character properties a text run stores itself; the others inherit
+/// from the paragraph style. An explicit "off" (`bold = false`, automatic
+/// colour) counts as stored and overrides the paragraph style.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Stored {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub superscript: bool,
+    pub subscript: bool,
+    pub font: bool,
+    pub size: bool,
+    pub color: bool,
+    pub highlight: bool,
+}
+
+impl Stored {
+    pub fn of(st: &ParagraphStyling) -> Self {
+        let f = st.stored_flags();
+        Stored {
+            bold: f.bold.is_some(),
+            italic: f.italic.is_some(),
+            underline: f.underline.is_some(),
+            strikethrough: f.strikethrough.is_some(),
+            superscript: f.superscript.is_some(),
+            subscript: f.subscript.is_some(),
+            font: st.font().is_some(),
+            size: st.font_size().is_some(),
+            color: st.font_color().is_some(),
+            highlight: st.highlight().is_some(),
+        }
+    }
+}
+
+/// OneNote's built-in paragraph styles (Normal, Heading 1–6, Page Title,
+/// Citation, Quote, Code), compared case-insensitively. Their look is fixed
+/// by OneNote and expressed by the block type (plain paragraph, heading,
+/// quote, code), so their font, size, colour and weight are not run marks.
+const BUILTIN_STYLES: &[&str] = &[
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "pagetitle",
+    "cite",
+    "blockquote",
+    "quote",
+    "code",
+];
+
+/// Whether text runs inherit the character formatting of a paragraph style
+/// with this style id: every style except OneNote's built-in ones.
+///
+/// OneNote stores a paragraph's base formatting in its paragraph style and
+/// only the differences in its text runs, so formatting applied to a whole
+/// paragraph (by a custom style or a third-party writer) can be in the
+/// paragraph style alone.
+pub fn inherits_paragraph_style(style_id: Option<&str>) -> bool {
+    !style_id.is_some_and(|id| BUILTIN_STYLES.iter().any(|b| id.eq_ignore_ascii_case(b)))
 }
 
 /// A stored hyperlink in UTF-16 offsets (as the parser reports them).
@@ -123,10 +224,18 @@ pub struct Options {
 /// Convert a parser `RichText` paragraph.
 pub fn convert(rt: &RichText, opts: Options) -> Converted {
     let indices: Vec<usize> = rt.text_run_indices().iter().map(|i| *i as usize).collect();
+    let ps = rt.paragraph_style();
+    let base = inherits_paragraph_style(ps.style_id()).then(|| RunFmt::from_styling(ps));
     let mut fmts: Vec<Option<RunFmt>> = rt
         .text_run_formatting()
         .iter()
-        .map(|s| Some(RunFmt::from_styling(s)))
+        .map(|s| {
+            let own = RunFmt::from_styling(s);
+            Some(match &base {
+                Some(base) => own.inherit(Stored::of(s), base),
+                None => own,
+            })
+        })
         .collect();
     if indices.is_empty() && fmts.is_empty() {
         fmts.push(Some(RunFmt::from_styling(rt.paragraph_style())));
@@ -915,5 +1024,101 @@ mod tests {
             Some("#FF0010")
         );
         assert_eq!(color_hex(Some(ColorRef::Auto)), None);
+    }
+
+    /// A whole paragraph formatted through its paragraph style (bold, blue,
+    /// 20 pt) with an unformatted text run keeps that formatting as marks.
+    #[test]
+    fn runs_inherit_paragraph_style_formatting() {
+        let base = RunFmt {
+            bold: true,
+            italic: true,
+            underline: true,
+            strikethrough: true,
+            superscript: true,
+            font: Some("Georgia".into()),
+            size_pt: Some(20.0),
+            color: Some("#0000FF".into()),
+            highlight: Some("#FFFF00".into()),
+            ..RunFmt::default()
+        };
+        let run = RunFmt::default().inherit(Stored::default(), &base);
+        let text = "Big bold paragraph";
+        let c = convert_runs(text, &[], &[Some(run)], &[], Options::default());
+        let n = text.chars().count();
+        let kinds: Vec<MarkKind> = c
+            .rich
+            .marks
+            .into_iter()
+            .map(|m| {
+                assert_eq!((m.start, m.end), (0, n));
+                m.kind
+            })
+            .collect();
+        for k in [
+            MarkKind::Bold,
+            MarkKind::Italic,
+            MarkKind::Underline,
+            MarkKind::Strikethrough,
+            MarkKind::Superscript,
+            MarkKind::Color {
+                color: "#0000FF".into(),
+            },
+            MarkKind::Highlight {
+                color: "#FFFF00".into(),
+            },
+            MarkKind::Font {
+                family: "Georgia".into(),
+            },
+            MarkKind::FontSize { pt: 20.0 },
+        ] {
+            assert!(kinds.contains(&k), "{k:?} missing from {kinds:?}");
+        }
+    }
+
+    /// What a run stores itself wins over the paragraph style, including an
+    /// explicit "off" (not bold, automatic colour); run-only flags never
+    /// come from the paragraph style.
+    #[test]
+    fn run_formatting_overrides_paragraph_style() {
+        let base = RunFmt {
+            bold: true,
+            subscript: true,
+            hidden: true,
+            math: true,
+            hyperlink: true,
+            font: Some("Georgia".into()),
+            color: Some("#0000FF".into()),
+            size_pt: Some(20.0),
+            ..RunFmt::default()
+        };
+        let own = RunFmt {
+            italic: true,
+            font: Some("Arial".into()),
+            ..RunFmt::default()
+        };
+        let stored = Stored {
+            bold: true,
+            italic: true,
+            font: true,
+            color: true,
+            ..Stored::default()
+        };
+        let f = own.inherit(stored, &base);
+        assert!(!f.bold && f.italic && f.subscript);
+        assert!(!f.hidden && !f.math && !f.hyperlink);
+        assert_eq!(f.font.as_deref(), Some("Arial"));
+        assert_eq!(f.color, None);
+        assert_eq!(f.size_pt, Some(20.0));
+    }
+
+    #[test]
+    fn builtin_paragraph_styles_are_not_inherited() {
+        for id in ["p", "h1", "H6", "PageTitle", "cite", "blockquote", "code"] {
+            assert!(!inherits_paragraph_style(Some(id)), "{id}");
+        }
+        for id in [Some("Style281"), Some("h7"), Some("Custom"), None] {
+            assert!(inherits_paragraph_style(id), "{id:?}");
+        }
     }
 }

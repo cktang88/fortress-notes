@@ -137,7 +137,8 @@ attachment and ink drawing on the page is an item.
 - `{"kind": "columns", "scattered": bool, "columns": [Column, …]}` — side by side, left to right.
   **Column**: `{"width": <fraction, sums to 1>, "x": <left>, "span": <width in units>, "rows": [LayoutRow]}`.
   Columns nest (a column can stack several items or contain columns).
-  `scattered: true` marks a band with more than 4 columns (scattered notes);
+  `scattered: true` marks a band with more than 4 columns (scattered notes),
+  except a grid of 5 columns whose tops are aligned (within 0.5 units);
   importers may stack such columns instead of rendering them side by side.
 
 Algorithm (`src/layout.rs`): sort items by top; sweep into horizontal bands
@@ -145,7 +146,12 @@ of transitively overlapping vertical ranges (overlap > 0.15 units, so touching
 or slightly overlapping outlines stay separate rows); inside a band, cluster
 by horizontal overlap (> 0.1 units) into columns, ordered by x; a band whose
 items overlap in both directions is stacked by top; columns are laid out
-recursively. Background images are excluded from banding and emitted as rows
+recursively. Before clustering, *bridges* are set aside: an item that
+overlaps (in both directions) two items that are side by side, such as a
+picture floating across the gap between two columns, an ink drawing over
+a page area, or a wide outline whose estimated height reaches into columns
+below it. The rest of the band is laid out without them and each bridge
+becomes a row of its own at its top (before rows starting below it). Background images are excluded from banding and emitted as rows
 at their own top. Raw `x`/`y`/`width` stay on the items so an importer can
 re-run a different heuristic.
 
@@ -220,6 +226,13 @@ carry several tags; each keeps its own definition.
 
 `{"start": int, "end": int, "type": …}` plus type-specific fields. Spans of
 the same mark are merged; marks may overlap; sorted by `start`.
+
+Marks are the effective character formatting: a text run inherits every
+property it does not store itself (bold … subscript, font, size, colour,
+highlight) from its paragraph style, so formatting applied to a whole
+paragraph appears as marks over the whole text. OneNote's built-in styles
+(Normal, Heading 1–6, Page Title, Citation, Quote, Code) are not inherited:
+their look is expressed by the block type.
 
 | `type` | fields |
 |---|---|

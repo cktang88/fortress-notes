@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P9).
 use crate::errors::Result;
 use crate::one::property::charset::Charset;
 use crate::one::property::color_ref::ColorRef;
@@ -5,6 +6,7 @@ use crate::one::property::paragraph_alignment::ParagraphAlignment;
 use crate::one::property::{PropertyType, simple};
 use crate::one::property_set::PropertySetId;
 use crate::onenote::ParserContext;
+use crate::onenote::rich_text::StoredFlags;
 use crate::onestore::Object;
 
 /// A paragraph style.
@@ -40,6 +42,9 @@ pub(crate) struct Data {
     pub(crate) hidden: bool,
     pub(crate) text_run_is_embedded_object: bool,
     pub(crate) text_run_object_type: Option<u32>,
+    // PATCH(fortress-onenote, P9): the character-format booleans as stored
+    // (`None` = absent, inherited from the paragraph style).
+    pub(crate) stored_flags: StoredFlags,
 }
 
 const FALLBACK: Data = Data {
@@ -67,6 +72,14 @@ const FALLBACK: Data = Data {
     hidden: false,
     text_run_is_embedded_object: false,
     text_run_object_type: None,
+    stored_flags: StoredFlags {
+        bold: None,
+        italic: None,
+        underline: None,
+        strikethrough: None,
+        superscript: None,
+        subscript: None,
+    },
 };
 
 pub(crate) fn parse(object: &Object, ctx: &mut ParserContext) -> Result<Data> {
@@ -81,13 +94,21 @@ pub(crate) fn parse(object: &Object, ctx: &mut ParserContext) -> Result<Data> {
     }
 
     let charset = Charset::parse(PropertyType::Charset, object)?;
-    let bold = simple::parse_bool(PropertyType::Bold, object)?.unwrap_or_default();
-    let italic = simple::parse_bool(PropertyType::Italic, object)?.unwrap_or_default();
-    let underline = simple::parse_bool(PropertyType::Underline, object)?.unwrap_or_default();
-    let strikethrough =
-        simple::parse_bool(PropertyType::Strikethrough, object)?.unwrap_or_default();
-    let superscript = simple::parse_bool(PropertyType::Superscript, object)?.unwrap_or_default();
-    let subscript = simple::parse_bool(PropertyType::Subscript, object)?.unwrap_or_default();
+    // PATCH(fortress-onenote, P9): keep whether each flag is stored.
+    let stored_flags = StoredFlags {
+        bold: simple::parse_bool(PropertyType::Bold, object)?,
+        italic: simple::parse_bool(PropertyType::Italic, object)?,
+        underline: simple::parse_bool(PropertyType::Underline, object)?,
+        strikethrough: simple::parse_bool(PropertyType::Strikethrough, object)?,
+        superscript: simple::parse_bool(PropertyType::Superscript, object)?,
+        subscript: simple::parse_bool(PropertyType::Subscript, object)?,
+    };
+    let bold = stored_flags.bold.unwrap_or_default();
+    let italic = stored_flags.italic.unwrap_or_default();
+    let underline = stored_flags.underline.unwrap_or_default();
+    let strikethrough = stored_flags.strikethrough.unwrap_or_default();
+    let superscript = stored_flags.superscript.unwrap_or_default();
+    let subscript = stored_flags.subscript.unwrap_or_default();
     let font = simple::parse_string(PropertyType::Font, object)?;
     let font_size = simple::parse_u16(PropertyType::FontSize, object)?;
     let font_color = ColorRef::parse(PropertyType::FontColor, object)?;
@@ -135,6 +156,7 @@ pub(crate) fn parse(object: &Object, ctx: &mut ParserContext) -> Result<Data> {
         hidden,
         text_run_is_embedded_object,
         text_run_object_type,
+        stored_flags,
     };
 
     Ok(data)
