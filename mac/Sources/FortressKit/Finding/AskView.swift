@@ -102,7 +102,9 @@ struct AskView: View {
 
     private func send() {
         let text = followUp.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !(turns.last?.state.isStreaming ?? false) else { return }
+        guard !text.isEmpty else { return }
+        // Asking something else stops the answer still streaming.
+        turns.last?.stop()
         followUp = ""
         let turn = AskTurn(question: text)
         turns.append(turn)
@@ -111,6 +113,7 @@ struct AskView: View {
 
     private func retry(_ turn: AskTurn) {
         guard let index = turns.firstIndex(where: { $0.id == turn.id }) else { return }
+        turn.stop()
         let fresh = AskTurn(question: turn.question)
         turns[index] = fresh
         fresh.start(model.api.ask(fresh.question))
@@ -168,33 +171,23 @@ struct AskTurnView: View {
         .animation(.smooth(duration: 0.25), value: state.phase)
     }
 
-    /// The answer as one readable paragraph; each sentence is followed by its chips.
+    /// The answer in paragraphs; each sentence is followed by its chips. Paragraphs that
+    /// are done never change, so while an answer streams only the last one is laid out again.
     private func answer(_ state: AskState) -> some View {
-        let parts: [Text] = state.sentences.enumerated().flatMap { index, sentence -> [Text] in
-            var parts = [Text(verbatim: (index == 0 ? "" : " ") + sentence.text)]
-            var seen = Set<Int>()
-            for citation in sentence.citations {
-                guard let number = state.number(of: citation), seen.insert(number).inserted else { continue }
-                parts.append(Text(verbatim: "\u{2009}"))
-                parts.append(chip(number: number, citation: citation))
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(state.paragraphs) { paragraph in
+                AnswerParagraph(sentences: paragraph.sentences.map { index in
+                    let sentence = state.sentences[index]
+                    var seen = Set<Int>()
+                    let chips = sentence.citations.compactMap { citation -> AnswerParagraph.Chip? in
+                        guard let number = state.number(of: citation), seen.insert(number).inserted else { return nil }
+                        return AnswerParagraph.Chip(number: number, citation: citation)
+                    }
+                    return AnswerParagraph.Sentence(text: sentence.text, chips: chips)
+                })
+                .equatable()
             }
-            return parts
         }
-        return Text.joined(parts)
-            .font(.system(size: 16))
-            .lineSpacing(9)
-            .foregroundStyle(.primary)
-            .textRenderer(MarkRenderer())
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func chip(number: Int, citation: AskCitation) -> Text {
-        var link = AttributedString("\u{2002}\(number)\u{2002}")
-        link.link = URL(string: "\(Self.citationScheme):\(citation.documentId)/\(citation.blockId)")
-        link.swiftUI.font = .system(size: 11, weight: .semibold).monospacedDigit()
-        link.swiftUI.baselineOffset = 2
-        return Text(link)
-            .customAttribute(TextMark(style: .citation))
     }
 
     @ViewBuilder private func outcome(_ state: AskState) -> some View {
@@ -223,7 +216,12 @@ struct AskTurnView: View {
                  symbol: "bolt.horizontal.circle", action: ("Try Again", retry))
             closestPassages(state.sources)
         case .failed(let message):
-            calm("Ask isn’t available.", detail: message, symbol: "bolt.horizontal.circle", action: ("Try Again", retry))
+            if state.sentences.isEmpty {
+                calm("Ask isn’t available.", detail: message, symbol: "bolt.horizontal.circle", action: ("Try Again", retry))
+            } else {
+                // What arrived stays readable above; say it's incomplete.
+                calm("The answer was cut off.", detail: message, symbol: "exclamationmark.bubble", action: ("Try Again", retry))
+            }
         }
     }
 
@@ -273,6 +271,49 @@ struct AskTurnView: View {
             }
         }
         .padding(.top, 10)
+    }
+}
+
+/// One paragraph of an answer: sentences with their citation chips, as one `Text`.
+/// Equatable, so SwiftUI skips paragraphs that didn't change while the answer streams.
+struct AnswerParagraph: View, Equatable {
+    struct Chip: Equatable {
+        var number: Int
+        var citation: AskCitation
+    }
+
+    struct Sentence: Equatable {
+        var text: String
+        var chips: [Chip]
+    }
+
+    let sentences: [Sentence]
+
+    var body: some View {
+        var parts: [Text] = []
+        parts.reserveCapacity(sentences.count * 3)
+        for (index, sentence) in sentences.enumerated() {
+            parts.append(Text(verbatim: (index == 0 ? "" : " ") + sentence.text))
+            for chip in sentence.chips {
+                parts.append(Text(verbatim: "\u{2009}"))
+                parts.append(Self.chip(chip))
+            }
+        }
+        return Text.joined(parts)
+            .font(.system(size: 16))
+            .lineSpacing(9)
+            .foregroundStyle(.primary)
+            .textRenderer(MarkRenderer())
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private static func chip(_ chip: Chip) -> Text {
+        var link = AttributedString("\u{2002}\(chip.number)\u{2002}")
+        link.link = URL(string: "\(AskTurnView.citationScheme):\(chip.citation.documentId)/\(chip.citation.blockId)")
+        link.swiftUI.font = .system(size: 11, weight: .semibold).monospacedDigit()
+        link.swiftUI.baselineOffset = 2
+        return Text(link)
+            .customAttribute(TextMark(style: .citation))
     }
 }
 

@@ -117,17 +117,9 @@ public struct DocumentInfo: Decodable, Hashable, Sendable {
 
 /// Endpoints only Finding uses (kept out of `APIClient.swift`).
 extension APIClient {
+    /// Through the client's store: coalesced with identical requests in flight, answered
+    /// from the stored body on a 304, and counted in `store.stats`.
     public func documentInfo(id: String) async throws -> DocumentInfo {
-        var request = URLRequest(url: baseURL.appending(path: "api/block-documents/\(id)/info"))
-        request.timeoutInterval = 30
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            var message = HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
-            if let detail = try? JSONDecoder().decode([String: JSONValue].self, from: data)["detail"]?.stringValue {
-                message = detail
-            }
-            throw APIError(status: http.statusCode, message: message)
-        }
-        return try JSONDecoder().decode(DocumentInfo.self, from: data)
+        try await get("api/block-documents/\(id)/info")
     }
 }
