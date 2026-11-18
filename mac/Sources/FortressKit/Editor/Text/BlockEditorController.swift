@@ -1187,7 +1187,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             // Media from the local server: download to a cache folder and open with its app.
             Task {
                 do {
-                    let (temporary, _) = try await URLSession.shared.download(from: url)
+                    let (temporary, _) = try await MediaCache.shared.session.download(from: url)
                     let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                         .appending(path: "FortressNotes/Files", directoryHint: .isDirectory)
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

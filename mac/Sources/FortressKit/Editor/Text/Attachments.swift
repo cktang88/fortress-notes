@@ -8,7 +8,7 @@ import SwiftUI
 final class AttachmentContext {
     let baseURL: URL
     /// The app's session (APIClient's), so pictures share its URL cache and configuration.
-    @ObservationIgnored var session: URLSession = .shared
+    @ObservationIgnored var session: URLSession = MediaCache.shared.session
     @ObservationIgnored var pipeline = ImagePipeline.shared
     @ObservationIgnored private var slots: [URL: ImageSlot] = [:]
     /// A picture arrived (blocks without a stored size lay out again).

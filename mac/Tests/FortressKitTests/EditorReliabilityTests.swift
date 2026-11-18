@@ -167,9 +167,10 @@ private func pendingDirectory() -> URL {
         #expect(Set(record.operations.map(\.operation)) == [.update, .insert])
 
         // Next launch: the note opens with the edits and saves them.
+        let relaunched = stubAPI()  // a new launch: nothing in memory
         SaveStub.replies = [(200, try JSONEncoder().encode(server)),
                                 (200, try JSONEncoder().encode(document(revision: 5, [node("a", "Kept"), node("b", "New text"), node("c", "Added")])))]
-        let reopened = EditorSession(documentId: "d", api: api)
+        let reopened = EditorSession(documentId: "d", api: relaunched)
         reopened.saveDelay = .milliseconds(1)
         await reopened.load()
         let shown = reopened.initialBlocks
@@ -198,6 +199,26 @@ private func pendingDirectory() -> URL {
         #expect(session.saveState == .offline)
         let record = try #require(PendingEdits.load(documentId: "d"))
         #expect(record.operations.first?.text == "Written on a plane")
+    }
+
+    /// Skimming the note list (30 selections 2 ms apart, each editor replaced by the next)
+    /// used to send 30 document requests; now only the note stopped on loads.
+    @Test func skimmingNotesLoadsOnlyTheLastOne() async throws {
+        let api = stubAPI()
+        SaveStub.replies = [(200, try JSONEncoder().encode(document(revision: 1, [node("a", "A")])))]
+        var tasks: [Task<Void, Never>] = []
+        var last: EditorSession?
+        for index in 0..<30 {
+            tasks.last?.cancel()
+            let session = EditorSession(documentId: "skim-\(index)", api: api)
+            last = session
+            tasks.append(Task { await session.load(debounce: .milliseconds(40)) })
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        await tasks.last?.value
+        #expect(SaveStub.requests.count == 1)
+        #expect(SaveStub.requests.first?.url?.lastPathComponent == "skim-29")
+        #expect(last?.document != nil)
     }
 
     /// Replaying operations never repeats one the server already applied.

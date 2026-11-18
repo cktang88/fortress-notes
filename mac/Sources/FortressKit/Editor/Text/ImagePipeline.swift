@@ -11,9 +11,11 @@ final class ImageSlot {
     init(image: NSImage? = nil) { self.image = image }
 }
 
-/// Loads pictures for the editor: fetched through the app's URL session (and its URL
-/// cache), decoded and downsampled off the main thread with ImageIO to at most the size
-/// they are shown at, and kept in a memory cache shared by every open note.
+/// Loads pictures for the editor: the bytes through `MediaCache`'s session (its disk URL
+/// cache, so a picture downloads once across notes and launches), decoded and
+/// downsampled off the main thread with ImageIO to at most the size they are shown at
+/// (a 3000 × 2000 photo is 24 MB decoded, 6.8 MB at 1600 px), and kept in a memory cache
+/// shared by every open note. A picture `MediaCache` already decoded is used as is.
 @MainActor
 final class ImagePipeline {
     static let shared = ImagePipeline()
@@ -34,7 +36,9 @@ final class ImagePipeline {
         cache.totalCostLimit = 256 * 1024 * 1024
     }
 
-    func cached(_ url: URL) -> NSImage? { cache.object(forKey: url as NSURL) }
+    func cached(_ url: URL) -> NSImage? {
+        cache.object(forKey: url as NSURL) ?? MediaCache.shared.cachedImage(for: url)
+    }
 
     /// The picture at `url`, from the cache or loaded once however many ask at a time.
     func image(for url: URL, session: URLSession) async -> NSImage? {

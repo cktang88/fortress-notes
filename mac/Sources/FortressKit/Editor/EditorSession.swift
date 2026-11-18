@@ -41,6 +41,8 @@ public final class EditorSession {
     @ObservationIgnored public var onDocumentChange: ((BlockDocument) -> Void)?
     /// Replaces the editor's text (load, load latest).
     @ObservationIgnored var showBlocks: (([EditorBlock]) -> Void)?
+    /// Told when a save can't reach the server (the app notices lost connections).
+    @ObservationIgnored var onSaveError: ((Error) -> Void)?
 
     @ObservationIgnored private(set) var base = SyncedTree()
     @ObservationIgnored private(set) var revision = 0
@@ -77,9 +79,16 @@ public final class EditorSession {
 
     // MARK: Loading
 
-    func load() async {
+    /// Loads the note. With `debounce`, a note that isn't already in memory waits a beat
+    /// first, so skimming the list (a selection every few milliseconds, each view
+    /// cancelled by the next) fetches only the note the person stops on.
+    func load(debounce: Duration? = nil, latest: Bool = false) async {
+        if let debounce, api.store.freshDocument(documentId, counting: false) == nil {
+            try? await Task.sleep(for: debounce)
+            if Task.isCancelled { return }
+        }
         do {
-            let document = try await api.document(id: documentId)
+            let document = latest ? try await api.reloadDocument(id: documentId) : try await api.document(id: documentId)
             loadError = nil
             let pending = persistsPendingEdits ? PendingEdits.load(documentId: documentId) : nil
             adopt(document, replaceText: true, pending: pending)
@@ -95,7 +104,8 @@ public final class EditorSession {
         dirty = false
         recovered = nil
         if persistsPendingEdits { PendingEdits.remove(documentId: documentId) }
-        await load()
+        // From the server: the cached copy is the one that conflicted.
+        await load(latest: true)
         if loadError == nil { saveState = .saved }
     }
 
@@ -233,6 +243,7 @@ public final class EditorSession {
         } catch {
             // Offline or a server hiccup: keep the edits, try the same request again.
             unsent = pending
+            if saveState != .offline { onSaveError?(error) }
             saveState = .offline
             retryDelay = min(30, max(2, retryDelay * 2))
             scheduleFlush(after: .seconds(retryDelay))

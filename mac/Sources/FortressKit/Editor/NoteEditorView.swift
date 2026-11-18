@@ -45,7 +45,7 @@ struct NoteEditorView: View {
             let session = self.session ?? EditorSession(documentId: documentId, api: model.api)
             self.session = session
             Task { try? await Task.sleep(for: .milliseconds(300)); showProgress = true }
-            await session.load()
+            await session.load(debounce: .milliseconds(40))
         }
         .onDisappear {
             guard let session else { return }
@@ -127,7 +127,8 @@ struct BlockTextEditor: NSViewRepresentable {
 
         context.coordinator.focusRequest = focusRequest
         context.coordinator.documentId = session.documentId
-        controller.context.session = api.session
+        // Pictures come through the media cache's session (disk URL cache, one download per URL).
+        controller.context.session = MediaCache.shared.session
         controller.context.adoptResolvedLinks(session.document?.resolvedLinks)
         controller.load(session.initialBlocks)
         session.resetBase(to: controller.currentBlocks())
@@ -137,6 +138,7 @@ struct BlockTextEditor: NSViewRepresentable {
             controller.load(blocks)
         }
         session.onDocumentChange = { document in model.noteDidChange(document) }
+        session.onSaveError = { error in model.report(error) }
         controller.onChange = {
             session.editorDidChange(leadingTexts: { controller.leadingTexts() })
         }
