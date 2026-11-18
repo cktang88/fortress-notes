@@ -374,19 +374,23 @@ def _prepare(blocks: list[SourceBlock] | str) -> list[_Planned]:
     roots = legalize([spec for block in blocks for spec in convert(block)])
     seen: dict[str, int] = {}
 
-    def planned(spec: BlockSpec, parent_id: str | None, index: int) -> _Planned:
+    def planned(spec: BlockSpec, parent: _Planned | None, index: int) -> _Planned:
         if not isinstance(spec, _Planned):
             spec = _Planned(spec.type, spec.attrs, spec.content, spec.payload, spec.children,
                             provenance=spec.provenance)
         if not spec.external_id:
-            if parent_id is not None:
-                spec.external_id = f"{parent_id}/{index}"
+            if parent is not None:
+                # Named by position under its parent, so it follows the parent's
+                # id, including the ids the parent was known by before.
+                spec.external_id = f"{parent.external_id}/{index}"
+                spec.previous_external_ids = [
+                    f"{previous}/{index}" for previous in parent.previous_external_ids
+                ]
             else:
                 base = "~" + spec.hash
                 seen[base] = seen.get(base, 0) + 1
                 spec.external_id = base if seen[base] == 1 else f"{base}#{seen[base]}"
-        spec.children = [planned(child, spec.external_id, number)
-                         for number, child in enumerate(spec.children)]
+        spec.children = [planned(child, spec, number) for number, child in enumerate(spec.children)]
         return spec
 
     return [planned(spec, None, index) for index, spec in enumerate(roots)]

@@ -201,9 +201,11 @@ def attrs(type_name: str, raw: object) -> dict[str, Any]:
     clean: dict[str, Any] = {}
     for key, value in result.items():
         try:
-            clean.update(schema.normalize_attrs(type_name, {key: value}))
+            normalized = schema.normalize_attrs(type_name, {key: value})
         except BlockShapeError:
             continue  # an unusable value (a bad colour, ...) is dropped
+        if key in normalized:  # (not the defaults normalizing fills in)
+            clean[key] = normalized[key]
     return schema.normalize_attrs(type_name, clean)
 
 
