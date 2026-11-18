@@ -80,4 +80,19 @@ import Testing
             BackendSettingsView().environment(model).padding(.top, 8)
         }
     }
+
+    /// HIG audit (UX_AUDIT.md B4, F9): the toast under Reduce Transparency, and the Quick Capture shortcut recorder in Settings.
+    @Test func accessibilityFallbacks() throws {
+        let model = ShellFixtures.model(openNote: "n2")
+        model.toast = Toast(message: "“Packing list” moved to Trash", action: .restore(documentId: "n5"))
+        try both("toast-reduce-transparency") {
+            MainWindow().environment(model).environment(\.accessibilityReduceTransparency, true)
+        }
+        try both("shortcut-recorder", size: CGSize(width: 560, height: 160)) {
+            Form {
+                Section("Keyboard Shortcut") { QuickCaptureShortcutRecorder(state: QuickCaptureState()) }
+            }
+            .formStyle(.grouped)
+        }
+    }
 }
