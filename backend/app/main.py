@@ -41,7 +41,7 @@ from .portability import (
     safe_filename,
     import_markdown_if_empty,
 )
-from .block_types import BlockShapeError
+from .block_schema import BlockShapeError, schema_json
 from .config import get_settings
 from .models import (
     NoteCreate,
@@ -312,6 +312,13 @@ def ocr_status() -> dict:
     """Background reading of pictures and PDFs: model, queued/done/failed counts."""
 
     return {"enabled": settings.vision_enabled, **ocr.status_counts(settings.block_db_path)}
+
+
+@app.get("/api/block-schema")
+def block_schema():
+    """The block type registry (docs/block-model.md): types, attrs, nesting, marks."""
+
+    return schema_json()
 
 
 @app.get("/api/navigation")
@@ -854,7 +861,7 @@ def apply_block_transaction(
     except block_store.DocumentRevisionConflict as exc:
         raise HTTPException(409, exc.detail()) from exc
     except BlockShapeError as exc:
-        # A table/image/... whose content is not a documented shape (spec §2a).
+        # An unknown type, illegal nesting or attrs/content the registry rejects.
         raise HTTPException(422, str(exc)) from exc
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(409, str(exc)) from exc

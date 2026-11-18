@@ -85,7 +85,8 @@ class DuplicateCheckTests(unittest.TestCase):
         from app import block_store
 
         hits = block_store.search_blocks(self.notes / ".fortress.sqlite3", "Moved")
-        self.assertEqual({hit["document_id"] for hit in hits}, {target})
+        # The linker shows (and so indexes) the referenced block's text.
+        self.assertEqual({hit["document_id"] for hit in hits}, {target, linker})
         self.assertIn("Moved two", (self.notes / f"{target}.md").read_text())
 
     def test_move_into_rejects_itself_and_missing_notes(self) -> None:

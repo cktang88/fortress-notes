@@ -1,7 +1,7 @@
 """Text read from the pictures and PDFs a note embeds (see ``ocr.py``), by media URL.
 
 The text lives in ``assets.text``; these helpers fold it into the views of a note
-that are not the block index: the Markdown mirror's front matter and AI review.
+that are not the block index: the Markdown mirror's front matter.
 """
 
 import re
@@ -11,8 +11,6 @@ from .config import get_settings
 
 # /media/<name> references inside a note body.
 _MEDIA_RE = re.compile(r"/media/([A-Za-z0-9_-]+\.[A-Za-z0-9]+)")
-_IMG_HTML_RE = re.compile(r"<img\b[^>]*?/media/([A-Za-z0-9_-]+\.[A-Za-z0-9]+)[^>]*>", re.IGNORECASE)
-_IMG_MD_RE = re.compile(r"!\[[^\]]*\]\(/media/([A-Za-z0-9_-]+\.[A-Za-z0-9]+)[^)]*\)", re.IGNORECASE)
 
 
 def _texts(media_names: list[str]) -> dict[str, str]:
@@ -34,15 +32,3 @@ def collect_image_texts(body: str) -> dict[str, str]:
     """Media name -> text read from it, for every picture/PDF the body references."""
 
     return _texts(list(dict.fromkeys(_MEDIA_RE.findall(body))))
-
-
-def inline_for_llm(body: str) -> str:
-    """Replace each image reference with the text read from it, for AI review."""
-
-    texts = collect_image_texts(body)
-
-    def replace(match: re.Match) -> str:
-        text = texts.get(match.group(1), "").strip()
-        return f"[image: {text}]" if text else "[image]"
-
-    return _IMG_MD_RE.sub(replace, _IMG_HTML_RE.sub(replace, body))

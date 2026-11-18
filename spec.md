@@ -48,134 +48,18 @@ resized width survives the round-trip).
 On first start an empty database imports any existing `NOTES_DIR/*.md` files once,
 copying the originals to a timestamped backup folder first.
 
-## 2a. Block shapes (`block_types.py`)
+## 2a. Block shapes
 
-Every block row has `type`, `attrs` (JSON, indexed in `block_attrs`), `content`
-(JSON), `text`, children (`parent_id`/`position`) and provenance (§7a).
-
-- **`text` is the searchable plain text**: FTS, ColBERT embeddings, Ask grep and
-  read_note read it. Blocks with structure or rich runs get it derived by the
-  server (no Markdown, no HTML); plain Markdown-only blocks (imported `.md`)
-  keep their Markdown source there, minus inline mark HTML.
-- **`content.markdown`** is what Markdown export/mirrors write for the block. The
-  server derives it for structured blocks and for rich text whose stored Markdown
-  lacks the marks; otherwise a writer's Markdown is kept.
-
-### Inline marks (the one canonical form)
-
-Rich text lives in `content.blocknote` as BlockNote inline content (what the web
-editor already stores), extended with `superscript`/`subscript` and hex colours:
-
-```jsonc
-{"type": "text", "text": "Hello", "styles": {
-   "bold": true, "italic": true, "underline": true, "strike": true, "code": true,
-   "superscript": true, "subscript": true,          // new (not BlockNote defaults)
-   "textColor": "#C00000",                           // CSS name ("red") or #hex
-   "backgroundColor": "#FFFF00"}}                    // highlight
-{"type": "link", "href": "https://…" /* or "[[doc_id|Title]]" */, "content": [<text runs>]}
-```
-
-Omitted styles are off; `"default"` colours are dropped. Text blocks (`paragraph`,
-`heading` attrs `level`, `list` attrs `ordered`/`checked`/`checked_at`, `quote`,
-`code` attrs `language`, and the web editor's `bulletListItem`, `numberedListItem`,
-`checkListItem`, `codeBlock`, `callout`) store
-`content: {"blocknote": [runs], "markdown": "…"}`; a block with only
-`{"markdown": …}` is plain Markdown (editors parse it). A newline inside a run is a
-line break.
-
-Markdown: bold `**`, italic `*`, strike `~~`, code `` ` ``, links `[t](url)`
-natively; `<u>`, `<sup>`, `<sub>`, `<span style="color:#C00000">`,
-`<mark style="background:#FFFF00">` for the rest. If native emphasis would not
-parse back to the same runs (e.g. `**"x"**y`), the block's marks are all written
-as HTML (`<strong>`, `<em>`, `<s>`, `<code>`, `<a href>`). Import parses all of
-these back into runs (only blocks that contain mark HTML get runs; others stay
-plain Markdown).
-
-### Table (`type: "table"`)
-
-```jsonc
-{"type": "table",
- "attrs": {"borders": true},                 // false: no visible borders (default true)
- "content": {"blocknote": {                  // BlockNote's tableContent, extended
-    "type": "tableContent",
-    "columnWidths": [200, null],             // CSS px per column; null = automatic
-    "headerRows": 1,                         // optional; also "headerCols"
-    "rows": [{"cells": [
-      {"type": "tableCell",
-       "props": {"backgroundColor": "#DEEAF6", "textColor": "red",
-                 "textAlignment": "center", "colspan": 1, "rowspan": 1},  // all optional
-       "content": [<runs>],                  // the cell's first line of text
-       "blocks": [<nested blocks>]}          // optional, after content (OneNote cells)
-    ]}]},
-   "markdown": "…"},
- "text": "Name\tQty\nApples\t3"}              // rows on lines, cells tab-separated
-```
-
-Nested (in-cell) blocks are `{"type", "attrs", "content", "children"?}` with no id:
-text types (content `{"blocknote": runs}`), `table` (nested tables), `image`,
-`file`, `math`, `thematic_break`. Rows need ≥ 1 cell; garbage is rejected with
-**422** by the transactions API (`BlockShapeError`). A cell saved without a
-`blocks` key keeps its nested blocks while the table keeps its shape (the web
-editor cannot show them); `"blocks": []` clears them.
-
-Markdown: a **GFM table** when there is exactly one header row and every cell is
-one line of text (column-uniform alignment allowed); otherwise an HTML
-`<table>` (one HTML block, no blank lines): `data-borders="false"`,
-`<colgroup><col style="width:200px">…`, header cells as `<th>`, cell
-`style="background-color:…;color:…;text-align:…"`, `colspan`/`rowspan`, cell content
-as inline HTML then `<p>`/`<ul>`/`<ol>`/`<li data-checked>`/`<pre><code>`/`<img>`/
-nested `<table>`; other table attrs in `data-attrs='{json}'`. Both import back
-(GFM tables no longer become `raw`).
-
-### Columns (`type: "columns"` → `type: "column"`)
-
-```jsonc
-{"type": "columns", "attrs": {/* free, e.g. onenote geometry */}, "content": {}, "text": "",
- "children": [
-   {"type": "column", "attrs": {"width": 0.4}, "content": {}, "text": "",   // relative width
-    "children": [<ordinary blocks>]},
-   {"type": "column", "attrs": {"width": 0.6}, "children": […]}]}
-```
-
-Columns are ordinary tree nodes: children are indexed, linked, moved, duplicated
-and undone like any block. A `columns` block holds only `column` blocks and a
-`column` lives only in a `columns` block (insert/move/type change otherwise → 409).
-Markdown (columns written one after another; the comments are invisible):
-
-```markdown
-<!-- fortress:columns {"onenote_y":3} -->
-
-<!-- fortress:column {"width":0.4} -->
-
-Left column blocks…
-
-<!-- fortress:column {"width":0.6} -->
-
-Right column blocks…
-
-<!-- /fortress:columns -->
-```
-
-### Image, file, math
-
-```jsonc
-{"type": "image", "attrs": {"url": "/media/01J….png", "alt": "OCR / alt text",
-  "caption": "…", "width": 480, "height": 320, "name": "scan.png"},   // px; all but url optional
- "text": "OCR / alt text\n…caption"}          // searchable
-// Markdown: <img src="/media/01J….png" alt="…" title="caption" width="480" height="320" data-name="…">
-//   (other attrs, e.g. the web editor's previewWidth, in data-attrs='{json}')
-
-{"type": "file", "attrs": {"url": "/media/01J….pdf", "name": "Contract.pdf",
-  "size": 48213, "mime": "application/pdf"}, "text": "Contract.pdf"}
-// Markdown: <!-- fortress:file {"mime":…,"name":…,"size":…,"url":…} -->
-//           [Contract.pdf](/media/01J….pdf) (47.1 KB)
-
-{"type": "math", "content": {"latex": "E = mc^2", "mathml": "<math>…"}, "text": "E = mc^2"}
-// Markdown: $$\nE = mc^2\n$$  (mathml is not exported)
-```
-
-A single `<img>` line in imported Markdown becomes an image block. Splitting and
-merging apply to text blocks only.
+The block model is specified in **[docs/block-model.md](docs/block-model.md)**, the
+contract between the backend and every client. In short: a block is a `type`
+from one registry (`block_schema.py`, served at `GET /api/block-schema`), `attrs`,
+inline `content` (text blocks: text/link/docLink/blockRef nodes with marks) and a
+`payload` (math, html). Tables, columns, quotes and callouts are container blocks
+with child blocks. Siblings are ordered by fractional `order` keys
+(`order_keys.py`). The server derives `text` (plain, no Markdown: FTS, embeddings,
+Ask and titles read it), Markdown (`block_markdown.py`), links, backlinks and asset
+links; it rejects unknown types, illegal nesting and cross-category type changes
+with **422**.
 
 ## 3. Backend (FastAPI, Python / uv)
 
@@ -183,9 +67,12 @@ merging apply to text blocks only.
 - `config.py` — settings from env (`pydantic-settings`).
 - `models.py` — Pydantic schemas (`NoteSummary`, `NoteCreate`, `NoteUpdate`,
   `BlockTransaction`, `RelatedResult`, ...).
-- `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS, rendering.
-- `block_types.py` — rich inline marks, tables, columns, image/file/math: validation,
-  derived Markdown/plain text, Markdown/HTML round trip (§2a).
+- `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS.
+- `block_schema.py` — the block type registry and inline content rules (§2a).
+- `order_keys.py` — fractional sibling order keys.
+- `block_markdown.py` — Markdown in and out of canonical blocks (ids in comments).
+- `block_legacy.py`, `block_migration.py` — older block shapes (the Mac app's
+  current requests, importer dicts) and the schema-14 migration of stored data.
 - `documents.py` — note lifecycle (create/update/trash/restore/purge) and Markdown mirrors.
 - `embeddings.py` — ColBERT late-interaction via PyLate; encode + MaxSim scoring,
   with a keyword fallback when disabled/unavailable.
@@ -430,8 +317,8 @@ settles a block conflict (taking the source's version is an ordinary undoable ed
 created_at=, modified_at=, provenance=, importer=)` (or
 `sources.upsert_document_from_source(db_path, …)`), with `blocks` a list of
 `SourceBlock(markdown, external_id, type, attrs, children, created_at, modified_at,
-provenance, content, text)` or a Markdown body. A SourceBlock carries either
-Markdown or `type` + structured `content` (§2a; Markdown and text are derived).
+provenance, content, payload, previous_external_ids)` or a Markdown body. A SourceBlock carries either
+Markdown or a canonical `type` + `attrs`/`content`/`payload` (§2a; text is derived).
 `sources.source_block(dict)` / `source_blocks([dict])` build them from plain dicts:
 
 ```python

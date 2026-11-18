@@ -36,7 +36,7 @@ class CorpusCacheTests(unittest.TestCase):
             apply_transaction(
                 database,
                 "today",
-                [BlockOperation(operation="update", block_id=block["id"], text="New words")],
+                [BlockOperation(operation="update", block_id=block["id"], content=[{"type": "text", "text": "New words"}])],
                 tree["revision"],
             )
 
