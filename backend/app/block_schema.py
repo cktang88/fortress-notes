@@ -5,9 +5,9 @@ category, attributes, payload and allowed children; the inline node form and its
 normalization; and the plain ``text`` the server derives from a block. Pure
 functions, no SQLite. ``schema_json()`` is what ``GET /api/block-schema`` serves.
 
-Input from older clients and stored legacy shapes (BlockNote names and runs,
-``[[id|Title]]`` links, table JSON) is read by :mod:`app.block_legacy`, which
-turns it into this module's canonical form.
+Stored legacy shapes (BlockNote names and runs, ``[[id|Title]]`` links, table
+JSON) are converted once by the schema 14 migration, via :mod:`app.block_legacy`;
+the API accepts only this module's canonical form.
 """
 
 from __future__ import annotations

@@ -953,8 +953,7 @@ async def upload_file(file: UploadFile = File(...)):
         media_type or "application/octet-stream",
     )
     ocr.wake()
-    # BlockNote's uploadFile result is a partial block; its file insertion
-    # handler passes this object directly to updateBlock.
+    # The Mac app reads ``props.url``/``props.name`` (EditorUpload.Response).
     return {"props": {"url": url, "name": name}}
 
 

@@ -498,7 +498,7 @@ class BlockStoreTests(unittest.TestCase):
 
             moved = apply_transaction(
                 database, created["id"],
-                [BlockOperation(operation="move", block_id=initial_ids[0], position=3)],
+                [BlockOperation(operation="move", block_id=initial_ids[0], after_id=initial_ids[2])],
                 redo_insert["revision"],
             )
             moved_ids = [node["id"] for node in moved["children"]]
@@ -681,7 +681,7 @@ class BlockStoreTests(unittest.TestCase):
             with self.assertRaises(DocumentRevisionConflict):
                 apply_transaction(
                     database, "one",
-                    [BlockOperation(operation="move", block_id=block_ids[1], position=2)],
+                    [BlockOperation(operation="move", block_id=block_ids[1], after_id=block_ids[2])],
                     initial["revision"],
                 )
             final = document_tree(database, "one")

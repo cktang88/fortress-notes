@@ -202,7 +202,8 @@ class WorkspaceFeatureTests(unittest.TestCase):
             json={
                 "base_revision": tree["revision"],
                 "operations": [
-                    {"operation": "update", "block_id": tree["children"][0]["id"], "text": "stale"}
+                    {"operation": "update", "block_id": tree["children"][0]["id"],
+                     "content": [{"type": "text", "text": "stale"}]}
                 ],
             },
         )

@@ -33,7 +33,7 @@ from typing import Iterable
 import frontmatter
 from ulid import ULID
 
-from . import block_legacy, order_keys, textutil
+from . import order_keys, textutil
 from . import block_schema as schema
 from . import provenance as _provenance
 from .block_markdown import BlockSpec, parse_markdown
@@ -2695,9 +2695,8 @@ class _Writer:
             if parent_id is not None:
                 self.row(parent_id, "parent block")
             siblings = self.sibling_keys(parent_id, moving)
-            index = len(siblings) if operation.position is None else min(operation.position, len(siblings))
-            low = siblings[index - 1][1] if index > 0 else None
-            high = siblings[index][1] if index < len(siblings) else None
+            low = siblings[-1][1] if siblings else None
+            high = None
         return parent_id, order_keys.key_between(low, high)
 
     # -- operations
@@ -2715,7 +2714,7 @@ class _Writer:
             raise ValueError(f"unsupported operation: {operation.operation}")
 
     def insert(self, operation: BlockOperation) -> None:
-        block, extra_children = _operation_block(operation)
+        block = _operation_block(operation)
         block_id = operation.block_id or new_id()
         if self.connection.execute("SELECT 1 FROM blocks WHERE id = ?", (block_id,)).fetchone():
             raise ValueError(f"block already exists: {block_id}")
@@ -2739,23 +2738,16 @@ class _Writer:
         )
         self.set_user_attrs(block_id, {}, operation.user_attrs)
         self.content_changed.append(block_id)
-        if extra_children:
-            self.content_changed.extend(insert_specs(
-                self.connection, self.document_id, extra_children, block_id, None, None,
-                self.now, self.now, self.revision, self.changes, provenance,
-            ))
 
     def update(self, operation: BlockOperation) -> None:
         if not operation.model_fields_set & {"type", "attrs", "content", "payload", "user_attrs", "provenance"}:
-            # e.g. an older client sending only "text": refuse rather than do nothing.
             raise BlockShapeError("an update names what to change: type, attrs, content, payload, user_attrs or provenance")
         row = self.row(operation.block_id)
         self.changes.touch(row["id"])
         current = _row_block(row)
-        legacy_content = isinstance(operation.content, dict)
         new_type = current.type
         if operation.type is not None:
-            new_type = block_legacy.canonical_type(operation.type, operation.attrs or current.attrs)
+            new_type = operation.type
             schema.check_type_change(current.type, new_type)
             if new_type != current.type:
                 schema.check_nesting(self.parent_type(row["parent_id"]), new_type)
@@ -2764,18 +2756,12 @@ class _Writer:
                 ):
                     schema.check_nesting(new_type, child["type"])
         attrs = schema.retype_attrs(current.type, new_type, current.attrs)
-        patch = operation.attrs
-        if legacy_content and patch is not None:
-            patch = block_legacy.attrs(new_type, patch)
-        attrs = schema.normalize_attrs(new_type, schema.patch_attrs(attrs, patch))
+        attrs = schema.normalize_attrs(new_type, schema.patch_attrs(attrs, operation.attrs))
         content, payload = current.content, current.payload
-        if legacy_content:
-            content, payload = self.legacy_content(row, new_type, operation.content, content, payload)
-        else:
-            if "content" in operation.model_fields_set:
-                content = operation.content
-            if "payload" in operation.model_fields_set:
-                payload = operation.payload
+        if "content" in operation.model_fields_set:
+            content = operation.content
+        if "payload" in operation.model_fields_set:
+            payload = operation.payload
         if new_type == "code" and content:
             content = schema.plain_content(content)
         content = schema.normalize_content(new_type, content)
@@ -2797,42 +2783,6 @@ class _Writer:
         if operation.user_attrs is not None:
             self.set_user_attrs(row["id"], None, operation.user_attrs)
         self.content_changed.append(row["id"])
-
-    def legacy_content(self, row, new_type, raw: dict, content, payload):
-        """An update in the Mac app's current shape (``{"blocknote": runs}``, ``{"latex"}``)."""
-
-        if new_type == "table" or isinstance(raw.get("blocknote"), dict):
-            raise BlockShapeError("a table's rows and cells are blocks: update them instead")
-        if new_type == "math":
-            latex = raw.get("latex")
-            return None, {**(payload or {}), "latex": latex if isinstance(latex, str) else ""}
-        if new_type in ("quote", "callout") and "blocknote" in raw:
-            nodes = block_legacy.inline(raw["blocknote"])
-            first = self.connection.execute(
-                """SELECT id, type FROM blocks WHERE parent_id = ? ORDER BY order_key LIMIT 1""",
-                (row["id"],),
-            ).fetchone()
-            if first is not None and first["type"] in schema.TEXT_TYPES:
-                self.changes.touch(first["id"])
-                self.connection.execute(
-                    "UPDATE blocks SET content_json = ?, updated_at = ?, revision = ? WHERE id = ?",
-                    (_dumps(schema.normalize_content(first["type"], nodes)), self.now,
-                     self.revision, first["id"]),
-                )
-                self.content_changed.append(first["id"])
-            else:
-                low = None
-                high = first["order_key"] if first is not None else None
-                self.content_changed.extend(insert_specs(
-                    self.connection, self.document_id, [BlockSpec("paragraph", content=nodes)],
-                    row["id"], low, high, self.now, self.now, self.revision, self.changes,
-                    {"source": "manual"},
-                ))
-            return None, None
-        if "blocknote" in raw:
-            return block_legacy.inline(raw["blocknote"], plain=new_type == "code"), payload
-        # Nothing the server reads (e.g. only the Markdown it used to store): unchanged.
-        return content, payload
 
     def move(self, operation: BlockOperation) -> None:
         row = self.row(operation.block_id)
@@ -2882,22 +2832,12 @@ class _Writer:
                 )
 
 
-def _operation_block(operation: BlockOperation) -> tuple[schema.Block, list[BlockSpec]]:
-    """The block an insert describes, and children it implies (older request shapes)."""
+def _operation_block(operation: BlockOperation) -> schema.Block:
+    """The block an insert describes."""
 
     if not operation.type:
         raise BlockShapeError("insert requires a type")
-    raw = operation.content
-    if isinstance(raw, dict) or operation.type not in schema.TYPES:
-        # The Mac app's current shape: BlockNote names, {"blocknote": ...} content.
-        converted = block_legacy.convert(operation.type, operation.attrs or {}, raw or {}, "")
-        first = converted[0]
-        if len(converted) > 1:
-            raise BlockShapeError("an insert describes one block")
-        if first.type == "paragraph" and "legacy_type" in first.attrs:
-            raise BlockShapeError(f"unknown block type: {operation.type!r}")
-        return first.block(), first.children
-    return schema.normalize_block(operation.type, operation.attrs, raw, operation.payload), []
+    return schema.normalize_block(operation.type, operation.attrs, operation.content, operation.payload)
 
 
 def _is_descendant(

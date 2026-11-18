@@ -50,7 +50,7 @@ class BlockMoveTests(unittest.TestCase):
             moved = apply_transaction(
                 database,
                 created["id"],
-                [BlockOperation(operation="move", block_id=c1, parent_id=None, position=1)],
+                [BlockOperation(operation="move", block_id=c1, after_id=created["children"][0]["id"])],
                 created["revision"],
             )
 

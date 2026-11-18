@@ -71,8 +71,8 @@ with **422**.
 - `block_schema.py` — the block type registry and inline content rules (§2a).
 - `order_keys.py` — fractional sibling order keys.
 - `block_markdown.py` — Markdown in and out of canonical blocks (ids in comments).
-- `block_legacy.py`, `block_migration.py` — older block shapes (the Mac app's
-  current requests, importer dicts) and the schema-14 migration of stored data.
+- `block_legacy.py`, `block_migration.py` — the schema-14 migration of stored
+  data in older block shapes (the API accepts canonical shapes only).
 - `documents.py` — note lifecycle (create/update/trash/restore/purge) and Markdown mirrors.
 - `embeddings.py` — ColBERT late-interaction via PyLate; encode + MaxSim scoring,
   with a keyword fallback when disabled/unavailable.

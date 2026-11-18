@@ -40,8 +40,11 @@ class NoteUpdate(BaseModel):
 class BlockOperation(BaseModel):
     """One operation of a block transaction (docs/block-model.md §4).
 
-    Unknown fields (``text``, ``expected_updated_at``, ...) are ignored.
+    Canonical shapes only: an unknown field (``position``, ``text``,
+    ``expected_updated_at``, ...) or non-list ``content`` is refused (422).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     operation: BlockOperationKind
     block_id: str | None = None
@@ -49,15 +52,13 @@ class BlockOperation(BaseModel):
     parent_id: str | None = None
     after_id: str | None = None
     before_id: str | None = None
-    # Deprecated (the Mac app's current requests): index among the parent's children.
-    position: int | None = Field(default=None, ge=0)
     type: str | None = None
     # Insert: the block's attrs. Update: a patch (null deletes a key).
     attrs: dict[str, Any] | None = None
     # Update: a patch of the person's own attributes (null deletes a key).
     user_attrs: dict[str, Any] | None = None
-    # Inline nodes (text types). The Mac app's current {"blocknote": runs} is read too.
-    content: list[dict[str, Any]] | dict[str, Any] | None = None
+    # Inline nodes (text types).
+    content: list[dict[str, Any]] | None = None
     # Structured data (math, html).
     payload: dict[str, Any] | None = None
     # Insert: where the content came from (pasted, web, ai, ...; default manual).

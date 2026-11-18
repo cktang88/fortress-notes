@@ -218,8 +218,9 @@ table, then its rows and cells, then the cells' paragraphs).
 
 Removed from the old API: `split`, `merge`, `duplicate`, `set_attrs` (use
 `update` with an attrs patch), `set_user_attrs` (use `update.user_attrs`),
-`expected_updated_at` (the revision check covers it), and client-sent `text`
-and `content.markdown`.
+`expected_updated_at` (the revision check covers it), `position` (use
+`after_id`/`before_id`), and client-sent `text` and `content.markdown`. An
+operation with a field not listed above is refused (422).
 
 ## 5. What the server derives (never accepted from clients)
 
@@ -313,68 +314,42 @@ never renumber siblings; undo restores a block's `(parent_id, order)` exactly.
 A unique index on `(document_id, parent_id or '', order)` covers top-level
 blocks too. Clients only ever sort by it (or rely on the order of `children`).
 
-## 9. Client migration (Mac app)
+## 9. Client migration (Mac app) — done
 
-The server still accepts the Mac app's current requests while it migrates, at
-the boundary only (nothing below is stored):
+The Mac app reads and writes the canonical model (`mac/Sources/FortressKit/Editor/Model/`:
+`BlockCodec` reads and writes inline nodes, `BlockDiff` sends `insert`/`update`/
+`move`/`delete` with `after_id`/`before_id`/`parent_id` and attrs patches,
+`docLink`/`blockRef` nodes for note links, tables and quotes as child blocks).
+The boundary compatibility layer the server kept during the migration is
+removed: the transaction API accepts only the shapes of §2-§4, and anything else
+is refused with HTTP 422 (nothing is written):
 
-- BlockNote/legacy type names map to canonical ones: `bulletListItem`,
-  `toggleListItem` → `bullet_item`; `numberedListItem` → `numbered_item`;
-  `checkListItem` → `check_item`; `list` → by `attrs.checked`/`attrs.ordered`;
-  `codeBlock` → `code`; `thematic_break`, `hr` → `divider`; `blockquote` →
-  `quote`; `audio`, `video`, `pdf` → `file`.
-- `content: {"blocknote": [runs]}` is read as inline content: `styles` names
-  (`superscript`, `subscript`, `textColor`, `backgroundColor`, `strikethrough`)
-  map to marks; link nodes with href `[[id|Title]]` become `docLink`, href
-  `(( id ))` becomes `blockRef`; `[[id]]`/`((id))` typed as text become nodes.
-  `content.markdown`, `text` and `expected_updated_at` are ignored (so an
-  update must still carry `content`, `type` or `attrs`).
-  `content: {"latex": …}` on math is read as the payload. Image `previewWidth`
-  maps to `width`.
-- An inline `quote` or `callout` insert/update with runs becomes the container
-  with one paragraph child holding the runs (an update replaces the first
-  paragraph child's content).
-- `position` (an index among the new parent's children, not counting the moved
-  block) is accepted on insert and move in place of `after_id`.
+- older or BlockNote type names (`bulletListItem`, `numberedListItem`,
+  `checkListItem`, `list`, `codeBlock`, `blockquote`, `hr`, ...) are unknown
+  types;
+- `content` must be a list of inline nodes (or null): `{"blocknote": runs}`,
+  `{"markdown": …}` and `{"latex": …}` objects are refused (math LaTeX goes in
+  `payload`); `[[id|Title]]`/`((id))` typed as text stay text (send `docLink`/
+  `blockRef` nodes);
+- inline content on a `quote`/`callout` (a container: send paragraph children),
+  BlockNote attrs such as image `previewWidth` (use `width`);
+- fields outside §4 — `position` (use `after_id`/`before_id`/`parent_id`),
+  `text`, `expected_updated_at`, ... — are refused, not ignored.
 
-What the Mac must change:
-
-1. **Read the new shape.** `content` is an array (or null) of inline nodes, not
-   `{"blocknote", "markdown"}`; `payload` holds math LaTeX. Marks are under
-   `marks` with the names in §3. Build note links from `docLink`/`blockRef`
-   nodes and label them from `resolved_links` (drop `currentLinkTitles` and the
-   `[[id|Title]]` href parsing). Use `type` names from §2; headings keep levels
-   4–6 (`heading(level)`), never clamped.
-2. **Tables and columns are child blocks.** Decode `table → table_row →
-   table_cell → blocks` (cell blocks have ids); editing a cell's text is an
-   `update` of the cell's paragraph; adding a row is inserts of a `table_row`,
-   its cells and their paragraphs. Delete `TableContent(blockNote:)` and the
-   loaded-shape compatibility code.
-3. **Quotes/callouts are containers**: a quote's lines are its paragraph
-   children.
-4. **Send canonical operations**: `insert`/`move` with `after_id` (or
-   `before_id`/`parent_id`) instead of `position`; `update` with only what
-   changed — `attrs` as a patch (`null` deletes; stop resending all attrs),
-   `content` as canonical inline nodes. Stop sending `text`,
-   `content.markdown`, `expected_updated_at`. Drop the `split`, `merge`,
-   `duplicate`, `set_attrs`, `set_user_attrs` cases from `BlockOperationKind`.
-5. **Delete the client Markdown serializer** (`BlockCodec.markdown`,
-   `InlineMarkdown.render` for storage) and the Markdown-only decoding paths
-   (`content.markdown` parsing, `soleImage`, fence stripping): every stored
-   block is canonical after the server's migration.
-6. Fetch `GET /api/block-schema` (or bundle it) to know which types may nest
-   where; unknown types from a newer server render as read-only placeholders and
-   are never rewritten.
-
-Once the Mac sends canonical operations, the boundary mapping above and the
-deprecated `position` field are removed.
+The `position` in responses (§1) is still served, read-only. Stored data in the
+old shapes is converted once by the schema 14 migration (§10,
+`backend/app/block_migration.py` with `block_legacy.py`), which stays.
 
 ## 10. Migration of stored data
 
 Schema version 14 converts every stored block once, at startup, in one SQLite
 transaction:
 
-- types to canonical names (as in §9); Markdown-only blocks are parsed into
+- types to canonical names (`bulletListItem`, `toggleListItem` → `bullet_item`;
+  `numberedListItem` → `numbered_item`; `checkListItem` → `check_item`; `list`
+  → by `attrs.checked`/`attrs.ordered`; `codeBlock` → `code`; `thematic_break`,
+  `hr` → `divider`; `blockquote` → `quote`; `audio`, `video`, `pdf` → `file`;
+  BlockNote `styles` → marks, image `previewWidth` → `width`); Markdown-only blocks are parsed into
   canonical content (a heading's `#`, a list item's marker, a code fence, a
   sole image, `$$` math); `raw` HTML becomes `html` blocks;
 - blockquotes become quote containers (and the blocks a quote swallowed by the

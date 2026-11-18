@@ -1,4 +1,4 @@
-"""Local storage for uploaded files shared by BlockNote file blocks."""
+"""Local storage for uploaded files (image and file blocks)."""
 
 from pathlib import Path
 from hashlib import sha256

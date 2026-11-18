@@ -92,29 +92,23 @@ def build_onenote(directory: Path, pages: int) -> None:
     (assets / f"{digest}.m4a").write_bytes(audio)
     block_store.register_asset(db, assets / f"{digest}.m4a", digest, "audio/mp4")
 
-    def runs(text: str) -> dict:
-        return {"blocknote": [{"type": "text", "text": text, "styles": {}}]}
+    def runs(text: str) -> list[dict]:
+        return [{"type": "text", "text": text}]
 
     def table(page: int, number: int) -> sources.SourceBlock:
         rows = []
         for r in range(5):
             cells = []
             for c in range(4):
-                cell = {"type": "tableCell", "props": {}, "content": [
-                    {"type": "text", "text": f"r{r}c{c} {rng.choice(words)}", "styles": {}}]}
+                blocks = [sources.SourceBlock(type="paragraph", content=runs(f"r{r}c{c} {rng.choice(words)}"))]
                 if r == 2 and c == 1:
-                    cell["blocks"] = [
-                        {"type": "paragraph", "content": {"blocknote": [
-                            {"type": "text", "text": sentence(), "styles": {}}]}},
-                        {"type": "bulletListItem", "content": {"blocknote": [
-                            {"type": "text", "text": sentence(), "styles": {}}]}},
-                    ]
-                cells.append(cell)
-            rows.append({"cells": cells})
+                    blocks += [sources.SourceBlock(type="paragraph", content=runs(sentence())),
+                               sources.SourceBlock(type="bullet_item", content=runs(sentence()))]
+                cells.append(sources.SourceBlock(type="table_cell", children=blocks))
+            rows.append(sources.SourceBlock(type="table_row", children=cells))
         return sources.SourceBlock(
-            type="table", external_id=f"{{P{page}}}/table{number}",
-            content={"blocknote": {"type": "tableContent", "headerRows": 1, "rows": rows}},
-            provenance={"extra": {"onenote": {"object_id": f"T{page}-{number}"}}},
+            type="table", external_id=f"{{P{page}}}/table{number}", attrs={"header_rows": 1},
+            children=rows, provenance={"extra": {"onenote": {"object_id": f"T{page}-{number}"}}},
         )
 
     def paragraph(page: int, key: str, text: str | None = None) -> sources.SourceBlock:
@@ -176,13 +170,12 @@ def build_onenote(directory: Path, pages: int) -> None:
         target_block = next(
             node["id"] for node in target_tree["children"] if node["type"] == "paragraph"
         )
-        text = " ".join(
-            f"[[{target}|Page]]" for target in targets
-        ) + f" see (({target_block}))"
+        content = [node for target in targets
+                   for node in ({"type": "docLink", "id": target}, {"type": "text", "text": " "})]
+        content += [{"type": "text", "text": "see "}, {"type": "blockRef", "id": target_block}]
         block_store.apply_transaction(db, document_id, [BlockOperation(
             operation="insert", block_id=block_store.new_id(), parent_id=None,
-            position=len(tree["children"]), type="paragraph", text=text,
-            content={"blocknote": [{"type": "text", "text": text, "styles": {}}]},
+            type="paragraph", content=content,
         )], tree["revision"])
     print(f"built onenote workspace: {pages} pages in {time.perf_counter() - started:.0f} s",
           file=sys.stderr)
@@ -348,8 +341,8 @@ def mixed(client_factory, base: str, docs: list[str], writer_doc: str, seconds: 
                 response = client.post(
                     f"{base}/api/block-documents/{writer_doc}/transactions",
                     json={"base_revision": revision, "operations": [{
-                        "operation": "update", "block_id": block["id"], "text": text,
-                        "content": {"blocknote": [{"type": "text", "text": text, "styles": {}}]}}]},
+                        "operation": "update", "block_id": block["id"],
+                        "content": [{"type": "text", "text": text}]}]},
                 )
                 writes.append(time.perf_counter() - started)
                 if response.status_code != 200:
@@ -379,8 +372,8 @@ def typing(client, base: str, document_id: str, count: int, query: str = "") -> 
         response = client.post(
             f"{base}/api/block-documents/{document_id}/transactions{query}",
             json={"base_revision": revision, "operations": [{
-                "operation": "update", "block_id": block["id"], "text": text,
-                "content": {"blocknote": [{"type": "text", "text": text, "styles": {}}]}}]},
+                "operation": "update", "block_id": block["id"],
+                "content": [{"type": "text", "text": text}]}]},
             headers={"Accept-Encoding": "identity"},
         )
         samples.append(time.perf_counter() - started)

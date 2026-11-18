@@ -1,9 +1,8 @@
-"""Reading block shapes from before the canonical model (docs/block-model.md §9-§10).
+"""Reading stored block shapes from before the canonical model (docs/block-model.md §10).
 
-Two callers: the schema migration, which converts every stored block once, and
-the transaction API, which still accepts the Mac app's current requests
-(BlockNote type names and ``content.blocknote`` runs) until it sends canonical
-operations. Nothing here is ever stored as is: everything comes out canonical.
+Used only by the schema 14 migration (``block_migration``), which converts every
+stored block once. The API accepts canonical shapes only (§9); nothing here is
+ever stored as is: everything comes out canonical.
 """
 
 from __future__ import annotations
