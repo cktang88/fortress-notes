@@ -155,12 +155,10 @@ struct BlockTextEditor: NSViewRepresentable {
 
         if let focusBlockId {
             context.coordinator.focusedRequest = focusBlockId
-            DispatchQueue.main.async { controller.focus(blockId: focusBlockId) }
+            Self.later { controller.focus(blockId: focusBlockId) }
         } else if session.document?.children.allSatisfy({ $0.text.isEmpty && $0.children.isEmpty }) ?? false {
-            // A new, empty note: start typing the title.
-            DispatchQueue.main.async { [weak header] in
-                header?.window?.makeFirstResponder(nil)
-            }
+            // A new, empty note: start typing.
+            Self.later { controller.focusStart() }
         }
         return controller.scrollView
     }
@@ -169,13 +167,19 @@ struct BlockTextEditor: NSViewRepresentable {
         if focusRequest != context.coordinator.focusRequest {
             context.coordinator.focusRequest = focusRequest
             let controller = context.coordinator.controller
-            DispatchQueue.main.async { controller.focusCaret() }
+            Self.later { controller.focusCaret() }
         }
         if let focusBlockId, focusBlockId != context.coordinator.focusedRequest {
             context.coordinator.focusedRequest = focusBlockId
             let controller = context.coordinator.controller
-            DispatchQueue.main.async { controller.focus(blockId: focusBlockId) }
+            Self.later { controller.focus(blockId: focusBlockId) }
         }
+    }
+
+    /// After the current layout pass (a run loop turn, which also runs while the main
+    /// queue is busy, unlike a GCD hop).
+    static func later(_ body: @escaping @MainActor () -> Void) {
+        RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { body() } }
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {

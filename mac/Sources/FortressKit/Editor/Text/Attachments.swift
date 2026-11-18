@@ -36,6 +36,11 @@ final class AttachmentContext {
         if let image = images[url] { return image }
         guard !loading.contains(url) else { return nil }
         loading.insert(url)
+        if url.isFileURL {
+            let image = NSImage(contentsOf: url)
+            images[url] = image
+            return image
+        }
         Task {
             if let (data, _) = try? await URLSession.shared.data(from: url), let image = NSImage(data: data) {
                 images[url] = image
