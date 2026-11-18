@@ -143,6 +143,11 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard let fragment = manager.textLayoutFragment(for: start) else { textView.scrollRangeToVisible(range); return }
         let frame = fragment.layoutFragmentFrame.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
         let visible = scrollView.contentView.bounds.height
+        // The view may not have grown to the laid-out text yet.
+        textView.sizeToFit()
+        if textView.frame.height < frame.maxY + visible / 2 {
+            textView.setFrameSize(NSSize(width: textView.frame.width, height: frame.maxY + visible / 2))
+        }
         let y = max(0, frame.midY - visible / 2)
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
         scrollView.reflectScrolledClipView(scrollView.contentView)
