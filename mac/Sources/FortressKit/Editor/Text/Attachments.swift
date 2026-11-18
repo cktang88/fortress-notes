@@ -530,10 +530,22 @@ final class InlineNodeAttachment: NSTextAttachment {
     let node: JSONValue
     nonisolated(unsafe) weak var context: AttachmentContext?
 
+    /// The font of the text around it (from the last layout), for the label view.
+    nonisolated(unsafe) var font: NSFont?
+
     @MainActor init(node: JSONValue, context: AttachmentContext) {
         self.node = node
         self.context = context
         super.init(data: nil, ofType: nil)
+        allowsTextAttachmentView = true
+    }
+
+    /// TextKit 2 shows the label in a small view (drawing it as an image left it blank).
+    override func viewProvider(for parentView: NSView?, location: any NSTextLocation, textContainer: NSTextContainer?) -> NSTextAttachmentViewProvider? {
+        let provider = InlineNodeViewProvider(textAttachment: self, parentView: parentView,
+                                              textLayoutManager: textContainer?.textLayoutManager, location: location)
+        provider.tracksTextAttachmentViewBounds = true
+        return provider
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -570,6 +582,7 @@ final class InlineNodeAttachment: NSTextAttachment {
         nonisolated(unsafe) let attributes = attributes
         return MainActor.assumeIsolated {
             let attrs = this.textAttributes(attributes)
+            this.font = attrs[.font] as? NSFont
             let label = this.label
             let size = (label as NSString).size(withAttributes: attrs)
             let font = attrs[.font] as! NSFont
@@ -591,5 +604,59 @@ final class InlineNodeAttachment: NSTextAttachment {
                 return true
             }
         }
+    }
+}
+
+final class InlineNodeViewProvider: NSTextAttachmentViewProvider {
+    override func loadView() {
+        nonisolated(unsafe) let provider = self
+        MainActor.assumeIsolated {
+            guard let attachment = provider.textAttachment as? InlineNodeAttachment else { return }
+            provider.view = InlineNodeLabelView(attachment: attachment)
+        }
+    }
+
+    override func attachmentBounds(
+        for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
+        textContainer: NSTextContainer?, proposedLineFragment: CGRect, position: CGPoint
+    ) -> CGRect {
+        textAttachment?.attachmentBounds(for: attributes, location: location, textContainer: textContainer,
+                                         proposedLineFragment: proposedLineFragment, position: position) ?? .zero
+    }
+}
+
+/// A note link's or block reference's label, underlined in the link colour.
+final class InlineNodeLabelView: NSView {
+    weak var attachment: InlineNodeAttachment?
+
+    init(attachment: InlineNodeAttachment) {
+        self.attachment = attachment
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let attachment else { return }
+        let font = attachment.font ?? (attachment.context?.theme ?? EditorTheme()).bodyFont()
+        let color: NSColor = attachment.isLink ? .linkColor : .textColor
+        let label = attachment.label
+        // The view spans descender to ascender; the baseline sits `-descender` up.
+        (label as NSString).draw(at: CGPoint(x: 1, y: -font.descender), withAttributes: [.font: font, .foregroundColor: color])
+        color.withAlphaComponent(0.35).setFill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: 1.5).fill()
+    }
+
+    /// Clicking a note link opens the note.
+    override func mouseDown(with event: NSEvent) {
+        if let node = attachment?.node, let id = NoteLinks.documentTarget(node), let open = attachment?.context?.openNote {
+            open(id)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+
+    override func resetCursorRects() {
+        if let node = attachment?.node, NoteLinks.documentTarget(node) != nil { addCursorRect(bounds, cursor: .pointingHand) }
     }
 }
