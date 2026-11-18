@@ -58,7 +58,7 @@ class BlockStoreTests(unittest.TestCase):
                     "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
                 ).fetchone()["version"]
             self.assertIsNotNone(table)
-            self.assertEqual(version, 12)
+            self.assertEqual(version, 13)
 
     def test_fresh_database_has_the_folder_position_index_migrations_create(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1115,7 +1115,7 @@ class BlockStoreTests(unittest.TestCase):
                     "SELECT version FROM schema_migrations ORDER BY version"
                 ).fetchall()
                 self.assertEqual(
-                    [row["version"] for row in versions], [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+                    [row["version"] for row in versions], [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
                 )
                 self.assertIsNotNone(
                     connection.execute(
