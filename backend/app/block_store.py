@@ -12,7 +12,7 @@ import json
 import re
 import sqlite3
 import threading
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -329,32 +329,107 @@ _MIGRATIONS = {
 }
 
 _ready_paths: set[Path] = set()
+# Databases whose schema is current, keyed by the path as given, with the file
+# identity checked (a deleted or replaced file is initialized again).
+_ready_files: dict[Path, tuple[Path, tuple[int, int], int]] = {}
 # Creating or migrating a database is check-then-write; concurrent first use from
 # several threads would otherwise race (duplicate version rows, lock errors).
 _initialize_lock = threading.Lock()
 UNSET = object()
+
+# Per-connection settings. WAL lets readers run while one writer commits;
+# synchronous=NORMAL is durable across application crashes in WAL mode (a power
+# loss can drop the last commits, never corrupt). The page cache and memory map
+# keep hot pages (navigation, open notes) out of read() calls.
+_PRAGMAS = (
+    "PRAGMA foreign_keys = ON",
+    "PRAGMA busy_timeout = 5000",
+    "PRAGMA synchronous = NORMAL",
+    "PRAGMA cache_size = -16000",
+    "PRAGMA mmap_size = 268435456",
+    "PRAGMA temp_store = MEMORY",
+)
+# Idle connections kept per thread and database. Request handlers run on a small,
+# reused thread pool, so each worker thread keeps its own warm connection (with
+# its prepared-statement cache) instead of opening one per request.
+_POOL_SIZE = 2
+
+
+class _Idle(list):
+    """A thread's idle connections to one database; closed when the thread ends."""
+
+    def __del__(self) -> None:
+        for connection, _identity in self:
+            with suppress(Exception):
+                connection.close()
+
+
+_pool = threading.local()
 
 
 def database_path(notes_path: Path) -> Path:
     return notes_path / DB_FILENAME
 
 
+def _file_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path, timeout=5.0)
+    connection = sqlite3.connect(path, timeout=5.0, cached_statements=256)
     try:
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        for pragma in _PRAGMAS[:2]:
+            connection.execute(pragma)
         # Switching modes needs an exclusive lock and fails at once ("database is
         # locked") while another connection is open, so only switch when needed.
         if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
             connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = FULL")
+        for pragma in _PRAGMAS[2:]:
+            connection.execute(pragma)
     except BaseException:
         connection.close()
         raise
     return connection
+
+
+def _checkout(path: Path) -> tuple[sqlite3.Connection, tuple[int, int] | None]:
+    idle: dict = getattr(_pool, "idle", None) or {}
+    _pool.idle = idle
+    entries = idle.get(path)
+    identity = _file_identity(path)
+    while entries:
+        connection, opened_identity = entries.pop()
+        # The file was replaced or deleted since: that connection would read
+        # (and write) the old one.
+        if identity is not None and opened_identity == identity:
+            return connection, identity
+        connection.close()
+    connection = connect(path)
+    return connection, identity or _file_identity(path)
+
+
+def _checkin(path: Path, connection: sqlite3.Connection, identity) -> None:
+    entries = _pool.idle.get(path)
+    if entries is None:
+        entries = _pool.idle[path] = _Idle()
+    if connection.in_transaction or len(entries) >= _POOL_SIZE or identity is None:
+        connection.close()
+        return
+    entries.append((connection, identity))
+
+
+def close_pooled_connections() -> None:
+    """Close this thread's idle connections (tests that delete databases)."""
+
+    for entries in (getattr(_pool, "idle", None) or {}).values():
+        while entries:
+            entries.pop()[0].close()
 
 
 @contextmanager
@@ -363,22 +438,57 @@ def connection_scope(path: Path, immediate: bool = False):
 
     Writes that read sibling positions before shifting them need ``immediate``:
     otherwise two requests can read the same positions before either writes.
+    The connection is this thread's pooled one (a nested scope gets its own).
     """
 
-    connection = connect(path)
+    connection, identity = _checkout(path)
     try:
         with connection:
             if immediate:
                 connection.execute("BEGIN IMMEDIATE")
             yield connection
     finally:
-        connection.close()
+        # ``with connection`` committed or rolled back; one still inside a
+        # transaction (a failed rollback) is closed rather than reused.
+        _checkin(path, connection, identity)
 
 
-def initialize(path: Path) -> None:
+@contextmanager
+def read_scope(path: Path):
+    """A pooled connection holding one read snapshot for several queries."""
+
+    with connection_scope(path) as connection:
+        connection.execute("BEGIN")
+        yield connection
+
+
+def initialize(path: Path, force: bool = False) -> None:
+    """Create or migrate the schema; a cheap check once a file is current.
+
+    The check is the file's identity (a deleted or replaced file starts over)
+    and SQLite's schema cookie (anything else that changed the schema, e.g. an
+    older snapshot copied over it, runs the migrations again).
+    """
+
+    if not force:
+        ready = _ready_files.get(path)
+        if ready is not None and ready[1] == _file_identity(path):
+            if _schema_cookie(path) == ready[2]:
+                return
     with _initialize_lock:
         _initialize(path)
+    identity = _file_identity(path)
+    if identity is not None:
+        _ready_files[path] = (path.resolve(), identity, _schema_cookie(path))
     _ready_paths.add(path.resolve())
+
+
+def _schema_cookie(path: Path) -> int:
+    connection, identity = _checkout(path)
+    try:
+        return int(connection.execute("PRAGMA schema_version").fetchone()[0])
+    finally:
+        _checkin(path, connection, identity)
 
 
 def _initialize(path: Path) -> None:
@@ -494,7 +604,14 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
     if not assets_path.is_dir():
         return 0
     registered = 0
+    changed = False
     with connection_scope(db_path) as connection:
+        # Registered files are not read again (this runs at every startup, and
+        # attachments can be large): only a sidecar text an empty row lacks.
+        known = {
+            row["media_name"]: (row["content_hash"], row["text"])
+            for row in connection.execute("SELECT media_name, content_hash, text FROM assets")
+        }
         for asset_path in sorted(assets_path.iterdir()):
             mime_type = _MIME_BY_EXTENSION.get(asset_path.suffix.lower())
             if (
@@ -504,12 +621,11 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
                 or not asset_path.is_file()
             ):
                 continue
-            try:
-                data = asset_path.read_bytes()
-            except OSError:
-                continue
-            content_hash = hashlib.sha256(data).hexdigest()
             old_sidecar = asset_path.with_suffix(".txt")
+            existing = known.get(asset_path.name)
+            if existing is not None and (existing[1] or not old_sidecar.is_file()):
+                registered += 1
+                continue
             try:
                 text = (
                     old_sidecar.read_text(encoding="utf-8")
@@ -518,6 +634,17 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
                 )
             except (OSError, UnicodeError):
                 text = ""
+            if existing is not None:
+                content_hash = existing[0]
+                if not text:
+                    registered += 1
+                    continue
+            else:
+                try:
+                    content_hash = _file_sha256(asset_path)
+                except OSError:
+                    continue
+            changed = True
             registered_at = _now()
             connection.execute(
                 """INSERT INTO assets(
@@ -548,11 +675,21 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
                     except OSError:
                         pass
             registered += 1
-        document_ids = connection.execute("SELECT id FROM documents").fetchall()
-        for row in document_ids:
-            _rebuild_document_assets(connection, row["id"])
-    rebuild_fts(db_path)
+        if changed:
+            document_ids = connection.execute("SELECT id FROM documents").fetchall()
+            for row in document_ids:
+                _rebuild_document_assets(connection, row["id"])
+    if changed:
+        rebuild_fts(db_path)
     return registered
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
@@ -1303,27 +1440,29 @@ def check_integrity(path: Path) -> bool:
 
 
 def fts_is_consistent(path: Path) -> bool:
-    """Check that FTS contains exactly the active canonical blocks."""
+    """Check that FTS contains exactly the active canonical blocks.
+
+    ``blocks_fts.block_id`` is UNINDEXED, so a SQL join on it scans the whole FTS
+    table once per block (minutes on a large workspace). Comparing the two ID
+    lists is linear.
+    """
 
     initialize(path)
-    with connection_scope(path) as connection:
-        missing = connection.execute(
-            """SELECT 1
-                 FROM blocks
-                 JOIN documents ON documents.id = blocks.document_id
-                 LEFT JOIN blocks_fts ON blocks_fts.block_id = blocks.id
-                WHERE documents.deleted_at IS NULL AND blocks_fts.block_id IS NULL
-                LIMIT 1"""
-        ).fetchone()
-        stale = connection.execute(
-            """SELECT 1
-                 FROM blocks_fts
-                 LEFT JOIN blocks ON blocks.id = blocks_fts.block_id
-                 LEFT JOIN documents ON documents.id = blocks_fts.document_id
-                WHERE blocks.id IS NULL OR documents.deleted_at IS NOT NULL
-                LIMIT 1"""
-        ).fetchone()
-    return missing is None and stale is None
+    with read_scope(path) as connection:
+        active = {
+            row[0]
+            for row in connection.execute(
+                """SELECT blocks.id FROM blocks
+                     JOIN documents ON documents.id = blocks.document_id
+                    WHERE documents.deleted_at IS NULL"""
+            )
+        }
+        indexed: set[str] = set()
+        for (block_id,) in connection.execute("SELECT block_id FROM blocks_fts"):
+            if block_id in indexed:
+                return False  # a duplicate row
+            indexed.add(block_id)
+    return active == indexed
 
 
 def rebuild_fts(path: Path) -> None:
