@@ -146,7 +146,9 @@ import Testing
     /// Closing a note while it loads cancels its request, and the cancellation is not
     /// reported as an error.
     @Test func cancelledReadCancelsTheRequestAndShowsNoNotice() async throws {
-        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 1) }
+        // A long delay: on a loaded CI runner the main actor can stall for seconds, and the
+        // answer must not arrive before the cancel does (cancelling ends the test early).
+        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 20) }
         let api = SpyProtocol.client()
         let model = makeModel(api)
         let task = Task { try await api.document(id: "d1") }
