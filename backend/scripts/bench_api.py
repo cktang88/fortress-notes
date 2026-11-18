@@ -441,10 +441,10 @@ def run(directory: Path, kind: str, rounds: int) -> dict:
             if media:
                 endpoints.append(("media", [("GET", f"{base}/media/{p.name}", None)
                                             for p in media[:5] if p.suffix != ".txt"]))
-            batch = client.post(f"{base}/api/block-documents/batch", json={"ids": sample[:20]})
+            batch = client.post(f"{base}/api/batch/block-documents", json={"ids": sample[:20]})
             if batch.status_code == 200:
                 endpoints.append(("batch (20 documents)", [
-                    ("POST", f"{base}/api/block-documents/batch", {"ids": sample[:20]})]))
+                    ("POST", f"{base}/api/batch/block-documents", {"ids": sample[:20]})]))
             results["endpoints"] = [measure(client, name, requests, rounds)
                                     for name, requests in endpoints]
             if batch.status_code != 200:

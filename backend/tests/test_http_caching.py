@@ -222,37 +222,6 @@ class WorkspaceValidatorTests(ApiCase):
         self.assertEqual(self.revalidate("/api/navigation", before), 200)
 
 
-class BatchTests(ApiCase):
-    def test_batch_returns_documents_etags_missing_and_not_modified(self) -> None:
-        first = self.create("One", "a")
-        second = self.create("Two", "b")
-        single = self.client.get(f"/api/block-documents/{first['id']}")
-        opened = block_store.document_tree(self.db, second["id"])["last_opened_at"]
-        response = self.client.post("/api/block-documents/batch", json={
-            "ids": [first["id"], second["id"], "missing", first["id"]],
-            "known": {first["id"]: single.headers["etag"]},
-        })
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["not_modified"], [first["id"]])
-        self.assertEqual(body["missing"], ["missing"])
-        self.assertEqual([tree["id"] for tree in body["documents"]], [second["id"]])
-        self.assertEqual(body["etags"][first["id"]], single.headers["etag"])
-        second_get = self.client.get(f"/api/block-documents/{second['id']}")
-        self.assertEqual(body["documents"][0]["children"], second_get.json()["children"])
-        # Prefetching is not opening.
-        self.assertEqual(opened, None)
-        self.assertEqual(
-            self.client.post("/api/block-documents/batch", json={"ids": []}).status_code, 422
-        )
-        self.assertEqual(
-            self.client.post(
-                "/api/block-documents/batch", json={"ids": ["x"] * 101}
-            ).status_code,
-            422,
-        )
-
-
 class CompressionTests(ApiCase):
     def test_large_json_is_gzipped_with_a_gzip_etag(self) -> None:
         for number in range(30):

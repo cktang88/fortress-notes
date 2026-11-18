@@ -14,7 +14,6 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -318,7 +317,6 @@ from .batch import router as batch_router  # noqa: E402
 
 app.include_router(batch_router)
 
-
 @app.get("/api/health")
 def health() -> dict:
     return {
@@ -440,53 +438,6 @@ def delete_block_document(document_id: str):
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     return Response(status_code=204)
-
-
-MAX_BATCH_DOCUMENTS = 100
-
-
-class DocumentBatchRequest(BaseModel):
-    ids: list[str] = Field(min_length=1, max_length=MAX_BATCH_DOCUMENTS)
-    # id -> ETag the client already has; those come back in ``not_modified``.
-    known: dict[str, str] = {}
-
-
-@app.post("/api/block-documents/batch")
-def get_block_documents_batch(data: DocumentBatchRequest):
-    """Several notes in one request (prefetch). Does not mark them opened.
-
-    Returns ``{"documents": [tree...], "etags": {id: etag}, "not_modified": [id],
-    "missing": [id]}``; ``etags`` covers every note found (also the unchanged
-    ones), and each ETag is the one ``GET /api/block-documents/{id}`` returns.
-    """
-
-    db = settings.block_db_path
-    bodies: list[bytes] = []
-    etags: dict[str, str] = {}
-    not_modified: list[str] = []
-    missing: list[str] = []
-    for document_id in dict.fromkeys(data.ids):
-        validator = block_store.document_validator(db, document_id)
-        if validator is None:
-            missing.append(document_id)
-            continue
-        tag = http_cache.etag("document", document_id, *validator)
-        if http_cache.if_none_match(data.known.get(document_id), tag):
-            etags[document_id] = tag
-            not_modified.append(document_id)
-            continue
-        rendered = _document_body(document_id, validator)
-        if rendered is None:
-            missing.append(document_id)
-            continue
-        etags[document_id] = rendered[0]
-        bodies.append(rendered[1])
-    body = b"".join([
-        b'{"documents":[', b",".join(bodies), b'],"etags":', http_cache.render(etags),
-        b',"not_modified":', http_cache.render(not_modified),
-        b',"missing":', http_cache.render(missing), b"}",
-    ])
-    return http_cache.json_response(body)
 
 
 @app.get("/api/block-documents/{document_id}")

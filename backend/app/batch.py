@@ -32,15 +32,17 @@ class DocumentBatchRequest(BaseModel):
 
 
 @router.post("/api/batch/block-documents")
-def batch_block_documents(request: DocumentBatchRequest) -> dict:
+def batch_block_documents(request: DocumentBatchRequest):
     """Several block documents in one read, for prefetching.
 
     Unlike ``GET /api/block-documents/{id}`` this does not mark the notes as opened:
     a prefetch is not the person opening a note.
     """
 
+    from . import http_cache, main
+
     path = _db_path()
-    documents: list[dict] = []
+    bodies: list[bytes] = []
     unchanged: list[str] = []
     missing: list[str] = []
     seen: set[str] = set()
@@ -65,12 +67,17 @@ def batch_block_documents(request: DocumentBatchRequest) -> dict:
                 if row["revision"] == known:
                     unchanged.append(document_id)
                     continue
-            tree = block_store._document_tree(connection, document_id)
-            if tree is None:
+            # Rendered once per validator and shared with the single GET's cache.
+            validator = block_store._document_validator(connection, document_id)
+            rendered = None if validator is None else main._document_body(document_id, validator)
+            if rendered is None:
                 missing.append(document_id)
             else:
-                documents.append(tree)
-    return {"documents": documents, "unchanged": unchanged, "missing": missing}
+                bodies.append(rendered[1])
+    return http_cache.json_response(b"".join([
+        b'{"documents":[', b",".join(bodies), b'],"unchanged":', http_cache.render(unchanged),
+        b',"missing":', http_cache.render(missing), b"}",
+    ]))
 
 
 class DocumentMoveItem(BaseModel):
