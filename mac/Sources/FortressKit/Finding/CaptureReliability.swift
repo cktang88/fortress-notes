@@ -210,6 +210,7 @@ final class HotKeyKeeper {
 // MARK: Draft
 
 /// The unsaved Quick Capture text, kept across closing the panel and quitting the app.
+/// `@unchecked Sendable`: UserDefaults is documented thread-safe; the struct is a value.
 struct CaptureDraftStore: @unchecked Sendable {
     var defaults: UserDefaults = .standard
     var key = "QuickCaptureDraft"

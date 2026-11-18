@@ -78,7 +78,7 @@ final class SpyProtocol: URLProtocol, @unchecked Sendable {
         }
         self.index.withLock { $0 = index }
         if reply.delay > 0 {
-            nonisolated(unsafe) let loader = self
+            let loader = self
             DispatchQueue.global().asyncAfter(deadline: .now() + reply.delay) {
                 loader.deliver(reply)
             }

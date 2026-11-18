@@ -16,7 +16,9 @@ extension NSAttributedString.Key {
 }
 
 /// Identity and kind of one paragraph's block. Immutable; replace it to change a block.
-final class BlockInfo: NSObject, @unchecked Sendable {
+/// (This and the boxes below are checked `Sendable`: final NSObject subclasses with only
+/// `let` properties of Sendable types.)
+final class BlockInfo: NSObject, Sendable {
     let id: String
     let kind: BlockKind
     let depth: Int
@@ -81,19 +83,19 @@ final class BlockInfo: NSObject, @unchecked Sendable {
 }
 
 /// The server's version of a block (boxed so attribute comparisons stay cheap).
-final class OriginBox: NSObject, @unchecked Sendable {
+final class OriginBox: NSObject, Sendable {
     let origin: BlockOrigin
     init(_ origin: BlockOrigin) { self.origin = origin }
 }
 
-final class MarksBox: NSObject, @unchecked Sendable {
+final class MarksBox: NSObject, Sendable {
     let marks: InlineMarks
     init(_ marks: InlineMarks) { self.marks = marks }
     override func isEqual(_ object: Any?) -> Bool { (object as? MarksBox)?.marks == marks }
     override var hash: Int { marks.hashValue }
 }
 
-final class NodeBox: NSObject, @unchecked Sendable {
+final class NodeBox: NSObject, Sendable {
     let node: JSONValue
     init(_ node: JSONValue) { self.node = node }
 }

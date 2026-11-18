@@ -30,7 +30,9 @@ final class ImagePipeline {
     private let cache = NSCache<NSURL, NSImage>()
     private var loading: [URL: Task<Decoded?, Never>] = [:]
 
-    /// A decoded picture handed from the decoding task to the main actor (immutable).
+    /// A decoded picture handed from the decoding task to the main actor.
+    /// `@unchecked Sendable`: CGImage is immutable and thread-safe, but not annotated
+    /// Sendable in the SDK.
     struct Decoded: @unchecked Sendable {
         let image: CGImage
         let size: CGSize

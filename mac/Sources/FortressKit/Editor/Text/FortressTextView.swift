@@ -32,8 +32,10 @@ final class FortressTextView: NSTextView {
         textView.backgroundColor = .textBackgroundColor
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
-        textView.isAutomaticQuoteSubstitutionEnabled = true
-        textView.isAutomaticDashSubstitutionEnabled = true
+        // Smart quotes and dashes follow System Settings ▸ Keyboard ▸ Text Input (the app
+        // has no setting of its own); link detection is off because links are marks.
+        textView.isAutomaticQuoteSubstitutionEnabled = NSSpellChecker.isAutomaticQuoteSubstitutionEnabled
+        textView.isAutomaticDashSubstitutionEnabled = NSSpellChecker.isAutomaticDashSubstitutionEnabled
         textView.isAutomaticLinkDetectionEnabled = false
         textView.isContinuousSpellCheckingEnabled = true
         textView.smartInsertDeleteEnabled = true

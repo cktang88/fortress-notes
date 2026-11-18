@@ -742,6 +742,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     // MARK: Normalizing (NSTextStorageDelegate)
 
+    // NSTextStorageDelegate isn't main-actor isolated (a text storage may be edited on
+    // any thread). This storage belongs to the editor's text view and is only edited on
+    // the main thread, so the callback asserts that with `MainActor.assumeIsolated`
+    // (which traps rather than races if it's ever wrong); `nonisolated(unsafe)` carries
+    // the non-Sendable storage into that closure, on the same thread.
+
     nonisolated func textStorage(
         _ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
         range editedRange: NSRange, changeInLength delta: Int

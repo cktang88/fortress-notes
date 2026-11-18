@@ -104,6 +104,13 @@ protocol LiveBlock: AnyObject {
 
 /// The one character of an atomic block. Draws through a hosted SwiftUI view, or the
 /// live view of a table or columns block.
+///
+/// NSTextAttachment isn't main-actor isolated (TextKit may ask it for bounds from a
+/// layout pass), so the mutable state below is `nonisolated(unsafe)`: it is only ever
+/// read or written on the main thread, because the editor's text views lay out on the
+/// main thread (TextKit 2 viewport layout in NSTextView), and every access that can
+/// arrive through a nonisolated TextKit callback goes through `MainActor.assumeIsolated`,
+/// which traps instead of racing if that ever changes.
 final class BlockAttachment: NSTextAttachment {
     let info: BlockInfo
     nonisolated(unsafe) weak var context: AttachmentContext?
@@ -214,6 +221,10 @@ enum ImageLayout {
     }
 }
 
+/// TextKit calls these from its (main-thread) layout of an NSTextView; the overrides are
+/// nonisolated in the SDK, so each hops into the main actor with `assumeIsolated` (a
+/// checked assertion, not a hop). `nonisolated(unsafe)` lets the non-Sendable provider
+/// and attachment cross into that closure: they never leave the main thread.
 final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
     override func loadView() {
         nonisolated(unsafe) let provider = self

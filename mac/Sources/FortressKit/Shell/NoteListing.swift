@@ -7,9 +7,9 @@ public enum NoteSort: String, CaseIterable, Identifiable, Sendable {
 
     public var label: String {
         switch self {
-        case .edited: "Date Edited"
-        case .created: "Date Created"
-        case .title: "Title"
+        case .edited: String(localized: "Date Edited")
+        case .created: String(localized: "Date Created")
+        case .title: String(localized: "Title")
         }
     }
 }
@@ -128,7 +128,7 @@ public enum NoteListing {
         var sections: [NoteSection] = []
         for note in ordered {
             let stamp = sort == .created ? note.createdAt : note.updatedAt
-            let title = Timestamp.date(stamp).map { dateBucket(for: $0, now: now, calendar: calendar) } ?? "Earlier"
+            let title = Timestamp.date(stamp).map { dateBucket(for: $0, now: now, calendar: calendar) } ?? String(localized: "Earlier")
             if sections.last?.title == title {
                 sections[sections.count - 1].notes.append(note)
             } else {
@@ -142,12 +142,15 @@ public enum NoteListing {
     public static func dateBucket(for date: Date, now: Date, calendar: Calendar) -> String {
         let today = calendar.startOfDay(for: now)
         func daysAgo(_ days: Int) -> Date { calendar.date(byAdding: .day, value: -days, to: today)! }
-        if date >= today { return "Today" }
-        if date >= daysAgo(1) { return "Yesterday" }
-        if date >= daysAgo(7) { return "Previous 7 Days" }
-        if date >= daysAgo(30) { return "Previous 30 Days" }
+        if date >= today { return String(localized: "Today") }
+        if date >= daysAgo(1) { return String(localized: "Yesterday") }
+        if date >= daysAgo(7) { return String(localized: "Previous 7 Days") }
+        if date >= daysAgo(30) { return String(localized: "Previous 30 Days") }
         let year = calendar.component(.year, from: date)
-        guard year == calendar.component(.year, from: now) else { return String(year) }
+        guard year == calendar.component(.year, from: now) else {
+            // The calendar's own year (not "2,025", and not the Gregorian year in a Buddhist calendar).
+            return date.formatted(Date.FormatStyle(locale: calendar.locale ?? .current, calendar: calendar, timeZone: calendar.timeZone).year())
+        }
         return calendar.standaloneMonthSymbols[calendar.component(.month, from: date) - 1]
     }
 
@@ -155,7 +158,7 @@ public enum NoteListing {
 
     public static func displayTitle(_ title: String) -> String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "New Note" : trimmed
+        return trimmed.isEmpty ? String(localized: "New Note") : trimmed
     }
 
     /// The snippet under a row's title: Markdown markers stripped, and empty when it only
@@ -187,7 +190,7 @@ public enum NoteListing {
         if date >= today {
             return date.formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar, timeZone: calendar.timeZone))
         }
-        if date >= calendar.date(byAdding: .day, value: -1, to: today)! { return "Yesterday" }
+        if date >= calendar.date(byAdding: .day, value: -1, to: today)! { return String(localized: "Yesterday") }
         if date >= calendar.date(byAdding: .day, value: -6, to: today)! {
             return date.formatted(Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).weekday(.wide))
         }
@@ -196,8 +199,10 @@ public enum NoteListing {
 
     /// "Deleted 3 days ago" for Trash rows.
     public static func deletedLabel(_ stamp: String, now: Date) -> String {
-        guard let date = Timestamp.date(stamp) else { return "Deleted" }
-        if now.timeIntervalSince(date) < 60 { return "Deleted just now" }
-        return "Deleted " + date.formatted(.relative(presentation: .named, unitsStyle: .wide))
+        guard let date = Timestamp.date(stamp) else { return String(localized: "Deleted") }
+        if now.timeIntervalSince(date) < 60 { return String(localized: "Deleted just now") }
+        // One sentence with the date as its argument (never "Deleted " + date: word order differs).
+        let relative = date.formatted(.relative(presentation: .named, unitsStyle: .wide))
+        return String(localized: "Deleted \(relative)", comment: "Trash row; the argument is a relative date such as “3 days ago”")
     }
 }

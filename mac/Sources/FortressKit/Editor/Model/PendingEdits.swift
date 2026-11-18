@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Edits not yet confirmed by the server, kept on disk (Application Support) so quitting,
 /// a crash or a lost connection never loses them. The native counterpart of the web
@@ -20,11 +21,17 @@ public enum PendingEdits {
         }
     }
 
-    /// Where records live; tests point it elsewhere.
-    nonisolated(unsafe) public static var directory: URL = {
+    /// Where records live; tests point it elsewhere. (Read from the main actor and from
+    /// the write queue, so it sits behind a lock rather than being `nonisolated(unsafe)`.)
+    public static var directory: URL {
+        get { storedDirectory.withLock { $0 } }
+        set { storedDirectory.withLock { $0 = newValue } }
+    }
+
+    private static let storedDirectory = Mutex<URL>({
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return support.appending(path: "FortressNotes/PendingEdits", directoryHint: .isDirectory)
-    }()
+    }())
 
     /// Writes happen in order, off the main thread.
     private static let queue = DispatchQueue(label: "app.fortress.notes.pending-edits", qos: .utility)

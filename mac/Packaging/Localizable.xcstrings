@@ -1,0 +1,14 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Deleted %@" : {
+      "comment" : "Trash row; the argument is a relative date such as “3 days ago”",
+      "extractionState" : "manual"
+    },
+    "Edited %@" : {
+      "comment" : "Note meta line; the argument is a relative date such as “5 min. ago”",
+      "extractionState" : "manual"
+    }
+  },
+  "version" : "1.0"
+}

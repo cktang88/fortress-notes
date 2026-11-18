@@ -447,6 +447,8 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 
     /// Every change of a cell's text (typing, paste, and undo, which doesn't always
     /// tell the delegate `textDidChange`) restyles it and writes it to the table.
+    /// (Cell storages are only edited on the main thread: see the note on
+    /// `BlockEditorController`'s storage delegate for the `assumeIsolated` pattern.)
     nonisolated func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
                                  range editedRange: NSRange, changeInLength delta: Int) {
         nonisolated(unsafe) let storage = textStorage
@@ -859,8 +861,9 @@ final class CellTextView: NSTextView {
         view.textContainerInset = .zero
         view.textContainer?.lineFragmentPadding = 0
         view.textContainer?.widthTracksTextView = true
-        view.isAutomaticQuoteSubstitutionEnabled = true
-        view.isAutomaticDashSubstitutionEnabled = true
+        // As the note's text view: the person's System Settings.
+        view.isAutomaticQuoteSubstitutionEnabled = NSSpellChecker.isAutomaticQuoteSubstitutionEnabled
+        view.isAutomaticDashSubstitutionEnabled = NSSpellChecker.isAutomaticDashSubstitutionEnabled
         view.isAutomaticLinkDetectionEnabled = false
         // Spell-checked while it is the first responder (see becomeFirstResponder).
         view.isContinuousSpellCheckingEnabled = false
@@ -1033,14 +1036,16 @@ final class TableAccessibilityElement: NSAccessibilityElement {
         }
     }
 
+    // Accessibility asks on the main thread; the overrides are nonisolated in the SDK, so
+    // each asserts that with `MainActor.assumeIsolated` before touching the controller.
     override func accessibilityFrame() -> NSRect {
-        nonisolated(unsafe) let controller = controller
+        let controller = controller
         let row = row, column = column
         return MainActor.assumeIsolated { controller?.screenFrame(row: row, column: column) ?? .zero }
     }
 
     override func accessibilityValue() -> Any? {
-        nonisolated(unsafe) let controller = controller
+        let controller = controller
         guard let column else { return nil }
         let row = row
         let value: String? = MainActor.assumeIsolated { controller?.accessibilityValue(row: row, column: column) }
@@ -1048,7 +1053,7 @@ final class TableAccessibilityElement: NSAccessibilityElement {
     }
 
     override func accessibilityPerformPress() -> Bool {
-        nonisolated(unsafe) let controller = controller
+        let controller = controller
         guard let column else { return false }
         let row = row
         return MainActor.assumeIsolated {
@@ -1058,7 +1063,7 @@ final class TableAccessibilityElement: NSAccessibilityElement {
     }
 
     override func setAccessibilityFocused(_ focused: Bool) {
-        nonisolated(unsafe) let controller = controller
+        let controller = controller
         guard focused, let column else { return }
         let row = row
         MainActor.assumeIsolated { controller?.focus(row: row, column: column, atEnd: true) }

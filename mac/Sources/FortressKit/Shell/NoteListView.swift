@@ -5,11 +5,15 @@ struct NoteListView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("noteSort") private var sort: NoteSort = .edited
     @AppStorage("groupByDate") private var groupsByDate = true
+    /// The sorted, grouped list, remade only when its inputs change: the body also runs
+    /// for every selection change (↑/↓ through the list), which mustn't re-sort the notes.
+    @State private var listing = NoteListCache()
 
     var body: some View {
-        let notes = NoteListing.notes(in: model.scope, navigation: model.navigation)
-        let sections = NoteListing.sections(notes, sort: sort, grouped: groupsByDate)
-        let folderNames = NoteListing.folderNames(model.navigation.items)
+        let list = listing.list(scope: model.scope, navigation: model.navigation, sort: sort, grouped: groupsByDate)
+        let notes = list.notes
+        let sections = list.sections
+        let folderNames = list.folderNames
         let showsFolder = !isFolderScope
         let selection = Binding<String?>(
             get: { model.openNoteId },
@@ -41,12 +45,12 @@ struct NoteListView: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .background(Color(nsColor: .textBackgroundColor))
-        .animation(.smooth(duration: 0.2), value: notes.map(\.id))
+        .animation(.smooth(duration: 0.2), value: list.ids)
         .task(id: model.openNoteId) {
             // Load the notes above and below the open one, so ↑/↓ open instantly. A new
             // selection cancels this before it sends anything.
             guard let id = model.openNoteId else { return }
-            let neighbours = NoteListing.neighbours(of: id, in: sections.flatMap(\.notes).map(\.id))
+            let neighbours = NoteListing.neighbours(of: id, in: list.orderedIds)
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
             await model.prefetch(noteIds: neighbours)
@@ -201,4 +205,49 @@ struct TrashAction: Equatable {
 
 extension FocusedValues {
     @Entry var noteListTrash: TrashAction?
+}
+
+/// What the note list shows for its inputs, kept between renders (like `PaletteCache`):
+/// filtering, sorting and grouping by date run when the notes, the scope, the sort or
+/// the day change, not on every body evaluation.
+@MainActor
+final class NoteListCache {
+    struct List {
+        var notes: [NavigationDocument]
+        var sections: [NoteSection]
+        var folderNames: [String: String]
+        /// The notes' ids in list order (for prefetching neighbours).
+        var orderedIds: [String]
+        /// The listed ids as a set-like value for the list's animation.
+        var ids: [String]
+    }
+
+    private struct Key: Equatable {
+        var scope: LibraryScope
+        var navigation: NavigationResponse
+        var sort: NoteSort
+        var grouped: Bool
+        var day: Date
+    }
+
+    private var key: Key?
+    private var cached = List(notes: [], sections: [], folderNames: [:], orderedIds: [], ids: [])
+    /// For tests: how often the list was remade.
+    private(set) var builds = 0
+
+    init() {}
+
+    func list(scope: LibraryScope, navigation: NavigationResponse, sort: NoteSort, grouped: Bool,
+              now: Date = Date(), calendar: Calendar = .current) -> List {
+        let key = Key(scope: scope, navigation: navigation, sort: sort, grouped: grouped, day: calendar.startOfDay(for: now))
+        if key == self.key { return cached }
+        self.key = key
+        builds += 1
+        let notes = NoteListing.notes(in: scope, navigation: navigation)
+        let sections = NoteListing.sections(notes, sort: sort, grouped: grouped, now: now, calendar: calendar)
+        let ordered = sections.flatMap(\.notes).map(\.id)
+        cached = List(notes: notes, sections: sections, folderNames: NoteListing.folderNames(navigation.items),
+                      orderedIds: ordered, ids: notes.map(\.id))
+        return cached
+    }
 }

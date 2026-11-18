@@ -103,11 +103,11 @@ struct BlockDetails: Equatable {
     static func describe(_ provenance: JSONValue?) -> String? {
         guard let provenance else { return nil }
         if let origin = provenance["origin"], let operation = origin["operation"]?.stringValue {
-            let title = origin["document_title"]?.stringValue ?? "another note"
+            let title = origin["document_title"]?.stringValue ?? String(localized: "another note", comment: "Block provenance: a note whose title is unknown")
             switch operation {
-            case "move_into": return "Folded in from \(title)"
-            case "duplicate": return "Duplicated from \(title)"
-            case "split": return "Split from \(title)"
+            case "move_into": return String(localized: "Folded in from \(title)")
+            case "duplicate": return String(localized: "Duplicated from \(title)")
+            case "split": return String(localized: "Split from \(title)")
             default: break
             }
         }
@@ -115,17 +115,17 @@ struct BlockDetails: Equatable {
         let host = provenance["source_url"]?.stringValue.flatMap { URL(string: $0)?.host() }
         func with(_ base: String) -> String {
             guard let path, !path.isEmpty else { return base }
-            return "\(base) › \(path)"
+            return String(localized: "\(base) › \(path)", comment: "Block provenance: source, then the path inside it")
         }
         switch provenance["source"]?.stringValue ?? "" {
-        case "manual", "": return "Written here"
-        case "capture": return host.map { "Captured from \($0)" } ?? "Quick Capture"
-        case "onenote_import": return with("From OneNote")
-        case "markdown_import": return with("Imported from Markdown")
-        case "paste": return host.map { "Pasted from \($0)" } ?? "Pasted"
-        case "web": return host.map { "From \($0)" } ?? "From the web"
-        case "ai": return "Written with AI"
-        case let other: return with("From \(other.replacingOccurrences(of: "_", with: " "))")
+        case "manual", "": return String(localized: "Written here")
+        case "capture": return host.map { String(localized: "Captured from \($0)") } ?? String(localized: "Quick Capture")
+        case "onenote_import": return with(String(localized: "From OneNote"))
+        case "markdown_import": return with(String(localized: "Imported from Markdown"))
+        case "paste": return host.map { String(localized: "Pasted from \($0)") } ?? String(localized: "Pasted")
+        case "web": return host.map { String(localized: "From \($0)") } ?? String(localized: "From the web")
+        case "ai": return String(localized: "Written with AI")
+        case let other: return with(String(localized: "From \(other.replacingOccurrences(of: "_", with: " "))"))
         }
     }
 }
@@ -137,15 +137,15 @@ private struct BlockInfoView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if details.newlyTyped && details.edited == nil {
-                row("pencil", "Written just now")
+                row("pencil", String(localized: "Written just now"))
             }
             if let edited = details.edited {
-                row("pencil", "Edited \(relative(edited))")
+                row("pencil", NoteEditorView.edited(edited, now: Date()))
             }
             if let source = details.source {
                 HStack(spacing: 6) {
                     Image(systemName: "arrow.down.forward.circle").frame(width: 14)
-                    Text(source + (details.inherited ? "" : ""))
+                    Text(source)
                     if let url = details.sourceURL {
                         Button { open(url) } label: { Image(systemName: "arrow.up.forward.square") }
                             .buttonStyle(.plain).foregroundStyle(.tint).help(url.absoluteString)
@@ -153,7 +153,7 @@ private struct BlockInfoView: View {
                 }
             }
             if let created = details.created {
-                row("calendar", "Created \(created.formatted(.dateTime.month(.abbreviated).year()))")
+                row("calendar", String(localized: "Created \(created.formatted(.dateTime.month(.abbreviated).year()))"))
             }
         }
         .font(.callout)
@@ -167,12 +167,5 @@ private struct BlockInfoView: View {
             Image(systemName: symbol).frame(width: 14)
             Text(text)
         }
-    }
-
-    private func relative(_ date: Date) -> String {
-        if Date().timeIntervalSince(date) < 60 { return "just now" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }

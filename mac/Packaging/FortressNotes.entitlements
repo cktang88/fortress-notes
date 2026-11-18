@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Fortress Notes: Developer ID, Hardened Runtime, NOT sandboxed (CODE_AUDIT.md, O1/O2).
+
+  Deliberately empty. The Hardened Runtime is on (codesign option "runtime") with no
+  runtime exceptions:
+  - no com.apple.security.cs.allow-jit / allow-unsigned-executable-memory: the app runs
+    no JIT; the Python backend is a separate process with its own code signature, and the
+    parent's hardened runtime doesn't apply to it;
+  - no com.apple.security.cs.disable-library-validation: the app loads only system
+    frameworks and its own code;
+  - no com.apple.security.cs.allow-dyld-environment-variables;
+  - no com.apple.security.automation.apple-events, camera, microphone, location.
+
+  Not sandboxed (no com.apple.security.app-sandbox): the app starts the local backend
+  (uv / python from the Fortress folder chosen in Settings, in its own process group),
+  reads that folder, writes ~/Library/Logs/Fortress Notes, and signals the process group
+  on quit. A sandboxed parent's children inherit its sandbox, so the backend couldn't run
+  tools from the repository or reach the notes folder. Revisit if the backend ships inside
+  the app bundle: then App Sandbox with network.client (localhost API),
+  files.user-selected.read-write (import/export, the notes folder through a
+  security-scoped bookmark) becomes possible.
+-->
+<plist version="1.0">
+<dict/>
+</plist>

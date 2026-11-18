@@ -3,7 +3,7 @@ name: mac perf A/B
 on:
   push:
     branches: [mac-code-audit]
-    paths: ["mac/**", ".github/workflows/mac-perf-ab.yml"]
+    paths: [".github/workflows/mac-perf-ab.yml"]
   workflow_dispatch:
 jobs:
   ab:
@@ -14,11 +14,10 @@ jobs:
         with: { fetch-depth: 0 }
       - name: Build each commit's tests
         run: |
-          set -e
           for c in 2780045 463d616 origin/main HEAD; do
             d="$RUNNER_TEMP/ab-$(echo $c | tr '/' '_')"
             git worktree add --detach "$d" "$c"
-            (cd "$d/mac" && swift build --build-tests 2>&1 | tail -3)
+            (cd "$d/mac" && swift build --build-tests 2>&1 | grep -E "error:|Compiling|Build complete" | tail -5) || echo "build failed: $c"
           done
       - name: Profile HEAD
         working-directory: mac

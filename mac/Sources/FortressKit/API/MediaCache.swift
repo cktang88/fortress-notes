@@ -15,6 +15,7 @@ public final class MediaCache: Sendable {
         init(_ image: NSImage) { self.image = image }
     }
 
+    /// `@unchecked Sendable`: NSCache is documented thread-safe, and `cache` is a `let`.
     private final class Memory: @unchecked Sendable {
         let cache = NSCache<NSURL, Image>()
     }
