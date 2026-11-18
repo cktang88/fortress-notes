@@ -70,7 +70,7 @@ enum DocumentText {
     /// Reads the blocks back. Duplicate ids (a paste of copied paragraphs) get fresh ones,
     /// reported in `renamed` so the caller can write them back to the text.
     static func blocks(from text: NSAttributedString) -> (blocks: [EditorBlock], renamed: [(range: NSRange, info: BlockInfo)]) {
-        let string = text.string as NSString
+        let string = text.nsString
         var blocks: [EditorBlock] = []
         var renamed: [(NSRange, BlockInfo)] = []
         var seen = Set<String>()
@@ -91,7 +91,7 @@ enum DocumentText {
 
     /// One paragraph read back as a block.
     static func block(in text: NSAttributedString, paragraph: NSRange, info: BlockInfo) -> EditorBlock {
-        let string = text.string as NSString
+        let string = text.nsString
         var block = EditorBlock(id: info.id, kind: info.kind, depth: info.depth, checked: info.checked,
                                 language: info.language, origin: info.origin?.origin,
                                 newProvenance: info.newProvenance, container: info.kind == .quote ? info.container : nil)
@@ -129,7 +129,7 @@ enum DocumentText {
     /// twice when two copies of it sit in the paragraph.
     static func runs(in text: NSAttributedString, range: NSRange) -> [InlineRun] {
         var runs: [InlineRun] = []
-        let string = text.string as NSString
+        let string = text.nsString
         guard range.length > 0 else { return [] }
         // Plain text (no nodes, no marks: most paragraphs of a paste) is one run.
         var plain = NSRange()

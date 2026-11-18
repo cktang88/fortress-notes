@@ -185,7 +185,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     var storage: NSTextStorage { textView.textStorage! }
-    private var string: NSString { storage.string as NSString }
+    private var string: NSString { storage.nsString }
 
     // MARK: Loading and reading
 
@@ -774,7 +774,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// One block per paragraph, unique ids between neighbours, atomic blocks keep their
     /// attachment, the text ends with "\n", and presentation follows the semantics.
     private func normalize(_ storage: NSTextStorage, _ editedRange: NSRange) {
-        let string = storage.string as NSString
+        let string = storage.nsString
         if string.length == 0 || string.character(at: string.length - 1) != 0x0A {
             let info = string.length > 0 ? (storage.blockInfo(at: string.length - 1) ?? BlockInfo()) : BlockInfo()
             storage.append(NSAttributedString(string: "\n", attributes: [.fnBlock: info]))
@@ -792,7 +792,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             }
             if mutable.range(of: "\n", options: .literal, range: edited).location != NSNotFound { structuralEdit = true }
         }
-        let text = storage.string as NSString
+        let text = storage.nsString
         let start = text.paragraphRange(at: min(editedRange.location, text.length - 1)).location
         let end = min(text.length, NSMaxRange(editedRange) + 1)
         var location = start

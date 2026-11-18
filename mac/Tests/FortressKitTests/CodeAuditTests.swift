@@ -113,4 +113,17 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
         #expect(words.contains("let x = 1"))
         #expect(!words.contains { $0.contains("Read") || $0.contains("and run") })
     }
+
+    // I3: the editor reads its text storage without the whole-note copy that bridging
+    // `NSTextStorage.string` to Swift makes.
+    @Test func textIsReadWithoutCopying() {
+        let storage = NSTextStorage(string: "First paragraph\nSecond\n")
+        let live = storage.nsString
+        #expect(live as String == storage.string)
+        storage.append(NSAttributedString(string: "Third\n"))
+        #expect(live.length == storage.length, "the live characters, not a copy")
+        #expect(storage.nsString.paragraphRange(at: 17) == NSRange(location: 16, length: 7))
+        let fixed = NSAttributedString(string: "abc")
+        #expect(fixed.nsString as String == "abc")
+    }
 }

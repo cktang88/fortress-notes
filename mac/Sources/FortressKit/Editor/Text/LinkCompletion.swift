@@ -46,7 +46,7 @@ final class LinkCompletion {
     private var queryRange: NSRange? {
         guard let controller else { return nil }
         let caret = controller.textView.selectedRange()
-        let text = controller.storage.string as NSString
+        let text = controller.storage.nsString
         guard caret.length == 0, caret.location >= anchor + 2, anchor + 2 <= text.length,
               text.substring(with: NSRange(location: anchor, length: 2)) == "[[" else { return nil }
         let range = NSRange(location: anchor, length: caret.location - anchor)
@@ -58,7 +58,7 @@ final class LinkCompletion {
     func textDidChange() {
         guard isActive else { return }
         guard let range = queryRange, let controller else { close(); return }
-        let text = controller.storage.string as NSString
+        let text = controller.storage.nsString
         model.query = text.substring(with: NSRange(location: range.location + 2, length: range.length - 2))
         refresh()
     }

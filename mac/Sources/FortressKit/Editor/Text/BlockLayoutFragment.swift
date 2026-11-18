@@ -26,7 +26,7 @@ final class BlockFragmentFactory: NSObject, NSTextLayoutManagerDelegate {
 
     /// 1-based number of a numbered item among its consecutive siblings.
     static func ordinal(in text: NSAttributedString, at offset: Int, depth: Int) -> Int {
-        let string = text.string as NSString
+        let string = text.nsString
         var count = 1
         var location = string.paragraphRange(at: offset).location
         while location > 0 {

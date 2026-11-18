@@ -17,7 +17,7 @@ enum InlineNodes {
     /// The node run containing `index`: the characters around it carrying the same box.
     static func range(at index: Int, in text: NSAttributedString) -> NSRange? {
         guard index >= 0, index < text.length else { return nil }
-        let paragraph = (text.string as NSString).paragraphRange(for: NSRange(location: index, length: 0))
+        let paragraph = text.nsString.paragraphRange(for: NSRange(location: index, length: 0))
         var range = NSRange()
         guard text.attribute(.fnNode, at: index, longestEffectiveRange: &range, in: paragraph) != nil else { return nil }
         return range
@@ -80,7 +80,7 @@ enum InlineNodes {
     static func separateCopies(in text: NSMutableAttributedString, range: NSRange, label: (JSONValue) -> String) {
         let range = NSIntersectionRange(range, NSRange(location: 0, length: text.length))
         guard range.length > 0 else { return }
-        let string = text.string as NSString
+        let string = text.nsString
         var copies: [(NSRange, NodeBox)] = []
         text.enumerateAttribute(.fnNode, in: range, options: []) { value, run, _ in
             guard let box = value as? NodeBox else { return }

@@ -292,7 +292,7 @@ struct EditorTheme: Sendable {
     /// paragraph one block (the one on its first character) and turns pasted rich text
     /// into marks.
     func restyle(_ storage: NSMutableAttributedString, range: NSRange) {
-        let string = storage.string as NSString
+        let string = storage.nsString
         guard string.length > 0 else { return }
         var location = string.paragraphRange(at: range.location).location
         let end = min(string.length, NSMaxRange(range))

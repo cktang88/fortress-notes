@@ -112,6 +112,22 @@ extension NSAttributedString {
     }
 }
 
+extension NSAttributedString {
+    /// The characters as an NSString, without copying them.
+    ///
+    /// `string` is a Swift `String`, and bridging a *mutable* NSString to Swift copies it
+    /// (`CFStringCreateCopy`): for the note's NSTextStorage that is the whole note, on every
+    /// call. The editor reads the text this way many times per keystroke (paragraph ranges,
+    /// selection snapping, normalizing, reading blocks back, numbering), so a 600,000-
+    /// character note spent milliseconds per key just copying it. A mutable attributed
+    /// string answers with its live `mutableString` instead (no copy; it shows later edits
+    /// of the characters, so don't hold it across one expecting the old text).
+    var nsString: NSString {
+        if let mutable = self as? NSMutableAttributedString { return mutable.mutableString }
+        return string as NSString
+    }
+}
+
 extension NSString {
     /// The paragraph range containing `index`, terminator included.
     func paragraphRange(at index: Int) -> NSRange {

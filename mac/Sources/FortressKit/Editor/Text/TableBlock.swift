@@ -346,7 +346,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
     private func textHeight(_ text: NSAttributedString, theme: EditorTheme, width: CGFloat) -> CGFloat {
         let lineHeight = theme.lineHeight(for: .paragraph)
         guard text.length > 0 else { return lineHeight }
-        let string = text.string as NSString
+        let string = text.nsString
         let multiline = string.rangeOfCharacter(from: Self.lineSeparators).location != NSNotFound
         if !multiline {
             let line = CTLineCreateWithAttributedString(text as CFAttributedString)
