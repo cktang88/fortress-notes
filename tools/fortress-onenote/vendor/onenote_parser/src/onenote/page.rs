@@ -1,9 +1,10 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P2, P7).
 use crate::contents::RichText;
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::layout_alignment::LayoutAlignment;
 use crate::one::property_set::{page_manifest_node, page_metadata, page_node, title_node};
-use crate::onenote::ParserContext;
+use crate::onenote::{ParserContext, skip_damaged};
 use crate::onenote::ink_recognition::{InkRecognition, parse_ink_recognition};
 use crate::onenote::outline::{Outline, parse_outline};
 use crate::onenote::page_content::{PageContent, parse_page_content};
@@ -168,10 +169,15 @@ pub(crate) fn parse_page(
 
     let data = parse_data(manifest, page_space)?;
 
-    let title = data
-        .title
-        .map(|id| parse_title(id, page_space, ctx))
-        .transpose()?;
+    // PATCH(fortress-onenote, P7): a damaged title or content object is
+    // skipped, the page survives.
+    let title = match data.title {
+        Some(id) => {
+            let title = parse_title(id, page_space, ctx);
+            skip_damaged(ctx, "page title", title)?
+        }
+        None => None,
+    };
 
     let level = metadata.page_level;
 
@@ -189,17 +195,19 @@ pub(crate) fn parse_page(
 
     // Parse recognition before content: it populates `ctx.recognized_words`,
     // which `parse_page_content` reads to attach each stroke's word.
-    let ink_recognition = data
-        .recognized_text
-        .map(|root_id| parse_ink_recognition(root_id, page_space, ctx))
-        .transpose()?
-        .flatten();
+    let ink_recognition = match data.recognized_text {
+        Some(root_id) => {
+            let rec = parse_ink_recognition(root_id, page_space, ctx);
+            skip_damaged(ctx, "handwriting recognition", rec)?.flatten()
+        }
+        None => None,
+    };
 
-    let contents: Vec<PageContent> = data
-        .content
-        .into_iter()
-        .map(|content_id| parse_page_content(content_id, page_space, ctx))
-        .collect::<Result<_>>()?;
+    let mut contents: Vec<PageContent> = Vec::new();
+    for content_id in data.content {
+        let content = parse_page_content(content_id, page_space, ctx);
+        contents.extend(skip_damaged(ctx, "page element", content)?);
+    }
 
     ctx.recognized_words.clear();
 
@@ -332,7 +340,9 @@ fn visible_text(rt: &RichText) -> String {
         if style.hidden() {
             continue;
         }
-        let start = bounds[i].min(utf16.len());
+        // PATCH(fortress-onenote, P2): more run styles than run boundaries
+        // (corrupt file) must not panic.
+        let start = bounds.get(i).copied().unwrap_or(utf16.len()).min(utf16.len());
         let end = bounds
             .get(i + 1)
             .copied()
@@ -362,7 +372,9 @@ fn remove_hyperlink(title: &str) -> String {
             clean_title = format!("{}{}", before_hyperlink, after_hyperlink);
         } else {
             // Sometimes links are broken, in these cases we only consider what is before the mark
-            clean_title = title[..marker_start].to_string();
+            // PATCH(fortress-onenote, P2): `marker_start` indexes
+            // `clean_title`, not `title` (could panic or loop forever).
+            clean_title.truncate(marker_start);
         }
     }
 

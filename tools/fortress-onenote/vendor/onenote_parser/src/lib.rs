@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P3).
 //! A OneNote file parser.
 //!
 //! `onenote_parser` provides a high-level API to parse OneNote notebooks and
@@ -171,6 +172,8 @@ pub use crate::onenote::file_identity::FileIdentity;
 /// The data that represents a OneNote notebook.
 pub mod notebook {
     pub use crate::onenote::notebook::Notebook;
+    // PATCH(fortress-onenote, P3)
+    pub use crate::onenote::notebook::TableOfContents;
 }
 
 /// The data that represents a OneNote section.

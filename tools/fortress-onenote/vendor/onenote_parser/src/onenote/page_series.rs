@@ -1,7 +1,8 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P7).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property_set::page_series_node;
-use crate::onenote::ParserContext;
+use crate::onenote::{ParserContext, skip_damaged};
 use crate::onenote::page::{Page, parse_page};
 use crate::onestore::OneStore;
 
@@ -34,16 +35,18 @@ pub(crate) fn parse_page_series(
         .ok_or_else(|| ErrorKind::MalformedOneNoteData("page series object is missing".into()))?;
     let data = page_series_node::parse(object)?;
 
-    let pages = data
-        .page_spaces
-        .into_iter()
-        .map(|page_space_id| {
-            store
-                .object_space(page_space_id)
-                .ok_or_else(|| ErrorKind::MalformedOneNoteData("page space is missing".into()))
-        })
-        .map(|page_space| parse_page(page_space?, ctx))
-        .collect::<Result<_>>()?;
+    // PATCH(fortress-onenote, P7): a page that cannot be read is skipped
+    // with a warning; the other pages of the section survive.
+    let mut pages = Vec::new();
+    for page_space_id in data.page_spaces {
+        let page = store
+            .object_space(page_space_id)
+            .ok_or_else(|| ErrorKind::MalformedOneNoteData("page space is missing".into()).into())
+            .and_then(|page_space| parse_page(page_space, ctx));
+        ctx.page = None;
+        ctx.recognized_words.clear();
+        pages.extend(skip_damaged(ctx, "page", page)?);
+    }
 
     Ok(PageSeries { pages })
 }

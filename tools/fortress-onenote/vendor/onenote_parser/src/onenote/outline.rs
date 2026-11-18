@@ -1,8 +1,9 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P7).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::layout_alignment::LayoutAlignment;
 use crate::one::property_set::{PropertySetId, outline_element_node, outline_group, outline_node};
-use crate::onenote::ParserContext;
+use crate::onenote::{ParserContext, skip_damaged};
 use crate::onenote::content::{Content, parse_content};
 use crate::onenote::list::{List, parse_list};
 use crate::onestore::ObjectSpace;
@@ -267,11 +268,12 @@ pub(crate) fn parse_outline(
         .ok_or_else(|| ErrorKind::MalformedOneNoteData("outline node is missing".into()))?;
     let data = outline_node::parse(outline_object)?;
 
-    let items = data
-        .children
-        .into_iter()
-        .map(|item_id| parse_outline_item(item_id, space, ctx))
-        .collect::<Result<_>>()?;
+    // PATCH(fortress-onenote, P7): skip damaged items.
+    let mut items = Vec::new();
+    for item_id in data.children {
+        let item = parse_outline_item(item_id, space, ctx);
+        items.extend(skip_damaged(ctx, "outline item", item)?);
+    }
 
     let outline = Outline {
         items,
@@ -341,11 +343,12 @@ fn parse_outline_group(
         );
     }
 
-    let outlines = data
-        .children
-        .into_iter()
-        .map(|item_id| parse_outline_item(item_id, space, ctx))
-        .collect::<Result<_>>()?;
+    // PATCH(fortress-onenote, P7): skip damaged items.
+    let mut outlines = Vec::new();
+    for item_id in data.children {
+        let item = parse_outline_item(item_id, space, ctx);
+        outlines.extend(skip_damaged(ctx, "outline item", item)?);
+    }
 
     let group = OutlineGroup {
         child_level: data.child_level,
@@ -371,23 +374,24 @@ pub(crate) fn parse_outline_element(
         );
     }
 
-    let children = data
-        .children
-        .into_iter()
-        .map(|item_id| parse_outline_item(item_id, space, ctx))
-        .collect::<Result<_>>()?;
+    // PATCH(fortress-onenote, P7): skip damaged children, contents and lists.
+    let mut children = Vec::new();
+    for item_id in data.children {
+        let item = parse_outline_item(item_id, space, ctx);
+        children.extend(skip_damaged(ctx, "outline item", item)?);
+    }
 
-    let contents = data
-        .contents
-        .into_iter()
-        .map(|content_id| parse_content(content_id, space, ctx))
-        .collect::<Result<_>>()?;
+    let mut contents = Vec::new();
+    for content_id in data.contents {
+        let content = parse_content(content_id, space, ctx);
+        contents.extend(skip_damaged(ctx, "content object", content)?);
+    }
 
-    let list_contents = data
-        .list_contents
-        .into_iter()
-        .map(|list_id| parse_list(list_id, space))
-        .collect::<Result<_>>()?;
+    let mut list_contents = Vec::new();
+    for list_id in data.list_contents {
+        let list = parse_list(list_id, space);
+        list_contents.extend(skip_damaged(ctx, "list format", list)?);
+    }
 
     let element = OutlineElement {
         child_level: data.child_level,

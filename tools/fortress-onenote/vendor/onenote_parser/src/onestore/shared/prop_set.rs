@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P8).
 use crate::Reader;
 use crate::debug::DebugOutput;
 use crate::errors::Result;
@@ -79,6 +80,11 @@ impl PropertySet {
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &PropertyValue> {
         self.values.iter().map(|(_, value)| value)
+    }
+
+    /// PATCH(fortress-onenote, P8): `(property id, value)` pairs.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (u32, &PropertyValue)> {
+        self.values.iter().map(|(key, value)| (*key, value))
     }
 
     pub(crate) fn values_with_index(&self) -> impl Iterator<Item = (usize, &PropertyValue)> {

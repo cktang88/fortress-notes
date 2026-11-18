@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P1).
 //! The property sets describing OneNote objects we can parse.
 //!
 //! See [\[MS-ONE\] 2.1.13] for the list of properties the OneNote file format specifies.
@@ -8,7 +9,9 @@ use crate::errors::{ErrorKind, Result};
 use crate::one::property::PropertyType;
 use crate::one::property::object_reference::ObjectReference;
 use crate::one::property::object_space_reference::ObjectSpaceReference;
-use crate::onestore::Object;
+use crate::fsshttpb::data::cell_id::CellId;
+use crate::fsshttpb::data::exguid::ExGuid;
+use crate::onestore::{MappingTable, Object};
 use crate::onestore::shared::compact_id::CompactId;
 use crate::onestore::shared::jcid::JcId;
 use crate::onestore::shared::object_prop_set::ObjectPropSet;
@@ -16,6 +19,7 @@ use crate::onestore::shared::prop_set::PropertySet;
 use crate::onestore::shared::property::PropertyId;
 use enum_primitive_derive::Primitive;
 use num_traits::FromPrimitive;
+use std::rc::Rc;
 
 pub(crate) mod embedded_file_container;
 pub(crate) mod embedded_file_node;
@@ -115,52 +119,73 @@ pub(crate) fn assert_property_set(object: &Object, expected: PropertySetId) -> R
     .into())
 }
 
-pub(crate) fn parse_object(
+/// Parse every element of a property-values list (`PropertyValues`) into
+/// nested objects.
+///
+/// PATCH(fortress-onenote, P1): the object (and object space) references of
+/// the elements are stored back to back in the parent's reference lists, so
+/// element *n* starts after the references consumed by elements 0..n. The
+/// upstream code started every element at the property's own offset, so
+/// e.g. every note tag on a paragraph resolved to the first tag's definition.
+/// Each nested object also gets a mapping that translates its local
+/// reference indexes back to the parent's (FSSHTTPB mapping tables
+/// disambiguate duplicate compact ids by index).
+pub(crate) fn parse_object_list(
     object: &Object,
     id: PropertyId,
     prop_type: PropertyType,
-    props: &PropertySet,
-) -> Result<Object> {
-    Ok(Object {
-        context_id: object.context_id,
-        jc_id: JcId(id.value()),
-        props: ObjectPropSet {
-            object_ids: get_object_ids(prop_type, props, object)?,
-            object_space_ids: get_object_space_ids(prop_type, props, object)?,
-            context_ids: vec![],
-            properties: props.clone(),
-        },
-        file_data: None,
-        mapping: object.mapping.clone(),
-    })
+    sets: &[PropertySet],
+) -> Result<Vec<Object>> {
+    let mut object_offset = ObjectReference::get_offset(prop_type, object)?;
+    let mut space_offset = ObjectSpaceReference::get_offset(prop_type, object)?;
+    let mut out = Vec::with_capacity(sets.len());
+    for props in sets {
+        let object_count = ObjectReference::count_references(props.values());
+        let space_count = ObjectSpaceReference::count_references(props.values());
+        out.push(Object {
+            context_id: object.context_id,
+            jc_id: JcId(id.value()),
+            props: ObjectPropSet {
+                object_ids: slice_ids(&object.props.object_ids, object_offset, object_count),
+                object_space_ids: slice_ids(
+                    &object.props.object_space_ids,
+                    space_offset,
+                    space_count,
+                ),
+                context_ids: vec![],
+                properties: props.clone(),
+            },
+            file_data: None,
+            mapping: Rc::new(OffsetMapping {
+                inner: object.mapping.clone(),
+                object_offset,
+                space_offset,
+            }),
+        });
+        object_offset += object_count;
+        space_offset += space_count;
+    }
+    Ok(out)
 }
 
-fn get_object_ids(
-    prop_type: PropertyType,
-    props: &PropertySet,
-    object: &Object,
-) -> Result<Vec<CompactId>> {
-    Ok(object
-        .props
-        .object_ids
-        .iter()
-        .skip(ObjectReference::get_offset(prop_type, object)?)
-        .take(ObjectReference::count_references(props.values()))
-        .copied()
-        .collect())
+fn slice_ids(ids: &[CompactId], offset: usize, count: usize) -> Vec<CompactId> {
+    ids.iter().skip(offset).take(count).copied().collect()
 }
 
-fn get_object_space_ids(
-    prop_type: PropertyType,
-    props: &PropertySet,
-    object: &Object,
-) -> Result<Vec<CompactId>> {
-    Ok(object
-        .props
-        .object_ids
-        .iter()
-        .skip(ObjectSpaceReference::get_offset(prop_type, object)?)
-        .take(ObjectSpaceReference::count_references(props.values()))
-        .copied()
-        .collect())
+/// Mapping table of a nested object: its reference indexes are relative to
+/// its slice of the parent's reference lists.
+struct OffsetMapping {
+    inner: Rc<dyn MappingTable>,
+    object_offset: usize,
+    space_offset: usize,
+}
+
+impl MappingTable for OffsetMapping {
+    fn resolve_id(&self, index: usize, cid: &CompactId) -> Option<ExGuid> {
+        self.inner.resolve_id(index + self.object_offset, cid)
+    }
+
+    fn get_object_space(&self, index: usize, cid: &CompactId) -> Option<CellId> {
+        self.inner.get_object_space(index + self.space_offset, cid)
+    }
 }

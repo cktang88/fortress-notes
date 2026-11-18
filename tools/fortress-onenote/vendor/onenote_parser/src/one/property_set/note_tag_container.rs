@@ -1,10 +1,11 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P1).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::PropertyType;
 use crate::one::property::note_tag::ActionItemStatus;
 use crate::one::property::object_reference::ObjectReference;
 use crate::one::property::time::Time;
-use crate::one::property_set::parse_object;
+use crate::one::property_set::parse_object_list;
 use crate::onestore::Object;
 
 /// A note tag state container.
@@ -32,14 +33,10 @@ impl Data {
             None => return Ok(None),
         };
 
-        let data = prop_sets
-            .iter()
-            .map(|props| {
-                let object = parse_object(object, prop_id, PropertyType::NoteTags, props)?;
-                let data = Self::parse_data(object)?;
-
-                Ok(data)
-            })
+        // PATCH(fortress-onenote, P1): each tag state has its own references.
+        let data = parse_object_list(object, prop_id, PropertyType::NoteTags, prop_sets)?
+            .into_iter()
+            .map(Self::parse_data)
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Some(data))

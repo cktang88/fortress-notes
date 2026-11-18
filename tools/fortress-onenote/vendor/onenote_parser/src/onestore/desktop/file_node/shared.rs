@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P6).
 use crate::Reader;
 use crate::errors::ErrorKind;
 use crate::errors::Result;
@@ -243,18 +244,29 @@ impl AttachmentInfo {
         F: FnOnce(&str) -> Result<FileBlob>,
     {
         // See https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-onestore/da2bbc7d-0529-4bf4-a843-6f3f55c87e8f
-        if self.data_ref.starts_with("<ifndf>") {
-            file_blob_by_id(&self.data_ref["<ifndf>".len()..])
+        //
+        // PATCH(fortress-onenote, P6): a reference that cannot be resolved
+        // (damaged GUID, blob missing from the file data store, external
+        // file) loses that one attachment/image, not the whole section: the
+        // blob is reported as missing (or invalid for an unknown reference
+        // kind) instead of failing the parse.
+        if let Some(id) = self.data_ref.strip_prefix("<ifndf>") {
+            match file_blob_by_id(id) {
+                Ok(blob) => Ok(blob),
+                Err(err) => {
+                    log::warn!("file data {} could not be resolved: {err}", self.data_ref);
+                    Ok(FileBlob::missing())
+                }
+            }
         } else if self.data_ref.starts_with("<file>") {
             // An external file reference
             // TODO: Find a test .one file that uses this and implement it.
-            Err(parser_error!(
-                ResolutionFailed,
+            log::warn!(
                 "Not supported: Loading an attachment from a file: {} (ext: {})",
                 self.data_ref,
                 self.extension,
-            )
-            .into())
+            );
+            Ok(FileBlob::missing())
         } else if self.data_ref.starts_with("<invfdo>") {
             // Preserve the invalid state rather than presenting it as a valid
             // zero-byte payload.
@@ -265,13 +277,12 @@ impl AttachmentInfo {
 
             Ok(FileBlob::invalid())
         } else {
-            Err(parser_error!(
-                ResolutionFailed,
+            log::warn!(
                 "Failed to resolve file reference: {} (ext: {})",
                 self.data_ref,
                 self.extension
-            )
-            .into())
+            );
+            Ok(FileBlob::invalid())
         }
     }
 }

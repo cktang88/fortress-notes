@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P5).
 //! OneNote parsing error handling.
 
 #[cfg(feature = "backtrace")]
@@ -22,6 +23,13 @@ pub struct Error {
 
     #[cfg(feature = "backtrace")]
     backtrace: Backtrace,
+}
+
+impl Error {
+    /// The kind of error. PATCH(fortress-onenote, P5).
+    pub fn kind(&self) -> &ErrorKind {
+        &self.kind
+    }
 }
 
 impl From<ErrorKind> for Error {
@@ -148,6 +156,12 @@ pub enum ErrorKind {
     /// A filesystem path was missing required components.
     #[error("Invalid path: {message}")]
     InvalidPath { message: Cow<'static, str> },
+
+    /// The section is password-protected: its object data is encrypted.
+    ///
+    /// PATCH(fortress-onenote, P5).
+    #[error("The section is password-protected (encrypted)")]
+    Encrypted,
 
     /// A `.onepkg` package could not be opened or did not contain a notebook.
     #[cfg(feature = "onepkg")]

@@ -1,10 +1,11 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P4, P5).
 use core::fmt;
 
 use super::file_structure::{
     FileNodeListFragment, FreeChunkListFragment, OneStoreHeader, TransactionLogFragment,
 };
 use crate::Reader;
-use crate::errors::Result;
+use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::cell_id::CellId;
 use crate::onestore::desktop::file_structure;
 use crate::onestore::desktop::objects;
@@ -87,10 +88,23 @@ impl Parse for RevisionStore {
         let mut transaction_log = Vec::new();
         let mut transaction_log_ref = header.fcr_transaction_log.clone();
         loop {
-            let mut reader = transaction_log_ref.resolve_to_reader(reader)?;
-
-            let fragment =
-                TransactionLogFragment::parse(&mut reader, transaction_log_ref.cb as usize)?;
+            // PATCH(fortress-onenote, P4): the transaction log only tells how
+            // many nodes of each file node list are committed. A log that
+            // points outside the file (seen in sections written by other
+            // tools or truncated after the last commit) is ignored: the lists
+            // are then read up to their chunk terminators.
+            let fragment = transaction_log_ref
+                .resolve_to_reader(reader)
+                .and_then(|mut r| {
+                    TransactionLogFragment::parse(&mut r, transaction_log_ref.cb as usize)
+                });
+            let fragment = match fragment {
+                Ok(f) => f,
+                Err(err) => {
+                    log::warn!("transaction log could not be read: {err}");
+                    break;
+                }
+            };
             transaction_log_ref = fragment.next_fragment.clone();
             transaction_log.push(fragment);
 
@@ -105,12 +119,21 @@ impl Parse for RevisionStore {
         let mut hashed_chunk_list = Vec::new();
         let mut hash_chunk_ref = header.fcr_hashed_chunk_list.clone();
         while !hash_chunk_ref.is_fcr_nil() && !hash_chunk_ref.is_fcr_zero() {
-            let mut reader = hash_chunk_ref.resolve_to_reader(reader)?;
-            let fragment = FileNodeListFragment::parse(
-                &mut reader,
-                &mut parse_context,
-                hash_chunk_ref.cb as usize,
-            )?;
+            // PATCH(fortress-onenote, P5): the hashed chunk list is not used
+            // for content. In password-protected sections its chunks are
+            // encrypted, so a failure here must not hide the real cause
+            // (reported when the encryption key node is reached below).
+            let fragment = hash_chunk_ref.resolve_to_reader(reader).and_then(|mut r| {
+                FileNodeListFragment::parse(&mut r, &mut parse_context, hash_chunk_ref.cb as usize)
+            });
+            let fragment = match fragment {
+                Ok(f) => f,
+                Err(err) if matches!(err.kind(), ErrorKind::Encrypted) => return Err(err),
+                Err(err) => {
+                    log::warn!("hashed chunk list could not be read: {err}");
+                    break;
+                }
+            };
             hash_chunk_ref = fragment.next_fragment.clone();
             hashed_chunk_list.push(fragment);
         }

@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P6).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::charset::Charset;
@@ -455,11 +456,19 @@ pub(crate) fn parse_rich_text(
 
     // Parse the base paragraph style
     let paragraph_style = if let Some(paragraph_style_id) = data.paragraph_style {
-        let paragraph_style_object = space.get_object(paragraph_style_id).ok_or_else(|| {
-            ErrorKind::MalformedOneNoteData("paragraph styling is missing".into())
-        })?;
-        let paragraph_style_data = paragraph_style_object::parse(paragraph_style_object, ctx)?;
-        parse_style(paragraph_style_data)
+        // PATCH(fortress-onenote, P6): a dangling style reference is
+        // treated like a missing one (defaults + warning), not as fatal.
+        match space.get_object(paragraph_style_id) {
+            Some(paragraph_style_object) => {
+                let paragraph_style_data =
+                    paragraph_style_object::parse(paragraph_style_object, ctx)?;
+                parse_style(paragraph_style_data)
+            }
+            None => {
+                warn!(ctx, "paragraph style is missing; using defaults");
+                ParagraphStyling::default()
+            }
+        }
     } else {
         warn!(ctx, "rich text has no paragraph style; using defaults");
         ParagraphStyling::default()

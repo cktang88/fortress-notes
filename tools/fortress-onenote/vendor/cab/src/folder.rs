@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: C1).
 use std::io::{self, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::slice;
@@ -131,9 +132,22 @@ impl<'a, R: Read + Seek> FolderReader<'a, R> {
         if new_offset > 0 {
             // TODO: If folder is uncompressed, we should just jump straight to
             // the correct block without "decompressing" those in between.
-            while self.data_blocks[self.current_block_index].cumulative_size
-                < new_offset
-            {
+            // PATCH(fortress-onenote, C1): a file whose offset lies beyond
+            // the folder's data blocks (corrupt cabinet) is an error, not an
+            // out-of-bounds panic.
+            loop {
+                let block = self
+                    .data_blocks
+                    .get(self.current_block_index)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "file offset is beyond the end of the folder data",
+                        )
+                    })?;
+                if block.cumulative_size >= new_offset {
+                    break;
+                }
                 self.current_block_index += 1;
                 self.load_block()?;
             }
@@ -227,6 +241,11 @@ impl<'a, R: Read + Seek + 'a> Read for FolderReader<'a, R> {
             self.current_block_index += 1;
             self.current_offset_within_block = 0;
             self.load_block()?;
+        }
+        // PATCH(fortress-onenote, C1): a block that decompressed to fewer
+        // bytes than its header promised must not underflow below.
+        if self.current_offset_within_block > self.current_block_data.len() {
+            invalid_data!("data block {} is too short", self.current_block_index);
         }
         let max_bytes = buf.len().min(
             self.current_block_data.len() - self.current_offset_within_block,

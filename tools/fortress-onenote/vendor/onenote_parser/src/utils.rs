@@ -1,4 +1,5 @@
-use crate::errors::{ErrorKind, Result};
+// Modified by fortress-onenote (vendor/PATCHES.md: P6).
+use crate::errors::Result;
 use widestring::U16CString;
 
 pub(crate) trait Utf16ToString {
@@ -12,12 +13,10 @@ impl Utf16ToString for &[u8] {
             .map(|v| u16::from_le_bytes([v[0], v[1]]))
             .collect();
 
+        // PATCH(fortress-onenote, P6): unpaired surrogates (written by
+        // some third-party tools) become U+FFFD instead of failing the
+        // whole section.
         let value = U16CString::from_vec_truncate(data);
-        value.to_string().map_err(|err| {
-            ErrorKind::MalformedOneNoteData(
-                format!("UTF-16 string conversion failed: {err}").into(),
-            )
-            .into()
-        })
+        Ok(value.to_string_lossy())
     }
 }

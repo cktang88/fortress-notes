@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P6).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::color::Color;
@@ -27,8 +28,10 @@ pub(crate) fn parse(object: &Object) -> Result<Data> {
     assert_property_set(object, PropertySetId::TableCellNode)?;
 
     let last_modified = Time::parse(PropertyType::LastModifiedTime, object)?;
-    let contents = ObjectReference::parse_vec(PropertyType::ElementChildNodes, object)?
-        .ok_or_else(|| ErrorKind::MalformedOneNoteFileData("table cell has no contents".into()))?;
+    // PATCH(fortress-onenote, P6): an empty cell (written by third-party
+    // tools; OneNote always writes a paragraph) is just empty.
+    let contents =
+        ObjectReference::parse_vec(PropertyType::ElementChildNodes, object)?.unwrap_or_default();
     let layout_max_width = simple::parse_f32(PropertyType::LayoutMaxWidth, object)?;
     let outline_indent_distance = OutlineIndentDistance::parse(object)?.ok_or_else(|| {
         ErrorKind::MalformedOneNoteFileData("table cell has no outline indent distance".into())

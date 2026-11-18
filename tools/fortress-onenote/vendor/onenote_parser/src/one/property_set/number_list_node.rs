@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P2).
 use crate::errors::{ErrorKind, Result};
 use crate::one::property::color_ref::ColorRef;
 use crate::one::property::time::Time;
@@ -64,7 +65,8 @@ pub(crate) fn parse(object: &Object) -> Result<Data> {
 }
 
 fn parse_list_format(data: Vec<u16>) -> Vec<char> {
-    decode_utf16(data[1..].iter().copied())
+    // PATCH(fortress-onenote, P2): an empty format must not panic.
+    decode_utf16(data.get(1..).unwrap_or_default().iter().copied())
         .map(|r| r.unwrap_or(REPLACEMENT_CHARACTER))
         .collect()
 }

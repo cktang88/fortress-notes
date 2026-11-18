@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P3, P8).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property_set::toc_container;
@@ -43,6 +44,41 @@ impl Notebook {
     }
 }
 
+/// The table of contents of a notebook or section group (`.onetoc2`),
+/// without its sections.
+///
+/// PATCH(fortress-onenote, P3): lets callers resolve, parse and report the
+/// listed entries themselves (e.g. report entries whose file is missing,
+/// which [`crate::Parser::parse_notebook`] silently skips).
+#[derive(Clone, Debug)]
+pub struct TableOfContents {
+    pub(crate) file_identity: FileIdentity,
+    pub(crate) entries: Vec<String>,
+    pub(crate) color: Option<Color>,
+}
+
+impl TableOfContents {
+    /// The identity stored in the table-of-contents file.
+    pub fn file_identity(&self) -> FileIdentity {
+        self.file_identity
+    }
+
+    /// The entry names in notebook order, exactly as stored: file names of
+    /// sections (`*.one`) and folder names of section groups.
+    ///
+    /// These strings come from the file and are untrusted: they may contain
+    /// path separators, `..` or other characters that are not valid in
+    /// file names.
+    pub fn entries(&self) -> &[String] {
+        &self.entries
+    }
+
+    /// The color of the notebook or section group.
+    pub fn color(&self) -> Option<Color> {
+        self.color
+    }
+}
+
 struct TocEntry {
     entries: Vec<(u32, String)>,
     color: Option<Color>,
@@ -83,9 +119,9 @@ fn parse_toc_entry(content_id: ExGuid, space: &(impl ObjectSpace + ?Sized)) -> R
     let toc = toc_container::parse(content)?;
 
     if let Some(name) = toc.filename {
-        let ordering_id = toc
-            .ordering_id
-            .ok_or_else(|| ErrorKind::MalformedOneNoteData("section has no order id".into()))?;
+        // PATCH(fortress-onenote, P8): entries without an ordering id keep
+        // their position in the parent's list (after ordered entries).
+        let ordering_id = toc.ordering_id.unwrap_or(u32::MAX);
 
         Ok(TocEntry {
             entries: vec![(ordering_id, name)],

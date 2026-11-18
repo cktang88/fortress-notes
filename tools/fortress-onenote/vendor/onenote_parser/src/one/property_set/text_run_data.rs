@@ -1,6 +1,7 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P1).
 use crate::errors::{ErrorKind, Result};
 use crate::one::property::PropertyType;
-use crate::one::property_set::parse_object;
+use crate::one::property_set::parse_object_list;
 use crate::onestore::Object;
 
 pub(crate) fn parse(object: &Object) -> Result<Option<Vec<Object>>> {
@@ -13,10 +14,8 @@ pub(crate) fn parse(object: &Object) -> Result<Option<Vec<Object>>> {
         None => return Ok(None),
     };
 
-    let data = prop_sets
-        .iter()
-        .map(|props| parse_object(object, prop_id, PropertyType::TextRunData, props))
-        .collect::<Result<Vec<_>>>()?;
+    // PATCH(fortress-onenote, P1): each run has its own references.
+    let data = parse_object_list(object, prop_id, PropertyType::TextRunData, prop_sets)?;
 
     Ok(Some(data))
 }

@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P6).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::object_reference::ObjectReference;
@@ -21,8 +22,10 @@ pub(crate) struct Data {
     pub(crate) contents: Vec<ExGuid>,
     pub(crate) list_contents: Vec<ExGuid>,
     pub(crate) list_spacing: Option<f32>,
-    pub(crate) author_original: ExGuid,
-    pub(crate) author_most_recent: ExGuid,
+    // PATCH(fortress-onenote, P6): authors are optional (third-party
+    // writers omit them; nothing reads them).
+    pub(crate) author_original: Option<ExGuid>,
+    pub(crate) author_most_recent: Option<ExGuid>,
     pub(crate) rtl: bool,
     pub(crate) is_deletable: bool,
     pub(crate) is_selectable: bool,
@@ -47,14 +50,8 @@ pub(crate) fn parse(object: &Object) -> Result<Data> {
     let list_contents =
         ObjectReference::parse_vec(PropertyType::ListNodes, object)?.unwrap_or_default();
     let list_spacing = simple::parse_f32(PropertyType::ListSpacingMu, object)?;
-    let author_original = ObjectReference::parse(PropertyType::AuthorOriginal, object)?
-        .ok_or_else(|| {
-            ErrorKind::MalformedOneNoteFileData("outline element has no original author".into())
-        })?;
-    let author_most_recent = ObjectReference::parse(PropertyType::AuthorMostRecent, object)?
-        .ok_or_else(|| {
-            ErrorKind::MalformedOneNoteFileData("outline element has no most recent author".into())
-        })?;
+    let author_original = ObjectReference::parse(PropertyType::AuthorOriginal, object)?;
+    let author_most_recent = ObjectReference::parse(PropertyType::AuthorMostRecent, object)?;
     let rtl = simple::parse_bool(PropertyType::OutlineElementRtl, object)?.unwrap_or_default();
     let is_deletable = simple::parse_bool(PropertyType::Deletable, object)?.unwrap_or_default();
     let is_selectable = simple::parse_bool(PropertyType::CannotBeSelected, object)?

@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P3, P7).
 #![deny(clippy::disallowed_macros)]
 
 use crate::FileSystem;
@@ -10,7 +11,7 @@ use crate::fsshttpb::data::exguid::ExGuid;
 use crate::fsshttpb::packaging::{OneStorePackaging, embedded_packaging_offset};
 use crate::onenote::file_identity::FileIdentity;
 use crate::onenote::ink_recognition::InkRecognizedWord;
-use crate::onenote::notebook::Notebook;
+use crate::onenote::notebook::{Notebook, TableOfContents};
 use crate::onenote::section::{Section, SectionEntry, SectionGroup};
 use crate::onestore::desktop::one_store_file::RevisionStore;
 use crate::onestore::desktop::parse::Parse;
@@ -58,6 +59,25 @@ pub(crate) struct ParserContext {
     /// and consumed when ink strokes are parsed, filling
     /// [`InkStroke::recognized_word`](ink::InkStroke::recognized_word).
     pub(crate) recognized_words: HashMap<ExGuid, InkRecognizedWord>,
+}
+
+/// PATCH(fortress-onenote, P7): keep the result of parsing one child object
+/// (page, outline item, content, list, title); a damaged object is dropped
+/// with a warning on the section report so the rest of the page and section
+/// survive. Encryption is never swallowed.
+pub(crate) fn skip_damaged<T>(
+    ctx: &mut ParserContext,
+    what: &str,
+    result: Result<T>,
+) -> Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(err) if matches!(err.kind(), ErrorKind::Encrypted) => Err(err),
+        Err(err) => {
+            warn!(ctx, "skipped a damaged {what}: {err}");
+            Ok(None)
+        }
+    }
 }
 
 /// The OneNote file parser.
@@ -182,6 +202,32 @@ impl<FS: FileSystem> Parser<FS> {
             entries: sections,
             color,
             report,
+        })
+    }
+
+    /// Parse only the table of contents of a notebook or section group.
+    ///
+    /// The `path` argument must point to a `.onetoc2` file. Unlike
+    /// [`Parser::parse_notebook`] no section is read: the entries are
+    /// returned as stored (see [`TableOfContents::entries`]).
+    ///
+    /// PATCH(fortress-onenote, P3).
+    pub fn parse_toc(&self, path: TypedPath) -> Result<TableOfContents> {
+        let source = self.fs.open_file(path)?;
+        let store = parse_store_auto(source)?;
+
+        if store.get_type()? != OneStoreType::TableOfContents {
+            return Err(ErrorKind::NotATocFile {
+                file: path.to_string_lossy().to_string(),
+            }
+            .into());
+        }
+
+        let (entries, color) = notebook::parse_toc(store.data_root())?;
+        Ok(TableOfContents {
+            file_identity: FileIdentity::new(store.as_onestore().file_identity()),
+            entries,
+            color,
         })
     }
 

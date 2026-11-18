@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P4, P5).
 pub(crate) mod file_node_chunk_reference;
 pub(crate) mod global_id_table;
 pub(crate) mod object_declaration;
@@ -143,8 +144,15 @@ impl FileNode {
             )?),
             2 => FileNodeDataRef::ElementList({
                 let list_ref = FileNodeChunkReference::parse(reader, stp_format, cb_format)?;
-                let mut resolved_reader = list_ref.resolve_to_reader(reader)?;
-                FileNodeList::parse(&mut resolved_reader, context, list_ref.data_size())
+                // PATCH(fortress-onenote, P4): a nil/zero reference is an
+                // empty list (third-party writers emit fcrZero for object
+                // spaces without revisions), not a list at offset 0.
+                if list_ref.is_fcr_nil() || list_ref.is_fcr_zero() {
+                    Ok(FileNodeList::default())
+                } else {
+                    let mut resolved_reader = list_ref.resolve_to_reader(reader)?;
+                    FileNodeList::parse(&mut resolved_reader, context, list_ref.data_size())
+                }
             }?),
             _ => FileNodeDataRef::InvalidData,
         };
@@ -211,9 +219,9 @@ impl FileNode {
             0x073 => FileNodeData::ObjectDeclarationFileData3LargeRefCountFND(
                 ObjectDeclarationFileData3LargeRefCountFND::parse(reader)?,
             ),
-            0x07C => FileNodeData::ObjectDataEncryptionKeyV2FNDX(
-                ObjectDataEncryptionKeyV2FNDX::parse(reader)?,
-            ),
+            // PATCH(fortress-onenote, P5): the object data that follows is
+            // encrypted; report that instead of failing on garbage later.
+            0x07C => return Err(ErrorKind::Encrypted.into()),
             0x084 => FileNodeData::ObjectInfoDependencyOverridesFND(
                 ObjectInfoDependencyOverridesFND::parse(reader, &data_ref)?,
             ),
