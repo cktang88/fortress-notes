@@ -193,6 +193,19 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let text = DocumentText.build(blocks, theme: theme, context: context)
         blockCache = [:]
         storage.setAttributedString(text)
+        // The blocks just shown are what reading the text back would give: keep them, so
+        // the first save (and the baseline right after opening) doesn't read every block.
+        var byId: [String: EditorBlock] = [:]
+        byId.reserveCapacity(blocks.count)
+        for block in blocks { byId[block.id] = block }
+        var cache: [String: CachedBlock] = [:]
+        cache.reserveCapacity(blocks.count)
+        storage.enumerateAttribute(.fnBlock, in: NSRange(location: 0, length: storage.length), options: []) { value, range, _ in
+            guard let info = value as? BlockInfo, let block = byId[info.id], cache[info.id] == nil else { return }
+            cache[info.id] = CachedBlock(info: info, length: range.length, block: block)
+        }
+        blockCache = cache
+        dirtyBlocks.removeAll()
         textView.undoManager?.removeAllActions()
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         syncTypingAttributes()
@@ -248,6 +261,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             isNormalizing = false
         }
         return blocks
+    }
+
+    /// Forgets the blocks kept from loading and earlier reads, so the next
+    /// `currentBlocks()` reads every paragraph back from the text (tests of the round trip).
+    func discardReadCache() {
+        blockCache = [:]
     }
 
     private struct CachedBlock {

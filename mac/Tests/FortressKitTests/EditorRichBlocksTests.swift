@@ -106,6 +106,8 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
     @Test func untouchedPageSavesNothing() throws {
         let document = try RichPage.load()
         let (controller, _) = editor(document)
+        // Read the text back, not the blocks kept from loading.
+        controller.discardReadCache()
         let blocks = controller.currentBlocks()
         #expect(blocks.map(\.kind) == [.paragraph, .table, .heading2, .columns, .math, .file])
         #expect(blocks[3].columns?.map { $0.blocks.count } == [3, 1])

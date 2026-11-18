@@ -60,6 +60,8 @@ public final class EditorSession {
     /// note's content as the server holds it.
     @ObservationIgnored private var sendingBlocks: [EditorBlock]?
     @ObservationIgnored private var savedBlocks: [EditorBlock]?
+    /// The note's blocks as loaded.
+    @ObservationIgnored private var loadedBlocks: [EditorBlock] = []
     /// Debounce for edits.
     @ObservationIgnored var saveDelay: Duration = .milliseconds(400)
     /// Whether unconfirmed edits are written to disk (off for previews and most tests).
@@ -123,6 +125,7 @@ public final class EditorSession {
         status = document.status
         updatedAt = Timestamp.date(document.updatedAt)
         let blocks = BlockCodec.flatten(document.children, resolved: document.resolvedLinks)
+        loadedBlocks = blocks
         var shown = blocks
         savedBlocks = nil
         recovered = nil
@@ -136,9 +139,10 @@ public final class EditorSession {
         if replaceText, let showBlocks {
             showBlocks(shown)
             // The baseline is what the editor reads back, so an untouched note never saves.
-            base = recovered == nil ? SyncedTree((currentBlocks?() ?? nil) ?? blocks) : SyncedTree(blocks)
+            base = recovered == nil ? SyncedTree((currentBlocks?() ?? nil) ?? blocks, reusing: nil, lazily: true)
+                : SyncedTree(blocks, reusing: nil, lazily: true)
         } else {
-            base = SyncedTree(blocks)
+            base = SyncedTree(blocks, reusing: nil, lazily: true)
         }
         if recovered != nil {
             dirty = true
@@ -151,13 +155,15 @@ public final class EditorSession {
     var initialBlocks: [EditorBlock] {
         if let recovered { return recovered }
         if let savedBlocks { return savedBlocks }
-        return document.map { BlockCodec.flatten($0.children, resolved: $0.resolvedLinks) } ?? []
+        // Decoded once when the note arrived (decoding a long note is not free).
+        return loadedBlocks
     }
 
     func resetBase(to blocks: [EditorBlock]) {
         // Recovered edits stay pending against the server's version.
         guard recovered == nil else { return }
-        base = SyncedTree(blocks)
+        // The baseline's fields are encoded only for blocks that change.
+        base = SyncedTree(blocks, reusing: nil, lazily: true)
     }
 
     /// Lets go of the editor once the note is closed. What it shows last stays readable,

@@ -21,13 +21,20 @@ public struct SyncedTree: Hashable, Sendable {
 
     /// The tree for `blocks`, taking the fields of blocks unchanged since `previous` from it
     /// instead of encoding them again (encoding is the expensive part of a diff).
-    init(_ blocks: [EditorBlock], reusing previous: SyncedTree?) {
+    /// `lazily`: fields are encoded only when a block changes (a note's baseline when it
+    /// opens: encoding all 2,000 blocks of a long note up front cost more than showing it).
+    init(_ blocks: [EditorBlock], reusing previous: SyncedTree?, lazily: Bool = false) {
         children[nil] = []
         parent.reserveCapacity(blocks.count)
-        fields.reserveCapacity(blocks.count)
+        fields.reserveCapacity(lazily ? 0 : blocks.count)
         encoded.reserveCapacity(blocks.count)
         order.reserveCapacity(blocks.count)
-        add(blocks, under: nil, reusing: previous)
+        add(blocks, under: nil, reusing: previous, lazily: lazily)
+    }
+
+    /// A block's fields, encoding them now if they were left for later.
+    func fields(of id: String) -> BlockFields? {
+        fields[id] ?? encoded[id].map(BlockCodec.encode)
     }
 
     public static func == (lhs: SyncedTree, rhs: SyncedTree) -> Bool {
@@ -39,21 +46,27 @@ public struct SyncedTree: Hashable, Sendable {
         hasher.combine(fields)
     }
 
-    private func reusedFields(_ block: EditorBlock, from previous: SyncedTree?) -> BlockFields? {
-        guard let previous, let old = previous.encoded[block.id], old == block else { return nil }
-        return previous.fields[block.id]
+    /// Whether `block` is unchanged since `previous` (its fields then carry over).
+    private func unchanged(_ block: EditorBlock, since previous: SyncedTree?) -> Bool {
+        guard let previous, let old = previous.encoded[block.id] else { return false }
+        return old == block
     }
 
     /// Adds a flat run of blocks under `root`; a columns block brings its column blocks
     /// and their blocks along (they are ordinary children on the server).
-    private mutating func add(_ blocks: [EditorBlock], under root: String?, reusing previous: SyncedTree?) {
+    private mutating func add(_ blocks: [EditorBlock], under root: String?, reusing previous: SyncedTree?, lazily: Bool) {
         for item in BlockDiff.shape(blocks) {
             let id = item.block.id
             let parentId = item.parent ?? root
             parent.updateValue(parentId, forKey: id)
             children[parentId, default: []].append(id)
             if children[id] == nil { children[id] = [] }
-            fields[id] = reusedFields(item.block, from: previous) ?? BlockCodec.encode(item.block)
+            if unchanged(item.block, since: previous) {
+                // Carried over, or still left for later when it was never encoded.
+                if let known = previous?.fields[id] { fields[id] = known }
+            } else if !lazily {
+                fields[id] = BlockCodec.encode(item.block)
+            }
             encoded[id] = item.block
             order.append(id)
             guard item.block.kind == .columns, let columns = item.block.columns else { continue }
@@ -63,7 +76,7 @@ public struct SyncedTree: Hashable, Sendable {
                 children[column.id] = children[column.id] ?? []
                 fields[column.id] = column.fields
                 order.append(column.id)
-                add(column.blocks, under: column.id, reusing: previous)
+                add(column.blocks, under: column.id, reusing: previous, lazily: lazily)
             }
         }
     }
@@ -142,7 +155,8 @@ public enum BlockDiff {
             let targetParent = result.parent[id] ?? nil
             let position = nextIndex[targetParent, default: 0]
             nextIndex[targetParent] = position + 1
-            let fields = result.fields[id]!
+            // No fields: unchanged since the base and never encoded, so nothing to update.
+            let fields = result.fields[id]
 
             if let currentParent = parent[id] {
                 // Siblings before `position` are the target's, already placed, so the block
@@ -155,12 +169,12 @@ public enum BlockDiff {
                     parent.updateValue(targetParent, forKey: id)
                     operations.append(BlockOperation(operation: .move, blockId: id, parentId: targetParent, position: position))
                 }
-                if base.fields[id] != fields {
+                if let fields, base.fields(of: id) != fields {
                     operations.append(BlockOperation(
                         operation: .update, blockId: id, type: fields.type, attrs: fields.attrs,
                         content: fields.content, text: fields.text))
                 }
-            } else {
+            } else if let fields = fields ?? result.fields(of: id) {
                 children[targetParent, default: []].insert(id, at: min(position, children[targetParent, default: []].count))
                 children[id] = []
                 parent.updateValue(targetParent, forKey: id)
