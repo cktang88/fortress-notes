@@ -82,11 +82,9 @@ extension Palette {
         let background = s(0x00)
         let text = s(0x05)
         let dark = scheme.isDark
-        let sunken = scheme[0x10] ?? RGBColor(oklch: {
-            var lch = background.oklch
-            lch.lightness += dark ? -0.03 : -0.022
-            return lch
-        }())
+        var lowered = background.oklch
+        lowered.lightness += dark ? -0.03 : -0.022
+        let sunken = scheme[0x10] ?? RGBColor(oklch: lowered)
         var surface = s(0x01)
         if surface.contrast(with: background) < 1.04 { surface = background.mixed(with: text, 0.06) }
         let red = s(0x08), purple = s(0x0E)

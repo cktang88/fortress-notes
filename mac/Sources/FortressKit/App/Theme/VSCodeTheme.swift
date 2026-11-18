@@ -71,7 +71,7 @@ public struct VSCodeTheme: Sendable {
     /// JSON with `//` and `/* */` comments and trailing commas → plain JSON.
     static func stripJSONC(_ text: String) -> String {
         var out = ""
-        var chars = Array(text)
+        let chars = Array(text)
         var i = 0
         var inString = false
         while i < chars.count {
@@ -103,7 +103,6 @@ public struct VSCodeTheme: Sendable {
                 i += 1
             }
         }
-        chars.removeAll()
         return out
     }
 }
@@ -119,7 +118,7 @@ extension Palette {
             ?? RGBColor(hex: dark ? "#1E1E1E" : "#FFFFFF")!
         func solid(_ keys: String...) -> RGBColor? {
             for key in keys {
-                if let (color, alpha) = theme.colors[key] { return background.mixed(with: color, alpha) }
+                if let entry = theme.colors[key] { return background.mixed(with: entry.color, entry.alpha) }
             }
             return nil
         }

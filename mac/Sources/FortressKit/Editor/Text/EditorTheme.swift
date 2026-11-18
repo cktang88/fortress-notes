@@ -138,8 +138,8 @@ struct EditorTheme: Sendable {
     // Every colour here comes from the theme palette (App/Theme): stable dynamic colours
     // that resolve per appearance, so cached attributes survive theme changes.
 
-    private static let markTextColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markText($0)) })
-    private static let markHighlightColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markHighlight($0)) })
+    nonisolated(unsafe) private static let markTextColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markText($0)) })
+    nonisolated(unsafe) private static let markHighlightColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markHighlight($0)) })
 
     /// A text colour by name ("red", the theme's red) or hex (made legible on the page).
     static func color(named name: String) -> NSColor? {

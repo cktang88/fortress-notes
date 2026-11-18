@@ -166,19 +166,19 @@ public final class ThemeRuntime: @unchecked Sendable {
 }
 
 extension NSColor {
-    public static let themeBackground = ThemeRuntime.color(.background)
-    public static let themeSunken = ThemeRuntime.color(.sunken)
-    public static let themeSurface = ThemeRuntime.color(.surface)
-    public static let themeBorder = ThemeRuntime.color(.border)
-    public static let themeText = ThemeRuntime.color(.text)
-    public static let themeSecondaryText = ThemeRuntime.color(.secondaryText)
-    public static let themeTertiaryText = ThemeRuntime.color(.tertiaryText)
-    public static let themeAccent = ThemeRuntime.color(.accent)
-    public static let themeLink = ThemeRuntime.color(.link)
-    public static let themeSelection = ThemeRuntime.color(.selection)
-    public static let themeHighlight = ThemeRuntime.color(.highlight)
-    public static let themeCodeText = ThemeRuntime.color(.codeText)
-    public static let themeQuoteBar = ThemeRuntime.color(.quoteBar)
+    nonisolated(unsafe) public static let themeBackground = ThemeRuntime.color(.background)
+    nonisolated(unsafe) public static let themeSunken = ThemeRuntime.color(.sunken)
+    nonisolated(unsafe) public static let themeSurface = ThemeRuntime.color(.surface)
+    nonisolated(unsafe) public static let themeBorder = ThemeRuntime.color(.border)
+    nonisolated(unsafe) public static let themeText = ThemeRuntime.color(.text)
+    nonisolated(unsafe) public static let themeSecondaryText = ThemeRuntime.color(.secondaryText)
+    nonisolated(unsafe) public static let themeTertiaryText = ThemeRuntime.color(.tertiaryText)
+    nonisolated(unsafe) public static let themeAccent = ThemeRuntime.color(.accent)
+    nonisolated(unsafe) public static let themeLink = ThemeRuntime.color(.link)
+    nonisolated(unsafe) public static let themeSelection = ThemeRuntime.color(.selection)
+    nonisolated(unsafe) public static let themeHighlight = ThemeRuntime.color(.highlight)
+    nonisolated(unsafe) public static let themeCodeText = ThemeRuntime.color(.codeText)
+    nonisolated(unsafe) public static let themeQuoteBar = ThemeRuntime.color(.quoteBar)
 }
 
 // MARK: SwiftUI
@@ -195,7 +195,7 @@ extension EnvironmentValues {
     }
 
     /// The palette for this view's appearance and contrast setting.
-    public var palette: Palette {
+    public var themePalette: Palette {
         themePalettes.palette(dark: colorScheme == .dark, increasedContrast: colorSchemeContrast == .increased)
     }
 }
@@ -212,7 +212,7 @@ public struct ThemeStyle: ShapeStyle {
     public init(_ role: Palette.Role) { self.role = role }
 
     public func resolve(in environment: EnvironmentValues) -> Color {
-        environment.palette[role].color
+        environment.themePalette[role].color
     }
 }
 
