@@ -1,0 +1,35 @@
+# TEMPORARY (mac-code-audit): A/B of keystroke latency across commits on one runner.
+name: mac perf A/B
+on:
+  push:
+    branches: [mac-code-audit]
+    paths: ["mac/**", ".github/workflows/mac-perf-ab.yml"]
+  workflow_dispatch:
+jobs:
+  ab:
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - name: Build each commit's tests
+        run: |
+          set -e
+          for c in 2780045 463d616 origin/main HEAD; do
+            d="$RUNNER_TEMP/ab-$(echo $c | tr '/' '_')"
+            git worktree add --detach "$d" "$c"
+            (cd "$d/mac" && swift build --build-tests 2>&1 | tail -3)
+          done
+      - name: Profile HEAD
+        working-directory: mac
+        run: KEYSTROKE_PROFILE=1 swift test --skip-build --filter KeystrokeProfile 2>&1 | grep -E "PROFILE|✘|error" | head -1500 || true
+        continue-on-error: true
+      - name: Keystroke latency, interleaved
+        run: |
+          for round in 1 2 3; do
+            for c in 2780045 463d616 origin/main HEAD; do
+              d="$RUNNER_TEMP/ab-$(echo $c | tr '/' '_')"
+              v=$(cd "$d/mac" && swift test --skip-build --filter "EditorPerformanceTests/keystrokeLatency" 2>&1 | grep -E "PERF keystroke\.(middle|long50k)\.(median|part\.insert\.median)" | tr '\n' ' ')
+              echo "AB round $round $c: $v" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          done
