@@ -596,7 +596,9 @@ def _nodes_from_html(
 
     walk(elements, {}, nodes, False)
     nodes = schema.merge_inline(nodes)
-    if collapse and nodes:
+    # Paragraph edges carry no spaces in Markdown or HTML; an image lifted out
+    # of the text must not leave one behind either.
+    if (collapse or images) and nodes:
         if nodes[0]["type"] == "text":
             nodes[0] = {**nodes[0], "text": nodes[0]["text"].lstrip(" ")}
         if nodes[-1]["type"] == "text":

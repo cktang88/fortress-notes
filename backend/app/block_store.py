@@ -1304,6 +1304,7 @@ def rename_document(path: Path, document_id: str, title: str) -> dict:
         )
         if cursor.rowcount == 0:
             raise KeyError("document not found")
+        document_retitled(connection, document_id)
     tree = document_tree(path, document_id)
     assert tree is not None
     return tree
@@ -1331,6 +1332,7 @@ def update_document_metadata(
         )
         if cursor.rowcount == 0:
             raise KeyError("document not found")
+        document_retitled(connection, document_id)
 
 
 def replace_document_from_markdown(
@@ -1348,7 +1350,7 @@ def replace_document_from_markdown(
     initialize(path)
     with connection_scope(path, immediate=True) as connection:
         existing = connection.execute(
-            "SELECT created_at, deleted_at FROM documents WHERE id = ?", (document_id,)
+            "SELECT title, created_at, deleted_at FROM documents WHERE id = ?", (document_id,)
         ).fetchone()
         if existing is not None and existing["deleted_at"] is not None:
             raise KeyError("document not found")
@@ -1384,6 +1386,8 @@ def replace_document_from_markdown(
         _insert_markdown_body(
             connection, document_id, body, existing["created_at"], _iso(updated_at)
         )
+        if title != existing["title"]:
+            document_retitled(connection, document_id)
 
 
 def delete_document(path: Path, document_id: str) -> None:
@@ -2232,7 +2236,6 @@ def refresh_derived(
 
     labels = _Labels(connection)
     ids = list(dict.fromkeys(block_ids))
-    changed_text: set[str] = set()
     for chunk in _chunks(ids):
         rows = connection.execute(
             f"""SELECT id, document_id, type, attrs_json, content_json, payload_json, text
@@ -2240,9 +2243,10 @@ def refresh_derived(
             chunk,
         ).fetchall()
         for row in rows:
-            if _refresh_row(connection, row, labels):
-                changed_text.add(row["id"])
-    referrers = _referrers(connection, changed_text | set(removed), set(retitled))
+            _refresh_row(connection, row, labels)
+    # Every refreshed block counts, not only changed text: a restored block
+    # keeps its text but its referrers read as broken until now.
+    referrers = _referrers(connection, set(ids) | set(removed), set(retitled))
     referrers -= set(ids)
     if referrers:
         fresh = _Labels(connection)
@@ -2264,8 +2268,8 @@ def _chunks(items: list[str], size: int = 500):
         yield items[start:start + size]
 
 
-def _refresh_row(connection: sqlite3.Connection, row: sqlite3.Row, labels: _Labels) -> bool:
-    """Derived data of one block; True when its text changed."""
+def _refresh_row(connection: sqlite3.Connection, row: sqlite3.Row, labels: _Labels) -> None:
+    """Re-derive the text, refs, asset links and search row of one block."""
 
     block = _row_block(row)
     block_id = row["id"]
@@ -2292,7 +2296,6 @@ def _refresh_row(connection: sqlite3.Connection, row: sqlite3.Row, labels: _Labe
             (block_id, media_name),
         )
     _refresh_fts(connection, block_id, row["document_id"], text)
-    return text != row["text"]
 
 
 def _referrers(
@@ -2724,10 +2727,11 @@ def _restore(connection: sqlite3.Connection, document_id: str, entries: list[dic
             [(entry["id"], name, value) for name, value in state["user_attrs"].items()],
         )
         _write_sync(connection, entry["id"], state["sync"])
-    for entry in entries:
-        if entry[key] is None and entry["id"] in present:
-            _delete_fts(connection, [entry["id"]])
-            connection.execute("DELETE FROM blocks WHERE id = ?", (entry["id"],))
+    # Search rows go first: deleting a parent cascades to its children.
+    doomed = [entry["id"] for entry in entries if entry[key] is None and entry["id"] in present]
+    _delete_fts(connection, doomed)
+    for block_id in doomed:
+        connection.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
 
 
 def _write_sync(connection: sqlite3.Connection, block_id: str, sync: dict | None) -> None:
