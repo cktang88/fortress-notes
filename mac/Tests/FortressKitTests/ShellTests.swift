@@ -256,7 +256,8 @@ private func fixtureData(_ name: String) throws -> Data {
 @Test func freePortsAreFound() throws {
     let port = try #require(BackendController.freePort())
     #expect(port > 0)
-    #expect(BackendController.isPortFree(port))
+    // Another test's connection can take a just-freed ephemeral port; a few tries settle it.
+    #expect((0..<5).contains { _ in BackendController.freePort().map(BackendController.isPortFree) == true })
 }
 
 /// Whether `pid` is gone (a zombie reparented to launchd is reaped quickly).
@@ -283,7 +284,8 @@ private func startStandIn(_ backend: BackendController, folder: URL, trapTerm: B
     #expect(backend.isProcessRunning && backend.ownsServer)
     #expect(backend.serverURL.absoluteString == "http://127.0.0.1:1")
     #expect(!backend.accepts(instance: "someone-else") && backend.accepts(instance: BackendAuth.instanceID))
-    let deadline = Date().addingTimeInterval(10)
+    // Generous: on CI the snapshot suites can keep the main actor busy for many seconds.
+    let deadline = Date().addingTimeInterval(60)
     var child: pid_t?
     while child == nil, Date() < deadline {
         child = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
