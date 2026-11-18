@@ -113,6 +113,26 @@ public final class OneNoteImporter {
         }
     }
 
+    /// Picks up an import that is still running on the backend (the app was restarted
+    /// mid-import), so the sheet shows its progress instead of step 1.
+    public func resumeRunningImport(api: APIClient) {
+        guard case .choosing = phase, file == nil, task == nil else { return }
+        task = Task { [weak self] in
+            guard let jobs = try? await api.recentOneNoteImports(),
+                  let running = jobs.first(where: { !$0.status.isFinished }) else {
+                self?.task = nil
+                return
+            }
+            guard let self, case .choosing = self.phase, self.file == nil else { return }
+            if let name = running.filename { self.file = URL(fileURLWithPath: "/" + name) }
+            do {
+                try await self.follow(running, api: api)
+            } catch {
+                self.phase = .failed(message: error.localizedDescription, converterMissing: false)
+            }
+        }
+    }
+
     /// Back to step 1 (after a failure, or to import another export).
     public func reset(keepFile: Bool = false) {
         task?.cancel()

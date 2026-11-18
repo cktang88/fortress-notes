@@ -403,6 +403,7 @@ extension AppModel {
                 }
             }
         }
+        importer.resumeRunningImport(api: api)
         isOneNoteImportShown = true
     }
 
