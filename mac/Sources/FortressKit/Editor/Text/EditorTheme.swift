@@ -135,77 +135,44 @@ struct EditorTheme: Sendable {
 
     // MARK: Colors
 
+    // Every colour here comes from the theme palette (App/Theme): stable dynamic colours
+    // that resolve per appearance, so cached attributes survive theme changes.
+
+    private static let markTextColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markText($0)) })
+    private static let markHighlightColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markHighlight($0)) })
+
+    /// A text colour by name ("red", the theme's red) or hex (made legible on the page).
     static func color(named name: String) -> NSColor? {
-        switch name.lowercased() {
-        case "gray", "grey": return .systemGray
-        case "brown": return .systemBrown
-        case "red": return .systemRed
-        case "orange": return .systemOrange
-        case "yellow": return NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                ? .systemYellow : NSColor(srgbRed: 0.72, green: 0.55, blue: 0.0, alpha: 1)
-        }
-        case "green": return .systemGreen
-        case "blue": return .systemBlue
-        case "purple": return .systemPurple
-        case "pink": return .systemPink
-        default: return hexColor(name)
-        }
+        if let hue = MarkHue(name: name) { return markTextColors[hue] }
+        return hexColor(name)
     }
 
+    /// A highlighter by name (the theme's hue as a tint) or hex (made quiet enough for text).
     static func highlightColor(named name: String) -> NSColor? {
-        if name.lowercased() == "yellow" {
-            return NSColor(name: nil) { appearance in
-                appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                    ? NSColor.systemYellow.withAlphaComponent(0.32)
-                    : NSColor(srgbRed: 1.0, green: 0.86, blue: 0.25, alpha: 0.45)
-            }
-        }
-        return color(named: name)?.withAlphaComponent(0.2)
+        if let hue = MarkHue(name: name) { return markHighlightColors[hue] }
+        return RGBColor(hex: name).map(ThemeRuntime.foreignFill)
     }
 
+    /// A hex text colour picked in another app, under the contrast rule (`Palette.legibleText`).
     static func hexColor(_ string: String) -> NSColor? {
-        var hex = string.trimmingCharacters(in: .whitespaces)
-        guard hex.hasPrefix("#") else { return nil }
-        hex.removeFirst()
-        if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
-        if hex.count == 8 { hex = String(hex.prefix(6)) }
-        guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
-        let color = NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
-                            blue: CGFloat(value & 0xFF) / 255, alpha: 1)
-        // Imported colours were picked for white paper: lighten dark ones in Dark Mode.
-        return NSColor(name: nil) { appearance in
-            guard appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua else { return color }
-            let brightness = color.usingColorSpace(.sRGB).map { 0.299 * $0.redComponent + 0.587 * $0.greenComponent + 0.114 * $0.blueComponent } ?? 0.5
-            return brightness < 0.55 ? (color.blended(withFraction: 0.45, of: .white) ?? color) : color
-        }
+        guard string.trimmingCharacters(in: .whitespaces).hasPrefix("#"), let color = RGBColor(hex: string) else { return nil }
+        return ThemeRuntime.foreignText(color)
     }
 
-    /// A cell or block background picked in another app: as is on white, quieter in Dark Mode.
+    /// A cell or block background picked in another app (`Palette.legibleFill`).
     static func cellBackground(named name: String) -> NSColor? {
-        guard let base = name.hasPrefix("#") ? hexBase(name) : color(named: name) else { return nil }
-        return NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? base.withAlphaComponent(0.22) : base
-        }
-    }
-
-    private static func hexBase(_ string: String) -> NSColor? {
-        var hex = string.trimmingCharacters(in: .whitespaces)
-        guard hex.hasPrefix("#") else { return nil }
-        hex.removeFirst()
-        if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
-        if hex.count == 8 { hex = String(hex.prefix(6)) }
-        guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
-        return NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
-                       blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+        if let hue = MarkHue(name: name) { return markHighlightColors[hue] }
+        guard name.trimmingCharacters(in: .whitespaces).hasPrefix("#"), let color = RGBColor(hex: name) else { return nil }
+        return ThemeRuntime.foreignFill(color)
     }
 
     func textColor(for info: BlockInfo) -> NSColor {
-        if info.kind == .check && info.checked { return .tertiaryLabelColor }
+        if info.kind == .check && info.checked { return .themeTertiaryText }
         if let name = textColorName, let color = Self.color(named: name) { return color }
         switch info.kind {
-        case .heading3, .heading5, .heading6, .quote: return .secondaryLabelColor
-        default: return .textColor
+        case .heading3, .heading5, .heading6, .quote: return .themeSecondaryText
+        case .code: return .themeCodeText
+        default: return .themeText
         }
     }
 
@@ -217,7 +184,8 @@ struct EditorTheme: Sendable {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .paragraphStyle: paragraphStyle,
-            .foregroundColor: marks.textColor.flatMap(Self.color(named:)) ?? textColor(for: info),
+            .foregroundColor: marks.textColor.flatMap(Self.color(named:))
+                ?? (marks.code && textColorName == nil && !(info.kind == .check && info.checked) ? NSColor.themeCodeText : textColor(for: info)),
             .fnStyled: true,
         ]
         if info.kind.hasInlineText {
@@ -229,12 +197,12 @@ struct EditorTheme: Sendable {
         if let highlight = marks.highlight.flatMap(Self.highlightColor(named:)) {
             attributes[.backgroundColor] = highlight
         } else if marks.code && info.kind != .code {
-            attributes[.backgroundColor] = NSColor.quaternarySystemFill
+            attributes[.backgroundColor] = NSColor.themeSurface
         }
         if marks.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
         if marks.strike || (info.kind == .check && info.checked) {
             attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
-            attributes[.strikethroughColor] = NSColor.tertiaryLabelColor
+            attributes[.strikethroughColor] = NSColor.themeTertiaryText
         }
         if let link = marks.link, info.kind != .code {
             attributes[.link] = link

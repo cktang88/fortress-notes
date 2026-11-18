@@ -140,7 +140,7 @@ final class ColumnsView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let controller, controller.frames.count > 1 else { return }
-        NSColor.quaternaryLabelColor.setFill()
+        NSColor.themeBorder.setFill()
         for frame in controller.frames.dropLast() {
             let x = (frame.maxX + controller.gutter / 2).rounded(.down)
             CGRect(x: x, y: 4, width: 1, height: max(0, bounds.height - 8)).fill()

@@ -44,7 +44,7 @@ struct AskView: View {
                 if let last = turns.last { withAnimation(.smooth(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .top) } }
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .themedContent()
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .navigationTitle("Ask")
         .environment(\.openURL, OpenURLAction { url in openCitation(url) })
@@ -228,14 +228,14 @@ struct AskTurnView: View {
     private func calm(_ title: String, detail: String?, symbol: String, action: (String, () -> Void)?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: symbol)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.themeSecondary)
                 .font(.system(size: 14))
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
                     .font(.system(size: 15))
                     .foregroundStyle(.primary)
                 if let detail {
-                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                    Text(detail).font(.callout).foregroundStyle(.themeSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let action {
@@ -263,7 +263,7 @@ struct AskTurnView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Sources")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.themeSecondary)
             ForEach(Array(state.citations.enumerated()), id: \.element.blockId) { index, citation in
                 PassageCard(title: citation.documentTitle, text: citation.quote, number: index + 1) {
                     model.open(noteId: citation.documentId, blockId: citation.blockId)
@@ -344,7 +344,7 @@ struct AskTrace: View {
             .truncationMode(.middle)
         }
         .font(.subheadline)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(.themeTertiary)
     }
 
     private func line(_ state: AskState, now: Date) -> String {
@@ -404,7 +404,7 @@ struct PassageCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title.isEmpty ? "Untitled" : title)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.themeSecondary)
                         .lineLimit(1)
                     Text(text)
                         .font(.callout)
@@ -417,7 +417,7 @@ struct PassageCard: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                Color(nsColor: isHovered ? .tertiarySystemFill : .quaternarySystemFill),
+                ThemeStyle(isHovered ? .border : .surface),
                 in: .rect(cornerRadius: 8, style: .continuous))
             .contentShape(.rect)
         }

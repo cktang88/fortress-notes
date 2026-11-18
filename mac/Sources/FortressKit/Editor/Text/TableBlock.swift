@@ -153,7 +153,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         guard hasLinks else { return text }
         let copy = NSMutableAttributedString(attributedString: text)
         text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length), options: []) { value, range, _ in
-            if value != nil { copy.addAttribute(.foregroundColor, value: NSColor.controlAccentColor, range: range) }
+            if value != nil { copy.addAttribute(.foregroundColor, value: NSColor.themeLink, range: range) }
         }
         return copy
     }
@@ -866,7 +866,9 @@ final class CellTextView: NSTextView {
         view.isContinuousSpellCheckingEnabled = false
         view.focusRingType = .none
         view.displaysLinkToolTips = true
-        view.linkTextAttributes = [.foregroundColor: NSColor.controlAccentColor, .cursor: NSCursor.pointingHand]
+        view.linkTextAttributes = [.foregroundColor: NSColor.themeLink, .cursor: NSCursor.pointingHand]
+        view.insertionPointColor = .themeAccent
+        view.selectedTextAttributes = [.backgroundColor: NSColor.themeSelection]
         return view
     }
 
@@ -948,7 +950,7 @@ final class TableGridView: NSView {
                     color.setFill()
                     frame.fill()
                 } else if controller.isHeader(row: r, column: c) {
-                    NSColor.labelColor.withAlphaComponent(0.045).setFill()
+                    NSColor.themeSurface.setFill()
                     frame.fill()
                 }
             }
@@ -959,7 +961,7 @@ final class TableGridView: NSView {
 
         let editing = controller.focusedCell != nil
         guard controller.borders || editing else { return }
-        let line = controller.borders ? NSColor.separatorColor : NSColor.tertiaryLabelColor.withAlphaComponent(0.25)
+        let line = controller.borders ? NSColor.themeBorder : NSColor.themeBorder.withAlphaComponent(0.6)
         line.setStroke()
         let grid = NSBezierPath()
         grid.lineWidth = 1
@@ -1107,23 +1109,23 @@ struct NestedCellBlocks: View {
                     .accessibilityLabel(block.attrs["alt"]?.stringValue ?? "Image")
             } else {
                 Label(block.attrs["alt"]?.stringValue ?? "Image", systemImage: "photo")
-                    .foregroundStyle(.secondary).lineLimit(2)
+                    .foregroundStyle(.themeSecondary).lineLimit(2)
             }
         case "table":
             Label("Table · \(block.children.count) rows", systemImage: "tablecells")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.themeSecondary)
                 .help(TableContent.nestedText(block))
         case "math":
             Text(MathText.attributed(block.payload?["latex"]?.stringValue ?? block.text, size: 14 * scale))
         case "file":
             Label(block.attrs["name"]?.stringValue ?? "File", systemImage: "doc")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.themeSecondary)
         case "divider":
             Divider()
         default:
             HStack(alignment: .firstTextBaseline, spacing: 6 * scale) {
                 if let marker = marker(for: block) {
-                    Text(marker).foregroundStyle(.secondary)
+                    Text(marker).foregroundStyle(.themeSecondary)
                 }
                 Text(block.text)
                     .fixedSize(horizontal: false, vertical: true)

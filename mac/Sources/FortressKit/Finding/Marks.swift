@@ -57,7 +57,7 @@ struct TextMark: TextAttribute {
 /// Draws find-style highlights (rounded, radius 3) and citation chips (capsules) behind
 /// marked runs; everything else draws as usual.
 struct MarkRenderer: TextRenderer {
-    var highlight: Color = Color(nsColor: .findHighlightColor)
+    var highlight = ThemeStyle(.highlight)
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
         for line in layout {
@@ -67,10 +67,10 @@ struct MarkRenderer: TextRenderer {
                     switch mark.style {
                     case .highlight:
                         let rect = bounds.insetBy(dx: -1, dy: 0)
-                        context.fill(RoundedRectangle(cornerRadius: 3).path(in: rect), with: .color(highlight))
+                        context.fill(RoundedRectangle(cornerRadius: 3).path(in: rect), with: .style(highlight))
                     case .citation:
                         let rect = bounds.insetBy(dx: -2, dy: -0.5)
-                        // The window's tint (Fortress Ember), faint.
+                        // The window's tint (the theme accent), faint.
                         context.fill(Capsule().path(in: rect), with: .style(.tint.opacity(0.15)))
                     }
                 }
@@ -92,7 +92,7 @@ extension Text {
             if segment.isMatch {
                 Text(verbatim: String(segment.text))
                     .fontWeight(.semibold)
-                    .foregroundStyle(Color.black.opacity(0.88))
+                    .foregroundStyle(.themeText)
                     .customAttribute(TextMark(style: .highlight))
             } else {
                 Text(verbatim: String(segment.text))

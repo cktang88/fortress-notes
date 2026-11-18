@@ -1,19 +1,6 @@
 import AppKit
 import SwiftUI
 
-extension Color {
-    /// "Fortress Ember", the app's one accent (DESIGN a.4), with dark and increased-contrast variants.
-    public static let fortressEmber = Color(nsColor: NSColor(name: "FortressEmber") { appearance in
-        let match = appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])
-        switch match {
-        case .darkAqua: return NSColor(srgbRed: 0xF0 / 255, green: 0x91 / 255, blue: 0x5A / 255, alpha: 1)
-        case .accessibilityHighContrastDarkAqua: return NSColor(srgbRed: 1, green: 0xB0 / 255, blue: 0x85 / 255, alpha: 1)
-        case .accessibilityHighContrastAqua: return NSColor(srgbRed: 0x8F / 255, green: 0x3D / 255, blue: 0x1A / 255, alpha: 1)
-        default: return NSColor(srgbRed: 0xB4 / 255, green: 0x53 / 255, blue: 0x2A / 255, alpha: 1)
-        }
-    })
-}
-
 /// The main window: sidebar, note list (or search results), editor (or Ask answer),
 /// and an inspector. Owned by the Shell area; the columns' contents come from each area.
 public struct MainWindow: View {
@@ -54,7 +41,10 @@ public struct MainWindow: View {
         }
         .modifier(ShellPresentations())
         .frame(minWidth: 900, minHeight: 560)
-        .tint(.fortressEmber)
+        .fortressTheme()
+        // The window behind the sidebar's glass takes the theme's sunken tone, so the
+        // native material picks up the palette instead of being replaced.
+        .containerBackground(ThemeStyle(.sunken), for: .window)
         .task {
             if model.connectsOnAppear { await model.connect() }
         }
@@ -152,9 +142,9 @@ struct NoSelectionView: View {
     var body: some View {
         Text("No Note Selected")
             .font(.body)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.themeTertiary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(.themeBackground)
     }
 }
 

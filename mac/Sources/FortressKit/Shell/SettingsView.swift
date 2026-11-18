@@ -10,12 +10,16 @@ public struct SettingsView: View {
             Tab("General", systemImage: "gearshape") {
                 BackendSettingsView()
             }
+            Tab("Appearance", systemImage: "paintpalette") {
+                AppearanceSettingsView()
+            }
             Tab("Backups", systemImage: "clock.arrow.circlepath") {
                 BackupsView()
                     .padding(20)
             }
         }
         .frame(width: 560, height: 520)
+        .fortressTheme()
     }
 }
 

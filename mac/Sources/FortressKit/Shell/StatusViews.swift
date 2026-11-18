@@ -47,7 +47,7 @@ struct ToastCapsule: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss")
@@ -74,10 +74,10 @@ struct OfflineBanner: View {
                 .controlSize(.small)
         }
         .font(.callout)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.themeSecondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(nsColor: .quaternarySystemFill), in: .rect(cornerRadius: 8))
+        .background(ThemeStyle(.surface), in: .rect(cornerRadius: 8))
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
     }
@@ -98,7 +98,7 @@ struct ConnectionUnavailableView: View {
                         .font(.headline)
                     Text("The first start can take a little while.")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.themeSecondary)
                 }
             } else {
                 ContentUnavailableView {
@@ -120,7 +120,7 @@ struct ConnectionUnavailableView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+        .themedContent()
     }
 
     private var description: String {

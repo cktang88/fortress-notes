@@ -159,7 +159,7 @@ public final class QuickCapture {
             onSave: { [weak self] in self?.save(andOpen: false) },
             onCancel: { [weak self] in self?.hide() })
             .padding(24)  // Room for the panel's shadow.
-            .tint(.fortressEmber)
+            .fortressTheme()
         panel.contentView = NSHostingView(rootView: view)
         return panel
     }

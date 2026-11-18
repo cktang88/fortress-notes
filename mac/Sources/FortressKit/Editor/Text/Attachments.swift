@@ -255,7 +255,7 @@ struct BlockEmbedView: View {
         Group {
             switch info.kind {
             case .divider:
-                Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
+                Rectangle().fill(ThemeStyle(.border)).frame(height: 1)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .image:
                 ImageBlockView(url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
@@ -328,9 +328,9 @@ private struct ImageBlockView: View {
                         }
                 } else {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color(nsColor: .quaternarySystemFill))
+                        .fill(ThemeStyle(.surface))
                         .overlay {
-                            Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary)
+                            Image(systemName: "photo").font(.title2).foregroundStyle(.themeTertiary)
                         }
                 }
             }
@@ -343,7 +343,7 @@ private struct ImageBlockView: View {
                 Text(caption)
                     .font(.system(size: 12 * theme.scale))
                     .lineSpacing(2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: size?.width ?? .infinity, alignment: .leading)
             }
@@ -361,7 +361,7 @@ struct MathBlockView: View {
         HStack(spacing: 10) {
             Image(systemName: "function")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.themeTertiary)
             Text(MathText.attributed(latex, size: 19))
                 .textSelection(.enabled)
                 .lineLimit(3)
@@ -370,7 +370,7 @@ struct MathBlockView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color(nsColor: .quaternarySystemFill).opacity(0.6)))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(ThemeStyle(.surface)))
         .help(latex)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Math: " + MathFormatter.plain(MathFormatter.format(latex)))
@@ -421,16 +421,16 @@ private struct FileChip: View {
                     Text(name).font(.callout).lineLimit(1).truncationMode(.middle)
                         .foregroundStyle(.primary)
                     if let size {
-                        Text(size).font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                        Text(size).font(.callout).foregroundStyle(.themeSecondary).monospacedDigit()
                             .fixedSize()
                     }
                     Image(systemName: "arrow.up.forward").font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.themeTertiary)
                         .opacity(hovering ? 1 : 0)
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 32)
-                .background(Capsule().fill(Color(nsColor: hovering ? .tertiarySystemFill : .quaternarySystemFill)))
+                .background(Capsule().fill(ThemeStyle(hovering ? .border : .surface)))
             }
             .buttonStyle(.plain)
             .onHover { hovering = $0 }
@@ -457,7 +457,7 @@ struct EmbedSummary: View {
                                     .font(.system(size: 14, weight: index == 0 ? .semibold : .regular))
                                     .padding(.horizontal, 10).padding(.vertical, 6)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .overlay(Rectangle().stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                                    .overlay(Rectangle().stroke(ThemeStyle(.border), lineWidth: 0.5))
                             }
                         }
                     }
@@ -465,8 +465,8 @@ struct EmbedSummary: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             } else {
                 HStack(spacing: 6) {
-                    Image(systemName: symbol).foregroundStyle(.secondary)
-                    Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    Image(systemName: symbol).foregroundStyle(.themeSecondary)
+                    Text(label).font(.caption.weight(.medium)).foregroundStyle(.themeSecondary)
                 }
                 if !summary.isEmpty {
                     Text(summary).font(.system(size: 14)).foregroundStyle(.primary).lineLimit(8)
@@ -475,7 +475,7 @@ struct EmbedSummary: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color(nsColor: .quaternarySystemFill)))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(ThemeStyle(.surface)))
         .help("Shown as is — edit this block on the web for now")
     }
 
