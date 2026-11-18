@@ -91,7 +91,11 @@ import Testing
                 ? .document(SpyJSON.document("d1", revision: 2, title: "Saved"))
                 : .document(SpyJSON.document("d1", revision: 1, title: "Loaded"))
         }
-        let api = SpyProtocol.client()
+        // Served from memory within `documentMaxAge` (2 s by default; a busy CI machine
+        // can stall longer than that between two lines).
+        var options = APIStore.Options()
+        options.documentMaxAge = 3600
+        let api = SpyProtocol.client(options: options)
         _ = try await api.document(id: "d1")
         _ = try await api.apply(BlockTransaction(baseRevision: 1, operations: []), to: "d1")
         let after = try await api.document(id: "d1")
@@ -372,7 +376,9 @@ import Testing
             }
             return .document(SpyJSON.document("d1", title: "Loaded"))
         }
-        let api = SpyProtocol.client()
+        var options = APIStore.Options()
+        options.documentMaxAge = 3600
+        let api = SpyProtocol.client(options: options)
         _ = try await api.document(id: "d1")
         let renamed = try await api.updateDocument(id: "d1", title: "Renamed")
         #expect(renamed.title == "Renamed" && renamed.children.count == 1)
