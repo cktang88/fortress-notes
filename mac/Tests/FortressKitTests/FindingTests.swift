@@ -106,7 +106,7 @@ import Testing
     }
 
     @Test func flattensTheSidebarTree() throws {
-        let navigation = try JSONDecoder().decode(NavigationResponse.self, from: try fixtureData("navigation.json"))
+        let navigation = try JSONDecoder().decode(NavigationResponse.self, from: try findingFixture("navigation.json"))
         let notes = PaletteCatalog.notes(in: navigation)
         #expect(notes.contains(PaletteNote(id: "01M7NZXNDZHSR801AP2K15KMAQ", title: "Kyoto trip", folder: "Travel")))
         #expect(notes.contains { $0.title == "Packing list" && $0.folder == nil })
@@ -219,7 +219,7 @@ private actor Calls {
 
 @Suite struct AskStateTests {
     private func events(_ name: String) throws -> [AskEvent] {
-        let text = String(decoding: try fixtureData(name), as: UTF8.self)
+        let text = String(decoding: try findingFixture(name), as: UTF8.self)
         return try text.split(separator: "\n").compactMap { try APIClient.askEvent(from: Data($0.utf8)) }
     }
 
@@ -292,18 +292,18 @@ private actor Calls {
 // MARK: Note info
 
 @Test func noteInfoCountsWordsBlocksAndLinks() throws {
-    let navigation = try JSONDecoder().decode(NavigationResponse.self, from: try fixtureData("navigation.json"))
+    let navigation = try JSONDecoder().decode(NavigationResponse.self, from: try findingFixture("navigation.json"))
     var info = NoteInfo.from(navigation: navigation, documentId: "01M7NZXNDZHSR801AP2K15KMAQ")
     #expect(info.folderPath == ["Travel"])
     #expect(info.createdAt != nil)
-    info.add(try JSONDecoder().decode(BlockDocument.self, from: try fixtureData("document.json")))
+    info.add(try JSONDecoder().decode(BlockDocument.self, from: try findingFixture("document.json")))
     #expect((info.blocks ?? 0) >= 4)
     #expect((info.words ?? 0) > 8)
     #expect(NoteInfo.linkCount(in: .object(["markdown": .string("See [[Kyoto trip]] and [map](https://x.y)")])) == 2)
 }
 
 @MainActor @Test func noteInfoFromTheRealInfoEndpoint() throws {
-    let imported = NoteInfo(try JSONDecoder().decode(DocumentInfo.self, from: try fixtureData("info-imported.json")))
+    let imported = NoteInfo(try JSONDecoder().decode(DocumentInfo.self, from: try findingFixture("info-imported.json")))
     let provenance = try #require(imported.provenance)
     #expect(provenance.label == "Imported from OneNote")
     #expect(provenance.path == "Travel notebook › Japan › Kyoto")
@@ -313,7 +313,7 @@ private actor Calls {
     #expect(InfoSection.sourceDates(provenance)?.hasPrefix("Written ") == true)
     #expect(imported.mixedSources == nil)
 
-    let manual = NoteInfo(try JSONDecoder().decode(DocumentInfo.self, from: try fixtureData("info.json")))
+    let manual = NoteInfo(try JSONDecoder().decode(DocumentInfo.self, from: try findingFixture("info.json")))
     #expect(manual.folderPath == ["Travel"])
     #expect(manual.provenance?.isNotable == false)
     #expect(manual.backlinksIn == 0)
@@ -323,7 +323,7 @@ private actor Calls {
     #expect(mixed.mixedSources == "12 from OneNote · 3 written here")
 }
 
-func fixtureData(_ name: String) throws -> Data {
+func findingFixture(_ name: String) throws -> Data {
     let url = try #require(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures"))
     return try Data(contentsOf: url)
 }

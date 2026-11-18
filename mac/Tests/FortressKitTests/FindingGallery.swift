@@ -118,7 +118,7 @@ enum FindingFixtures {
 
     /// The real `/info` answer for an imported note, placed in Travel with links in and out.
     static var info: Data {
-        guard let data = try? fixtureData("info-imported.json"),
+        guard let data = try? findingFixture("info-imported.json"),
               var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return Data("{}".utf8) }
         object["folder_path"] = [["id": "01M7NZXND9X670BWK4XMRNMYCP", "name": "Travel"]]
         object["last_opened_at"] = "2026-11-17T21:40:00+00:00"
@@ -134,7 +134,7 @@ enum FindingFixtures {
     }
 
     static func navigation() -> NavigationResponse {
-        (try? JSONDecoder().decode(NavigationResponse.self, from: fixtureData("navigation.json")))
+        (try? JSONDecoder().decode(NavigationResponse.self, from: findingFixture("navigation.json")))
             ?? NavigationResponse(items: [], recent: [])
     }
 
@@ -171,7 +171,7 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
     static func body(path: String, query: [URLQueryItem]) -> Data {
         let encoder = JSONEncoder()
         func encoded<T: Encodable>(_ value: T) -> Data { (try? encoder.encode(value)) ?? Data("[]".utf8) }
-        if path.hasSuffix("/api/navigation") { return (try? fixtureData("navigation.json")) ?? Data() }
+        if path.hasSuffix("/api/navigation") { return (try? findingFixture("navigation.json")) ?? Data() }
         if path.hasSuffix("/api/unified-search") { return encoded(FindingFixtures.search) }
         if path.hasSuffix("/api/ask") { return FindingFixtures.askStream }
         if path.hasSuffix("/info") { return FindingFixtures.info }
@@ -181,7 +181,7 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
             return encoded(hasBlock ? FindingFixtures.seenBefore : FindingFixtures.related)
         }
         if path.contains("/api/block-documents/"), !path.hasSuffix("/similar") {
-            return (try? fixtureData("document.json")) ?? Data()
+            return (try? findingFixture("document.json")) ?? Data()
         }
         return Data("[]".utf8)
     }

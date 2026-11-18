@@ -58,7 +58,6 @@ struct TextMark: TextAttribute {
 /// marked runs; everything else draws as usual.
 struct MarkRenderer: TextRenderer {
     var highlight: Color = Color(nsColor: .findHighlightColor)
-    var chip: Color = .accentColor.opacity(0.14)
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
         for line in layout {
@@ -67,11 +66,12 @@ struct MarkRenderer: TextRenderer {
                     let bounds = run.typographicBounds.rect
                     switch mark.style {
                     case .highlight:
-                        let rect = bounds.insetBy(dx: -1.5, dy: 0)
+                        let rect = bounds.insetBy(dx: -1, dy: 0)
                         context.fill(RoundedRectangle(cornerRadius: 3).path(in: rect), with: .color(highlight))
                     case .citation:
                         let rect = bounds.insetBy(dx: -2, dy: -0.5)
-                        context.fill(Capsule().path(in: rect), with: .color(chip))
+                        // The window's tint (Fortress Ember), faint.
+                        context.fill(Capsule().path(in: rect), with: .style(.tint.opacity(0.15)))
                     }
                 }
                 context.draw(run)

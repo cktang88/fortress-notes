@@ -191,7 +191,6 @@ struct AskTurnView: View {
     private func chip(number: Int, citation: AskCitation) -> Text {
         var link = AttributedString("\u{2002}\(number)\u{2002}")
         link.link = URL(string: "\(Self.citationScheme):\(citation.documentId)/\(citation.blockId)")
-        link.swiftUI.foregroundColor = .accentColor
         link.swiftUI.font = .system(size: 11, weight: .semibold).monospacedDigit()
         link.swiftUI.baselineOffset = 2
         return Text(link)
@@ -359,7 +358,7 @@ struct PassageCard: View {
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
                         .foregroundStyle(.tint)
                         .frame(width: 18, height: 18)
-                        .background(Color.accentColor.opacity(0.14), in: .circle)
+                        .background(.tint.opacity(0.15), in: .circle)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title.isEmpty ? "Untitled" : title)

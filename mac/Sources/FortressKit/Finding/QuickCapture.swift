@@ -252,7 +252,7 @@ struct QuickCaptureView: View {
             case .saving:
                 Label("Saving…", systemImage: "bolt").foregroundStyle(.secondary)
             case .editing:
-                Label("Inbox", systemImage: "tray")
+                Label("New note", systemImage: "square.and.pencil")
                     .foregroundStyle(.secondary)
             }
             Spacer()

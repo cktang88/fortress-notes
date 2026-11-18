@@ -211,6 +211,6 @@ struct RowBackground: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(isSelected ? AnyShapeStyle(Color.accentColor.opacity(0.13)) : AnyShapeStyle(Color.clear))
+            .fill(isSelected ? AnyShapeStyle(.tint.opacity(0.13)) : AnyShapeStyle(Color.clear))
     }
 }
