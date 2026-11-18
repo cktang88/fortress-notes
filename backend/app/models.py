@@ -35,6 +35,10 @@ class NoteCreate(BaseModel):
     status: NoteStatus = "rough"
     tags: list[str] = []
     folder_id: str | None = None
+    # Where the note came from (see app/provenance.py), e.g.
+    # {"source": "ai", "extra": {"question": "..."}} for a saved Ask answer or
+    # {"source": "web", "source_url": "https://..."} for a clipped page.
+    provenance: dict[str, Any] | None = None
 
 
 class NoteUpdate(BaseModel):
@@ -55,6 +59,9 @@ class BlockOperation(BaseModel):
     content: dict[str, Any] | None = None
     text: str | None = None
     split_at: int | None = Field(default=None, ge=0)
+    # insert/update: where the block's content came from (pasted, web, ai, ...).
+    # Omitted on insert means typed here ("manual"); omitted on update keeps it.
+    provenance: dict[str, Any] | None = None
     # For split, the offset in the block text in UTF-16 code units (JavaScript string
     # indices, as the browser counts; an emoji is 2). For duplicate/merge,
     # position keeps its existing sibling-position meaning.
@@ -227,3 +234,10 @@ class AskRequest(BaseModel):
 
 class CaptureRequest(BaseModel):
     text: str = Field(min_length=1, max_length=20_000)
+    # Optional extra provenance (e.g. the source_url of a page captured from).
+    provenance: dict[str, Any] | None = None
+
+
+class SourceConflictResolution(BaseModel):
+    # "source": take the source's newer version; "local": keep the local edit.
+    keep: Literal["source", "local"]

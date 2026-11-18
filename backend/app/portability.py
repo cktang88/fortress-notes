@@ -15,7 +15,9 @@ from pathlib import Path
 
 import frontmatter
 
+from . import provenance as _provenance
 from .block_store import (
+    _markdown_import_provenance,
     connection_scope,
     create_document,
     derive_title as _derive_title,
@@ -117,12 +119,15 @@ def export_document_markdown(database_path: Path, document_id: str) -> str:
     document = document_tree(database_path, document_id)
     if document is None:
         raise KeyError("document not found")
+    document_provenance = document.get("provenance") or {"source": "manual"}
     post = frontmatter.Post(
-        _render_markdown(document["children"]),
+        _render_markdown(document["children"], document_provenance=document_provenance),
         title=document["title"],
         status=document["status"],
         created_at=document["created_at"],
         updated_at=document["updated_at"],
+        # Where the note came from; a later Markdown import restores it.
+        provenance=_provenance.front_matter(document_provenance),
     )
     return frontmatter.dumps(post)
 
@@ -178,6 +183,9 @@ def import_markdown_directory(database_path: Path, source_directory: Path) -> Im
                 post.content,
                 created_at,
                 updated_at,
+                provenance=_markdown_import_provenance(
+                    post.metadata, source_path.name, datetime.now(timezone.utc).isoformat()
+                ),
             )
         except Exception as error:  # File data is an untrusted import boundary.
             items.append(ImportItem(source_path, document_id, "error", str(error)))
@@ -278,6 +286,7 @@ class UploadedNote:
     status: str
     body: str
     created_at: object | None = None
+    provenance: dict | None = None
 
 
 def parse_uploaded_markdown(filename: str, raw: bytes) -> UploadedNote:
@@ -302,4 +311,7 @@ def parse_uploaded_markdown(filename: str, raw: bytes) -> UploadedNote:
         status=status if isinstance(status, str) and status in {"rough", "polished"} else "rough",
         body=post.content,
         created_at=created_at if isinstance(created_at, (str, datetime)) else None,
+        provenance=_markdown_import_provenance(
+            metadata, Path(filename).name, datetime.now(timezone.utc).isoformat()
+        ),
     )

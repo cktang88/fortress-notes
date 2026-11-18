@@ -87,7 +87,9 @@ copying the originals to a timestamped backup folder first.
 | `GET` · `POST` | `/api/backups` | — | list snapshots · take a manual snapshot |
 | `GET` | `/api/backups/{name}/download` | — | SQLite snapshot file |
 | `POST` | `/api/backups/{name}/restore` | — | `{restored, safety_backup}` |
-| `GET` | `/api/block-documents/{id}/markdown` | `?download=true` | one note as Markdown |
+| `GET` | `/api/block-documents/{id}/markdown` | `?download=true` | one note as Markdown (with provenance, §7a) |
+| `GET` | `/api/block-documents/{id}/info` | — | note metadata: dates, provenance, counts, conflicts (§7a) |
+| `POST` | `/api/block-documents/{id}/blocks/{block_id}/source-conflict` | `{keep}` | document tree (§7a) |
 | `POST` | `/api/markdown-import/files` | multipart `files[]`, `folder_id?` | `{imported, errors}` |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
 
@@ -189,6 +191,91 @@ associations.
 - **Saved searches**: saved from the search box and re-run from chips beneath it.
 - **Keyboard**: ⌘/Ctrl+K or `/` search, Alt+N new note, ↑/↓/Enter through results,
   Esc clears search, `?` shows tips.
+
+## 7a. Provenance, metadata and living documents
+
+Every note and every block records where it came from (`provenance.py`, schema v13).
+Notes store it in `documents.provenance_json` (plus `source_kind` /
+`source_external_id`, the re-import key, unique when set); blocks in
+`blocks.provenance_json`, where NULL means "same as the note" (the blocks a note
+was created with). Provenance is never part of block text, FTS or embeddings.
+
+```jsonc
+// provenance (all keys but "source" optional)
+{
+  "source": "onenote_import",   // manual | capture | markdown_import | onenote_import | paste | web | ai | <any lower-case word>
+  "external_id": "{GUID}",      // id in the source; (source, external_id) keys re-imports
+  "source_path": "Work › Meetings › Standup",  // or a file path
+  "source_url": "https://…",
+  "source_created_at": "…", "source_modified_at": "…",  // the source's own timestamps
+  "imported_at": "…", "synced_at": "…",                  // first import, last re-import that changed it
+  "importer": {"name": "onenote", "version": "1.0"},
+  "origin": {"operation": "move_into|duplicate|split", "document_id": "…",
+             "document_title": "…", "block_id": "…", "at": "…"},
+  "extra": {},                   // importer-specific
+  // server-maintained on blocks: "source_hash", "conflict", "source_removed", "dismissed_hash";
+  // "backfilled": true marks the migration's guess
+}
+```
+
+- **Document payload** (`GET /api/block-documents/{id}` and every tree response) adds
+  `provenance`, `last_opened_at` (set when that GET runs) and
+  `resolved_links: {documents: {id: {title}}, blocks: {id: {document_id, document_title, type, text}}}`.
+  `[[id|Title]]` links are served with the target's current title (stored text is
+  untouched). Each block adds `provenance` (its own, or the note's with
+  `"inherited": true`) and `revision` (the note revision that last changed it; null
+  if unchanged since creation/import).
+- **Navigation / list items** add `source` (the note's provenance kind).
+- **Writes**: `NoteCreate.provenance` (e.g. `{"source": "ai", "extra": {"question": …}}`
+  for a saved Ask answer), `CaptureRequest.provenance` (e.g. `source_url`), and
+  `BlockOperation.provenance` on `insert` (default `{"source": "manual"}`) and
+  `update` (omitted keeps it). Client input is validated (422/409) and cannot set the
+  server-maintained keys. Duplicate/split copies get `origin` and lose `external_id`;
+  move-into stamps `origin.operation = "move_into"` on every moved block.
+- **Markdown**: export front matter carries `provenance:`; a block whose provenance
+  differs from the note's is preceded by one line
+  `<!-- fortress:block {"external_id":"{GUID}","source":"onenote_import",…} -->`.
+  Import (directory, upload, mirrors) restores both, so export → import → export is
+  identical. A copy whose source key is already taken gives it up
+  (`extra.copy_of_external_id`).
+
+`GET /api/block-documents/{id}/info`:
+
+```jsonc
+{
+  "id", "title", "status", "created_at", "updated_at", "last_opened_at", "revision",
+  "folder_id", "folder_path": [{"id", "name"}],          // top folder first
+  "provenance": {…},
+  "counts": {"words", "characters", "blocks", "outgoing_links", "outgoing_document_links",
+             "outgoing_block_links", "backlinks", "edits"},  // backlinks from other notes
+  "blocks_by_source": {"manual": 3, "onenote_import": 12},
+  "can_undo", "can_redo",
+  "sync": null | {"synced_at", "checked_at", "source_title", "blocks_edited_here",
+                  "blocks_removed_in_source": [block_id]},
+  "conflicts": [{"kind": "title", "local_title", "source_title", "detected_at"} |
+                {"kind": "block", "block_id", "local_text", "source_markdown",
+                 "source_modified_at", "detected_at"}]
+}
+```
+
+`POST /api/block-documents/{id}/blocks/{block_id}/source-conflict` `{"keep": "source"|"local"}`
+settles a block conflict (taking the source's version is an ordinary undoable edit).
+
+**Living documents** (`sources.py`): importers call
+`documents.upsert_from_source(source=, external_id=, title=, blocks=, folder_path=,
+created_at=, modified_at=, provenance=, importer=)` (or
+`sources.upsert_document_from_source(db_path, …)`), with `blocks` a list of
+`SourceBlock(markdown, external_id, type, attrs, children, created_at, modified_at,
+provenance)` or a Markdown body. `folder_path=[(external_id, name), …]` finds/creates
+folders by source id (`sources.ensure_folder_path`). It returns
+`UpsertResult(document_id, status=created|updated|unchanged|skipped_deleted, revision,
+blocks_created, blocks_updated, blocks_deleted, blocks_skipped, conflicts)`. The note
+keeps its Fortress id, links, backlinks and history; a re-import is one undo step.
+Policy: untouched blocks follow the source; locally edited blocks keep the local
+text and record the source's version as a conflict; local additions stay after the
+block they followed; local deletions stick; blocks gone from the source are deleted
+unless edited (then marked `source_removed`); structure follows the source; title and
+folder follow the source unless changed locally; trashed notes are skipped.
 
 ## 8. Roadmap / potential features
 
