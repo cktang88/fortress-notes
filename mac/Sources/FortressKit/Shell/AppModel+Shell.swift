@@ -46,7 +46,21 @@ extension AppModel {
     /// starts its own (with this launch's token) and only ever talks to that one, never
     /// to whatever already answers on the port; otherwise it loads the sidebar from the
     /// address in Settings (a backend run by hand).
+    ///
+    /// Every window calls it when it opens; only the first connects (later windows wait
+    /// for that attempt, so a second window never starts a second backend).
     public func connect() async {
+        if let attempt = library.connectTask {
+            await attempt.value
+            if scope == .trash { await refreshTrash() }
+            return
+        }
+        let attempt = Task { await self.performConnect() }
+        library.connectTask = attempt
+        await attempt.value
+    }
+
+    private func performConnect() async {
         applyBackendAddress()
         backend.onUnexpectedExit = { [weak self] in
             guard let self else { return }
@@ -139,11 +153,18 @@ extension AppModel {
     /// it's back.
     public func startReconnecting() {
         guard reconnectTask == nil, connectsOnAppear else { return }
+        let library = self.library
         reconnectTask = Task { [weak self] in
-            var delay = self?.reconnectDelays.first ?? .seconds(1)
+            var delay = library.reconnectDelays.first
             while !Task.isCancelled {
                 try? await Task.sleep(for: delay)
-                guard let self, !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return }
+                guard let self else {
+                    // The window that started it closed: hand over to another one.
+                    library.reconnectTask = nil
+                    library.activeWindowModel?.startReconnecting()
+                    return
+                }
                 if await self.backendAnswers() {
                     self.reconnectTask = nil
                     await self.backendAnswered()
@@ -192,7 +213,7 @@ extension AppModel {
     /// The window title: the open note's title.
     public var windowTitle: String {
         switch route {
-        case .note: openNote.map { NoteListing.displayTitle($0.title) } ?? "Fortress Notes"
+        case .note: NoteListing.displayTitle(openNote?.title ?? "")  // Never the app's name (HIG).
         case .ask: "Ask"
         case .empty: scopeTitle
         }
@@ -295,6 +316,12 @@ extension AppModel {
             }
             let title = visible.first { $0.id == id }.map { NoteListing.displayTitle($0.title) }
             show(Toast(message: title.map { "“\($0)” moved to Trash" } ?? "Moved to Trash", action: .restore(documentId: id)))
+            registerUndo("Move to Trash") { model in
+                await model.restore(trashedId: id, announce: false)
+                model.open(noteId: id)
+            } redo: { model in
+                await model.trashNote(id: id)
+            }
             patchNavigation { navigation in
                 NavigationEdits.removeDocument(id, from: &navigation.items)
                 navigation.recent.removeAll { $0.id == id }
@@ -305,8 +332,14 @@ extension AppModel {
     }
 
     public func moveNote(id: String, toFolder folderId: String?) async {
+        let previous = NoteListing.allDocuments(in: navigation.items).first { $0.id == id }?.folderId
         do {
             try await api.moveDocument(id: id, folderId: folderId)
+            if previous != folderId {
+                registerUndo("Move Note") { await $0.moveNote(id: id, toFolder: previous) } redo: {
+                    await $0.moveNote(id: id, toFolder: folderId)
+                }
+            }
             // The server stamps a moved note as edited now.
             let stamp = Timestamp.serverString()
             patchNavigation { navigation in
@@ -335,6 +368,8 @@ extension AppModel {
             }
             scope = .folder(id: folder.id)
             renamingFolderId = folder.id
+            let created = folder.id
+            registerUndo("New Folder") { await $0.deleteFolder(id: created) } redo: { await $0.newFolder(in: parentId) }
         } catch {
             report(error)
         }
@@ -360,9 +395,15 @@ extension AppModel {
     public func renameFolder(id: String, to name: String) async {
         renamingFolderId = nil
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, NoteListing.folder(id: id, in: navigation.items)?.name != trimmed else { return }
+        let oldName = NoteListing.folder(id: id, in: navigation.items)?.name
+        guard !trimmed.isEmpty, oldName != trimmed else { return }
         do {
             let renamed = try await api.renameFolder(id: id, name: trimmed)
+            if let oldName {
+                registerUndo("Rename Folder") { await $0.renameFolder(id: id, to: oldName) } redo: {
+                    await $0.renameFolder(id: id, to: trimmed)
+                }
+            }
             patchNavigation { navigation in
                 NavigationEdits.updateFolder(id, in: &navigation.items) { $0.name = renamed.name }
             }
@@ -402,6 +443,65 @@ extension AppModel {
         }
     }
 
+    /// Moves a folder (with everything in it) into another folder, or to the top level.
+    /// Refused when the destination is the folder itself or inside it.
+    public func moveFolder(id: String, toParent parentId: String?) async {
+        guard let folder = NoteListing.folder(id: id, in: navigation.items), folder.parentId != parentId,
+              Self.canMoveFolder(id, into: parentId, items: navigation.items) else { return }
+        let previous = folder.parentId
+        do {
+            try await api.moveFolder(id: id, parentId: parentId)
+            registerUndo("Move Folder") { await $0.moveFolder(id: id, toParent: previous) } redo: {
+                await $0.moveFolder(id: id, toParent: parentId)
+            }
+            await refreshNavigation()
+        } catch {
+            report(error)
+            await refreshNavigation()
+        }
+    }
+
+    /// A folder can't go into itself or one of its own subfolders.
+    static func canMoveFolder(_ id: String, into parentId: String?, items: [NavigationNode]) -> Bool {
+        guard let parentId else { return true }
+        return parentId != id && !NoteListing.isFolder(parentId, inside: id, items: items)
+    }
+
+    // MARK: Undo
+
+    /// Registers an undoable library edit on the window's undo manager (Edit ▸ Undo
+    /// "Move to Trash", ⌘Z in the list). The inverse is registered at once (so it lands on
+    /// the redo stack), then the work runs without registering again.
+    func registerUndo(
+        _ name: String,
+        undo: @escaping @MainActor @Sendable (AppModel) async -> Void,
+        redo: @escaping @MainActor @Sendable (AppModel) async -> Void
+    ) {
+        guard let undoManager, undoSuppression == 0 else { return }
+        undoManager.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated {
+                model.undoSuppression += 1
+                model.registerUndoUnsuppressed(name, undo: redo, redo: undo)
+                Task {
+                    await undo(model)
+                    model.undoSuppression -= 1
+                }
+            }
+        }
+        undoManager.setActionName(name)
+    }
+
+    private func registerUndoUnsuppressed(
+        _ name: String,
+        undo: @escaping @MainActor @Sendable (AppModel) async -> Void,
+        redo: @escaping @MainActor @Sendable (AppModel) async -> Void
+    ) {
+        let suppression = undoSuppression
+        undoSuppression = 0
+        registerUndo(name, undo: undo, redo: redo)
+        undoSuppression = suppression
+    }
+
     // MARK: Trash
 
     public func refreshTrash() async {
@@ -418,6 +518,7 @@ extension AppModel {
     public func restore(trashedId id: String, announce: Bool = true) async {
         do {
             try await api.restore(documentId: id)
+            registerUndo("Restore") { await $0.trashNote(id: id) } redo: { await $0.restore(trashedId: id) }
             if announce {
                 let title = trash.first { $0.id == id }.map { NoteListing.displayTitle($0.title) }
                 show(Toast(message: title.map { "Restored “\($0)”" } ?? "Restored"))
@@ -458,6 +559,11 @@ extension AppModel {
         toast = nil
         switch action {
         case .restore(let id):
+            // The same as Edit ▸ Undo Move to Trash, so the undo stack stays in step.
+            if let undoManager, undoManager.canUndo, undoManager.undoActionName == "Move to Trash" {
+                undoManager.undo()
+                return
+            }
             await restore(trashedId: id, announce: false)
             open(noteId: id)
         }

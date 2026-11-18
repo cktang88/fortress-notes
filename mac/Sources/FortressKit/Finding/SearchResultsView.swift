@@ -43,7 +43,7 @@ struct SearchResultsView: View {
                 withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(selection) }
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .themedContent(.sunken)
         .onChange(of: model.query, initial: true) { _, query in
             let api = model.api
             controller.update(query: query) { try await api.search($0) }
@@ -56,16 +56,16 @@ struct SearchResultsView: View {
         if let message = controller.errorMessage {
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.themeSecondary)
                 .padding(12)
         } else if controller.results.isEmpty, controller.resultsQuery == controller.query, !controller.query.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("No matches for “\(controller.query)”")
                     .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
                 Text("Try other words, or ask your notes with ⌘↩.")
                     .font(.subheadline)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.themeTertiary)
             }
             .padding(12)
         }
@@ -125,14 +125,14 @@ private struct AskRow: View {
                     .foregroundStyle(.tint)
                     .frame(width: 20)
                 Text("Ask your notes: \(Text(verbatim: query).foregroundStyle(.primary))")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
                     .font(.body)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 8)
                 Text("⌘↩")
                     .font(.caption.monospacedDigit().weight(.medium))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.themeTertiary)
             }
             .padding(.horizontal, 10)
             .frame(height: 36)
@@ -156,7 +156,7 @@ private struct PassageRow: View {
                 HStack(spacing: 6) {
                     Text(match.documentTitle.isEmpty ? "Untitled" : match.documentTitle)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.themeSecondary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     MatchReasons(reasons: match.matched)
@@ -188,10 +188,10 @@ struct MatchReasons: View {
             ForEach(reasons, id: \.self) { reason in
                 if let info = Self.info[reason] {
                     Image(systemName: info.symbol)
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 10, weight: .semibold))  // HIG minimum
+                        .foregroundStyle(.themeTertiary)
                         .frame(width: 16, height: 14)
-                        .background(.quaternary.opacity(0.6), in: .capsule)
+                        .background(ThemeStyle(.surface), in: .capsule)
                         .help(info.help)
                         .accessibilityLabel(info.help)
                 }
@@ -207,11 +207,15 @@ struct MatchReasons: View {
 }
 
 /// The highlight behind the selected row: a quiet accent tint with concentric corners.
+/// In a window that isn't key it dims to neutral, like system selections (HIG: only the
+/// key window's controls have color).
 struct RowBackground: View {
     let isSelected: Bool
+    @Environment(\.appearsActive) private var appearsActive
 
     var body: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(isSelected ? AnyShapeStyle(.tint.opacity(0.13)) : AnyShapeStyle(Color.clear))
+            .fill(!isSelected ? AnyShapeStyle(Color.clear)
+                  : appearsActive ? AnyShapeStyle(.tint.opacity(0.13)) : AnyShapeStyle(.quaternary))
     }
 }

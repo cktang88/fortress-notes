@@ -31,3 +31,14 @@ def use_settings(settings: Settings):
     """Make ``settings`` the active ones (a patcher: ``with`` or ``start``/``stop``)."""
 
     return patch.object(config, "_active", settings)
+
+
+def mirror_file(notes: Path, document_id: str) -> Path:
+    """A note's vault mirror, where the mirror writer last put it (read from disk).
+
+    A note without one (never written, or trashed) gets a path that doesn't exist.
+    """
+
+    from app.documents import MirrorWriter
+
+    return MirrorWriter().path(Path(notes), document_id) or Path(notes) / f".no-mirror-{document_id}.md"

@@ -5,6 +5,9 @@ import SwiftUI
 struct ToastHost: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The timer waits while the pointer is on the toast (HIG: no time-boxed UI people
+    /// can't finish acting on). Its Undo is also Edit ▸ Undo, after it's gone too.
+    @State private var isHovering = false
 
     var body: some View {
         let toast = model.toast ?? (model.isConnected ? model.notice.map { Toast(id: $0.id, message: $0.message) } : nil)
@@ -12,8 +15,11 @@ struct ToastHost: View {
             if let toast {
                 ToastCapsule(toast: toast)
                     .id(toast.id)
+                    .onHover { isHovering = $0 }
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                    .task(id: toast.id) {
+                    .onAppear { AccessibilityNotification.Announcement(AttributedString(toast.message)).post() }
+                    .task(id: ToastTimer(id: toast.id, isPaused: isHovering)) {
+                        guard !isHovering else { return }
                         try? await Task.sleep(for: .seconds(5))
                         guard !Task.isCancelled else { return }
                         if model.toast?.id == toast.id { model.toast = nil }
@@ -24,6 +30,11 @@ struct ToastHost: View {
         .padding(.bottom, 20)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .smooth(duration: 0.25), value: toast?.id)
     }
+}
+
+private struct ToastTimer: Hashable {
+    var id: UUID
+    var isPaused: Bool
 }
 
 struct ToastCapsule: View {
@@ -47,7 +58,9 @@ struct ToastCapsule: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss")
@@ -56,7 +69,7 @@ struct ToastCapsule: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .fixedSize()
-        .glassEffect(.regular.interactive(), in: .capsule)
+        .floatingGlass(in: Capsule(), interactive: true)
     }
 }
 
@@ -74,10 +87,10 @@ struct OfflineBanner: View {
                 .controlSize(.small)
         }
         .font(.callout)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.themeSecondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(nsColor: .quaternarySystemFill), in: .rect(cornerRadius: 8))
+        .background(ThemeStyle(.surface), in: .rect(cornerRadius: 8))
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
     }
@@ -98,7 +111,7 @@ struct ConnectionUnavailableView: View {
                         .font(.headline)
                     Text("The first start can take a little while.")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.themeSecondary)
                 }
             } else {
                 ContentUnavailableView {
@@ -120,7 +133,7 @@ struct ConnectionUnavailableView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+        .themedContent()
     }
 
     private var description: String {

@@ -1,30 +1,67 @@
 import AppKit
 import SwiftUI
 
-extension Color {
-    /// "Fortress Ember", the app's one accent (DESIGN a.4), with dark and increased-contrast variants.
-    public static let fortressEmber = Color(nsColor: NSColor(name: "FortressEmber") { appearance in
-        let match = appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])
-        switch match {
-        case .darkAqua: return NSColor(srgbRed: 0xF0 / 255, green: 0x91 / 255, blue: 0x5A / 255, alpha: 1)
-        case .accessibilityHighContrastDarkAqua: return NSColor(srgbRed: 1, green: 0xB0 / 255, blue: 0x85 / 255, alpha: 1)
-        case .accessibilityHighContrastAqua: return NSColor(srgbRed: 0x8F / 255, green: 0x3D / 255, blue: 0x1A / 255, alpha: 1)
-        default: return NSColor(srgbRed: 0xB4 / 255, green: 0x53 / 255, blue: 0x2A / 255, alpha: 1)
-        }
-    })
+/// One main window: its own `AppModel` over the shared `Library`, published to the menu
+/// bar as the focused scene's model so commands act on this window.
+public struct MainWindowScene: View {
+    /// The main windows' scene id (`openWindow(id:value:)` opens a note in a new one).
+    public static let id = "main"
+
+    let library: Library
+    let noteId: String?
+    @State private var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.undoManager) private var undoManager
+    @Environment(\.appearsActive) private var appearsActive
+
+    /// `noteId`: the note this window was opened for (Open in New Window), if any.
+    public init(library: Library, noteId: String? = nil) {
+        self.library = library
+        self.noteId = noteId
+        _model = State(initialValue: AppModel(library: library))
+    }
+
+    public var body: some View {
+        MainWindow(initialNoteId: noteId)
+            .environment(model)
+            .focusedSceneValue(\.windowModel, model)
+            .onAppear {
+                model.undoManager = undoManager
+                let openWindow = self.openWindow
+                library.openWindow = { id in
+                    if let id { openWindow(id: Self.id, value: id) } else { openWindow(id: Self.id) }
+                }
+                library.windowDidBecomeActive(model)
+                if library.pendingNewNote {
+                    library.pendingNewNote = false
+                    Task { await model.newNote() }
+                }
+            }
+            .onChange(of: undoManager) { _, manager in model.undoManager = manager }
+            .onChange(of: appearsActive) { _, active in if active { library.windowDidBecomeActive(model) } }
+            .onDisappear { library.windowDidClose(model) }
+    }
 }
 
 /// The main window: sidebar, note list (or search results), editor (or Ask answer),
 /// and an inspector. Owned by the Shell area; the columns' contents come from each area.
 public struct MainWindow: View {
     @Environment(AppModel.self) private var model
-    /// Column layout, kept per window across launches.
+    /// Per-window state restored at relaunch (small ids only, never note content).
     @SceneStorage("columns") private var storedColumns = ColumnLayout.all.rawValue
+    @SceneStorage("scope") private var storedScope = ""
+    @SceneStorage("note") private var storedNote = ""
+    @SceneStorage("inspector") private var storedInspector = false
     @State private var visibility: NavigationSplitViewVisibility = .all
     /// The layout to return to when Focus mode ends.
     @State private var layoutBeforeFocus: NavigationSplitViewVisibility = .all
+    @FocusState private var isSearchFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let initialNoteId: String?
 
-    public init() {}
+    public init(initialNoteId: String? = nil) {
+        self.initialNoteId = initialNoteId
+    }
 
     public var body: some View {
         @Bindable var model = model
@@ -47,6 +84,8 @@ public struct MainWindow: View {
         .navigationTitle(model.windowTitle)
         .navigationSubtitle(model.windowSubtitle)
         .searchable(text: $model.query, placement: .toolbar, prompt: "Search notes")
+        .searchFocused($isSearchFocused)
+        .onChange(of: model.searchFocusRequest) { _, _ in isSearchFocused = true }
         .overlay(alignment: .top) {
             if model.isPaletteShown {
                 CommandPaletteView().padding(.top, 140)
@@ -54,7 +93,10 @@ public struct MainWindow: View {
         }
         .modifier(ShellPresentations())
         .frame(minWidth: 900, minHeight: 560)
-        .tint(.fortressEmber)
+        .fortressTheme()
+        // The window behind the sidebar's glass takes the theme's sunken tone, so the
+        // native material picks up the palette instead of being replaced.
+        .containerBackground(ThemeStyle(.sunken), for: .window)
         .task {
             if model.connectsOnAppear { await model.connect() }
         }
@@ -62,13 +104,18 @@ public struct MainWindow: View {
         .onAppear {
             visibility = ColumnLayout(rawValue: storedColumns)?.visibility ?? .all
             if visibility == .detailOnly { model.isFocusMode = true }
+            restoreSelection()
         }
+        .onChange(of: model.scope) { _, scope in storedScope = scope.storageKey }
+        .onChange(of: model.openNoteId) { _, id in storedNote = id ?? "" }
+        .onChange(of: model.isInspectorShown) { _, shown in storedInspector = shown }
+        .onChange(of: model.hasLoadedNavigation) { _, loaded in if loaded { dropMissingSelection() } }
         .onChange(of: visibility) { _, new in
             storedColumns = ColumnLayout(new).rawValue
             if new != .detailOnly && model.isFocusMode { model.isFocusMode = false }
         }
         .onChange(of: model.isFocusMode) { _, focused in
-            withAnimation(.smooth(duration: 0.25)) {
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
                 if focused, visibility != .detailOnly {
                     layoutBeforeFocus = visibility
                     visibility = .detailOnly
@@ -76,6 +123,55 @@ public struct MainWindow: View {
                     visibility = layoutBeforeFocus == .detailOnly ? .all : layoutBeforeFocus
                 }
             }
+        }
+    }
+}
+
+extension MainWindow {
+    /// Where the window was at the last quit (or the note it was opened for).
+    private func restoreSelection() {
+        if let scope = LibraryScope(storageKey: storedScope) { model.scope = scope }
+        model.isInspectorShown = storedInspector
+        if let initialNoteId {
+            model.open(noteId: initialNoteId)
+        } else if !storedNote.isEmpty, model.route == .empty {
+            model.open(noteId: storedNote)
+        }
+    }
+
+    /// A restored folder or note that no longer exists (deleted elsewhere) is let go.
+    private func dropMissingSelection() {
+        let items = model.navigation.items
+        if case .folder(let id) = model.scope, NoteListing.folder(id: id, in: items) == nil { model.scope = .all }
+        if let id = model.openNoteId, !NoteListing.allDocuments(in: items).contains(where: { $0.id == id }) {
+            model.route = .empty
+        }
+    }
+}
+
+extension LibraryScope {
+    /// The scope as a short string for `@SceneStorage`.
+    var storageKey: String {
+        switch self {
+        case .all: "all"
+        case .rough: "rough"
+        case .polished: "polished"
+        case .recent: "recent"
+        case .trash: "trash"
+        case .folder(let id): "folder:" + id
+        }
+    }
+
+    init?(storageKey: String) {
+        switch storageKey {
+        case "all": self = .all
+        case "rough": self = .rough
+        case "polished": self = .polished
+        case "recent": self = .recent
+        case "trash": self = .trash
+        default:
+            guard storageKey.hasPrefix("folder:"), storageKey.count > 7 else { return nil }
+            self = .folder(id: String(storageKey.dropFirst(7)))
         }
     }
 }
@@ -152,9 +248,9 @@ struct NoSelectionView: View {
     var body: some View {
         Text("No Note Selected")
             .font(.body)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.themeTertiary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(.themeBackground)
     }
 }
 
@@ -163,8 +259,9 @@ struct DetailToolbar: ToolbarContent {
     @Environment(AppModel.self) private var model
 
     var body: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            if model.openNoteId != nil {
+        // The whole group comes and goes (hiding only its contents leaves an empty capsule).
+        if model.openNoteId != nil {
+            ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     Task { await model.exportOpenNote() }
                 } label: {

@@ -178,7 +178,7 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         #expect(operations.map(\.operation) == [.update, .insert, .insert, .insert])
         #expect(operations.dropFirst().allSatisfy { $0.type == "table_cell" })
         #expect(operations[1].afterId == "01M7ONENOTECELL00000000")
-        window.undoManager?.undo()
+        controller.textView.undoManager?.undo()  // The note's undo stack.
         #expect(table.table.columnCount == 3)
     }
 

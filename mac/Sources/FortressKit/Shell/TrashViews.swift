@@ -3,7 +3,6 @@ import SwiftUI
 /// Trashed notes, newest first, with Restore and Delete Permanently.
 struct TrashListView: View {
     @Environment(AppModel.self) private var model
-    @State private var isConfirmingEmpty = false
 
     var body: some View {
         @Bindable var model = model
@@ -23,8 +22,7 @@ struct TrashListView: View {
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
-        .background(Color(nsColor: .textBackgroundColor))
-        .animation(.smooth(duration: 0.2), value: model.trash.map(\.id))
+        .themedContent()
         .overlay {
             if model.trash.isEmpty && model.isConnected {
                 ContentUnavailableView(
@@ -37,13 +35,13 @@ struct TrashListView: View {
         }
         .toolbar {
             ToolbarItem {
-                Button("Empty Trash…") { isConfirmingEmpty = true }
+                Button("Empty Trash…") { model.isEmptyTrashConfirmationShown = true }
                     .fixedSize()
                     .disabled(model.trash.isEmpty)
                     .help("Permanently delete every note in the Trash")
             }
         }
-        .confirmationDialog(emptyTitle, isPresented: $isConfirmingEmpty) {
+        .confirmationDialog(emptyTitle, isPresented: $model.isEmptyTrashConfirmationShown) {
             Button("Empty Trash", role: .destructive) { Task { await model.emptyTrash() } }
         } message: {
             Text("This can't be undone.")
@@ -67,11 +65,11 @@ struct TrashRow: View {
                 .lineLimit(1)
             Text(preview.isEmpty ? "No additional text" : preview)
                 .font(.callout)
-                .foregroundStyle(preview.isEmpty ? .tertiary : .secondary)
+                .foregroundStyle(preview.isEmpty ? .themeTertiary : .themeSecondary)
                 .lineLimit(2, reservesSpace: true)
             Text(NoteListing.deletedLabel(note.deletedAt, now: now))
                 .font(.subheadline)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.themeTertiary)
                 .padding(.top, 2)
         }
         .padding(.vertical, 6)
@@ -91,9 +89,9 @@ struct TrashDetailView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     HStack(spacing: 12) {
                         Image(systemName: "trash")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.themeSecondary)
                         Text("This note is in the Trash.")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.themeSecondary)
                             .lineLimit(1)
                         Spacer(minLength: 8)
                         Button("Restore") { Task { await model.restore(trashedId: note.id) } }
@@ -106,19 +104,19 @@ struct TrashDetailView: View {
                     }
                     .font(.body)
                     .padding(12)
-                    .background(Color(nsColor: .quaternarySystemFill), in: .rect(cornerRadius: 8))
+                    .background(ThemeStyle(.surface), in: .rect(cornerRadius: 8))
 
                     Text(NoteListing.displayTitle(note.title))
                         .font(.system(size: 28, weight: .bold))
                         .textSelection(.enabled)
                     Text(NoteListing.deletedLabel(note.deletedAt, now: Date()))
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.themeSecondary)
                     if !note.snippet.isEmpty {
                         Text(note.snippet)
                             .font(.system(size: 16))
                             .lineSpacing(10)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.themeSecondary)
                             .textSelection(.enabled)
                     }
                 }
@@ -127,7 +125,7 @@ struct TrashDetailView: View {
                 .padding(.top, 32)
                 .frame(maxWidth: .infinity)
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .themedContent()
             .confirmationDialog("Delete “\(NoteListing.displayTitle(note.title))” permanently?", isPresented: $isConfirmingDelete) {
                 Button("Delete Permanently", role: .destructive) { Task { await model.deleteForever(trashedId: note.id) } }
             } message: {

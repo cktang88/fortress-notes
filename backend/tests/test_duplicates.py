@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from support import make_settings, use_settings
+from support import make_settings, use_settings, mirror_file
 
 
 PLAN = (
@@ -78,7 +78,7 @@ class DuplicateCheckTests(unittest.TestCase):
         from app import documents
 
         documents.flush_mirrors()
-        self.assertIn("Moved two", (self.notes / f"{target}.md").read_text())
+        self.assertIn("Moved two", mirror_file(self.notes, target).read_text())
 
     def test_move_into_rejects_itself_and_missing_notes(self) -> None:
         note = self.create("A", "text")

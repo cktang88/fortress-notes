@@ -9,8 +9,9 @@ from pathlib import Path
 
 from . import block_store
 
-# /media/<name> references inside a note body.
-_MEDIA_RE = re.compile(r"/media/([A-Za-z0-9_-]+\.[A-Za-z0-9]+)")
+# References to stored files inside a note body: /media/<name>, or assets/<name>
+# relative to the note in the vault mirror.
+_MEDIA_RE = re.compile(r"(?:/media/|(?<![A-Za-z0-9_-])assets/)([A-Za-z0-9_-]+\.[A-Za-z0-9]+)")
 
 
 def _texts(db_path: Path, media_names: list[str]) -> dict[str, str]:

@@ -3,19 +3,26 @@ import SwiftUI
 
 /// The Settings window: where the backend lives and how it starts, and backups.
 public struct SettingsView: View {
+    /// Settings reopens on the pane last viewed (HIG).
+    @AppStorage("settingsPane") private var pane = "general"
+
     public init() {}
 
     public var body: some View {
-        TabView {
-            Tab("General", systemImage: "gearshape") {
+        TabView(selection: $pane) {
+            Tab("General", systemImage: "gearshape", value: "general") {
                 BackendSettingsView()
             }
-            Tab("Backups", systemImage: "clock.arrow.circlepath") {
+            Tab("Appearance", systemImage: "paintpalette", value: "appearance") {
+                AppearanceSettingsView()
+            }
+            Tab("Backups", systemImage: "clock.arrow.circlepath", value: "backups") {
                 BackupsView()
                     .padding(20)
             }
         }
         .frame(width: 560, height: 520)
+        .fortressTheme()
     }
 }
 
@@ -87,6 +94,15 @@ struct BackendSettingsView: View {
             }
 
             Section {
+                QuickCaptureShortcutRecorder(state: QuickCapture.shared.state)
+            } header: {
+                Text("Keyboard Shortcut")
+            } footer: {
+                Text("Opens Quick Capture from any app. Click the shortcut, then press the keys you want; esc cancels, delete turns it off.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 Toggle("Read text in pictures and PDFs on this Mac", isOn: $readsPictureText)
             } header: {
                 Text("Text in Pictures")
@@ -109,8 +125,9 @@ struct BackendSettingsView: View {
                     }
                 }
                 HStack {
-                    Button("Import from OneNote…") { model.showOneNoteImport() }
-                        .disabled(!model.isConnected)
+                    // The sheet opens in the main window last in front.
+                    Button("Import from OneNote…") { model.library.activeWindowModel?.showOneNoteImport() }
+                        .disabled(!model.isConnected || model.library.activeWindowModel == nil)
                 }
             } header: {
                 Text("Importing from OneNote")

@@ -25,7 +25,7 @@ from app.models import BlockOperation
 from app.portability import export_document_markdown, import_markdown_directory
 from app.sources import SourceBlock, document_info, upsert_document_from_source
 
-from support import make_settings, use_settings
+from support import make_settings, use_settings, mirror_file
 
 
 def _texts(nodes):
@@ -174,31 +174,32 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertIn("external_id: '{PAGE-1}'", markdown)
         self.assertIn('"provenance":{"external_id":"{C}","source":"onenote_import"}', markdown)
         self.assertIn("  - Child <!-- fortress:block", markdown)  # nested child keeps its indent
-        self.assertNotIn(document_id, markdown.split("---", 2)[2])
+        self.assertIn(f"\nid: {document_id}\n", markdown.split("---", 2)[1])
+        # Nothing refers to these blocks: no ids in the body.
+        self.assertNotIn("^01", markdown)
+        self.assertNotIn('"id"', markdown)
 
         other = self.root / "other"
         other.mkdir()
         (other / "page.md").write_text(markdown, encoding="utf-8")
         target = other / ".fortress.sqlite3"
         import_markdown_directory(target, other)
-        restored = document_tree(target, "page")
+        # The note keeps its id (front matter "id").
+        restored = document_tree(target, document_id)
         self.assertEqual(restored["provenance"]["source"], "onenote_import")
         self.assertEqual(restored["provenance"]["external_id"], "{PAGE-1}")
         self.assertEqual(restored["provenance"]["source_path"], "Work › Meetings › Meeting")
         self.assertEqual(_texts(restored["children"]), ["Agenda", "Item", "code", "Typed here"])
-        # Block ids travel with the export.
-        self.assertEqual([node["id"] for node in restored["children"]],
-                         [node["id"] for node in document_tree(self.db, document_id)["children"]])
         child = restored["children"][1]["children"][0]
         self.assertEqual(child["text"], "Child")
         self.assertEqual(child["provenance"]["external_id"], "{C}")
         self.assertEqual(restored["children"][3]["provenance"], {"source": "paste"})
         # No comment line became a block, and a second export is identical.
-        self.assertEqual(export_document_markdown(target, "page"), markdown)
+        self.assertEqual(export_document_markdown(target, document_id), markdown)
 
         # Re-importing the export into a database that has the source page reuses
         # nothing: the copy gives up the source id instead of stealing it.
-        (other / "copy.md").write_text(markdown, encoding="utf-8")
+        (other / "copy.md").write_text(markdown.replace(f"id: {document_id}\n", ""), encoding="utf-8")
         import_markdown_directory(self.db, other)
         copy = document_tree(self.db, "copy")
         self.assertNotIn("external_id", copy["provenance"])
@@ -251,7 +252,10 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(tree["resolved_links"]["documents"], {"target": {"title": "New | title"}})
         self.assertEqual(tree["resolved_links"]["blocks"][target_block]["text"], "Edited target")
         self.assertIn("New | title", [hit["text"] for hit in block_store.search_blocks(self.db, "title")][0])
-        self.assertIn("[[target]]", export_document_markdown(self.db, "source"))
+        # Wikilinks by file name (a "|" can't be in one), labelled with the title.
+        exported = export_document_markdown(self.db, "source")
+        self.assertIn("See [[New title]] and [[New title#^", exported)
+        self.assertIn("|Edited target]] or [custom words](https://example.com)", exported)
         self.assertEqual(len(block_store.document_backlinks(self.db, "target")), 3)
 
 
@@ -634,7 +638,7 @@ class ProvenanceApiTests(unittest.TestCase):
         )
         exported = self.client.get(f"/api/block-documents/{result.document_id}/markdown").text
         documents.flush_mirrors()
-        mirror = (self.notes / f"{result.document_id}.md").read_text(encoding="utf-8")
+        mirror = mirror_file(self.notes, result.document_id).read_text(encoding="utf-8")
         self.assertIn("onenote_import", mirror)
         self.assertIn("fortress:block", mirror)
         response = self.client.post(

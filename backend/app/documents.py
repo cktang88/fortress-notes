@@ -1,8 +1,9 @@
 """Note lifecycle over the canonical SQLite store, plus the Markdown mirrors.
 
-SQLite is the only source of truth. ``NOTES_DIR/<id>.md`` is a read-only mirror
-of each note, kept so notes stay readable outside the app; nothing reads the
-mirrors back except the explicit importer. Writers never touch mirrors: the
+SQLite is the only source of truth. The notes folder is a read-only mirror of
+every note as plain Markdown, laid out as an Obsidian vault (``vault.py``), kept so
+notes stay readable outside the app; nothing reads the mirrors back except the
+explicit importer. Writers never touch mirrors: the
 background :class:`MirrorWriter` is their only writer and remover, and it
 follows SQLite's change log, so every write (here, transactions, imports,
 restores) is mirrored without its writer asking.
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import frontmatter
 
-from . import background, block_store, duplicates, images, provenance, workspace
+from . import background, block_store, duplicates, images, provenance, vault, workspace
 from .config import get_settings
 from .models import NoteCreate, NoteSummary, NoteUpdate
 
@@ -49,6 +50,8 @@ def create(
     data: NoteCreate,
     created_at: object | None = None,
     source: dict[str, object] | None = None,
+    document_id: str | None = None,
+    specs: list | None = None,
 ) -> dict:
     """Create a note and return its tree; raises KeyError when the folder does not exist.
 
@@ -70,8 +73,24 @@ def create(
         # An unnamed note takes its title from its first line until someone names it.
         title_auto=not data.title,
         provenance=source,
+        document_id=document_id,
+        specs=specs if specs is not None else _linked_specs(db_path, data.body),
     )
     return tree
+
+
+def _linked_specs(db_path: Path, body: str) -> list | None:
+    """``body``'s blocks with its ``[[Note name]]`` wikilinks resolved to workspace notes
+    (None: nothing to resolve, parse it as usual)."""
+
+    if "[[" not in body:
+        return None
+    from .block_markdown import parse_markdown
+
+    block_store.initialize(db_path)
+    with block_store.read_scope(db_path) as connection:
+        links = vault.ImportLinks(vault.workspace_names(connection))
+    return parse_markdown(body, links)
 
 
 def update(document_id: str, data: NoteUpdate) -> tuple[dict, tuple]:
@@ -138,6 +157,7 @@ def capture(text: str, extra_provenance: dict | None = None) -> dict[str, object
         body,
         folder_id=folder_id,
         provenance=source,
+        specs=_linked_specs(db_path, body),
     )
     block_store.move_document(db_path, tree["id"], folder_id, position=0)
     return {"document_id": tree["id"], "title": tree["title"], "folder": UNCATEGORIZED}
@@ -182,20 +202,35 @@ def upsert_from_source(**kwargs):
 # file about once per interval. (Rendering a 2,000-block note's Markdown takes
 # as long as the edit itself.)
 MIRROR_DELAY_S = 0.5
-# NOTES_DIR/<this>: the change-log position the mirrors are written up to, so a
-# restart only rewrites what changed meanwhile (and a crash loses nothing).
+# NOTES_DIR/<this>: the change-log position (and vault format) the mirrors are
+# written up to, so a restart only rewrites what changed meanwhile (and a crash
+# loses nothing).
 MIRROR_STATE = ".fortress-mirrors.json"
+# NOTES_DIR/<this>: where each note's mirror is and which of its blocks carry
+# ids, as last written (rewritten only when that changes).
+MIRROR_FILES = ".fortress-mirror-files.json"
 _log = logging.getLogger("fortress")
 
 
-class MirrorWriter(background.Service):
-    """The only writer and remover of ``NOTES_DIR/<id>.md`` (the ``mirrors`` lane).
+class _MirrorState:
+    def __init__(self) -> None:
+        self.position: tuple[str, int] | None = None
+        self.format: int | None = None
+        self.files: dict[str, str] = {}
+        self.targets: dict[str, str] = {}
+        self.anchors: dict[str, list[str]] = {}
 
-    Each pass rewrites the mirror of every note whose ``change_seq`` moved
-    since the last pass, and removes those of trashed notes. Notes purged
-    before a pass saw them trashed are handed over with :meth:`removed`. A
-    database it has no position for (first run, a replaced database) gets
-    every mirror rewritten once.
+
+class MirrorWriter(background.Service):
+    """The only writer and remover of the vault mirrors (the ``mirrors`` lane).
+
+    The notes folder is an Obsidian vault (``vault.py``): ``<folders>/<title>.md``.
+    Each pass works out every note's path from the folder tree and titles,
+    removes the mirrors of trashed notes and the old files of moved or renamed
+    ones, and rewrites the mirror of every note whose ``change_seq`` moved,
+    that moved, that links to a note whose link name changed, or whose
+    referenced blocks changed. A database it has no position for (first run, a
+    replaced database, an older vault format) gets every mirror rewritten.
     """
 
     name = "mirrors"
@@ -203,55 +238,102 @@ class MirrorWriter(background.Service):
     poll = MIRROR_DELAY_S
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._removed: dict[Path, set[str]] = {}
-        self._positions: dict[Path, tuple[str, int] | None] = {}
+        self._states: dict[Path, _MirrorState] = {}
 
     def removed(self, db_path: Path, document_ids: list[str]) -> None:
-        """These notes are gone for good: remove their mirrors on the next pass."""
+        """These notes are gone for good: their mirrors go on the next pass."""
 
         if document_ids:
-            with self._lock:
-                self._removed.setdefault(db_path, set()).update(document_ids)
             background.wake(self.name)
 
     def step(self) -> None:
         db_path, notes_path = _paths()
-        with self._lock:
-            removals = self._removed
-            self._removed = {}
-        for removed_db, ids in removals.items():
-            for document_id in sorted(ids):
-                (removed_db.parent / f"{document_id}.md").unlink(missing_ok=True)
         self.sync(db_path, notes_path)
         return None
 
+    def path(self, notes_path: Path, document_id: str) -> Path | None:
+        """Where a note's mirror was last written."""
+
+        relative = self._state(notes_path).files.get(document_id)
+        return notes_path / relative if relative else None
+
     def sync(self, db_path: Path, notes_path: Path) -> int:
-        """Mirror every note changed since the last pass; returns how many."""
+        """Bring every mirror up to date; returns how many were written."""
 
         if not db_path.exists():
             return 0  # the workspace went away (never recreate it from here)
         block_store.initialize(db_path)
-        position = self._position(notes_path)
+        state = self._state(notes_path)
         with block_store.read_scope(db_path) as connection:
             epoch, seq = connection.execute(
                 "SELECT epoch, seq FROM change_log WHERE id = 1"
             ).fetchone()
-            if position == (epoch, seq):
+            current = state.format == vault.FORMAT_VERSION
+            if current and state.position == (epoch, seq):
                 return 0
-            if position is None or position[0] != epoch:
-                rows = connection.execute("SELECT id FROM documents").fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT id FROM documents WHERE change_seq > ?", (position[1],)
-                ).fetchall()
-        for row in rows:
+            full = not current or state.position is None or state.position[0] != epoch
+            rows = [dict(row) for row in connection.execute(
+                """SELECT id, title, folder_id, created_at, change_seq
+                     FROM documents WHERE deleted_at IS NULL"""
+            )]
+            folders = [dict(row) for row in connection.execute(
+                "SELECT id, parent_id, name, position FROM folders"
+            )]
+            anchors = vault.referenced_blocks(connection)
+            legacy = (
+                [row[0] for row in connection.execute("SELECT id FROM documents")]
+                if not current else []
+            )
+        layout = self._layout(notes_path, state, rows, folders)
+        changed = (
+            set(layout.paths) if full
+            else {row["id"] for row in rows if row["change_seq"] > state.position[1]}
+        )
+        gone = [document_id for document_id in state.files if document_id not in layout.paths]
+        moved = {
+            document_id for document_id, path in layout.paths.items()
+            if state.files.get(document_id) != path
+        }
+        renamed = {
+            document_id for document_id, target in layout.targets.items()
+            if state.targets.get(document_id) != target
+        }
+        anchored = {
+            document_id for document_id in layout.paths
+            if sorted(anchors.get(document_id, ())) != state.anchors.get(document_id, [])
+        }
+        linking = _documents_linking_to(db_path, renamed | set(gone)) if (renamed or gone) else set()
+        rewrite = (changed | moved | anchored | linking) & set(layout.paths)
+
+        # First take away what is stale (so a name can pass from one note to another)...
+        kept: dict[str, dict] = {}
+        for document_id in legacy:  # the one-file-per-id layout of format 1
+            old = notes_path / f"{document_id}.md"
+            if old.is_file():
+                kept[document_id] = _hand_added(old, document_id)
+                old.unlink(missing_ok=True)
+        for document_id in gone:
+            _remove(notes_path, state.files[document_id])
+        for document_id in moved & set(state.files):
+            old = notes_path / state.files[document_id]
+            kept.setdefault(document_id, _hand_added(old, document_id))
+            _remove(notes_path, state.files[document_id])
+        # ... then write.
+        for document_id in sorted(rewrite):
             try:
-                _mirror_document(db_path, notes_path, row[0])
+                _mirror_document(db_path, notes_path, document_id, layout,
+                                 anchors.get(document_id, ()), kept.get(document_id))
             except Exception:  # logged; one bad note must not stop the others
-                _log.exception("mirror write failed for %s", row[0])
-        self._save_position(notes_path, (epoch, seq))
-        return len(rows)
+                _log.exception("mirror write failed for %s", document_id)
+        new_anchors = {key: sorted(value) for key, value in anchors.items() if key in layout.paths}
+        files_changed = (state.files, state.targets, state.anchors) != (
+            layout.paths, layout.targets, new_anchors
+        )
+        state.files, state.targets = dict(layout.paths), dict(layout.targets)
+        state.anchors = new_anchors
+        state.format = vault.FORMAT_VERSION
+        self._save(notes_path, state, (epoch, seq), files_changed=files_changed)
+        return len(rewrite)
 
     def rebuild(self, db_path: Path, notes_path: Path, stash: Path) -> None:
         """Make every mirror match SQLite (after a restore).
@@ -261,29 +343,164 @@ class MirrorWriter(background.Service):
         """
 
         active = {str(item["id"]) for item in block_store.list_documents(db_path)}
-        for mirror in notes_path.glob("*.md"):
-            if mirror.stem not in active:
-                stash.mkdir(parents=True, exist_ok=True)
-                mirror.replace(stash / mirror.name)
-        self._save_position(notes_path, None)
+        state = self._state(notes_path)
+        if state.format == vault.FORMAT_VERSION:
+            stale = {path for document_id, path in state.files.items() if document_id not in active}
+        else:
+            stale = {path.name for path in notes_path.glob("*.md") if path.stem not in active}
+        for relative in sorted(stale):
+            source = notes_path / relative
+            if source.is_file():
+                target = stash / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(target)
+                _prune(notes_path, source.parent)
+        state.files = {key: value for key, value in state.files.items() if key in active}
+        self._save(notes_path, state, None, files_changed=True)
         self.sync(db_path, notes_path)
 
-    def _position(self, notes_path: Path) -> tuple[str, int] | None:
-        if notes_path not in self._positions:
+    def write_one(self, db_path: Path, notes_path: Path, document_id: str) -> None:
+        """Write (or remove) one note's mirror now."""
+
+        state = self._state(notes_path)
+        with block_store.read_scope(db_path) as connection:
+            rows = [dict(row) for row in connection.execute(
+                "SELECT id, title, folder_id, created_at FROM documents WHERE deleted_at IS NULL"
+            )]
+            folders = [dict(row) for row in connection.execute(
+                "SELECT id, parent_id, name, position FROM folders"
+            )]
+            anchors = vault.referenced_blocks(connection)
+        layout = self._layout(notes_path, state, rows, folders)
+        old = state.files.get(document_id)
+        kept = None
+        legacy = notes_path / f"{document_id}.md"
+        if state.format != vault.FORMAT_VERSION and legacy.is_file():
+            kept = _hand_added(legacy, document_id)
+            legacy.unlink()
+        if old and old != layout.paths.get(document_id):
+            kept = _hand_added(notes_path / old, document_id)
+            _remove(notes_path, old)
+        if document_id in layout.paths:
+            _mirror_document(db_path, notes_path, document_id, layout,
+                             anchors.get(document_id, ()), kept)
+            state.files[document_id] = layout.paths[document_id]
+            state.targets[document_id] = layout.targets[document_id]
+        else:
+            state.files.pop(document_id, None)
+        self._save(notes_path, state, state.position, files_changed=True)
+
+    def _layout(self, notes_path: Path, state: _MirrorState, rows: list[dict],
+                folders: list[dict]) -> vault.Layout:
+        ours = {path.casefold() for path in state.files.values()}
+
+        def taken(path: str, document_id: str) -> bool:
+            # Someone else's file at that name is never overwritten.
+            if state.files.get(document_id) == path or path.casefold() in ours:
+                return False
+            existing = notes_path / path
+            if not existing.exists():
+                return False
+            # (an older mirror of this very note, e.g. "one.md" for "One.md" on macOS, is not)
+            if (notes_path / f"{document_id}.md").exists() and existing.samefile(
+                notes_path / f"{document_id}.md"
+            ):
+                return False
+            try:
+                found = frontmatter.loads(existing.read_text(encoding="utf-8")).metadata.get("id")
+            except Exception:
+                return True
+            return str(found) != document_id
+
+        return vault.compute_layout(rows, folders, taken)
+
+    def _state(self, notes_path: Path) -> _MirrorState:
+        if notes_path not in self._states:
+            state = _MirrorState()
             try:
                 saved = json.loads((notes_path / MIRROR_STATE).read_text(encoding="utf-8"))
-                self._positions[notes_path] = (str(saved["epoch"]), int(saved["seq"]))
+                state.position = (str(saved["epoch"]), int(saved["seq"]))
+                state.format = int(saved.get("format") or 1)
             except (OSError, ValueError, KeyError, TypeError):
-                self._positions[notes_path] = None
-        return self._positions[notes_path]
+                pass
+            try:
+                files = json.loads((notes_path / MIRROR_FILES).read_text(encoding="utf-8"))
+                state.files = {str(k): str(v) for k, v in dict(files.get("files") or {}).items()}
+                state.targets = {str(k): str(v) for k, v in dict(files.get("targets") or {}).items()}
+                state.anchors = {str(k): list(v) for k, v in dict(files.get("anchors") or {}).items()}
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+            self._states[notes_path] = state
+        return self._states[notes_path]
 
-    def _save_position(self, notes_path: Path, position: tuple[str, int] | None) -> None:
-        self._positions[notes_path] = position
+    def _save(self, notes_path: Path, state: _MirrorState, position: tuple[str, int] | None,
+              files_changed: bool) -> None:
+        state.position = position
+        if files_changed:
+            _atomic_write(notes_path / MIRROR_FILES, json.dumps(
+                {"files": state.files, "targets": state.targets, "anchors": state.anchors},
+                ensure_ascii=False, sort_keys=True,
+            ))
         target = notes_path / MIRROR_STATE
         if position is None:
             target.unlink(missing_ok=True)
         else:
-            _atomic_write(target, json.dumps({"epoch": position[0], "seq": position[1]}))
+            _atomic_write(target, json.dumps(
+                {"epoch": position[0], "seq": position[1], "format": state.format}
+            ))
+
+
+def _documents_linking_to(db_path: Path, document_ids: set[str]) -> set[str]:
+    """Notes with a link to one of ``document_ids`` or to a block in one of them."""
+
+    found: set[str] = set()
+    ids = sorted(document_ids)
+    with block_store.read_scope(db_path) as connection:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            marks = ",".join("?" for _ in chunk)
+            for row in connection.execute(
+                f"""SELECT source.document_id FROM document_refs AS refs
+                      JOIN blocks AS source ON source.id = refs.source_block_id
+                     WHERE refs.target_document_id IN ({marks})
+                    UNION
+                    SELECT source.document_id FROM block_refs AS refs
+                      JOIN blocks AS source ON source.id = refs.source_block_id
+                      JOIN blocks AS target ON target.id = refs.target_block_id
+                     WHERE target.document_id IN ({marks})""",
+                chunk + chunk,
+            ):
+                found.add(row[0])
+    return found
+
+
+def _hand_added(path: Path, document_id: str) -> dict:
+    """The front matter of a note's existing mirror (a person may have added keys)."""
+
+    try:
+        metadata = dict(frontmatter.loads(path.read_text(encoding="utf-8")).metadata)
+    except Exception:  # missing or damaged: simply rewritten
+        return {}
+    return metadata if str(metadata.get("id") or document_id) == document_id else {}
+
+
+def _remove(notes_path: Path, relative: str) -> None:
+    path = notes_path / relative
+    path.unlink(missing_ok=True)
+    _prune(notes_path, path.parent)
+
+
+def _prune(notes_path: Path, directory: Path) -> None:
+    """Remove folders a move or trash left empty (up to the notes folder)."""
+
+    root = notes_path.resolve()
+    current = directory
+    while current.resolve() != root and root in current.resolve().parents:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
 
 
 mirrors = background.register(MirrorWriter())
@@ -307,36 +524,34 @@ def mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
     """Write (or remove) one note's mirror now, serialized with the writer."""
 
     with background.exclusive(MirrorWriter.name):
-        _mirror_document(db_path, notes_path, document_id)
+        mirrors.write_one(db_path, notes_path, document_id)
 
 
-def _mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
+def mirror_path(document_id: str, notes_path: Path | None = None) -> Path | None:
+    """Where a note's mirror is (as last written)."""
+
+    return mirrors.path(notes_path or _paths()[1], document_id)
+
+
+def _mirror_document(db_path: Path, notes_path: Path, document_id: str, layout: vault.Layout,
+                     anchors, kept: dict | None) -> None:
     tree = block_store.document_tree(db_path, document_id)
-    target = notes_path / f"{document_id}.md"
-    if tree is None:
-        target.unlink(missing_ok=True)
+    if tree is None or document_id not in layout.paths:
         return
+    resolved = (tree.get("resolved_links") or {}).get("blocks") or {}
     body = block_store.render_markdown(
-        tree["children"], document_provenance=tree["provenance"]
+        tree["children"], document_provenance=tree["provenance"],
+        links=layout.render_links(document_id, anchors, resolved.get),
     )
+    relative = layout.paths[document_id]
+    target = notes_path / relative
     # Keep any extra front matter a person added to the file by hand.
-    metadata: dict[str, object] = {}
-    if target.is_file():
-        try:
-            metadata = dict(frontmatter.loads(target.read_text(encoding="utf-8")).metadata)
-        except Exception:  # A damaged mirror is simply rewritten.
-            metadata = {}
-    metadata.pop("tags", None)  # retired; dropped from older mirrors too
-    metadata.update(
-        id=tree["id"],
-        title=tree["title"],
-        status=tree["status"],
-        created_at=tree["created_at"],
-        updated_at=tree["updated_at"],
-        images=images.collect_image_texts(db_path, body),
-        provenance=provenance.front_matter(tree["provenance"]),
+    existing = kept if kept is not None else _hand_added(target, document_id)
+    metadata = vault.front_matter(
+        tree, Path(relative).stem, images.collect_image_texts(db_path, body), existing
     )
-    _atomic_write(target, frontmatter.dumps(frontmatter.Post(body, **metadata)))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(target, vault.dump(metadata, body))
 
 
 def _atomic_write(path: Path, text: str) -> None:

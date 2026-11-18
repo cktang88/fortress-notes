@@ -24,6 +24,7 @@ public final class QuickCapture {
     private var monitor: Any?
     private var hideGeneration = 0
     private var terminationObserver: NSObjectProtocol?
+    private var isInstalled = false
 
     init(outbox: CaptureOutbox = CaptureOutbox(), drafts: CaptureDraftStore = CaptureDraftStore()) {
         self.outbox = outbox
@@ -35,18 +36,13 @@ public final class QuickCapture {
         }
     }
 
-    /// Registers the global shortcut (⇧⌘Space). Safe to call more than once.
+    /// Registers the global shortcut (Settings ▸ General; ⇧⌘Space unless changed). Safe
+    /// to call more than once.
     public func install(model: AppModel) {
         attach(model)
-        guard keeper == nil else { return }
-        let keeper = HotKeyKeeper { [weak self] in
-            GlobalHotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(cmdKey | shiftKey)) { self?.toggle() }
-        }
-        keeper.onConflict = { [weak self] in
-            self?.model?.notice = Notice(message: "Another app is using ⇧⌘Space, so Quick Capture can’t use it. It’s still in the File menu and the ⌘K palette.")
-        }
-        self.keeper = keeper
-        keeper.activate()
+        guard !isInstalled else { return }
+        isInstalled = true
+        updateShortcut()
         let drafts = self.drafts
         let state = self.state
         terminationObserver = NotificationCenter.default.addObserver(
@@ -59,6 +55,24 @@ public final class QuickCapture {
         }
     }
 
+    /// Registers the shortcut saved in Settings (again), dropping the previous one.
+    public func updateShortcut() {
+        keeper = nil
+        state.isShortcutTaken = false
+        guard let shortcut = QuickCaptureShortcut.saved() else { return }
+        let keeper = HotKeyKeeper { [weak self] in
+            GlobalHotKey(keyCode: UInt32(shortcut.keyCode), modifiers: shortcut.carbonModifiers) { self?.toggle() }
+        }
+        keeper.onConflict = { [weak self] in
+            guard let self else { return }
+            self.state.isShortcutTaken = true
+            self.model?.notice = Notice(message: "Another app is using \(shortcut.display), so Quick Capture can’t use it. Choose another shortcut in Settings; Quick Capture is still in the View menu.")
+        }
+        keeper.onRegistered = { [weak self] in self?.state.isShortcutTaken = false }
+        self.keeper = keeper
+        keeper.activate()
+    }
+
     /// Where captures are sent (also used by tests, without the global shortcut).
     func attach(_ model: AppModel) {
         self.model = model
@@ -68,7 +82,7 @@ public final class QuickCapture {
         }
     }
 
-    /// Whether ⇧⌘Space is registered (false while another app holds it).
+    /// Whether the global shortcut is registered (false while another app holds it).
     public var isShortcutRegistered: Bool { keeper?.status == .registered }
 
     public var isShown: Bool { (panel?.isVisible ?? false) && monitor != nil }
@@ -146,9 +160,13 @@ public final class QuickCapture {
     }
 
     private func open(_ documentId: String) {
-        model?.open(noteId: documentId)
         NSApp.activate()
-        NSApp.windows.first { $0.canBecomeMain && !($0 is NSPanel) }?.makeKeyAndOrderFront(nil)
+        if let window = model?.library.activeWindowModel {
+            window.open(noteId: documentId)
+            NSApp.windows.first { $0.canBecomeMain && !($0 is NSPanel) && $0.isVisible }?.makeKeyAndOrderFront(nil)
+        } else {
+            model?.library.openNote(documentId)  // No window open: opens one.
+        }
     }
 
     private func makePanel() -> QuickCapturePanel {
@@ -159,7 +177,7 @@ public final class QuickCapture {
             onSave: { [weak self] in self?.save(andOpen: false) },
             onCancel: { [weak self] in self?.hide() })
             .padding(24)  // Room for the panel's shadow.
-            .tint(.fortressEmber)
+            .fortressTheme()
         panel.contentView = NSHostingView(rootView: view)
         return panel
     }
@@ -226,6 +244,8 @@ final class QuickCaptureState {
     var phase: Phase = .editing
     /// Bumped each time the panel opens, to put the caret in the text.
     var focusRequest = 0
+    /// Another app holds the global shortcut (Settings says so next to it).
+    var isShortcutTaken = false
 
     init(text: String = "", phase: Phase = .editing) {
         self.text = text
@@ -249,6 +269,7 @@ final class QuickCapturePanel: NSPanel {
         isMovableByWindowBackground = true
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
+        isExcludedFromWindowsMenu = true
     }
 
     override var canBecomeKey: Bool { true }
@@ -293,7 +314,7 @@ struct QuickCaptureView: View {
                     .frame(height: 38)
             }
             .frame(width: Self.width)
-            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            .floatingGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
         .onChange(of: state.focusRequest, initial: true) { _, _ in isFocused = true }

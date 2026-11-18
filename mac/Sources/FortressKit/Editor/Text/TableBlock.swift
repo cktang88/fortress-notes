@@ -153,7 +153,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         guard hasLinks else { return text }
         let copy = NSMutableAttributedString(attributedString: text)
         text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length), options: []) { value, range, _ in
-            if value != nil { copy.addAttribute(.foregroundColor, value: NSColor.controlAccentColor, range: range) }
+            if value != nil { copy.addAttribute(.foregroundColor, value: NSColor.themeLink, range: range) }
         }
         return copy
     }
@@ -725,7 +725,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 
     private func replaceTable(with updated: TableContent, actionName: String) {
         let previous = table
-        let undoManager = grid.window?.undoManager
+        let undoManager = grid.noteUndoManager ?? grid.window?.undoManager
         table = updated
         focusedCell = nil
         isBuilt = true
@@ -789,7 +789,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         case ([.command], "b"): toggleMark(\.bold, in: view)
         case ([.command], "i"): toggleMark(\.italic, in: view)
         case ([.command], "u"): toggleMark(\.underline, in: view)
-        case ([.command], "e"): toggleMark(\.code, in: view)
+        case ([.command, .option], "e"): toggleMark(\.code, in: view)
         case ([.command, .shift], "x"): toggleMark(\.strike, in: view)
         case ([.command, .control], "="), ([.command, .control], "+"): toggleMark(\.sup, in: view)
         case ([.command, .control], "-"): toggleMark(\.sub, in: view)
@@ -842,6 +842,9 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 /// controller is its delegate.
 final class CellTextView: NSTextView {
     weak var table: TableBlockController?
+
+    /// The note's undo stack (see `FortressTextView.noteUndo`).
+    override var undoManager: UndoManager? { noteUndoManager ?? super.undoManager }
     var row = 0
     var column = 0
     var cellTheme = EditorTheme()
@@ -866,7 +869,9 @@ final class CellTextView: NSTextView {
         view.isContinuousSpellCheckingEnabled = false
         view.focusRingType = .none
         view.displaysLinkToolTips = true
-        view.linkTextAttributes = [.foregroundColor: NSColor.controlAccentColor, .cursor: NSCursor.pointingHand]
+        view.linkTextAttributes = [.foregroundColor: NSColor.themeLink, .cursor: NSCursor.pointingHand]
+        view.insertionPointColor = .themeAccent
+        view.selectedTextAttributes = [.backgroundColor: NSColor.themeSelection]
         return view
     }
 
@@ -948,7 +953,7 @@ final class TableGridView: NSView {
                     color.setFill()
                     frame.fill()
                 } else if controller.isHeader(row: r, column: c) {
-                    NSColor.labelColor.withAlphaComponent(0.045).setFill()
+                    NSColor.themeSurface.setFill()
                     frame.fill()
                 }
             }
@@ -959,7 +964,7 @@ final class TableGridView: NSView {
 
         let editing = controller.focusedCell != nil
         guard controller.borders || editing else { return }
-        let line = controller.borders ? NSColor.separatorColor : NSColor.tertiaryLabelColor.withAlphaComponent(0.25)
+        let line = controller.borders ? NSColor.themeBorder : NSColor.themeBorder.withAlphaComponent(0.6)
         line.setStroke()
         let grid = NSBezierPath()
         grid.lineWidth = 1
@@ -1072,7 +1077,12 @@ struct NestedCellBlocks: View {
     let context: AttachmentContext?
     let scale: CGFloat
 
+    // Hosted in its own NSHostingView inside the text view: theme it here.
     var body: some View {
+        themedBody.fortressTheme().foregroundStyle(.themeText)
+    }
+
+    @ViewBuilder private var themedBody: some View {
         VStack(alignment: .leading, spacing: 3 * scale) {
             ForEach(Array(flattened.enumerated()), id: \.offset) { _, item in
                 row(item.block)
@@ -1107,23 +1117,23 @@ struct NestedCellBlocks: View {
                     .accessibilityLabel(block.attrs["alt"]?.stringValue ?? "Image")
             } else {
                 Label(block.attrs["alt"]?.stringValue ?? "Image", systemImage: "photo")
-                    .foregroundStyle(.secondary).lineLimit(2)
+                    .foregroundStyle(.themeSecondary).lineLimit(2)
             }
         case "table":
             Label("Table · \(block.children.count) rows", systemImage: "tablecells")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.themeSecondary)
                 .help(TableContent.nestedText(block))
         case "math":
             Text(MathText.attributed(block.payload?["latex"]?.stringValue ?? block.text, size: 14 * scale))
         case "file":
             Label(block.attrs["name"]?.stringValue ?? "File", systemImage: "doc")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.themeSecondary)
         case "divider":
             Divider()
         default:
             HStack(alignment: .firstTextBaseline, spacing: 6 * scale) {
                 if let marker = marker(for: block) {
-                    Text(marker).foregroundStyle(.secondary)
+                    Text(marker).foregroundStyle(.themeSecondary)
                 }
                 Text(block.text)
                     .fixedSize(horizontal: false, vertical: true)

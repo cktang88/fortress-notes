@@ -46,7 +46,11 @@ class NoteFolderCreationTests(unittest.TestCase):
                 )
 
             self.assertEqual(missing.status_code, 404)
-            self.assertEqual({path.stem for path in notes.glob("*.md")}, {note_id})
+            # The vault mirrors the folders: Projects/Research/Research notes.md
+            self.assertEqual(
+                [path.relative_to(notes).as_posix() for path in notes.rglob("*.md")],
+                ["Projects/Research/Research notes.md"],
+            )
             with closing(sqlite3.connect(database)) as connection, connection:
                 stored_ids = {
                     row[0] for row in connection.execute("SELECT id FROM documents")

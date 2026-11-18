@@ -36,6 +36,7 @@ from ulid import ULID
 from . import order_keys, textutil
 from . import block_schema as schema
 from . import provenance as _provenance
+from . import vault
 from .block_markdown import BlockSpec, parse_markdown
 from .block_markdown import render_markdown as _render_markdown
 from .block_schema import BlockShapeError
@@ -980,29 +981,31 @@ def markdown_import_provenance(
 ) -> dict[str, object]:
     """Provenance for a note read from a Markdown file.
 
-    Our own export writes the note's provenance as front matter; it is restored
-    as it was (so export -> import -> export is stable). Any other file is a
-    ``markdown_import``.
+    Our own export and mirror write the note's provenance in front matter
+    (``fortress.provenance``; older versions ``provenance``); it is restored as
+    it was (so export -> import -> export is stable). Any other file is a
+    ``markdown_import`` (with its ``source`` URL, as web clippers write it).
     """
 
-    exported = metadata.get("provenance")
-    if isinstance(exported, dict):
-        try:
-            restored = _provenance.normalize(exported, trusted=True)
-        except _provenance.ProvenanceError:
-            restored = {}
-        if restored:
-            return restored
+    note = vault.read_front_matter(metadata)
+    if note.provenance:
+        return note.provenance
     value: dict[str, object] = {
         "source": "markdown_import",
         "source_path": source_path,
         "imported_at": now,
         "importer": dict(MARKDOWN_IMPORTER),
     }
-    for key, name in (("created_at", "source_created_at"), ("updated_at", "source_modified_at")):
-        if metadata.get(key) is not None:
-            value[name] = _iso(metadata[key])
-    return value
+    for stamp, name in ((note.created, "source_created_at"), (note.updated, "source_modified_at")):
+        if stamp is not None:
+            value[name] = _iso(stamp)
+    source = metadata.get("source")
+    if isinstance(source, str) and re.match(r"^https?://", source.strip()):
+        value["source_url"] = source.strip()
+    try:
+        return _provenance.normalize(value, trusted=True) or value
+    except _provenance.ProvenanceError:
+        return {key: item for key, item in value.items() if key != "source_url"}
 
 
 def create_document(
@@ -1016,8 +1019,9 @@ def create_document(
     ensure_empty_paragraph: bool = False,
     folder_id: str | None = None,
     provenance: dict[str, object] | None = None,
+    specs: list[BlockSpec] | None = None,
 ) -> None:
-    """Create the block representation for a newly created compatibility note."""
+    """Create a note from Markdown ``body`` (or already parsed ``specs``)."""
 
     initialize(path)
     with connection_scope(path, immediate=True) as connection:
@@ -1036,6 +1040,7 @@ def create_document(
             _iso(updated_at),
             ensure_empty_paragraph,
             provenance,
+            specs,
         )
         if folder_id is not None:
             position = document_insert_position(connection, folder_id, None)
@@ -1112,6 +1117,16 @@ def block_text(path: Path, document_id: str, block_id: str) -> str | None:
             (block_id, document_id),
         ).fetchone()
     return None if row is None else str(row["text"])
+
+
+def document_exists_any(path: Path, document_id: str) -> bool:
+    """Whether a note (active or in the trash) has this id."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        return connection.execute(
+            "SELECT 1 FROM documents WHERE id = ?", (document_id,)
+        ).fetchone() is not None
 
 
 def document_exists(path: Path, document_id: str) -> bool:
@@ -1250,10 +1265,17 @@ def create_block_document(
     created_at: object | None = None,
     title_auto: bool = False,
     provenance: dict[str, object] | None = None,
+    document_id: str | None = None,
+    specs: list[BlockSpec] | None = None,
 ) -> dict:
-    """Create a document; with ``title_auto`` its title follows its first line."""
+    """Create a document; with ``title_auto`` its title follows its first line.
 
-    document_id = new_id()
+    ``specs`` (already parsed blocks, e.g. with links resolved across an import)
+    replace ``body``; ``document_id`` is used when no note has it yet.
+    """
+
+    if document_id is None or document_exists_any(path, document_id):
+        document_id = new_id()
     now = utc_now()
     create_document(
         path, document_id, title, status, body,
@@ -1261,6 +1283,7 @@ def create_block_document(
         ensure_empty_paragraph=True,
         folder_id=folder_id,
         provenance=provenance,
+        specs=specs,
     )
     if title_auto:
         with connection_scope(path) as connection:
@@ -1869,6 +1892,7 @@ def _insert_document(
     updated_at: str,
     ensure_empty_paragraph: bool = False,
     provenance: dict[str, object] | None = None,
+    specs: list[BlockSpec] | None = None,
 ) -> None:
     position = connection.execute(
         """SELECT COALESCE(MAX(position) + 1, 0)
@@ -1886,7 +1910,7 @@ def _insert_document(
         connection, document_id, _unclaimed_source_key(connection, provenance or {"source": "manual"})
     )
     _insert_markdown_body(
-        connection, document_id, body, created_at, updated_at, ensure_empty_paragraph
+        connection, document_id, body, created_at, updated_at, ensure_empty_paragraph, specs
     )
 
 
@@ -1956,10 +1980,12 @@ def _insert_markdown_body(
     created_at: str,
     updated_at: str,
     ensure_empty_paragraph: bool = False,
+    specs: list[BlockSpec] | None = None,
 ) -> None:
-    """A document's blocks from a Markdown body (ids from its comments when free)."""
+    """A document's blocks from a Markdown body (ids from it when free) or parsed specs."""
 
-    specs = parse_markdown(body)
+    if specs is None:
+        specs = parse_markdown(body)
     if not specs and ensure_empty_paragraph:
         # The editor always has a paragraph to type into; give it a stable id.
         specs = [BlockSpec("paragraph", content=[])]
@@ -2249,12 +2275,12 @@ def document_write(path: Path, immediate: bool = True):
 
 def render_markdown(
     nodes: list[dict], depth: int = 0, document_provenance: dict | None = None,
-    include_ids: bool = True,
+    include_ids: bool = True, links=None,
 ) -> str:
     """A block tree as Markdown (see ``block_markdown.render_markdown``)."""
 
     return _render_markdown(
-        nodes, document_provenance=document_provenance, include_ids=include_ids
+        nodes, document_provenance=document_provenance, include_ids=include_ids, links=links
     )
 
 

@@ -53,7 +53,7 @@ struct PictureReadingProgress: View {
                 .controlSize(.mini)
             Text("Reading text in pictures · \(remaining.formatted()) left")
                 .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.themeTertiary)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .combine)
@@ -89,7 +89,7 @@ struct PictureTextCard: View {
             HStack(spacing: 6) {
                 Image(systemName: picture.isPDF ? "doc.richtext" : "photo")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
                 Text(title)
                     .font(.callout.weight(.medium))
                 Spacer(minLength: 4)
@@ -99,7 +99,7 @@ struct PictureTextCard: View {
             if let source = sourceLine {
                 Text(source)
                     .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.themeTertiary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -114,7 +114,7 @@ struct PictureTextCard: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .quaternarySystemFill), in: .rect(cornerRadius: 8, style: .continuous))
+        .background(ThemeStyle(.surface), in: .rect(cornerRadius: 8, style: .continuous))
         .contextMenu {
             Button("Copy Text", action: onCopy).disabled(picture.text.isEmpty)
             Button("Show in Note", action: onShow)
@@ -129,7 +129,7 @@ struct PictureTextCard: View {
                 Text("Reading…")
             }
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.themeSecondary)
         case .queued:
             Label("Waiting", systemImage: "clock")
                 .labelStyle(StatusLabelStyle())
@@ -162,7 +162,7 @@ struct PictureTextCard: View {
         } else {
             Text(placeholder)
                 .font(.callout)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.themeTertiary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
@@ -230,7 +230,7 @@ private struct StatusLabelStyle: LabelStyle {
             configuration.title
         }
         .font(.subheadline)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(.themeTertiary)
     }
 }
 

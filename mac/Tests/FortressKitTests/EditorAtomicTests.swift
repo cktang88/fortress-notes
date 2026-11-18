@@ -164,7 +164,7 @@ private func nodes(_ block: EditorBlock) -> Int { block.runs.filter { $0.node !=
         let canUndo = manager?.canUndo ?? false
         manager?.undo()
         #expect(live.table.cell(row: 0, column: 0)?.plainText == "R0C0",
-                "undo in the cell: canUndo \(canUndo), same manager \(manager === window.undoManager), text now \(cell.string)")
+                "undo in the cell: canUndo \(canUndo), same manager \(manager === editor.textView.undoManager), text now \(cell.string)")
         cell.setSelectedRange(NSRange(location: cell.string.utf16.count, length: 0))
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         cell.insertText(" edited", replacementRange: cell.selectedRange())
@@ -175,7 +175,8 @@ private func nodes(_ block: EditorBlock) -> Int { block.runs.filter { $0.node !=
         #expect(live.editor == nil)
         #expect(live.text(row: 0, column: 0).string == "R0C0 edited")
         #expect(editor.currentBlocks()[1].table?.cell(row: 0, column: 0)?.plainText == "R0C0 edited")
-        window.undoManager?.undo()
+        // ⌘Z with the note focused: the note's own undo stack (not the window's).
+        editor.textView.undoManager?.undo()
         #expect(live.table.cell(row: 0, column: 0)?.plainText == "R0C0")
         #expect(live.text(row: 0, column: 0).string == "R0C0")
     }

@@ -1,0 +1,248 @@
+"""The notes folder as an Obsidian vault (app/vault.py, documents.MirrorWriter)."""
+
+import json
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+import frontmatter
+from fastapi.testclient import TestClient
+
+from app import block_store, documents, vault
+from app.block_store import apply_transaction, document_tree
+from app.models import BlockOperation, NoteCreate
+from app.portability import import_markdown_directory
+from support import make_settings, mirror_file, use_settings
+
+
+def _walk(nodes):
+    for node in nodes:
+        yield node
+        yield from _walk(node.get("children") or [])
+
+
+class LayoutTests(unittest.TestCase):
+    def test_names_folders_clashes_and_link_targets(self) -> None:
+        folders = [
+            {"id": "f1", "parent_id": None, "name": "Work", "position": 0},
+            {"id": "f2", "parent_id": "f1", "name": "Q3: plans", "position": 0},
+            {"id": "f3", "parent_id": None, "name": "assets", "position": 1},
+            {"id": "f4", "parent_id": None, "name": "work", "position": 2},
+        ]
+        documents_ = [
+            {"id": "a", "title": "Plans", "folder_id": None, "created_at": "1"},
+            {"id": "b", "title": "plans", "folder_id": None, "created_at": "2"},
+            {"id": "c", "title": "Plans", "folder_id": "f2", "created_at": "3"},
+            {"id": "d", "title": "What? #1 [draft]", "folder_id": "f3", "created_at": "4"},
+            {"id": "e", "title": "", "folder_id": "f4", "created_at": "5"},
+        ]
+        layout = vault.compute_layout(documents_, folders)
+        self.assertEqual(layout.paths, {
+            "a": "Plans.md", "b": "plans 2.md", "c": "Work/Q3 plans/Plans.md",
+            "d": "assets 2/What 1 draft.md", "e": "work 2/Untitled.md",
+        })
+        # The shortest name that is unique in the vault, as Obsidian links.
+        self.assertEqual(layout.targets["a"], "Plans")
+        self.assertEqual(layout.targets["c"], "Work/Q3 plans/Plans")
+        self.assertEqual(layout.targets["b"], "plans 2")
+        self.assertEqual(layout.media_prefix("c"), "../../assets/")
+        self.assertEqual(layout.media_prefix("a"), "assets/")
+
+    def test_someone_elses_file_is_never_taken(self) -> None:
+        layout = vault.compute_layout(
+            [{"id": "a", "title": "Ideas", "folder_id": None, "created_at": "1"}], [],
+            taken=lambda path, _id: path == "Ideas.md",
+        )
+        self.assertEqual(layout.paths["a"], "Ideas 2.md")
+
+
+class _Workspace(unittest.TestCase):
+    def setUp(self) -> None:
+        self.notes = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.settings = make_settings(self.notes)
+        self.enterContext(use_settings(self.settings))
+        self.db = self.settings.block_db_path
+
+    def mirror(self, document_id: str) -> str:
+        documents.flush_mirrors()
+        return mirror_file(self.notes, document_id).read_text(encoding="utf-8")
+
+
+class VaultMirrorTests(_Workspace):
+    def make_linked_notes(self):
+        target = documents.create(NoteCreate(title="Roadmap", body="# Q3 goals\n\nShip the beta.\n\nOther"))
+        heading, goal, _other = target["children"]
+        source = documents.create(NoteCreate(title="Weekly", body="Intro"))
+        tree = apply_transaction(self.db, source["id"], [
+            BlockOperation(operation="insert", type="paragraph", content=[
+                {"type": "text", "text": "See "}, {"type": "docLink", "id": target["id"]},
+                {"type": "text", "text": ", "}, {"type": "blockRef", "id": goal["id"]},
+                {"type": "text", "text": " and "}, {"type": "blockRef", "id": heading["id"]},
+            ]),
+            BlockOperation(operation="insert", type="paragraph", content=[
+                {"type": "text", "text": "Mark", "marks": {"highlight": "yellow"}},
+            ]),
+            BlockOperation(operation="insert", type="callout", attrs={"icon": "💡"}),
+            BlockOperation(operation="insert", type="image",
+                           attrs={"url": "/media/01J00000000000000000000AB1.png", "alt": "chart",
+                                  "width": 300}),
+        ], source["revision"])
+        callout = tree["children"][3]
+        apply_transaction(self.db, source["id"], [
+            BlockOperation(operation="insert", type="paragraph", parent_id=callout["id"],
+                           content=[{"type": "text", "text": "Inside"}]),
+        ], tree["revision"])
+        return target, goal, heading, source
+
+    def test_the_mirror_is_plain_obsidian_markdown(self) -> None:
+        target, goal, heading, source = self.make_linked_notes()
+        weekly = self.mirror(source["id"])
+        self.assertEqual(mirror_file(self.notes, source["id"]), self.notes / "Weekly.md")
+        post = frontmatter.loads(weekly)
+        self.assertEqual(list(post.metadata)[:6], ["title", "created", "updated", "id", "status", "fortress"])
+        self.assertEqual(post.metadata["fortress"], {"provenance": {"source": "manual"}})
+        self.assertEqual(post.content, (
+            "Intro\n\n"
+            f"See [[Roadmap]], [[Roadmap#^{goal['id']}|Ship the beta.]] and [[Roadmap#Q3 goals|Q3 goals]]\n\n"
+            "==Mark==\n\n"
+            '<!-- fortress:block {"attrs":{"icon":"💡"}} -->\n> [!note]\n> Inside\n\n'
+            "![chart|300](assets/01J00000000000000000000AB1.png)"
+        ))
+        roadmap = frontmatter.loads(self.mirror(target["id"])).content
+        # Only the blocks something refers to carry an id: ^id, or (a heading) a comment.
+        self.assertEqual(roadmap, (
+            f'# Q3 goals <!-- fortress:block {{"id":"{heading["id"]}"}} -->\n\n'
+            f"Ship the beta. ^{goal['id']}\n\nOther"
+        ))
+
+    def test_renames_and_moves_rename_files_and_rewrite_the_links_to_them(self) -> None:
+        target, _goal, _heading, source = self.make_linked_notes()
+        documents.flush_mirrors()
+        documents.update(target["id"], documents.NoteUpdate(title="Plan: 2027"))
+        self.assertIn("See [[Plan 2027|Plan: 2027]]", self.mirror(source["id"]))
+        self.assertFalse((self.notes / "Roadmap.md").exists())
+        self.assertTrue((self.notes / "Plan 2027.md").exists())
+        self.assertEqual(frontmatter.loads(self.mirror(target["id"])).metadata["aliases"], ["Plan: 2027"])
+
+        folder = block_store.create_folder(self.db, "Projects")
+        block_store.move_document(self.db, target["id"], folder["id"], position=0)
+        self.mirror(target["id"])
+        self.assertEqual(mirror_file(self.notes, target["id"]), self.notes / "Projects" / "Plan 2027.md")
+        block_store.rename_folder(self.db, folder["id"], "Archive")
+        self.mirror(target["id"])
+        self.assertEqual(mirror_file(self.notes, target["id"]), self.notes / "Archive" / "Plan 2027.md")
+        self.assertFalse((self.notes / "Projects").exists())  # emptied folders go
+
+        # A second note with the same name: links use the path to tell them apart.
+        documents.create(NoteCreate(title="Plan: 2027", body="other"))
+        self.assertIn("See [[Archive/Plan 2027|Plan: 2027]]", self.mirror(source["id"]))
+
+    def test_a_newly_referenced_block_gets_its_id_in_its_own_note(self) -> None:
+        target = documents.create(NoteCreate(title="Target", body="Quote me"))
+        self.assertEqual(frontmatter.loads(self.mirror(target["id"])).content, "Quote me")
+        source = documents.create(NoteCreate(title="Source", body=""))
+        block = target["children"][0]["id"]
+        apply_transaction(self.db, source["id"], [
+            BlockOperation(operation="update", block_id=source["children"][0]["id"],
+                           content=[{"type": "blockRef", "id": block}]),
+        ], source["revision"])
+        self.assertEqual(frontmatter.loads(self.mirror(target["id"])).content, f"Quote me ^{block}")
+
+    def test_someone_elses_file_in_the_folder_is_left_alone(self) -> None:
+        (self.notes / "Ideas.md").write_text("mine", encoding="utf-8")
+        note = documents.create(NoteCreate(title="Ideas", body="theirs"))
+        self.mirror(note["id"])
+        self.assertEqual((self.notes / "Ideas.md").read_text(encoding="utf-8"), "mine")
+        self.assertEqual(mirror_file(self.notes, note["id"]), self.notes / "Ideas 2.md")
+
+    def test_mirrors_of_the_old_format_are_replaced_once(self) -> None:
+        note = documents.create(NoteCreate(title="Old style", body="text"))
+        legacy = self.notes / f"{note['id']}.md"
+        legacy.write_text(f"---\nid: {note['id']}\ncreated_at: x\ncustom: keep\n---\nold\n", encoding="utf-8")
+        (self.notes / documents.MIRROR_STATE).write_text(
+            json.dumps({"epoch": "e", "seq": 1}), encoding="utf-8"
+        )
+        documents.mirrors._states.clear()
+        text = self.mirror(note["id"])
+        self.assertFalse(legacy.exists())
+        self.assertIn("custom: keep", text)
+        self.assertNotIn("created_at", text)
+        state = json.loads((self.notes / documents.MIRROR_STATE).read_text(encoding="utf-8"))
+        self.assertEqual(state["format"], vault.FORMAT_VERSION)
+
+    def test_the_vault_imports_back_losslessly(self) -> None:
+        target, goal, heading, source = self.make_linked_notes()
+        folder = block_store.create_folder(self.db, "Projects")
+        block_store.move_document(self.db, target["id"], folder["id"], position=0)
+        from app.sources import SourceBlock
+
+        onenote = documents.upsert_from_source(
+            source="onenote_import", external_id="{P}", title="Imported",
+            blocks=[SourceBlock("From OneNote", external_id="{B}")],
+            provenance={"source_path": "Book › Page"},
+        )
+        documents.flush_mirrors()
+
+        copy = self.notes.parent / f"{self.notes.name}-copy"
+        self.addCleanup(shutil.rmtree, copy, True)
+        shutil.copytree(self.notes, copy, ignore=shutil.ignore_patterns(".fortress*", "assets"))
+        database = copy / ".fortress.sqlite3"
+        report = import_markdown_directory(database, copy)
+        self.assertEqual(report.error_count, 0, report.items)
+
+        for original in (target, source):
+            before = document_tree(self.db, original["id"])
+            after = document_tree(database, original["id"])  # the note id is kept
+            self.assertEqual(
+                [(node["type"], node["attrs"], node["content"], node["payload"]) for node in _walk(after["children"])],
+                [(node["type"], node["attrs"], node["content"], node["payload"]) for node in _walk(before["children"])],
+            )
+            self.assertEqual((after["title"], after["status"], after["created_at"]),
+                             (before["title"], before["status"], before["created_at"]))
+        # Referenced blocks keep their ids, so the links and backlinks do too.
+        ids = {node["id"] for node in _walk(document_tree(database, target["id"])["children"])}
+        self.assertLessEqual({goal["id"], heading["id"]}, ids)
+        self.assertEqual(len(block_store.document_backlinks(database, target["id"])), 3)
+        moved = next(item for item in block_store.navigation(database)["items"] if item.get("kind") == "folder")
+        self.assertEqual(moved["name"], "Projects")
+        imported = document_tree(database, onenote.document_id)
+        self.assertEqual(imported["provenance"]["source"], "onenote_import")
+        self.assertEqual(imported["children"][0]["provenance"]["external_id"], "{B}")
+
+
+class LinkedBodyTests(_Workspace):
+    def test_wikilinks_typed_in_a_capture_link_to_existing_notes(self) -> None:
+        target = documents.create(NoteCreate(title="Groceries", body="milk"))
+        captured = documents.capture("Add eggs to [[groceries]], see [[Nothing yet]]")
+        [block] = document_tree(self.db, captured["document_id"])["children"]
+        self.assertEqual(block["content"], [
+            {"type": "text", "text": "Add eggs to "}, {"type": "docLink", "id": target["id"]},
+            {"type": "text", "text": ", see [[Nothing yet]]"},
+        ])
+
+
+class UploadTests(_Workspace):
+    def test_files_uploaded_together_link_to_each_other(self) -> None:
+        from app import main
+
+        client = self.enterContext(TestClient(main.app))
+        existing = documents.create(NoteCreate(title="Already here", body="x"))
+        response = client.post("/api/markdown-import/files", files=[
+            ("files", ("Alpha.md", b"Hi [[Beta#^b1|beta]] and [[Already here]] [[beta]]", "text/markdown")),
+            ("files", ("Beta.md", b"---\naliases: [B]\n---\nTarget ^b1\n\nBack to [[Alpha]]", "text/markdown")),
+        ])
+        self.assertEqual(response.status_code, 200, response.text)
+        ids = {item["name"]: item["id"] for item in response.json()["imported"]}
+        alpha = document_tree(self.db, ids["Alpha.md"])
+        beta = document_tree(self.db, ids["Beta.md"])
+        self.assertEqual(alpha["children"][0]["content"], [
+            {"type": "text", "text": "Hi "}, {"type": "blockRef", "id": beta["children"][0]["id"]},
+            {"type": "text", "text": " and "}, {"type": "docLink", "id": existing["id"]},
+            {"type": "text", "text": " "}, {"type": "docLink", "id": beta["id"]},
+        ])
+        self.assertEqual(beta["children"][1]["content"][1], {"type": "docLink", "id": alpha["id"]})
+
+
+if __name__ == "__main__":
+    unittest.main()

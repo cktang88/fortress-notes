@@ -224,7 +224,6 @@ class ApiWorkTests(unittest.TestCase):
         )
 
     def test_transactions_write_the_mirror_in_the_background(self) -> None:
-        mirror = self.notes / f"{self.note['id']}.md"
         import threading
 
         writers = []
@@ -239,6 +238,7 @@ class ApiWorkTests(unittest.TestCase):
         # Only the mirrors lane writes mirrors, never the request.
         self.assertEqual(set(writers) - {"fortress-mirrors"}, set())
         self.documents.flush_mirrors()
+        mirror = self.documents.mirror_path(self.note["id"], self.notes)
         self.assertIn("Background", mirror.read_text(encoding="utf-8"))
 
     def test_transaction_response_primes_the_get_and_its_etag(self) -> None:
