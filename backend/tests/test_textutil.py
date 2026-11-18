@@ -15,6 +15,12 @@ class TextRulesTests(unittest.TestCase):
         self.assertEqual(folded, "creme brulee at cafe angstrom")
         self.assertEqual(textutil.words("Café-Crème_2024!"), ["cafe", "creme", "2024"])
 
+    def test_fold_is_one_character_per_character_for_every_code_point(self) -> None:
+        text = "".join(chr(code) for code in range(0x20000) if not 0xD800 <= code < 0xE000)
+        folded = textutil.fold(text)
+        self.assertEqual(len(folded), len(text))
+        self.assertEqual(textutil.fold("İSTANBUL Straße ǅ"), "istanbul straße ǆ")
+
     def test_fold_accents_leaves_ascii_regex_syntax_alone(self) -> None:
         self.assertEqual(textutil.fold_accents(r"\D\W[Éé]+ Café"), r"\D\W[ee]+ Cafe")
 

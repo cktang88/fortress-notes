@@ -43,7 +43,7 @@ def fold(text: str) -> str:
 
     if text.isascii():
         return text.lower()
-    return "".join(map(_fold_char, text))
+    return text.translate(_FOLD_TABLE)
 
 
 def fold_accents(pattern: str) -> str:
@@ -56,6 +56,17 @@ def fold_accents(pattern: str) -> str:
     if pattern.isascii():
         return pattern
     return "".join(c if c.isascii() else _fold_char(c) for c in pattern)
+
+
+class _FoldTable(dict):
+    """code point -> folded character, filled on first use (for ``str.translate``)."""
+
+    def __missing__(self, code: int) -> str:
+        folded = self[code] = _fold_char(chr(code))
+        return folded
+
+
+_FOLD_TABLE = _FoldTable()
 
 
 @lru_cache(maxsize=4096)
