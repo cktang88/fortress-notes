@@ -216,7 +216,6 @@ class ApiWorkTests(unittest.TestCase):
             patch.object(assets, "get_settings", lambda: settings),
             patch.object(images, "get_settings", lambda: settings),
             patch.object(search, "get_settings", lambda: settings),
-            patch.object(images, "extract_and_store", lambda _path: None),
         ):
             item.start()
             self.addCleanup(item.stop)

@@ -34,7 +34,6 @@ class UploadLimitTests(unittest.TestCase):
             patch.object(search, "get_settings", lambda: settings),
             patch.object(images, "get_settings", lambda: settings),
             patch.object(assets, "get_settings", lambda: settings),
-            patch.object(images, "extract_and_store", lambda _path: None),
             patch.object(main, "MAX_UPLOAD_BYTES", 3 * 1024 * 1024 + 5),
         ):
             item.start()

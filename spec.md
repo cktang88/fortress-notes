@@ -29,8 +29,8 @@ status: rough           # "rough" | "polished"
 tags: [ideas, project]
 created_at: 2026-06-20T10:00:00Z
 updated_at: 2026-06-20T10:05:00Z
-images:                  # cached caption+OCR per referenced image (see §6)
-  01J...: "A bar chart. Text in image: Q1 revenue"
+images:                  # text read from each referenced picture/PDF (see §6)
+  01J....png: "Q1 revenue"
 ---
 
 The note body in Markdown.
@@ -212,7 +212,8 @@ merging apply to text blocks only.
 | `GET` | `/api/notes/{id}/related` | `?k=5` | `SearchResult[]` |
 | `POST` | `/api/notes/{id}/review` | `?kind=factcheck\|clarify\|object` | `ReviewResponse` |
 | `POST` | `/api/block-documents/{id}/link-checks` | — | `{links: [{url, status, checked_at, block_ids}]}` |
-| `POST` | `/api/images` | multipart `file` | `{url, text}` (saves image, runs caption+OCR) |
+| `POST` | `/api/images` | multipart `file` | `{url, text}` (saves image; OCR is queued, `text` is empty) |
+| `GET` | `/api/ocr` | — | `{enabled, model, queued, done, failed, running}` (background OCR state) |
 | `GET` | `/media/{file}` | — | stored file bytes (ranges, immutable caching; see below) |
 | `POST` | `/api/batch/block-documents` | `{ids: [≤50], known: {id: revision}}` | `{documents: [tree], unchanged: [id], missing: [id]}`; does not mark notes opened |
 | `POST` | `/api/batch/move` | `{documents: [{id, folder_id}], folders: [{id, parent_id}]}` | `{folders, documents}` (counts moved) |
@@ -343,23 +344,42 @@ returned and retried on a later open; they never edit note content. Results incl
 the current block IDs for each link, so removed or changed links do not keep stale
 associations.
 
-## 6. Images & vision (`images.py`, `vision.py`)
+## 6. Images & OCR (`ocr.py`, `images.py`)
 
 - **Paste/drop**: the editor's `handlePaste`/`handleDrop` (logic in `paste.ts`,
   unit-tested) pull image files from the clipboard/drop, `POST /api/images`, and insert
   an `<img>` with the returned `/media/…` URL. Markdown stays small — images are files.
 - **Fast & non-blocking**: `/api/images` saves the file and returns **immediately**
-  (~ms); caption/OCR runs in a tracked background task (`asyncio.to_thread`, references
-  held so it isn't GC'd) so the image appears instantly and the event loop never blocks.
+  (~ms); OCR runs later on the OCR worker thread, never on a request.
 - **Resize**: `ImageResize` (extends Tiptap `Image`) adds a drag handle that writes a
   `width` attribute; turndown `keep(['img'])` preserves `<img width=…>` as raw HTML so
   the size round-trips through Markdown.
-- **Searchable images**: **RapidOCR** and local SmolVLM captions run once per image and
-  write per-image and content-hash sidecars (cache reused across duplicate bytes). `note_search_text`
-  folds title + body + sidecar text so full-text and embedding search cover image text;
-  the text is also mirrored into the note's `images:` frontmatter on save. Captions are
-  enabled by default and use the small **SmolVLM-256M** model; OCR and captioning run
-  locally. Models lazy-load + pre-warm in the background at startup.
+- **OCR pipeline** (`ocr.py`): every image (png/jpeg/gif/webp/bmp/tiff) and PDF
+  asset — pasted, uploaded or imported from OneNote — is read once per content
+  SHA-256 and OCR model id (`ocr.MODEL`). Images: RapidOCR with PP-OCRv6 small
+  (ONNX Runtime on CPU, models bundled in the `rapidocr` wheel, no torch), EXIF
+  rotation applied, transparency flattened onto white, detected boxes grouped into
+  lines. PDFs: the embedded text layer (pypdfium2); a page is rendered (≤2000 px)
+  and OCR'd only when its text layer is (nearly) empty, or short with a picture
+  covering ≥25% of the page (≤100 OCR'd pages per PDF).
+- **Queue = SQLite**: `ocr_results(content_hash, model, status, text, method, pages,
+  attempts, error, …)`. An asset is pending while no `done`/`failed` row exists for its
+  hash and the current model, so the queue survives restarts with nothing to replay,
+  a changed model re-reads everything lazily (the old text stays searchable meanwhile;
+  old-model rows are dropped once re-read) and a cache hit costs nothing. One daemon
+  thread works through it: newest assets first, pictures whose every block already has
+  OneNote's OCR text (`alt`) last; woken by uploads and imports, and it polls once a
+  minute for assets registered any other way. `running` is written before the work,
+  so an asset that crashes the process is retried at most 3 times.
+- **Searchable, not shown**: the text goes to `assets.text`, which feeds each owning
+  block's FTS row, its ColBERT document (the block's version includes the asset's
+  `text_updated_at`, so only that block is re-encoded), Ask's grep corpus and the
+  sources Ask shows the model (`[Text in attached picture/PDF]`), and unified-search
+  snippets when the match is in the picture. OneNote alt text stays in the block's own
+  text, so both are indexed. `GET …/info` lists `picture_text` per picture/PDF block
+  (status, method, pages, model, text) and `GET /api/ocr` the queue state.
+- Older `<id>.txt` sidecars are migrated into `assets.text` once by
+  `backfill_assets` (until the queue re-reads the file).
 
 ## 7. Workspace safety and organization
 
@@ -581,10 +601,10 @@ app bundle), else `PATH`. Converter timeout: `FORTRESS_ONENOTE_TIMEOUT_S`
   `sections_removed_in_source` (folders are kept). Pages of sections that failed
   to read this time are never counted as removed; notebooks not in the export
   are not looked at.
-- **Images without OneNote OCR text** (png/jpeg/gif/webp) are queued for the
-  app's local caption + OCR (`images.extract_and_store`, one at a time on a
-  background thread, after the import; skipped if the asset already has text)
-  so their text becomes searchable; `images_ocr_queued` counts them.
+- **OCR**: every imported image and PDF goes through the app's OCR queue (§6);
+  images without OneNote OCR text wake it as soon as their page is written
+  (`images_ocr_queued` counts them), pictures that have OneNote's text are read
+  last.
 - **Text coverage**: per page, the words of the manifest's text (text blocks,
   table cells, image alt/OCR and ink text; math excluded) are compared with the
   imported note's blocks (case-folded words weighted by length, as a multiset;
@@ -652,7 +672,8 @@ ended.
 ## 8. Roadmap / potential features
 
 - **PLAID/Voyager index** for embedding search at larger scale.
-- Larger leaderboard-class OCR/VLM (e.g. PaddleOCR-VL) as an opt-in.
+- Larger leaderboard-class OCR/VLM (e.g. PaddleOCR-VL) as an opt-in tier; on the
+  Mac, Apple Vision OCR from the native app.
 - Graph view stays deferred (outside the single-user product boundary).
 
 ## 9. Open questions
