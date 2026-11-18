@@ -173,6 +173,7 @@ extension AppModel {
         }
         patch(&navigation.items)
         for index in navigation.recent.indices { patch(&navigation.recent[index]) }
+        recordBlockVersions(of: document)  // Finding: "Seen before" cache key.
     }
 
     // MARK: Notes

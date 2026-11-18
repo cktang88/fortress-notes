@@ -48,6 +48,7 @@ struct SearchResultsView: View {
             let api = model.api
             controller.update(query: query) { try await api.search($0) }
         }
+        .onDisappear { controller.cancel() }
         .onLocalKeyDown(handleKey)
     }
 

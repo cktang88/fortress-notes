@@ -1,108 +1,5 @@
 import Foundation
 
-// MARK: Fuzzy matching
-
-/// How well a query matches a name. Tiers come first, so a command whose name *contains*
-/// the query always beats a note that only matches scattered letters.
-enum FuzzyMatch {
-    struct Result: Equatable {
-        var score: Int
-        /// Character offsets in the candidate that matched (for bolding).
-        var indices: [Int]
-    }
-
-    static func match(_ query: String, in candidate: String) -> Result? {
-        let needle = fold(query.trimmingCharacters(in: .whitespaces))
-        guard !needle.isEmpty else { return Result(score: 1, indices: []) }
-        let hay = fold(candidate)
-        guard !hay.isEmpty else { return nil }
-
-        if let start = find(needle, in: hay) {
-            let indices = Array(start..<(start + needle.count))
-            let atWord = start == 0 || !isWordCharacter(hay[start - 1])
-            let base: Int
-            if start == 0 && needle.count == hay.count {
-                base = 10_000  // Exact.
-            } else if start == 0 {
-                base = 9_000  // Prefix.
-            } else if atWord {
-                base = 8_000  // Starts a word.
-            } else {
-                base = 7_000  // Somewhere inside.
-            }
-            // Earlier and shorter candidates rank higher within a tier.
-            return Result(score: base - min(start, 200) * 4 - min(hay.count, 400), indices: indices)
-        }
-
-        // Several words in any order, each found at a word start: "trip kyo".
-        let words = needle.split(separator: " ").map(Array.init)
-        if words.count > 1 {
-            var indices: [Int] = []
-            for word in words {
-                guard let start = findAtWordStart(word, in: hay) else { indices = []; break }
-                indices += Array(start..<(start + word.count))
-            }
-            if !indices.isEmpty {
-                return Result(score: 6_000 - min(hay.count, 400), indices: indices.sorted())
-            }
-        }
-
-        // Scattered letters in order ("kt" → "Kyoto trip"); fewer gaps and word starts score higher.
-        let letters = needle.filter { $0 != " " }
-        var indices: [Int] = []
-        var position = 0
-        for letter in letters {
-            // Prefer the next occurrence at a word start, else the next occurrence.
-            var found: Int?
-            var index = position
-            var firstPlain: Int?
-            while index < hay.count {
-                if hay[index] == letter {
-                    if firstPlain == nil { firstPlain = index }
-                    if index == 0 || !isWordCharacter(hay[index - 1]) { found = index; break }
-                }
-                index += 1
-            }
-            guard let hit = found ?? firstPlain else { return nil }
-            indices.append(hit)
-            position = hit + 1
-        }
-        let span = (indices.last ?? 0) - (indices.first ?? 0) + 1
-        let gaps = span - indices.count
-        let wordStarts = indices.filter { $0 == 0 || !isWordCharacter(hay[$0 - 1]) }.count
-        let score = 3_000 + wordStarts * 150 - gaps * 25 - (indices.first ?? 0) * 5 - min(hay.count, 400)
-        return Result(score: max(1, min(score, 5_999)), indices: indices)
-    }
-
-    /// Lowercased, accents removed, one entry per character of the original.
-    static func fold(_ text: String) -> [Character] {
-        text.map { character in
-            String(character).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).first ?? character
-        }
-    }
-
-    private static func isWordCharacter(_ character: Character) -> Bool {
-        character.isLetter || character.isNumber
-    }
-
-    private static func find(_ needle: [Character], in hay: [Character]) -> Int? {
-        guard needle.count <= hay.count else { return nil }
-        for start in 0...(hay.count - needle.count) where hay[start] == needle[0] {
-            if Array(hay[start..<(start + needle.count)]) == needle { return start }
-        }
-        return nil
-    }
-
-    private static func findAtWordStart(_ needle: [Character], in hay: [Character]) -> Int? {
-        guard !needle.isEmpty, needle.count <= hay.count else { return nil }
-        for start in 0...(hay.count - needle.count)
-        where (start == 0 || !isWordCharacter(hay[start - 1])) && Array(hay[start..<(start + needle.count)]) == needle {
-            return start
-        }
-        return nil
-    }
-}
-
 // MARK: Palette contents
 
 enum PaletteCommand: String, CaseIterable, Sendable {
@@ -224,8 +121,24 @@ enum PaletteCatalog {
         return notes
     }
 
+    /// Recent notes with the folder each lives in.
+    static func recent(in navigation: NavigationResponse, notes: [PaletteNote]) -> [PaletteNote] {
+        guard !navigation.recent.isEmpty else { return [] }
+        let wanted = Set(navigation.recent.map(\.id))
+        var folders: [String: String] = [:]
+        for note in notes where wanted.contains(note.id) {
+            if let folder = note.folder { folders[note.id] = folder }
+        }
+        return navigation.recent.map { PaletteNote(id: $0.id, title: $0.title, folder: folders[$0.id]) }
+    }
+
     /// The sections to show for what's typed. Prefixes: ">" commands only, "?" ask, "/" search.
     static func sections(for rawQuery: String, notes: [PaletteNote], recent: [PaletteNote]) -> [PaletteSection] {
+        sections(for: rawQuery, index: PaletteIndex(notes: notes, recent: recent))
+    }
+
+    /// The sections for what's typed, ranked against a prebuilt index (titles already folded).
+    static func sections(for rawQuery: String, index: PaletteIndex) -> [PaletteSection] {
         let trimmed = rawQuery.trimmingCharacters(in: .whitespaces)
 
         if trimmed.hasPrefix("?") {
@@ -243,7 +156,7 @@ enum PaletteCatalog {
         }
 
         if trimmed.isEmpty {
-            let recentItems = recent.prefix(5).map { noteItem($0, match: nil) }
+            let recentItems = index.recent.prefix(5).map { noteItem($0, match: nil) }
             let suggested = PaletteCommand.suggested.map { commandItem($0, query: "")! }
             return [
                 PaletteSection(title: recentItems.isEmpty ? nil : "Recent", items: Array(recentItems)),
@@ -251,11 +164,28 @@ enum PaletteCatalog {
             ].filter { !$0.items.isEmpty }
         }
 
-        var matches: [PaletteItem] = notes.compactMap { note in
-            FuzzyMatch.match(trimmed, in: note.title.isEmpty ? "Untitled" : note.title).map { noteItem(note, match: $0) }
+        // Score every title without allocating, keep the best few, and only then build rows
+        // (with the offsets to bold) for those.
+        let query = FuzzyMatch.Query(trimmed)
+        var best = TopScores(capacity: maxMatches)
+        index.entries.withUnsafeBufferPointer { entries in
+            for offset in entries.indices {
+                if let score = FuzzyMatch.score(query, in: entries[offset].folded) {
+                    best.insert(score: score, offset: offset)
+                }
+            }
         }
-        matches += PaletteCommand.allCases.compactMap { commandItem($0, query: trimmed) }
-        let top = Array(ranked(matches).prefix(maxMatches))
+        let commands = PaletteCommand.allCases.compactMap { commandItem($0, query: trimmed) }
+        for (offset, command) in commands.enumerated() {
+            best.insert(score: command.score, offset: index.entries.count + offset)
+        }
+        let top: [PaletteItem] = best.ranked.map { offset in
+            if offset < index.entries.count {
+                let entry = index.entries[offset]
+                return noteItem(entry.note, match: FuzzyMatch.match(query, in: entry.folded))
+            }
+            return commands[offset - index.entries.count]
+        }
         let fallbacks = [
             PaletteItem(id: "new:\(trimmed)", title: "New Note “\(trimmed)”", symbol: "square.and.pencil",
                         accessory: nil, action: .newNote(title: trimmed)),
@@ -312,5 +242,87 @@ enum PaletteCatalog {
         PaletteItem(
             id: "search:\(words)", title: words.isEmpty ? "Search inside notes…" : "Search inside notes for “\(words)”",
             symbol: "magnifyingglass", accessory: nil, action: .search(words))
+    }
+}
+
+// MARK: Index and per-keystroke cache
+
+/// Every note title folded for matching, built once per sidebar change.
+struct PaletteIndex: Sendable {
+    struct Entry: Sendable {
+        var note: PaletteNote
+        var folded: FoldedText
+    }
+
+    let notes: [PaletteNote]
+    let recent: [PaletteNote]
+    let entries: [Entry]
+
+    init(notes: [PaletteNote], recent: [PaletteNote]) {
+        self.notes = notes
+        self.recent = recent
+        entries = notes.map { Entry(note: $0, folded: FoldedText($0.title.isEmpty ? "Untitled" : $0.title)) }
+    }
+
+    init(navigation: NavigationResponse) {
+        let notes = PaletteCatalog.notes(in: navigation)
+        self.init(notes: notes, recent: PaletteCatalog.recent(in: navigation, notes: notes))
+    }
+}
+
+/// The best `capacity` (score, offset) pairs: higher score first, then lower offset (the
+/// order the candidates were offered in), like a stable sort.
+struct TopScores {
+    let capacity: Int
+    private(set) var items: [(score: Int, offset: Int)] = []
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        items.reserveCapacity(capacity + 1)
+    }
+
+    var ranked: [Int] { items.map(\.offset) }
+
+    /// Offsets must be offered in increasing order.
+    mutating func insert(score: Int, offset: Int) {
+        if items.count == capacity, let last = items.last, score <= last.score { return }
+        var position = items.count
+        while position > 0 && items[position - 1].score < score { position -= 1 }
+        items.insert((score, offset), at: position)
+        if items.count > capacity { items.removeLast() }
+    }
+}
+
+/// What the palette view keeps between renders: the index (rebuilt only when the
+/// sidebar's notes change) and the sections for the last query (hover and selection
+/// changes re-render the view without ranking again).
+@MainActor
+final class PaletteCache {
+    private var navigation: NavigationResponse?
+    private(set) var index = PaletteIndex(notes: [], recent: [])
+    private var last: (query: String, sections: [PaletteSection])?
+    /// For tests: how often the index was built and the notes ranked.
+    private(set) var indexBuilds = 0
+    private(set) var rankings = 0
+
+    init() {}
+
+    func sections(for query: String, navigation: NavigationResponse) -> [PaletteSection] {
+        if self.navigation != navigation {
+            self.navigation = navigation
+            // A save changes dates in the tree, not titles: keep the folded index then.
+            let notes = PaletteCatalog.notes(in: navigation)
+            let recent = PaletteCatalog.recent(in: navigation, notes: notes)
+            if notes != index.notes || recent != index.recent {
+                index = PaletteIndex(notes: notes, recent: recent)
+                indexBuilds += 1
+                last = nil
+            }
+        }
+        if let last, last.query == query { return last.sections }
+        rankings += 1
+        let sections = PaletteCatalog.sections(for: query, index: index)
+        last = (query, sections)
+        return sections
     }
 }

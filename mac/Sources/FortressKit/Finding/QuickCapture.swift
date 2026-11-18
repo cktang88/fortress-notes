@@ -5,27 +5,71 @@ import SwiftUI
 
 /// Quick Capture: ⇧⌘Space from anywhere opens a small glass panel over whatever app is
 /// in front (without switching to Fortress). ↩ saves to the inbox, ⇧↩ adds a line,
-/// ⌘↩ saves and opens the note, esc puts it away (the draft is kept).
+/// ⌘↩ saves and opens the note, esc puts it away.
+///
+/// Nothing typed is lost: esc (or quitting) keeps the draft until it is saved, and a
+/// capture made while the backend is unreachable waits in an on-disk outbox and is sent
+/// when it answers again. The shortcut is re-registered after sleep, and if another app
+/// owns it the person is told (the menu item still works) and it is retried later.
 @MainActor
 public final class QuickCapture {
     public static let shared = QuickCapture()
 
-    let state = QuickCaptureState()
+    let state: QuickCaptureState
+    let outbox: CaptureOutbox
+    private let drafts: CaptureDraftStore
     private var panel: QuickCapturePanel?
     private weak var model: AppModel?
-    private var hotKey: GlobalHotKey?
+    private var keeper: HotKeyKeeper?
     private var monitor: Any?
-    private var draftExpiry: Date?
     private var hideGeneration = 0
+    private var terminationObserver: NSObjectProtocol?
+
+    init(outbox: CaptureOutbox = CaptureOutbox(), drafts: CaptureDraftStore = CaptureDraftStore()) {
+        self.outbox = outbox
+        self.drafts = drafts
+        state = QuickCaptureState(text: drafts.load())
+        outbox.onSent = { [weak self] _ in
+            guard let self else { return }
+            Task { await self.model?.refreshNavigation() }
+        }
+    }
 
     /// Registers the global shortcut (⇧⌘Space). Safe to call more than once.
     public func install(model: AppModel) {
-        self.model = model
-        guard hotKey == nil else { return }
-        hotKey = GlobalHotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(cmdKey | shiftKey)) { [weak self] in
-            self?.toggle()
+        attach(model)
+        guard keeper == nil else { return }
+        let keeper = HotKeyKeeper { [weak self] in
+            GlobalHotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(cmdKey | shiftKey)) { self?.toggle() }
+        }
+        keeper.onConflict = { [weak self] in
+            self?.model?.notice = Notice(message: "Another app is using ⇧⌘Space, so Quick Capture can’t use it. It’s still in the File menu and the ⌘K palette.")
+        }
+        self.keeper = keeper
+        keeper.activate()
+        let drafts = self.drafts
+        let state = self.state
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { drafts.save(state.text) }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.outbox.nudge() }
         }
     }
+
+    /// Where captures are sent (also used by tests, without the global shortcut).
+    func attach(_ model: AppModel) {
+        self.model = model
+        outbox.connect { [weak model] text in
+            let api = await MainActor.run { model?.api } ?? APIClient()
+            return try await api.capture(text)
+        }
+    }
+
+    /// Whether ⇧⌘Space is registered (false while another app holds it).
+    public var isShortcutRegistered: Bool { keeper?.status == .registered }
 
     public var isShown: Bool { (panel?.isVisible ?? false) && monitor != nil }
 
@@ -35,9 +79,7 @@ public final class QuickCapture {
 
     public func show() {
         hideGeneration += 1
-        if let expiry = draftExpiry, expiry < .now { state.text = "" }
-        draftExpiry = nil
-        state.phase = .editing
+        if state.phase != .saving { state.phase = .editing }
         let panel = self.panel ?? makePanel()
         self.panel = panel
         position(panel)
@@ -52,9 +94,9 @@ public final class QuickCapture {
     }
 
     public func hide() {
+        drafts.save(state.text)  // Kept until saved, across launches too.
         guard let panel, panel.isVisible else { return }
         stopMonitoring()
-        if !state.text.isEmpty { draftExpiry = Date.now.addingTimeInterval(600) }  // Keep a draft for 10 minutes.
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             panel.animator().alphaValue = 0
@@ -68,15 +110,18 @@ public final class QuickCapture {
         }
     }
 
-    func save(andOpen: Bool) {
+    @discardableResult
+    func save(andOpen: Bool) -> Task<Void, Never>? {
         let text = state.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, state.phase != .saving else { return }
+        guard !text.isEmpty, state.phase != .saving else { return nil }
         let api = model?.api ?? APIClient()
         state.phase = .saving
-        Task {
+        drafts.save(state.text)  // Until the server has it.
+        return Task {
             do {
                 let result = try await api.capture(text)
                 state.text = ""
+                drafts.save("")
                 state.phase = .saved(title: result.title, folder: result.folder)
                 await model?.refreshNavigation()
                 if andOpen {
@@ -86,8 +131,16 @@ public final class QuickCapture {
                     try? await Task.sleep(for: .milliseconds(900))
                     if case .saved = state.phase { hide() }
                 }
+            } catch where CaptureOutbox.isRetryable(error) {
+                // Offline or the server is down: keep it on disk and send it later.
+                outbox.enqueue(text)
+                state.text = ""
+                drafts.save("")
+                state.phase = .queued
+                try? await Task.sleep(for: .milliseconds(1400))
+                if state.phase == .queued { hide() }
             } catch {
-                state.phase = .failed(AskTurn.message(for: error))
+                state.phase = .failed(AskTurn.message(for: error))  // The text stays, as a draft.
             }
         }
     }
@@ -149,12 +202,23 @@ public final class QuickCapture {
     }
 }
 
+extension QuickCaptureState.Phase {
+    var isDone: Bool {
+        switch self {
+        case .saved, .queued: true
+        default: false
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class QuickCaptureState {
     enum Phase: Equatable {
         case editing, saving
         case saved(title: String, folder: String)
+        /// Saved on this Mac; sent when the backend answers again.
+        case queued
         case failed(String)
     }
 
@@ -252,12 +316,16 @@ struct QuickCaptureView: View {
                     .lineLimit(1)
             case .saving:
                 Label("Saving…", systemImage: "bolt").foregroundStyle(.secondary)
+            case .queued:
+                Label("Saved on this Mac · it’ll be added when Fortress is back", systemImage: "tray.and.arrow.down")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             case .editing:
                 Label("New note", systemImage: "square.and.pencil")
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if case .saved = state.phase {} else {
+            if state.phase.isDone {} else {
                 hint("Save", key: "↩")
                 hint("Save & Open", key: "⌘↩")
                 hint("Close", key: "esc")

@@ -108,16 +108,17 @@ final class FindingStubProtocol: URLProtocol, @unchecked Sendable {
         for (index, chunk) in reply.chunks.enumerated() {
             delay += chunk.delay
             let isLast = index == reply.chunks.count - 1
-            let needsResponse = !sentResponse && reply.failure == nil
+            // The response goes with the first piece, unless the request fails outright
+            // (a lone failing piece with no data: no connection at all).
+            let failsHere = isLast && reply.failure != nil
+            let needsResponse = !sentResponse && !(failsHere && chunk.data.isEmpty)
             sentResponse = sentResponse || needsResponse
             queue.asyncAfter(deadline: .now() + delay) { [self] in
                 guard !flags.withLock({ $0.stopped }) else { return }
                 if isLast { flags.withLock { $0.done = true } }
                 if let failure = reply.failure, isLast {
-                    if !chunk.data.isEmpty {
-                        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                        client?.urlProtocol(self, didLoad: chunk.data)
-                    }
+                    if needsResponse { client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed) }
+                    if !chunk.data.isEmpty { client?.urlProtocol(self, didLoad: chunk.data) }
                     client?.urlProtocol(self, didFailWithError: URLError(failure))
                     return
                 }

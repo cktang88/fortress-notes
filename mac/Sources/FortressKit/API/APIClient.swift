@@ -116,7 +116,8 @@ public struct APIClient: Sendable {
                     let (bytes, response) = try await session.bytes(for: request)
                     try await check(response, body: nil)
                     for try await line in bytes.lines where !line.isEmpty {
-                        if let event = try Self.askEvent(from: Data(line.utf8)) {
+                        // Finding: a garbled line is skipped, not the end of the answer.
+                        if let event = try? Self.askEvent(from: Data(line.utf8)) {
                             continuation.yield(event)
                         }
                     }
