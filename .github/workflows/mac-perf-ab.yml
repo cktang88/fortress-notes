@@ -1,5 +1,5 @@
 # TEMPORARY (mac-code-audit): what makes a keystroke slower once a long note has loaded
-# (chunked load, run-loop idle work, spell checking). Removed before merging.
+# (chunked load, run-loop idle work, spell checking; run 2). Removed before merging.
 name: mac perf A/B
 on:
   push:
