@@ -586,7 +586,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             cursor = NSMaxRange(next)
         }
         let previousDepth: Int? = first.location > 0 ? storage.blockInfo(at: paragraph(at: first.location - 1).location).map {
-            $0.kind == .embed ? $0.depth - 1 : $0.depth
+            $0.kind.holdsOwnChildren ? $0.depth - 1 : $0.depth
         } : nil
         if delta > 0 {
             guard let previousDepth, firstInfo.depth + delta <= previousDepth + 1 else { NSSound.beep(); return }

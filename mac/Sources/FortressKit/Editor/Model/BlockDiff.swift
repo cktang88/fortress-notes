@@ -13,14 +13,30 @@ public struct SyncedTree: Hashable, Sendable {
 
     /// The tree a list of editor blocks describes.
     public init(_ blocks: [EditorBlock]) {
-        let shaped = BlockDiff.shape(blocks)
         children[nil] = []
-        for item in shaped {
-            parent.updateValue(item.parent, forKey: item.block.id)
-            children[item.parent, default: []].append(item.block.id)
-            children[item.block.id] = children[item.block.id] ?? []
-            fields[item.block.id] = BlockCodec.encode(item.block)
-            order.append(item.block.id)
+        add(blocks, under: nil)
+    }
+
+    /// Adds a flat run of blocks under `root`; a columns block brings its column blocks
+    /// and their blocks along (they are ordinary children on the server).
+    private mutating func add(_ blocks: [EditorBlock], under root: String?) {
+        for item in BlockDiff.shape(blocks) {
+            let id = item.block.id
+            let parentId = item.parent ?? root
+            parent.updateValue(parentId, forKey: id)
+            children[parentId, default: []].append(id)
+            children[id] = children[id] ?? []
+            fields[id] = BlockCodec.encode(item.block)
+            order.append(id)
+            guard item.block.kind == .columns, let columns = item.block.columns else { continue }
+            for column in columns {
+                parent.updateValue(id, forKey: column.id)
+                children[id, default: []].append(column.id)
+                children[column.id] = children[column.id] ?? []
+                fields[column.id] = column.fields
+                order.append(column.id)
+                add(column.blocks, under: column.id)
+            }
         }
     }
 
@@ -45,7 +61,7 @@ public enum BlockDiff {
         for var block in blocks {
             let maxDepth: Int
             if let previous = output.last {
-                maxDepth = previous.block.kind == .embed ? previous.depth : previous.depth + 1
+                maxDepth = previous.block.kind.holdsOwnChildren ? previous.depth : previous.depth + 1
             } else {
                 maxDepth = 0
             }
@@ -63,7 +79,13 @@ public enum BlockDiff {
     public static func operations(from base: SyncedTree, to target: [EditorBlock]) -> (operations: [BlockOperation], result: SyncedTree) {
         let result = SyncedTree(target)
         var newProvenance: [String: JSONValue] = [:]
-        for block in target { if let provenance = block.newProvenance { newProvenance[block.id] = provenance } }
+        func collect(_ blocks: [EditorBlock]) {
+            for block in blocks {
+                if let provenance = block.newProvenance { newProvenance[block.id] = provenance }
+                for column in block.columns ?? [] { collect(column.blocks) }
+            }
+        }
+        collect(target)
         var children = base.children
         var parent = base.parent
         if children[nil] == nil { children[nil] = [] }

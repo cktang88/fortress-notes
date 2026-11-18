@@ -19,12 +19,27 @@ public enum BlockCodec {
         for node in nodes {
             var block = decode(node, depth: depth)
             if let resolved, !resolved.documents.isEmpty { block.runs = currentLinkTitles(block.runs, resolved) }
+            if block.kind == .columns { block.columns = columns(of: node, resolved: resolved) }
             output.append(block)
-            if block.kind != .embed {
+            if !block.kind.holdsOwnChildren {
                 output.append(contentsOf: flatten(node.children, depth: depth + 1, resolved: resolved))
             }
         }
         return output
+    }
+
+    /// The columns of a `columns` block, each with its blocks flattened like the main flow.
+    public static func columns(of node: BlockNode, resolved: ResolvedLinks? = nil) -> [EditorColumn] {
+        node.children.map { child in
+            let origin = BlockOrigin(
+                type: child.type, attrs: child.attrs, userAttrs: child.userAttrs, content: child.content,
+                text: child.text, kind: .embed, native: true, createdAt: child.createdAt, updatedAt: child.updatedAt,
+                provenance: child.provenance, revision: child.revision)
+            var width: Double?
+            if case .number(let value)? = child.attrs["width"] { width = value }
+            return EditorColumn(id: child.id, width: width, origin: origin,
+                                blocks: flatten(child.children, depth: 0, resolved: resolved))
+        }
     }
 
     /// Note links read with the linked note's current title (living links). The stored
@@ -142,6 +157,19 @@ public enum BlockCodec {
             block.kind = .image
         case "file", "audio", "video", "pdf":
             block.kind = .file
+        case "table":
+            if let table = TableContent(blockNote: native) {
+                block.kind = .table
+                block.table = table
+            } else {
+                block.kind = .embed
+            }
+        case "columns":
+            // Columns hold only column blocks (spec §2a); anything else is shown as is.
+            let valid = !node.children.isEmpty && node.children.allSatisfy { $0.type == "column" }
+            block.kind = valid ? .columns : .embed
+        case "math":
+            block.kind = .math
         default:
             block.kind = .embed
         }
@@ -151,7 +179,7 @@ public enum BlockCodec {
             block.kind = .embed
             block.runs = []
         }
-        if block.kind == .embed { origin.children = node.children }
+        if block.kind.holdsOwnChildren { origin.children = node.children }
         block.runs = normalized(block.runs.map { run in
             var run = run
             if run.node == nil { run.text = run.text.replacingOccurrences(of: "\n", with: softBreak) }
@@ -226,6 +254,8 @@ public enum BlockCodec {
             case ("underline", .bool(let on)): marks.underline = on
             case ("strike", .bool(let on)), ("strikethrough", .bool(let on)): marks.strike = on
             case ("code", .bool(let on)): marks.code = on
+            case ("superscript", .bool(let on)): marks.sup = on
+            case ("subscript", .bool(let on)): marks.sub = on
             case ("textColor", .string(let color)): marks.textColor = color == "default" ? nil : color
             case ("backgroundColor", .string(let color)): marks.highlight = color == "default" ? nil : color
             default: marks.extraStyles[key] = value
@@ -239,6 +269,14 @@ public enum BlockCodec {
     /// The fields to write for a block, keeping what the editor doesn't manage.
     public static func encode(_ block: EditorBlock) -> BlockFields {
         let origin = block.origin
+        if block.kind == .table, let table = block.table {
+            if let origin, origin.kind == .table, TableContent(blockNote: origin.content["blocknote"]) == table {
+                return BlockFields(type: origin.type, attrs: origin.attrs, content: origin.content, text: origin.text)
+            }
+            // The server derives the Markdown and plain text of tables; send its shape.
+            return BlockFields(type: "table", attrs: origin?.attrs ?? [:],
+                               content: .object(["blocknote": table.blockNote]), text: table.plainText)
+        }
         if !block.kind.hasInlineText {
             if let origin, origin.kind == block.kind {
                 return BlockFields(type: origin.type, attrs: origin.attrs, content: origin.content, text: origin.text)
@@ -327,6 +365,8 @@ public enum BlockCodec {
         if marks.underline { styles["underline"] = .bool(true) }
         if marks.strike { styles["strike"] = .bool(true) }
         if marks.code { styles["code"] = .bool(true) }
+        if marks.sup { styles["superscript"] = .bool(true) }
+        if marks.sub { styles["subscript"] = .bool(true) }
         if let color = marks.textColor { styles["textColor"] = .string(color) }
         if let color = marks.highlight { styles["backgroundColor"] = .string(color) }
         return .object(styles)
@@ -381,7 +421,7 @@ public enum BlockCodec {
         case .code:
             return "```\(block.language ?? "")\n" + plainText(block.runs) + "\n```"
         case .divider: return "---"
-        case .image, .file, .embed: return block.origin?.content["markdown"]?.stringValue ?? ""
+        case .image, .file, .embed, .table, .columns, .math: return block.origin?.content["markdown"]?.stringValue ?? ""
         }
     }
 
