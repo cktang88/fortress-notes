@@ -7,6 +7,10 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 
+# A block reference reads as its target's current text.
+EDITED = "Edited searchable phrase A migrated searchable block"
+
+
 class BlockApiFlowTests(unittest.TestCase):
     def test_migration_edit_search_references_export_and_restart(self) -> None:
         from app import block_store, main
@@ -49,6 +53,7 @@ class BlockApiFlowTests(unittest.TestCase):
                     source = created.json()
                     block = source["children"][0]
                     original_text = block["text"]
+                    self.assertEqual(original_text, "Draft body A migrated searchable block")
 
                     edited = client.post(
                         f"/api/block-documents/{source['id']}/transactions?response=document",
@@ -58,14 +63,17 @@ class BlockApiFlowTests(unittest.TestCase):
                                 {
                                     "operation": "update",
                                     "block_id": block["id"],
-                                    "text": f"Edited searchable phrase (({target_block_id} \"target\"))",
+                                    "content": [
+                                        {"type": "text", "text": "Edited searchable phrase "},
+                                        {"type": "blockRef", "id": target_block_id},
+                                    ],
                                 }
                             ],
                         },
                     )
                     self.assertEqual(edited.status_code, 200)
                     self.assertEqual(edited.json()["children"][0]["text"],
-                                     f"Edited searchable phrase (({target_block_id} \"target\"))")
+                                     EDITED)
 
                     undone = client.post(
                         f"/api/block-documents/{source['id']}/undo",
@@ -80,7 +88,7 @@ class BlockApiFlowTests(unittest.TestCase):
                     self.assertEqual(redone.status_code, 200)
                     self.assertEqual(
                         redone.json()["children"][0]["text"],
-                        f"Edited searchable phrase (({target_block_id} \"target\"))",
+                        EDITED,
                     )
 
                     results = block_store.search_blocks(settings.block_db_path, "searchable phrase")
@@ -105,7 +113,7 @@ class BlockApiFlowTests(unittest.TestCase):
                     self.assertEqual(recovered.status_code, 200)
                     self.assertEqual(
                         recovered.json()["children"][0]["text"],
-                        f"Edited searchable phrase (({target_block_id} \"target\"))",
+                        EDITED,
                     )
                     restarted_undo = restarted.post(
                         f"/api/block-documents/{source['id']}/undo",

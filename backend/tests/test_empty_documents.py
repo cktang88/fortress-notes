@@ -1,6 +1,6 @@
 """Every live document the editor opens has a block to type into.
 
-BlockNote shows a blank paragraph for an empty document; if the server has no
+An editor shows a blank paragraph for an empty document; if the server has no
 block for it, the first keystrokes refer to a block it never heard of.
 """
 
@@ -51,7 +51,10 @@ class EmptyDocumentTests(unittest.TestCase):
             f"/api/block-documents/{document_id}/transactions?response=document",
             json={
                 "base_revision": document["revision"],
-                "operations": [{"operation": "update", "block_id": block["id"], "text": text}],
+                "operations": [{
+                    "operation": "update", "block_id": block["id"],
+                    "content": [{"type": "text", "text": text}],
+                }],
             },
         )
         self.assertEqual(response.status_code, 200, response.text)

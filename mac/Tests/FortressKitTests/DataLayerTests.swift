@@ -121,10 +121,14 @@ import Testing
 
     /// An answer that left before a save must not put the older revision back.
     @Test func olderReadNeverReplacesANewerSave() async throws {
+        // Like the real server: only the read that left before the save sees revision 4.
+        // (A busy CI machine can outlast `documentMaxAge`, so the last read may revalidate.)
+        let reads = Counter()
         SpyProtocol.reset { seen in
-            seen.method == "POST"
-                ? .document(SpyJSON.document("d1", revision: 5, title: "New"))
-                : .document(SpyJSON.document("d1", revision: 4, title: "Old"), delay: 0.5)
+            if seen.method == "POST" { return .document(SpyJSON.document("d1", revision: 5, title: "New")) }
+            return reads.next() == 0
+                ? .document(SpyJSON.document("d1", revision: 4, title: "Old"), delay: 0.5)
+                : .document(SpyJSON.document("d1", revision: 5, title: "New"))
         }
         let api = SpyProtocol.client()
         async let slowRead = api.document(id: "d1")

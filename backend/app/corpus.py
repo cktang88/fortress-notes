@@ -284,7 +284,7 @@ def _load_notes(connection, document_ids: set[str] | None) -> dict[str, Note]:
                    JOIN assets USING (content_hash, media_name)
                    WHERE block_assets.block_id = blocks.id AND trim(assets.text) <> ''
                ))
-             ORDER BY blocks.document_id, blocks.position, blocks.id""",
+             ORDER BY blocks.document_id, blocks.order_key, blocks.id""",
         params,
     ):
         text = searchable_text(str(row[3]), [row[4]] if row[4] else ())

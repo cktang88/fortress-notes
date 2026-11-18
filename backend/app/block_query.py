@@ -223,7 +223,7 @@ def title_matches(path: Path, query: str, limit: int = 20) -> list[dict[str, obj
                       (SELECT blocks.id FROM blocks
                         WHERE blocks.document_id = documents.id
                           AND blocks.parent_id IS NULL
-                        ORDER BY blocks.position LIMIT 1) AS block_id
+                        ORDER BY blocks.order_key LIMIT 1) AS block_id
                  FROM documents
                 WHERE documents.deleted_at IS NULL"""
         ).fetchall()

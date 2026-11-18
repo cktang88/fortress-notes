@@ -11,13 +11,13 @@ import re
 from pathlib import Path
 
 from . import provenance as _provenance
+from . import order_keys
 from .block_store import (
     _document_provenance,
     _now,
-    _rebuild_document_assets,
-    _rebuild_document_references,
     connection_scope,
     initialize,
+    rebuild_document_derived,
 )
 
 MIN_WORDS = 12
@@ -97,9 +97,8 @@ def move_into(path: Path, source_id: str, target_id: str) -> int:
         }
         if active != {source_id, target_id}:
             raise KeyError("document not found")
-        offset = connection.execute(
-            """SELECT COALESCE(MAX(position) + 1, 0) FROM blocks
-                WHERE document_id = ? AND parent_id IS NULL""",
+        last_key = connection.execute(
+            """SELECT MAX(order_key) FROM blocks WHERE document_id = ? AND parent_id IS NULL""",
             (target_id,),
         ).fetchone()[0]
         moved = connection.execute(
@@ -130,19 +129,30 @@ def move_into(path: Path, source_id: str, target_id: str) -> int:
         connection.executemany(
             "UPDATE blocks SET provenance_json = ?, revision = ? WHERE id = ?", updates
         )
+        # The moved top-level blocks go after the target's, in their order.
+        roots = [
+            row[0] for row in connection.execute(
+                """SELECT id FROM blocks WHERE document_id = ? AND parent_id IS NULL
+                    ORDER BY order_key""",
+                (source_id,),
+            )
+        ]
         connection.execute(
-            """UPDATE blocks
-                  SET document_id = ?,
-                      position = CASE WHEN parent_id IS NULL THEN position + ? ELSE position END
-                WHERE document_id = ?""",
-            (target_id, offset, source_id),
+            "UPDATE blocks SET order_key = '~' || id WHERE document_id = ? AND parent_id IS NULL",
+            (source_id,),
+        )
+        connection.execute(
+            "UPDATE blocks SET document_id = ? WHERE document_id = ?", (target_id, source_id)
+        )
+        connection.executemany(
+            "UPDATE blocks SET order_key = ? WHERE id = ?",
+            list(zip(order_keys.keys_between(last_key, None, len(roots)), roots)),
         )
         connection.execute(
             "DELETE FROM document_history WHERE document_id IN (?, ?)", (source_id, target_id)
         )
         connection.execute("DELETE FROM blocks_fts WHERE document_id = ?", (source_id,))
-        _rebuild_document_references(connection, target_id)
-        _rebuild_document_assets(connection, target_id)
+        rebuild_document_derived(connection, target_id)
         connection.execute(
             """UPDATE documents SET updated_at = ?, revision = revision + 1
                 WHERE id IN (?, ?)""",

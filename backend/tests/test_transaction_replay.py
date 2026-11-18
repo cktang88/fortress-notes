@@ -19,10 +19,12 @@ class TransactionReplayTests(unittest.TestCase):
                 BlockOperation(
                     operation="update",
                     block_id=block["id"],
-                    text="First line, then more",
-                    expected_updated_at=block["updated_at"],
+                    content=[{"type": "text", "text": "First line, then more"}],
                 ),
-                BlockOperation(operation="insert", block_id="01JABCDEFGHJKMNPQRSTVWXYZ0", text="Added"),
+                BlockOperation(
+                    operation="insert", block_id="01JABCDEFGHJKMNPQRSTVWXYZ0", type="paragraph",
+                    content=[{"type": "text", "text": "Added"}],
+                ),
             ]
             first = apply_transaction(
                 database, document["id"], operations, document["revision"], "tx-1"
@@ -45,7 +47,8 @@ class TransactionReplayTests(unittest.TestCase):
             apply_transaction(
                 database,
                 document["id"],
-                [BlockOperation(operation="update", block_id=block_id, text="One")],
+                [BlockOperation(operation="update", block_id=block_id,
+                                content=[{"type": "text", "text": "One"}])],
                 document["revision"],
                 "tx-2",
             )
@@ -53,7 +56,8 @@ class TransactionReplayTests(unittest.TestCase):
                 apply_transaction(
                     database,
                     document["id"],
-                    [BlockOperation(operation="update", block_id=block_id, text="Two")],
+                    [BlockOperation(operation="update", block_id=block_id,
+                                    content=[{"type": "text", "text": "Two"}])],
                     document["revision"],
                     "tx-2",
                 )
