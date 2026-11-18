@@ -164,7 +164,7 @@ private struct LinkCompletionList: View {
     }
 }
 
-/// The small "Add Link" popover (⇧⌘K / ⌘L).
+/// The small "Add Link" popover (⌘K).
 @MainActor
 enum LinkEditor {
     enum Result { case apply(String), remove, cancel }

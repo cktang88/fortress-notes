@@ -147,6 +147,8 @@ final class HotKeyKeeper {
     private(set) var registrations = 0
     /// Called when registering fails (another app owns the shortcut).
     var onConflict: (@MainActor () -> Void)?
+    /// Called when registering succeeds after a conflict.
+    var onRegistered: (@MainActor () -> Void)?
 
     private let register: @MainActor () -> AnyObject?
     private var token: AnyObject?
@@ -204,6 +206,7 @@ final class HotKeyKeeper {
         let previous = status
         status = token == nil ? .conflict : .registered
         if status == .conflict && previous != .conflict { onConflict?() }
+        if status == .registered && previous == .conflict { onRegistered?() }
     }
 }
 

@@ -1,23 +1,25 @@
 import SwiftUI
 
-/// Menu-bar commands for finding things: the ⌘K palette, Ask, and Quick Capture.
-/// Added to the app's scene with `.commands { FindingCommands(model: model) }`.
+/// Menu-bar commands for finding things: the palette (Open Quickly…), Ask, and Quick
+/// Capture. They act on the focused window (`FocusedValues.windowModel`).
 public struct FindingCommands: Commands {
-    let model: AppModel
+    @FocusedValue(\.windowModel) private var model
+    @AppStorage(QuickCaptureShortcut.defaultsKey) private var captureShortcut = QuickCaptureShortcut.standard.storage
 
-    public init(model: AppModel) {
-        self.model = model
-    }
+    public init() {}
 
     public var body: some Commands {
         CommandGroup(after: .sidebar) {
-            Button("Command Palette") {
+            Button(Shortcuts.commandPalette.title) {
+                guard let model else { return }
                 if !model.isPaletteShown { model.paletteQuery = "" }
                 model.isPaletteShown.toggle()
             }
-            .keyboardShortcut("k", modifiers: .command)
+            .keyboardShortcut(Shortcuts.commandPalette)
+            .disabled(model == nil)
 
-            Button("Ask Your Notes…") {
+            Button(Shortcuts.askNotes.title) {
+                guard let model else { return }
                 let query = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
                 if query.isEmpty {
                     model.paletteQuery = "? "
@@ -26,10 +28,13 @@ public struct FindingCommands: Commands {
                     model.route = .ask(question: query)
                 }
             }
-            .keyboardShortcut("a", modifiers: [.command, .shift])
+            .keyboardShortcut(Shortcuts.askNotes)
+            .disabled(model == nil)
 
+            // Shows the global shortcut set in Settings (registered system-wide by QuickCapture).
+            let shortcut = QuickCaptureShortcut(storage: captureShortcut)
             Button("Quick Capture") { QuickCapture.shared.toggle() }
-                .keyboardShortcut(.space, modifiers: [.command, .shift])
+                .keyboardShortcut(shortcut?.keyboardShortcut)
             Divider()
         }
     }

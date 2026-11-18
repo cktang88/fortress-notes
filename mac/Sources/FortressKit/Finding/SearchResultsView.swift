@@ -188,7 +188,7 @@ struct MatchReasons: View {
             ForEach(reasons, id: \.self) { reason in
                 if let info = Self.info[reason] {
                     Image(systemName: info.symbol)
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))  // HIG minimum
                         .foregroundStyle(.themeTertiary)
                         .frame(width: 16, height: 14)
                         .background(ThemeStyle(.surface), in: .capsule)
@@ -207,11 +207,15 @@ struct MatchReasons: View {
 }
 
 /// The highlight behind the selected row: a quiet accent tint with concentric corners.
+/// In a window that isn't key it dims to neutral, like system selections (HIG: only the
+/// key window's controls have color).
 struct RowBackground: View {
     let isSelected: Bool
+    @Environment(\.appearsActive) private var appearsActive
 
     var body: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(isSelected ? AnyShapeStyle(.tint.opacity(0.13)) : AnyShapeStyle(Color.clear))
+            .fill(!isSelected ? AnyShapeStyle(Color.clear)
+                  : appearsActive ? AnyShapeStyle(.tint.opacity(0.13)) : AnyShapeStyle(.quaternary))
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -37,6 +38,7 @@ struct SidebarView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .help("New Folder (⌥⌘N)")
+            .accessibilityLabel("New Folder")
             .disabled(!model.isConnected)
         }
     }
@@ -56,6 +58,7 @@ private struct LibraryRow: View {
         Label(title, systemImage: symbol)
             .tag(scope)
             .modifier(dropTarget)
+            .dropHighlight(isTargeted)
     }
 
     private var dropTarget: SidebarDropTarget {
@@ -70,12 +73,16 @@ private struct LibraryRow: View {
             }
         }
         var onFiles: (@MainActor @Sendable ([URL]) -> Void)?
+        var onFolder: (@MainActor @Sendable (String) async -> Void)?
         if scope != .trash {
             onFiles = { urls in model.beginImport(urls, into: nil) }
         }
+        if let destination {
+            onFolder = { id in await model.moveFolder(id: id, toParent: destination) }
+        }
         return SidebarDropTarget(
             isEnabled: destination != nil || scope == .trash, isTargeted: $isTargeted,
-            onNote: onNote, onFiles: onFiles)
+            onNote: onNote, onFolder: onFolder, onFiles: onFiles)
     }
 }
 
@@ -110,7 +117,13 @@ private struct FolderRow: View {
             }
         }
         .tag(LibraryScope.folder(id: node.id))
+        .draggable(NoteDrag.folderPayload(for: node.id)) {
+            Label(node.name, systemImage: "folder").padding(8)
+        }
         .modifier(dropTarget)
+        .dropHighlight(isTargeted)
+        .accessibilityAction(named: "Rename") { model.renamingFolderId = node.id }
+        .accessibilityAction(named: "New Note in Folder") { Task { await model.newNote(in: node.id) } }
         .contextMenu {
             Button("New Note") { Task { await model.newNote(in: node.id) } }
             Button("New Folder Inside") { Task { await model.newFolder(in: node.id) } }
@@ -152,7 +165,16 @@ private struct FolderRow: View {
         let onFiles: @MainActor @Sendable ([URL]) -> Void = { urls in
             model.beginImport(urls, into: folderId)
         }
-        return SidebarDropTarget(isEnabled: true, isTargeted: $isTargeted, onNote: onNote, onFiles: onFiles)
+        let onFolder: @MainActor @Sendable (String) async -> Void = { id in
+            // A folder can't go into itself or its own subfolder.
+            guard AppModel.canMoveFolder(id, into: folderId, items: model.navigation.items) else {
+                NSSound.beep()
+                return
+            }
+            await model.moveFolder(id: id, toParent: folderId)
+        }
+        return SidebarDropTarget(
+            isEnabled: true, isTargeted: $isTargeted, onNote: onNote, onFolder: onFolder, onFiles: onFiles)
     }
 
     private func commit() {
@@ -162,11 +184,26 @@ private struct FolderRow: View {
     }
 }
 
-/// Accepts notes dragged from the list (as "fortress-note:<id>" text) and Markdown files.
+extension View {
+    /// Shows a sidebar row is a valid drop destination while something is over it.
+    func dropHighlight(_ isTargeted: Bool) -> some View {
+        background {
+            if isTargeted {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(.selection, lineWidth: 2)
+                    .padding(-4)
+            }
+        }
+    }
+}
+
+/// Accepts notes and folders dragged in the window (as "fortress-note:<id>" /
+/// "fortress-folder:<id>" text) and Markdown files.
 struct SidebarDropTarget: ViewModifier {
     let isEnabled: Bool
     @Binding var isTargeted: Bool
     let onNote: @MainActor @Sendable (String) async -> Void
+    var onFolder: (@MainActor @Sendable (String) async -> Void)?
     let onFiles: (@MainActor @Sendable ([URL]) -> Void)?
 
     func body(content: Content) -> some View {
@@ -194,11 +231,16 @@ struct SidebarDropTarget: ViewModifier {
         }
         guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else { return false }
         let onNote = self.onNote
+        let onFolder = self.onFolder
         _ = provider.loadObject(ofClass: NSString.self) { object, _ in
             guard let text = object as? NSString else { return }
             let string = String(text)
             Task { @MainActor in
-                if let id = NoteDrag.noteId(from: string) { await onNote(id) }
+                if let id = NoteDrag.noteId(from: string) {
+                    await onNote(id)
+                } else if let id = NoteDrag.folderId(from: string) {
+                    if let onFolder { await onFolder(id) } else { NSSound.beep() }
+                }
             }
         }
         return true
@@ -230,5 +272,11 @@ enum NoteDrag {
     static func payload(for id: String) -> String { prefix + id }
     static func noteId(from text: String) -> String? {
         text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : nil
+    }
+
+    static let folderPrefix = "fortress-folder:"
+    static func folderPayload(for id: String) -> String { folderPrefix + id }
+    static func folderId(from text: String) -> String? {
+        text.hasPrefix(folderPrefix) ? String(text.dropFirst(folderPrefix.count)) : nil
     }
 }

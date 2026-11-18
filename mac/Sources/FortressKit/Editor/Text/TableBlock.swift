@@ -727,7 +727,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 
     private func replaceTable(with updated: TableContent, actionName: String) {
         let previous = table
-        let undoManager = grid.window?.undoManager
+        let undoManager = grid.noteUndoManager ?? grid.window?.undoManager
         table = updated
         focusedCell = nil
         isBuilt = true
@@ -791,7 +791,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         case ([.command], "b"): toggleMark(\.bold, in: view)
         case ([.command], "i"): toggleMark(\.italic, in: view)
         case ([.command], "u"): toggleMark(\.underline, in: view)
-        case ([.command], "e"): toggleMark(\.code, in: view)
+        case ([.command, .option], "e"): toggleMark(\.code, in: view)
         case ([.command, .shift], "x"): toggleMark(\.strike, in: view)
         case ([.command, .control], "="), ([.command, .control], "+"): toggleMark(\.sup, in: view)
         case ([.command, .control], "-"): toggleMark(\.sub, in: view)
@@ -844,6 +844,9 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 /// controller is its delegate.
 final class CellTextView: NSTextView {
     weak var table: TableBlockController?
+
+    /// The note's undo stack (see `FortressTextView.noteUndo`).
+    override var undoManager: UndoManager? { noteUndoManager ?? super.undoManager }
     var row = 0
     var column = 0
     var cellTheme = EditorTheme()

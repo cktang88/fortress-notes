@@ -6,17 +6,20 @@ struct FortressNotesApp: App {
     @NSApplicationDelegateAdaptor(FortressAppDelegate.self) private var delegate
 
     var body: some Scene {
-        WindowGroup {
-            MainWindow()
-                .environment(delegate.model)
-                .findingSetup(delegate.model)  // Finding: global Quick Capture shortcut (⇧⌘Space).
+        // Each window has its own selection over the shared library; a value opens a
+        // note in a new window (Note ▸ Open in New Window).
+        WindowGroup(id: MainWindowScene.id, for: String.self) { $noteId in
+            MainWindowScene(library: delegate.library, noteId: noteId)
+                .findingSetup(delegate.model)  // Finding: the global Quick Capture shortcut.
         }
         .defaultSize(width: 1280, height: 820)
         .windowResizability(.contentMinSize)
         .commands {
             SidebarCommands()
-            ShellCommands(model: delegate.model)
-            FindingCommands(model: delegate.model)  // Finding: ⌘K palette, Ask, Quick Capture.
+            TextEditingCommands()  // Find (⌘F, ⌘G, ⌘E), Spelling, Substitutions, Speech.
+            ToolbarCommands()
+            ShellCommands(library: delegate.library)
+            FindingCommands()  // Open Quickly… (palette), Ask, Quick Capture.
         }
 
         Settings {

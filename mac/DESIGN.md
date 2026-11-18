@@ -11,9 +11,10 @@ Research date: 18 November 2026. This spec covers the native SwiftUI app in `mac
 1. **The note is the hero.** Chrome recedes, as in Linear's 2026 refresh: "parts central to the user's task should stay in focus, ones that support orientation and navigation should recede." Linear dimmed its sidebar "a few notches" and softened its separators ([Linear, Mar 2026](https://linear.app/now/behind-the-latest-design-refresh)).
 2. **Standard components first, glass only on the navigation layer.** Apple says "Don't use Liquid Glass in the content layer" and "use Liquid Glass effects sparingly" ([HIG: Materials](https://developer.apple.com/design/human-interface-guidelines/materials)). Standard bars, sidebars, sheets and popovers adopt glass on their own. Custom backgrounds on them should be removed ([Adopting Liquid Glass](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)).
 3. **One accent, used for state only.** No color for decoration. Status (rough or polished) is shown by glyph shape, not by hue.
-4. **Keyboard-complete.** Every action is in the menu bar with a shortcut, in the ⌘K palette, and in context menus. Raycast's rule: "every action has a keyboard shortcut, and every shortcut has visual confirmation" ([Raycast teardown, third-party](https://blakecrosley.com/guides/design/raycast)).
+4. **Keyboard-complete.** Every action is in the menu bar (frequent ones with a shortcut), in the palette (Open Quickly…, ⇧⌘O), and in context menus. Raycast's rule: "every action has a keyboard shortcut, and every shortcut has visual confirmation" ([Raycast teardown, third-party](https://blakecrosley.com/guides/design/raycast)).
 5. **Instant and local.** No spinners for local work. Bear's approach: "no spinners, skeleton screens, or toasts… sync runs in the background" ([Bear teardown, third-party](https://blakecrosley.com/guides/design/bear)). Progress UI appears only for network or LLM work, and only after 300 ms.
 6. **Calm motion.** Critically damped springs, no bounce, everything under 300 ms. Reduce Motion is respected everywhere.
+7. **Least surprise: the Mac's keys and menus are never overridden.** ⌘C/⌘V/⌘Z, ⌘F/⌘G/⌘E, ⌘B/⌘I/⌘U, ⌘K (Add Link), ⌘T, ⌥⌘T, ⌥⌘C/⌥⌘V, ⌃⌘Space and the rest of the HIG's standard table keep their system meaning. App shortcuts live in one table (`Shell/Shortcuts.swift`) that `UXAuditTests` checks against the system's; the full map is in b.12.
 
 ---
 
@@ -176,7 +177,9 @@ Content colours come from **one semantic palette** (`App/Theme/Palette.swift`); 
 | Command palette panel | `.glassEffect(.regular, in: .rect(cornerRadius: 22))` in a `GlassEffectContainer`. It is a transient navigation surface floating over content |
 | Quick Capture panel | Same as the palette (it floats over other apps' windows) |
 | "Ask" composer at the bottom of the answer view | `GlassEffectContainer { TextField… Button(.glassProminent) }`, floating 16pt above the bottom edge, like Notes' floating toolbar |
-| Undo toast ("Moved to Trash · Undo") | `.glassEffect(.regular.interactive())` capsule, bottom center, auto-hides after 5s |
+| Undo toast ("Moved to Trash · Undo") | `.glassEffect(.regular.interactive())` capsule, bottom center, auto-hides after 5s (the timer waits while the pointer is on it; its Undo is also Edit ▸ Undo) |
+
+All four custom surfaces go through `floatingGlass(in:)` (`Shell/FloatingGlass.swift`): under Reduce Transparency they become an opaque panel in the theme's surface color with a theme-border hairline, and under Increase Contrast the glass gets that border.
 | Editor floating format bar | **None.** Formatting lives in keyboard shortcuts, Markdown shortcuts and the editor's context menu (*Paragraph Style*). The `[[` note picker is a system popover (glass automatically) |
 
 Under Reduce Transparency, glass becomes opaque automatically. Our custom glass must still read correctly (test it).
@@ -249,7 +252,7 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 **Sidebar** (`List(selection:)`, `.listStyle(.sidebar)`):
 - Sections, in order:
   - **Library**: All Notes, Rough, Polished, Recent (⌘1–⌘4).
-  - **Folders**: nested, as an `OutlineGroup` (disclosure triangles), then **Trash** as the last row (HIG: nothing critical at the bottom).
+  - **Folders**: nested, as an `OutlineGroup` (disclosure triangles, collapsed by default), then **Trash** as the last row (HIG: nothing critical at the bottom). *HIG decision:* the HIG suggests at most two levels in a sidebar; OneNote imports bring notebook → section → page trees, so deeper folders are allowed but stay collapsed, so the sidebar shows two levels unless the person opens more. Folders drag into folders (never into themselves or their own subfolders); notes drag onto folders and the Trash; Markdown files drop onto folders. Every drop has a menu alternative (Note ▸ Move To ▸) and is undoable.
 - A quiet **New Folder** button (⌥⌘N) in the sidebar's bottom inset.
 - No counts and no badges.
 - Drag notes onto a folder, onto All Notes (top level) or onto Trash; drag folders into folders. Drop `.md` files onto a folder to import them there.
@@ -259,7 +262,7 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 - Grouped by date sections like Apple Notes (Today / Yesterday / Previous 7 Days / Previous 30 Days / month names). Section headers are 11pt semibold secondary.
 - Row anatomy (top to bottom): title (1 line), snippet (2 lines, first non-title text), meta line (`time or date · folder`, plus a trailing `circle.dashed` glyph when rough).
 - The column's toolbar has the **Sort and Group** menu (`line.3.horizontal.decrease`) and **New Note** (`square.and.pencil`, ⌘N). The window title shows the open note's title with its folder as subtitle.
-- Context menu: Open, Export as Markdown…, Move to Trash. ⌘⌫ moves the selected note to the Trash (only while the list has focus) with the undo toast.
+- Context menu: Open, Open in New Window, Move To ▸, Export as Markdown…, Move to Trash. ⌘⌫ moves the selected note to the Trash (only while the list has focus) with the undo toast. Library edits (Move to Trash, Restore, Move Note, Move Folder, New Folder, Rename Folder) are undoable with ⌘Z on the window's undo stack (Edit ▸ Undo Move to Trash); the note's text has its own undo stack, so ⌘Z in the editor undoes typing and ⌘Z in the list undoes list actions.
 
 **Editor** (detail):
 - The title is a separate single-line field (28 bold). ↩ in the title moves to the body. A new note's title follows its first line until the person types one.
@@ -290,18 +293,20 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
   - **Follow-up composer**: a floating glass capsule at the bottom with "Ask a follow-up" and a send button (`arrow.up`). Follow-ups stack below the first answer; esc stops a running answer.
 - Failure, no key configured, or nothing found: an inline `.secondary` message (with the closest passages when Ask timed out). Never an alert.
 
-### b.4 Command palette (⌘K)
+### b.4 Command palette (Open Quickly…, ⇧⌘O)
+
+- *Why not ⌘K:* in Notes, Pages, Mail and TextEdit ⌘K is **Add Link**, and the editor keeps it. The palette takes ⇧⌘O, Xcode's Open Quickly, the Mac's own jump-anywhere key.
 
 - A window-anchored glass overlay, **560 wide**, near the top of the window. The rest of the window is not dimmed, matching Raycast and Spotlight.
 - Input: placeholder "Search notes and commands", `magnifyingglass` leading.
   - Prefix `>` limits to commands, `?` asks your notes, `/` searches inside notes.
-- Result sections: **Notes** (fuzzy title match ranked locally from the sidebar tree, matched characters semibold; recent notes when empty), **Commands** (New Note, New Folder, Quick Capture, Search Notes, Ask Your Notes, Show All Notes, Show Trash, Backups, Toggle Inspector, Reload Notes, Import from OneNote…; each also matches synonyms such as "jot" or "migrate").
+- Result sections: **Notes** (fuzzy title match ranked locally from the sidebar tree, matched characters semibold; recent notes when empty), **Commands** (the menu bar's commands: New Note, New Folder, New Window, Quick Capture, Search Notes, Ask Your Notes, Show All Notes / Rough / Polished / Recent, Show Trash, Backups, Back Up Now, Toggle Inspector, Toggle Focus Mode, Reload Notes, Import Markdown Files…, Import from OneNote…, Export as Markdown…, Move Note to Trash, Open Note in New Window; each also matches synonyms such as "jot" or "migrate"; formatting stays in the Format menu, since it acts on the text selection).
 - Row: leading symbol (`.secondary`), title (13), trailing shortcut hint where one exists.
 - Keys: ↑/↓, ↩ runs the selected row, ⌘↩ asks your notes, esc closes.
 
-### b.5 Quick Capture (⇧⌘Space, global)
+### b.5 Quick Capture (⇧⌘Space by default, global, configurable)
 
-- A global hot key registered by the app itself (no third-party package). It is re-registered after sleep; if another app owns the shortcut the person is told, the menu item (View ▸ Quick Capture) still works, and registration is retried later.
+- A global hot key registered by the app itself with Carbon `RegisterEventHotKey` (no Accessibility permission, no third-party package). The person changes it in Settings ▸ General ▸ Keyboard Shortcut (click, press keys; esc cancels, delete turns it off). Combinations macOS or the app already use (⌘Space Spotlight, ⌥⌘Space Finder search, ⌃Space / ⌃⌥Space input sources, ⌃⌘Space emoji, screenshots, the app's menu keys) are refused with the reason; ⇧⌘Space is none of these and not Raycast's or Alfred's default (⌥Space). It is re-registered after sleep; if another app owns it, Settings says so next to it, a notice says so once, the menu item (View ▸ Quick Capture) still works, and registration is retried when the app becomes active.
 - A borderless, non-activating floating panel (`NSPanel`, `.nonactivatingPanel`, `canJoinAllSpaces`, `fullScreenAuxiliary`) hosting SwiftUI, so the app in front does not lose its place, as in Things' Quick Entry. **560 wide**, glass, placeholder "Capture a thought…".
 - Behavior:
   - ↩ saves to the **Uncategorized** folder (`POST /api/capture`; the first line becomes the title). ⇧↩ inserts a newline. ⌘↩ saves and opens the note. esc puts the panel away.
@@ -336,7 +341,7 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 
 - **File → Import → Markdown Files…** (⇧⌘I) picks `.md` files, then a sheet: destination folder ("Into"), "Each file becomes a note named after the file. Front matter (title, status) is kept.", [Cancel] [Import], then the files that couldn't be imported with the reason.
 - Dropping `.md` files on a sidebar folder imports them into it.
-- **File → Import → From OneNote…** (also ⌘K "Import from OneNote…" and Settings ▸ General). One sheet, 560 wide, three steps:
+- **File → Import → From OneNote…** (also the palette's "Import from OneNote…" and Settings ▸ General). One sheet, 560 wide, three steps:
   1. The export how-to (onenote.com/notebooks → Export notebook, or Download on onedrive.com; unlock password-protected sections first), a dashed drop zone with [Choose File…] (.zip, .onepkg, .one), and "Put notebooks in" (top level or a folder).
   2. A step list (Uploading → Converting → Importing pages → Linking pages: done steps `checkmark.circle.fill` secondary, the current one a small spinner, later ones `.quaternary`), one linear progress bar (upload fraction, then pages_done/pages_total), and the current "Notebook › Section › Page" in secondary, truncated in the middle. Closing the sheet doesn't stop the import; a toast says when it's done.
   3. The report: headline + "147 pages · 36 images · 9 files · 12 tables · in 42 s", one card per notebook (`quaternarySystemFill` at 60%, radius 12) with created/updated/unchanged/skipped and images/files/tables/with-columns counts (zeros in `.tertiary`), failed sections with reason and hint, converter notes in a disclosure, unresolved links in a disclosure, [Show in Sidebar] per notebook, and the re-import promise ("Importing the same export again updates these notes; your edits are kept.").
@@ -348,8 +353,10 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 - **General**:
   - **Backend**: status, address (default `http://127.0.0.1:8000`), the Fortress folder (the repository or its `backend/`, found automatically when the app runs from the repository) with [Choose…], "Start the backend automatically" (on by default), the command it runs, [Start Backend] / [Stop Backend] and [Show Log] (`~/Library/Logs/Fortress Notes/backend.log`).
   - **Text in Pictures**: "Read text in pictures and PDFs on this Mac" (Apple Vision).
-  - **Importing from OneNote**: whether the `fortress-onenote` converter is built (how to build it if not) and [Import from OneNote…].
+  - **Keyboard Shortcut**: the global Quick Capture shortcut (b.5).
+  - **Importing from OneNote**: whether the `fortress-onenote` converter is built (how to build it if not) and [Import from OneNote…] (opens in the main window last in front).
 - **Backups**: as in b.8.
+- Settings reopens on the pane last viewed.
 
 ### b.11 Empty states (all `ContentUnavailableView`)
 
@@ -363,13 +370,57 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 | Inspector related empty | see b.6 | | | |
 | Ask: backend unreachable | `bolt.horizontal.circle` | "Ask isn't available" | "The local server isn't responding." | [Try Again] |
 
-### b.12 Menu bar (`ShellCommands`, `FindingCommands`, `SidebarCommands`)
+### b.12 Menu bar and the full shortcut map (`ShellCommands`, `FindingCommands`, `FormatCommands`, `Shell/Shortcuts.swift`)
 
-- **File**: New Note ⌘N, New Folder ⌥⌘N, Import ▸ Markdown Files… ⇧⌘I / From OneNote…, Export as Markdown… ⇧⌘E, Back Up Now, Restore from Backup….
-- **View**: Show/Hide Sidebar ⌃⌘S, Show/Hide Inspector ⌥⌘I, Enter/Exit Focus Mode ⌃⌘↩, Command Palette ⌘K, Ask Your Notes… ⇧⌘A, Quick Capture ⇧⌘Space.
-- **Note**: Move To ▸ (folders, nested ones indented), Move to Trash ⌘⌫ (while the note list has focus).
-- **Go**: All Notes ⌘1, Rough ⌘2, Polished ⌘3, Recent ⌘4, Trash.
-- **Formatting** is handled by the editor (section c) and its context menu's *Paragraph Style* submenu: Body ⌥⌘0, Heading 1/2/3 ⌥⌘1/2/3, Bulleted List ⇧⌘7, Numbered List ⇧⌘8, Checklist ⇧⌘L, Toggle Checkbox ⌘↩, Quote ⌥⌘', Code Block ⌥⌘C, Bold ⌘B, Italic ⌘I, Underline ⌘U, Strikethrough ⇧⌘X, Inline Code ⌘E, Highlight ⇧⌘H, Superscript ⌃⌘=, Subscript ⌃⌘−, Add Link ⇧⌘K or ⌘L, Insert Table ⌥⌘T, Indent ⌘] / Tab, Outdent ⌘[ / ⇧Tab, Move Block Up/Down ⌃⌘↑/↓.
+Menus are in the standard order: App, File, Edit, Format, View, Note, Go, Window, Help. Every command acts on the **window in front** (each window publishes its own `AppModel` with `focusedSceneValue(\.windowModel)`), and is disabled, never hidden, when it doesn't apply. The system's command sets are included: `SidebarCommands`, `TextEditingCommands` (Find, Spelling and Grammar, Substitutions, Transformations, Speech), `ToolbarCommands` (Show/Hide Toolbar ⌥⌘T, Customize Toolbar…). `TextFormattingCommands` is left out on purpose: its Font and Text items set fonts behind the editor's marks; our Format menu sends the editor's own actions instead.
+
+| Menu | Command | Shortcut |
+|---|---|---|
+| App | Settings… | ⌘, |
+| File | New Note | ⌘N (with no window open, opens one and makes the note there) |
+| File | New Folder | ⌥⌘N |
+| File | New Window | – |
+| File | Import ▸ Markdown Files… / From OneNote… | ⇧⌘I / – |
+| File | Export as Markdown… | ⇧⌘E |
+| File | Back Up Now, Restore from Backup… | – |
+| File | Close Window | ⌘W (system) |
+| Edit | Undo / Redo (list actions in the list, typing in the note) | ⌘Z / ⇧⌘Z |
+| Edit | Cut / Copy / Paste / Paste and Match Style / Select All | ⌘X / ⌘C / ⌘V / ⌥⇧⌘V / ⌘A (system) |
+| Edit | Find ▸ Find… / Find Next / Find Previous / Use Selection for Find / Jump to Selection | ⌘F / ⌘G / ⇧⌘G / ⌘E / ⌘J (system, in the note) |
+| Edit | Search All Notes (puts the caret in the window's search field) | ⌥⌘F |
+| Edit | Spelling and Grammar, Substitutions, Transformations, Speech, Writing Tools, Emoji & Symbols | system (⌘; ⌘: ⌃⌘Space) |
+| Format | Bold / Italic / Underline | ⌘B / ⌘I / ⌘U |
+| Format | Strikethrough | ⇧⌘X |
+| Format | Inline Code | ⌥⌘E (⌘E stays Use Selection for Find) |
+| Format | Highlight | ⇧⌘H |
+| Format | Superscript / Subscript | ⌃⌘= / ⌃⌘- |
+| Format | Body, Heading 1/2/3 | ⌥⌘0, ⌥⌘1/2/3 |
+| Format | Bulleted List / Numbered List / Checklist | ⇧⌘7 / ⇧⌘8 / ⇧⌘L |
+| Format | Quote | ⌥⌘' |
+| Format | Code Block | ⌃⌥⌘C (⌥⌘C is Copy Style) |
+| Format | Mark as Checked | ⇧⌘U (as in Notes) |
+| Format | Indent / Outdent | ⌘] / ⌘[ (and Tab / ⇧Tab in lists) |
+| Format | Move Up / Move Down | ⌃⌘↑ / ⌃⌘↓ |
+| Format | Add Link… | ⌘K (as in Notes, Pages, Mail, TextEdit) |
+| Format | Insert Table | – (⌥⌘T is Show/Hide Toolbar) |
+| View | Show/Hide Toolbar, Customize Toolbar… | ⌥⌘T (system) |
+| View | Show/Hide Sidebar | ⌃⌘S |
+| View | Show/Hide Inspector | ⌥⌘I |
+| View | Enter/Exit Focus Mode | ⌃⌘↩ |
+| View | Open Quickly… (palette) | ⇧⌘O |
+| View | Ask Your Notes… | ⇧⌘A |
+| View | Quick Capture | ⇧⌘Space (global, configurable) |
+| View | Reload Notes | ⌘R |
+| View | Enter Full Screen | ⌃⌘F (system) |
+| Note | Move To ▸, Open in New Window | – |
+| Note | Move to Trash (only while the note list has focus; in the note ⌘⌫ deletes to the line start) | ⌘⌫ |
+| Go | All Notes / Rough / Polished / Recent / Trash | ⌘1 / ⌘2 / ⌘3 / ⌘4 / – |
+| Window | Minimize, Zoom, Tile, Merge All Windows, Cycle Windows | ⌘M, ⌘` (system) |
+| Help | Search | ⇧⌘/ (system) |
+
+Inside surfaces: in the palette and the search field ↑/↓ move, ↩ opens, ⌘↩ asks, esc closes or clears; in Quick Capture ↩ saves, ⇧↩ adds a line, ⌘↩ saves and opens, esc puts it away; in a table cell Tab/⇧Tab move between cells. Text navigation and selection (⌥/⌘ arrows, ⇧ to extend, Emacs keys ⌃A/⌃E/⌃K/⌃Y…), Services, Look Up (⌃⌘D or force click), dictation, text replacements and smart quotes/dashes (from System Settings) are NSTextView's own and untouched.
+
+**Pasteboard.** Copying from a note puts the note's blocks (for pasting between notes with kinds and marks), Markdown (`net.daringfireball.markdown`, for Markdown editors and code tools), RTF and plain text on the pasteboard. Pasting takes the same: blocks, rich text (RTF/HTML from Safari, Pages, Word, Notes; marks the editor knows are kept, and the source page is recorded), plain text, and images (a screenshot copied with ⌃⇧⌘4, a PNG/TIFF) or files (a dragged screenshot thumbnail, PDFs, any file), which upload and become picture or file blocks. Paste and Match Style (⌥⇧⌘V) pastes plain text.
 
 ---
 
@@ -418,7 +469,7 @@ BlockEditorController + FortressTextView : NSTextView (TextKit 2)  ← NSViewRep
   - Note links are `docLink` inline nodes; their label is the target's current title (from `resolved_links`), in the accent colour. Typing `[[` opens the note picker. Renames show up everywhere without rewriting stored text.
   - Block references are `blockRef` nodes showing the referenced block's current text, with a subtle underline.
 - **Images and files.** Paste or drop uploads through `POST /api/files`; the image is inserted as an attachment with a view provider (stored `width`/`height`, drag handle for width). The text in pictures comes from OCR (backend and Apple Vision) and is shown in the inspector, never in the note.
-- **Undo.** NSTextView's `undoManager` with `allowsUndo = true`; structural operations (indent, move block ⌃⌘↑/↓, checkbox toggle) register as text-system undo, all in one stack.
+- **Undo.** NSTextView's `undoManager` with `allowsUndo = true`; structural operations (indent, move block ⌃⌘↑/↓, checkbox toggle, table edits) register as text-system undo, all in one stack per note (`FortressTextView.noteUndo`, shared by columns and table cells), separate from the window's stack where list actions are undone.
 - **Performance.**
   - TextKit 2 lays out only the viewport.
   - Never touch `textView.layoutManager`. Accessing it silently drops the view back to TextKit 1.
@@ -428,7 +479,7 @@ BlockEditorController + FortressTextView : NSTextView (TextKit 2)  ← NSViewRep
 
 ### Tables, columns, math (rich imported content)
 
-- **Tables** stay one atomic paragraph in the note (one attachment character) whose view is a live grid: one small TextKit 2 text view per cell (rich marks, links, ⌘B/⌘I/⌘U/⌘E/⇧⌘X, ⌃⌘= superscript, ⌃⌘− subscript). Tab/⇧Tab move between cells (Tab in the last cell adds a row), ↑/↓ at a cell's edge move to the cell above/below or out of the table, Esc leaves it, ↩ is a line break inside the cell. The context menu inserts/deletes rows and columns and toggles the header row; each is one undo step. Look: 14pt cell text, 10/7 padding, radius 6 outline, `separatorColor` grid when `attrs.borders` (borderless tables show faint dashed guides only while a cell is edited), header cells semibold on a 4.5% label tint, imported cell colours as is in light mode and at 22% in dark. Stored column widths (CSS px ≈ pt) are honoured; automatic columns share the rest; everything shrinks to the measure. Nested cell blocks (OneNote lists/pictures in cells) show read-only under the cell text and are kept untouched. A table is saved as ordinary child blocks (`table` → `table_row` → `table_cell` → paragraphs; docs/block-model.md §2): a cell edit is an `update` of that cell's paragraph, a new row or column is inserts, and `text`/Markdown are derived by the server.
+- **Tables** stay one atomic paragraph in the note (one attachment character) whose view is a live grid: one small TextKit 2 text view per cell (rich marks, links, ⌘B/⌘I/⌘U/⌥⌘E/⇧⌘X, ⌃⌘= superscript, ⌃⌘− subscript). Tab/⇧Tab move between cells (Tab in the last cell adds a row), ↑/↓ at a cell's edge move to the cell above/below or out of the table, Esc leaves it, ↩ is a line break inside the cell. The context menu inserts/deletes rows and columns and toggles the header row; each is one undo step. Look: 14pt cell text, 10/7 padding, radius 6 outline, `separatorColor` grid when `attrs.borders` (borderless tables show faint dashed guides only while a cell is edited), header cells semibold on a 4.5% label tint, imported cell colours as is in light mode and at 22% in dark. Stored column widths (CSS px ≈ pt) are honoured; automatic columns share the rest; everything shrinks to the measure. Nested cell blocks (OneNote lists/pictures in cells) show read-only under the cell text and are kept untouched. A table is saved as ordinary child blocks (`table` → `table_row` → `table_cell` → paragraphs; docs/block-model.md §2): a cell edit is an `update` of that cell's paragraph, a new row or column is inserts, and `text`/Markdown are derived by the server.
 - **Columns** stay inside the measure (two columns of ~300pt read well; widening past the measure would break the calm single column). Each column hosts its own block editor (the same controller as the note, embedded, no scrolling), with a 32pt gutter and a hairline. Trade-offs: no selection across columns or out of a column, Find works per column, ↑/↓ leave a column at its first/last line. Saving diffs the column blocks as ordinary children (`column` parents), so edits are inserts/updates/moves the backend accepts; columns are never created or removed from the native editor.
 - **Images** use stored width/height (no jump when the picture loads), never wider than the column or taller than 480; caption 12/16 secondary below; alt text as hover help and accessibility label. **Files** are chips with icon, name and size. **Math** is set from the LaTeX by a small reader (Greek, operators, ^/_ raised/lowered, \frac, \sqrt) in New York italic on a quiet fill, source on hover; saved untouched.
 
@@ -511,17 +562,20 @@ struct FortressNotesApp: App {
     @NSApplicationDelegateAdaptor(FortressAppDelegate.self) private var delegate
 
     var body: some Scene {
-        WindowGroup {
-            MainWindow()                       // NavigationSplitView: sidebar | list or results | editor or Ask, + inspector
-                .environment(delegate.model)
-                .findingSetup(delegate.model)  // global Quick Capture shortcut (⇧⌘Space)
+        // Each window: its own AppModel (selection, open note, sheets) over the shared
+        // Library; a String value opens a note in a new window.
+        WindowGroup(id: MainWindowScene.id, for: String.self) { $noteId in
+            MainWindowScene(library: delegate.library, noteId: noteId)
+                .findingSetup(delegate.model)  // global Quick Capture shortcut
         }
         .defaultSize(width: 1280, height: 820)
         .windowResizability(.contentMinSize)
         .commands {
             SidebarCommands()
-            ShellCommands(model: delegate.model)
-            FindingCommands(model: delegate.model)  // ⌘K palette, Ask, Quick Capture
+            TextEditingCommands()  // Find ⌘F/⌘G/⌘E, Spelling, Substitutions, Speech
+            ToolbarCommands()
+            ShellCommands(library: delegate.library)  // File, Edit, Format, View, Note, Go
+            FindingCommands()  // Open Quickly… (palette), Ask, Quick Capture
         }
 
         Settings {
