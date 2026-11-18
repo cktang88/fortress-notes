@@ -401,6 +401,25 @@ public final class EditorSession {
         }
     }
 
+    /// Whether any open note has edits (or a title) the server doesn't have yet.
+    public static var hasUnsavedEdits: Bool {
+        sessions.contains { box in
+            guard let session = box.session else { return false }
+            return session.hasUnsavedChanges || session.titleTask != nil
+        }
+    }
+
+    /// Quit was chosen with edits unsaved: send them now (the app delegate bounds the wait
+    /// and then quits; whatever didn't go is written to disk in `applicationWillTerminate`).
+    public static func saveAllForQuit() async {
+        for box in sessions {
+            guard let session = box.session else { continue }
+            await session.commitTitle()
+            await session.waitForInFlight()
+            if session.hasUnsavedChanges, session.saveState != .conflict { await session.flush() }
+        }
+    }
+
     /// The app is quitting: there is no time for a request, so unsaved edits go to disk
     /// (synchronously) and are saved the next time their note opens.
     static func applicationWillTerminate() {

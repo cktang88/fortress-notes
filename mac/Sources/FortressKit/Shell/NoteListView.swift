@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Notes in the selected scope, grouped by date like Notes.
 struct NoteListView: View {
@@ -29,6 +30,8 @@ struct NoteListView: View {
                                     .padding(8)
                             }
                             .contextMenu { NoteContextMenu(note: note) }
+                            .accessibilityAction(named: "Move to Trash") { Task { await model.trashNote(id: note.id) } }
+                            .accessibilityAction(named: "Open in New Window") { model.library.openWindow?(note.id) }
                             .onHover { inside in model.prefetchOnHover(noteId: inside ? note.id : nil) }
                     }
                 } header: {
@@ -41,7 +44,6 @@ struct NoteListView: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .themedContent(.sunken)
-        .animation(.smooth(duration: 0.2), value: notes.map(\.id))
         .task(id: model.openNoteId) {
             // Load the notes above and below the open one, so ↑/↓ open instantly. A new
             // selection cancels this before it sends anything.
@@ -60,6 +62,11 @@ struct NoteListView: View {
             guard model.openNoteId != nil else { return .ignored }
             model.requestEditorFocus()
             return .handled
+        }
+        .onCopyCommand {
+            // Edit ▸ Copy on a selected note: its Markdown (loaded when pasted), as Notes copies a note.
+            guard let id = model.openNoteId else { return [] }
+            return [NoteCopy.provider(noteId: id, title: model.openNote.map { NoteListing.displayTitle($0.title) } ?? "", api: model.api)]
         }
         .onDeleteCommand {
             if let id = model.openNoteId { Task { await model.trashNote(id: id) } }
@@ -144,10 +151,12 @@ struct NoteRow: View {
 
 struct NoteContextMenu: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     let note: NavigationDocument
 
     var body: some View {
         Button("Open") { model.open(noteId: note.id) }
+        Button("Open in New Window") { openWindow(id: MainWindowScene.id, value: note.id) }
         MoveToFolderMenu(noteId: note.id)
         Button("Export as Markdown…") {
             model.open(noteId: note.id)
@@ -190,6 +199,25 @@ struct NoteListEmptyView: View {
                 Button("Import Markdown…") { model.isImporterShown = true }
             }
         }
+    }
+}
+
+/// A note copied from the list: its Markdown as plain text and Markdown, fetched when
+/// something pastes it (the title if the server can't be reached).
+enum NoteCopy {
+    static func provider(noteId: String, title: String, api: APIClient) -> NSItemProvider {
+        let provider = NSItemProvider()
+        for type in [UTType.utf8PlainText.identifier, MarkdownCopy.typeIdentifier] {
+            provider.registerDataRepresentation(forTypeIdentifier: type, visibility: .all) { @Sendable completion in
+                nonisolated(unsafe) let completion = completion
+                Task {
+                    let text = (try? await api.markdown(documentId: noteId)) ?? title
+                    completion(Data(text.utf8), nil)
+                }
+                return nil
+            }
+        }
+        return provider
     }
 }
 

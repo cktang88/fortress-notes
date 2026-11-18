@@ -4,6 +4,9 @@ import Foundation
 
 enum PaletteCommand: String, CaseIterable, Sendable {
     case newNote, newFolder, quickCapture, searchNotes, askNotes, allNotes, trash, backups, toggleInspector, reload, importOneNote
+    // The rest of the menu bar, so the palette and the menus offer the same commands (HIG,
+    // DESIGN principle 4). Formatting stays in the Format menu: it acts on the text selection.
+    case newWindow, importMarkdown, exportMarkdown, backUpNow, focusMode, rough, polished, recent, moveToTrash, openInNewWindow
 
     var title: String {
         switch self {
@@ -18,6 +21,16 @@ enum PaletteCommand: String, CaseIterable, Sendable {
         case .toggleInspector: "Toggle Inspector"
         case .reload: "Reload Notes"
         case .importOneNote: "Import from OneNote…"
+        case .newWindow: "New Window"
+        case .importMarkdown: "Import Markdown Files…"
+        case .exportMarkdown: "Export as Markdown…"
+        case .backUpNow: "Back Up Now"
+        case .focusMode: "Toggle Focus Mode"
+        case .rough: "Show Rough"
+        case .polished: "Show Polished"
+        case .recent: "Show Recent"
+        case .moveToTrash: "Move Note to Trash"
+        case .openInNewWindow: "Open Note in New Window"
         }
     }
 
@@ -35,6 +48,16 @@ enum PaletteCommand: String, CaseIterable, Sendable {
         case .toggleInspector: ["related", "backlinks", "info", "sidebar"]
         case .reload: ["refresh", "sync"]
         case .importOneNote: ["onenote", "microsoft", "notebook", "migrate", "export"]
+        case .newWindow: ["window", "tab"]
+        case .importMarkdown: ["markdown", "md", "files"]
+        case .exportMarkdown: ["save", "markdown", "md", "share"]
+        case .backUpNow: ["backup", "snapshot", "save"]
+        case .focusMode: ["distraction", "zen", "full", "hide sidebar"]
+        case .rough: ["draft", "status"]
+        case .polished: ["done", "status", "finished"]
+        case .recent: ["latest", "history"]
+        case .moveToTrash: ["delete", "remove", "bin"]
+        case .openInNewWindow: ["window", "separate"]
         }
     }
 
@@ -51,17 +74,36 @@ enum PaletteCommand: String, CaseIterable, Sendable {
         case .toggleInspector: "sidebar.trailing"
         case .reload: "arrow.clockwise"
         case .importOneNote: "square.and.arrow.down"
+        case .newWindow: "macwindow.badge.plus"
+        case .importMarkdown: "square.and.arrow.down"
+        case .exportMarkdown: "square.and.arrow.up"
+        case .backUpNow: "externaldrive.badge.timemachine"
+        case .focusMode: "arrow.up.left.and.arrow.down.right"
+        case .rough: "circle.dashed"
+        case .polished: "checkmark.seal"
+        case .recent: "clock"
+        case .moveToTrash: "trash"
+        case .openInNewWindow: "macwindow"
         }
     }
 
     var shortcut: String? {
+        // The menu bar's own shortcuts (one table, so a hint never names a dead key).
         switch self {
-        case .newNote: "⌘N"
-        case .newFolder: "⌥⌘N"
-        case .quickCapture: "⇧⌘Space"
-        case .searchNotes: "⇧⌘F"
-        case .askNotes: "⇧⌘A"
-        case .toggleInspector: "⌥⌘I"
+        case .newNote: Shortcuts.newNote.display
+        case .newFolder: Shortcuts.newFolder.display
+        case .quickCapture: QuickCaptureShortcut.saved()?.display
+        case .searchNotes: Shortcuts.searchAllNotes.display
+        case .askNotes: Shortcuts.askNotes.display
+        case .toggleInspector: Shortcuts.toggleInspector.display
+        case .importMarkdown: Shortcuts.importMarkdown.display
+        case .exportMarkdown: Shortcuts.exportMarkdown.display
+        case .focusMode: Shortcuts.focusMode.display
+        case .allNotes: Shortcuts.allNotes.display
+        case .rough: Shortcuts.rough.display
+        case .polished: Shortcuts.polished.display
+        case .recent: Shortcuts.recent.display
+        case .reload: Shortcuts.reloadNotes.display
         default: nil
         }
     }

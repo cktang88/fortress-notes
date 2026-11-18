@@ -80,4 +80,15 @@ import Testing
             BackendSettingsView().environment(model).padding(.top, 8)
         }
     }
+
+    /// HIG audit (UX_AUDIT.md F9): the Quick Capture shortcut recorder in Settings.
+    /// (Reduce Transparency is read-only in the environment, so B4 is checked by hand.)
+    @Test func quickCaptureShortcutRecorder() throws {
+        try both("shortcut-recorder", size: CGSize(width: 560, height: 160)) {
+            Form {
+                Section("Keyboard Shortcut") { QuickCaptureShortcutRecorder(state: QuickCaptureState()) }
+            }
+            .formStyle(.grouped)
+        }
+    }
 }

@@ -3,7 +3,6 @@ import SwiftUI
 /// Trashed notes, newest first, with Restore and Delete Permanently.
 struct TrashListView: View {
     @Environment(AppModel.self) private var model
-    @State private var isConfirmingEmpty = false
 
     var body: some View {
         @Bindable var model = model
@@ -24,7 +23,6 @@ struct TrashListView: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .themedContent()
-        .animation(.smooth(duration: 0.2), value: model.trash.map(\.id))
         .overlay {
             if model.trash.isEmpty && model.isConnected {
                 ContentUnavailableView(
@@ -37,13 +35,13 @@ struct TrashListView: View {
         }
         .toolbar {
             ToolbarItem {
-                Button("Empty Trash…") { isConfirmingEmpty = true }
+                Button("Empty Trash…") { model.isEmptyTrashConfirmationShown = true }
                     .fixedSize()
                     .disabled(model.trash.isEmpty)
                     .help("Permanently delete every note in the Trash")
             }
         }
-        .confirmationDialog(emptyTitle, isPresented: $isConfirmingEmpty) {
+        .confirmationDialog(emptyTitle, isPresented: $model.isEmptyTrashConfirmationShown) {
             Button("Empty Trash", role: .destructive) { Task { await model.emptyTrash() } }
         } message: {
             Text("This can't be undone.")

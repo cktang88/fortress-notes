@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// ⌘K: jump to any note or run any command, from the keyboard. A Raycast-style glass
+/// Open Quickly… (⇧⌘O): jump to any note or run any command, from the keyboard. A Raycast-style glass
 /// panel, 560 wide, floating over the window (the window is not dimmed).
 ///
 /// Keys: ↑/↓ move, ↩ runs, ⌘↩ asks your notes, esc closes. Prefixes: ">" commands,
@@ -38,7 +38,7 @@ struct CommandPaletteView: View {
                     footer(selected: items.first { $0.id == currentSelection(in: items) })
                 }
                 .frame(width: 560)
-                .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                .floatingGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
             .scaleEffect(isShown || reduceMotion ? 1 : 0.98, anchor: .top)
             .opacity(isShown ? 1 : 0)
@@ -69,8 +69,9 @@ struct CommandPaletteView: View {
     private func field(text: Binding<String>) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 17, weight: .medium))
+                .font(.title2.weight(.medium))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             TextField("Search notes and commands", text: text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 20))
@@ -165,6 +166,8 @@ struct CommandPaletteView: View {
             let current = items.firstIndex { $0.id == currentSelection(in: items) } ?? 0
             let next = event.keyCode == KeyCode.down ? min(current + 1, items.count - 1) : max(current - 1, 0)
             selectedID = items[next].id
+            // The field keeps focus, so tell VoiceOver which row is highlighted.
+            AccessibilityNotification.Announcement(AttributedString(items[next].title)).post()
             return true
         case KeyCode.returnKey, KeyCode.keypadEnter:
             if modifiers == .command {
@@ -247,6 +250,23 @@ struct CommandPaletteView: View {
             Task { await model.refreshNavigation() }
         case .importOneNote:
             model.showOneNoteImport()
+        case .newWindow:
+            model.library.openWindow?(nil)
+        case .importMarkdown:
+            model.isImporterShown = true
+        case .exportMarkdown:
+            Task { await model.exportOpenNote() }
+        case .backUpNow:
+            Task { await model.backUpNow() }
+        case .focusMode:
+            model.isFocusMode.toggle()
+        case .rough, .polished, .recent:
+            model.query = ""
+            model.select(command == .rough ? .rough : command == .polished ? .polished : .recent)
+        case .moveToTrash:
+            if let id = model.openNoteId { Task { await model.trashNote(id: id) } }
+        case .openInNewWindow:
+            if let id = model.openNoteId { model.library.openWindow?(id) }
         }
     }
 
@@ -292,6 +312,8 @@ private struct PaletteRow: View {
         .padding(.horizontal, 10)
         .frame(height: CommandPaletteView.rowHeight)
         .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(isSelected ? AnyShapeStyle(.primary.opacity(0.08)) : AnyShapeStyle(.clear)))
