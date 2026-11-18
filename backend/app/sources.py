@@ -277,18 +277,21 @@ def _table_cell(cell: Any) -> Any:
 
 
 def ensure_folder_path(
-    path: Path, source: str, segments: Iterable[tuple[str, str] | dict[str, str]]
+    path: Path,
+    source: str,
+    segments: Iterable[tuple[str, str] | dict[str, str]],
+    parent_id: str | None = None,
 ) -> str | None:
     """Find or create a folder chain by source ids; returns the last folder's id.
 
     ``segments`` run from the top, e.g. ``[(notebook_guid, "Work"),
     (section_guid, "Meetings")]``. A folder is found again by its source id even
     after the user renamed or moved it (both are kept); a folder still carrying
-    the name the source gave it follows the source's renames.
+    the name the source gave it follows the source's renames. New top folders
+    are created under ``parent_id`` (None: the top level).
     """
 
     initialize(path)
-    parent_id: str | None = None
     with connection_scope(path, immediate=True) as connection:
         for segment in segments:
             if isinstance(segment, dict):
