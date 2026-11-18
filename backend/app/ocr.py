@@ -9,8 +9,8 @@ per content hash and OCR model:
   (scans, printouts) are rendered and OCR'd.
 
 The queue is SQLite itself: an asset is pending while ``ocr_results`` has no
-finished row for its hash and the current :data:`MODEL`. One daemon thread
-works through it, newest assets first (a fresh paste before an old backfill),
+finished row for its hash and the current :data:`MODEL`. The ``ocr`` lane of
+app/background.py works through it, one asset per unit, newest assets first (a fresh paste before an old backfill),
 images whose block already has OneNote's own OCR text (``alt``) last. A crash
 or restart loses nothing: the work is simply still pending, and an asset that
 keeps failing is given up after :data:`MAX_ATTEMPTS`. Changing :data:`MODEL`
@@ -24,14 +24,13 @@ being part of the note body.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import block_store
-from .config import get_settings
+from . import background, block_store
+from .config import Settings, get_settings
 
 log = logging.getLogger("fortress.ocr")
 
@@ -79,7 +78,7 @@ def _get_engine():
         if _engine is None:
             from rapidocr import ModelType, OCRVersion, RapidOCR
 
-            threads = getattr(get_settings(), "ocr_threads", 0) or max(1, min(4, (os.cpu_count() or 2) // 2))
+            threads = Settings.default_threads(get_settings().ocr_threads)
             _engine = RapidOCR(
                 params={
                     "Global.log_level": "error",
@@ -248,7 +247,7 @@ def pending(db_path: Path, limit: int = 1) -> list[dict]:
 
 
 def _mark(db_path: Path, content_hash: str, **fields) -> None:
-    fields["updated_at"] = block_store._now()
+    fields["updated_at"] = block_store.utc_now()
     columns = ", ".join(fields)
     updates = ", ".join(f"{name} = excluded.{name}" for name in fields)
     with block_store.connection_scope(db_path) as connection:
@@ -311,7 +310,7 @@ def status_counts(db_path: Path) -> dict[str, object]:
         "queued": queued,
         "done": counts.get("done", 0),
         "failed": counts.get("failed", 0),
-        "running": _worker.busy,
+        "running": background.busy(OcrQueue.name),
     }
 
 
@@ -337,69 +336,36 @@ def asset_status(db_path: Path, content_hashes: list[str]) -> dict[str, dict[str
 # --- Worker -------------------------------------------------------------------------------
 
 
-class _Worker:
-    """One daemon thread; :func:`wake` after registering new assets."""
+class OcrQueue(background.Service):
+    """The ``ocr`` lane: one pending asset per unit; :func:`wake` after registering new ones."""
+
+    name = "ocr"
+    priority = background.LOW
+    # The poll also finds assets registered any other way (an import's PDFs, a
+    # restored backup).
+    poll = POLL_SECONDS
 
     def __init__(self) -> None:
-        self.thread: threading.Thread | None = None
         self.db_path: Path | None = None
-        self.wakeup = threading.Event()
-        self.stopping = threading.Event()
-        self.busy = False
-        self.lock = threading.Lock()
 
-    def start(self, db_path: Path) -> None:
-        with self.lock:
-            if self.thread is not None and self.thread.is_alive():
-                if self.db_path == db_path:
-                    self.wakeup.set()
-                    return
-                self.stop()
-            self.db_path = db_path
-            self.stopping.clear()
-            self.wakeup.set()  # backfill whatever is pending from before
-            self.thread = threading.Thread(
-                target=self._run, args=(db_path,), name="fortress-ocr", daemon=True
-            )
-            self.thread.start()
-
-    def stop(self, timeout: float = 5.0) -> None:
-        self.stopping.set()
-        self.wakeup.set()
-        thread = self.thread
-        if thread is not None:
-            thread.join(timeout)
-        self.thread = None
-
-    def _run(self, db_path: Path) -> None:
-        while not self.stopping.is_set():
-            # Woken by uploads and imports; the poll also finds assets registered
-            # any other way (an import's PDFs, a restored backup).
-            self.wakeup.wait(POLL_SECONDS)
-            self.wakeup.clear()
-            while not self.stopping.is_set():
-                self.busy = True
-                try:
-                    if not process_one(db_path):
-                        break
-                except Exception:  # e.g. the database is locked for a long write
-                    log.exception("OCR worker error")
-                    self.stopping.wait(5.0)
-                finally:
-                    self.busy = False
+    def step(self) -> float | None:
+        if self.db_path is None or not process_one(self.db_path):
+            return None
+        return 0
 
 
-_worker = _Worker()
+_queue = background.register(OcrQueue())
 
 
 def start(db_path: Path) -> None:
-    """Start the background worker (it backfills everything pending)."""
+    """Start reading in the background (it backfills everything pending)."""
 
-    _worker.start(db_path)
+    _queue.db_path = db_path
+    background.ensure(_queue)
 
 
 def stop() -> None:
-    _worker.stop()
+    background.halt(OcrQueue.name)
 
 
 def wake(_paths: object = None) -> None:
@@ -409,18 +375,13 @@ def wake(_paths: object = None) -> None:
     the queue finds pending assets in SQLite by itself.
     """
 
-    _worker.wakeup.set()
+    background.wake(OcrQueue.name)
 
 
 def wait_idle(timeout: float = 30.0) -> bool:
     """Block until the queue is drained (tests and scripts)."""
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        db_path = _worker.db_path
-        if db_path is None or (
-            not _worker.busy and not _worker.wakeup.is_set() and not pending(db_path)
-        ):
-            return True
-        time.sleep(0.02)
-    return False
+    db_path = _queue.db_path
+    return background.runner.wait_idle(
+        OcrQueue.name, lambda: db_path is None or not pending(db_path), timeout
+    )

@@ -422,7 +422,7 @@ async def _call(prompt: str, timeout: float, sources: _Sources, emit: Emit, show
     stream = _SentenceStream()
     settings = get_settings()
     options: dict = {"model": settings.ask_model, "fast": True}
-    if getattr(settings, "ask_reasoning_effort", ""):
+    if settings.ask_reasoning_effort:
         options["reasoning_effort"] = settings.ask_reasoning_effort
     async with asyncio.timeout(timeout):
         async for delta in llm.chat_json_stream(_SYSTEM, prompt, timeout=timeout, **options):

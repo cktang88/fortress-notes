@@ -17,7 +17,6 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -26,6 +25,8 @@ from app import block_store, documents, images, onenote_import, sources
 from app.block_store import apply_transaction, document_tree, search_blocks
 from app.models import BlockOperation
 from app.portability import export_document_markdown
+from support import make_settings, use_settings
+
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"fake image bytes"
 PDF = b"%PDF-1.4 fake pdf"
@@ -236,24 +237,10 @@ class _Base(unittest.TestCase):
         self.root = Path(self._directory.name)
         self.notes = self.root / "notes"
         self.notes.mkdir()
-        self.settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=self.notes / ".fortress.sqlite3",
-            notes_path=self.notes,
-            assets_path=self.notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            vlm_caption_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        self.settings.assets_path.mkdir()
-        for item in (
-            patch.object(documents, "get_settings", lambda: self.settings),
-            patch.object(images, "get_settings", lambda: self.settings),
-        ):
-            item.start()
-            self.addCleanup(item.stop)
+        self.settings = make_settings(self.notes, reindex_interval_s=5.0)
+        patcher = use_settings(self.settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.db = self.settings.block_db_path
         self.manifest = build_manifest()
         self.export = write_manifest(self.root / "export", self.manifest)
@@ -328,7 +315,8 @@ class ImportManifestTests(_Base):
         standup = self.tree(P3)["provenance"]
         self.assertEqual(standup["source_url"], "https://example.org/source")
         self.assertTrue(standup["extra"]["onenote"]["title_derived"])
-        self.assertTrue((self.notes / f"{ids[P1]}.md").is_file())  # Markdown mirror
+        documents.flush_mirrors()  # Markdown mirrors follow in the background
+        self.assertTrue((self.notes / f"{ids[P1]}.md").is_file())
 
     def test_local_edit_survives_reimport_and_source_change_is_a_conflict(self) -> None:
         self.run_import()
@@ -558,7 +546,7 @@ class ImportJobApiTests(_Base):
             return {"pages": 4}
 
         for item in (
-            patch.object(main, "settings", self.settings),
+            use_settings(self.settings),
             patch.object(onenote_import, "jobs", self.jobs),
             patch.object(onenote_import, "run_converter", fake_converter),
             # Importing by path is for token holders (app/auth.py).
@@ -917,7 +905,7 @@ class ImportJobLifecycleTests(_Base):
             return {"pages": 4}
 
         for item in (
-            patch.object(main, "settings", self.settings),
+            use_settings(self.settings),
             patch.object(onenote_import, "jobs", self.jobs),
             patch.object(onenote_import, "run_converter", fake_converter),
             # Importing by path is for token holders (app/auth.py).

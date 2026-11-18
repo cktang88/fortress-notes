@@ -6,6 +6,8 @@ from unittest.mock import patch
 from app import embeddings
 from app.block_store import bootstrap_markdown
 
+from support import make_settings, use_settings
+
 
 class _FakeModel:
     def __init__(self) -> None:
@@ -66,6 +68,13 @@ def _trash(database, document_id: str) -> None:
         )
 
 
+def _scratch_settings(test: unittest.TestCase, **overrides):
+    """Embeddings on, over an empty notes folder that lasts as long as ``test``."""
+
+    directory = test.enterContext(tempfile.TemporaryDirectory())
+    return make_settings(Path(directory), embeddings_enabled=True, **overrides)
+
+
 class BlockEmbeddingTests(unittest.TestCase):
     def test_warm_index_encodes_canonical_blocks_and_reuses_cache(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -79,10 +88,8 @@ class BlockEmbeddingTests(unittest.TestCase):
             bootstrap_markdown(notes, database)
             model = _FakeModel()
 
-            with patch.object(embeddings, "_get_model", return_value=model), patch.object(
-                embeddings,
-                "get_settings",
-                return_value=type("Settings", (), {"block_db_enabled": True, "block_db_path": database})(),
+            with patch.object(embeddings, "_get_model", return_value=model), use_settings(
+                make_settings(root, embeddings_enabled=True)
             ):
                 self.assertEqual(embeddings.warm_index(), 2)
                 self.assertEqual(embeddings.warm_index(), 0)
@@ -98,19 +105,15 @@ class BlockEmbeddingTests(unittest.TestCase):
             block_store.create_document(
                 database, "doc", "Doc", "rough", "Alpha beta\n\nGamma delta", "2025-01-01", "2025-01-01"
             )
-            settings = type("Settings", (), {"block_db_path": database})()
+            settings = make_settings(Path(directory), embeddings_enabled=True)
             model = _WordModel()
-            with patch.object(embeddings, "_get_model", return_value=model), patch.object(
-                embeddings, "get_settings", return_value=settings
-            ), patch.object(embeddings, "_cache", embeddings._Cache()):
+            with patch.object(embeddings, "_get_model", return_value=model), use_settings(settings), patch.object(embeddings, "_cache", embeddings._Cache()):
                 self.assertEqual(embeddings.warm_index(), 2)
                 before = embeddings.score_documents("alpha", _docs(database))
             self.assertTrue((Path(directory) / ".fortress-embeddings.sqlite3").exists())
 
             # A restart: a fresh in-memory cache loads the saved vectors.
-            with patch.object(embeddings, "_get_model", return_value=model), patch.object(
-                embeddings, "get_settings", return_value=settings
-            ), patch.object(embeddings, "_cache", embeddings._Cache()):
+            with patch.object(embeddings, "_get_model", return_value=model), use_settings(settings), patch.object(embeddings, "_cache", embeddings._Cache()):
                 self.assertEqual(embeddings.warm_index(), 0)
                 self.assertEqual(embeddings.score_documents("alpha", _docs(database)), before)
                 tree = block_store.document_tree(database, "doc")
@@ -139,11 +142,9 @@ class BlockEmbeddingTests(unittest.TestCase):
             block_store.create_document(
                 database, "doc", "Doc", "rough", "Alpha beta\n\nGamma delta", "2025-01-01", "2025-01-01"
             )
-            settings = type("Settings", (), {"block_db_path": database})()
+            settings = make_settings(Path(directory), embeddings_enabled=True)
             model = CountingModel()
-            with patch.object(embeddings, "_get_model", return_value=model), patch.object(
-                embeddings, "get_settings", return_value=settings
-            ), patch.object(embeddings, "_cache", embeddings._Cache()):
+            with patch.object(embeddings, "_get_model", return_value=model), use_settings(settings), patch.object(embeddings, "_cache", embeddings._Cache()):
                 embeddings.warm_index()  # paragraphs
                 fresh = embeddings.score_documents("alpha beta", _docs(database))
                 embeddings._cache.queries.clear()
@@ -163,7 +164,7 @@ class BlockEmbeddingTests(unittest.TestCase):
             (f"b{i}", "v1", " ".join(rng.choice(words, size=int(rng.integers(1, 120)))))
             for i in range(300)
         ]
-        settings = type("Settings", (), {"block_db_path": None})()
+        settings = _scratch_settings(self)
 
         def brute(query: str) -> dict[str, float]:
             q = np.asarray(model.encode([query], is_query=True)[0])
@@ -173,9 +174,7 @@ class BlockEmbeddingTests(unittest.TestCase):
                 out[block_id] = float((q @ d.T).max(axis=1).sum())
             return out
 
-        with patch.object(embeddings, "_get_model", return_value=model), patch.object(
-            embeddings, "get_settings", return_value=settings
-        ), patch.object(embeddings, "_cache", embeddings._Cache()), patch.object(
+        with patch.object(embeddings, "_get_model", return_value=model), use_settings(settings), patch.object(embeddings, "_cache", embeddings._Cache()), patch.object(
             embeddings, "INLINE_ENCODE_LIMIT", 1000
         ):
             for query in ("w1 w2 w3", " ".join(words[:50]), " ".join(words * 3)):
@@ -197,10 +196,8 @@ class BlockEmbeddingTests(unittest.TestCase):
     def test_a_search_never_waits_for_a_whole_cold_index(self) -> None:
         model = _WordModel()
         docs = [(f"b{i}", "v1", f"w{i} w{i + 1}") for i in range(100)]
-        settings = type("Settings", (), {"block_db_path": None})()
-        with patch.object(embeddings, "_get_model", return_value=model), patch.object(
-            embeddings, "get_settings", return_value=settings
-        ), patch.object(embeddings, "_cache", embeddings._Cache()):
+        settings = _scratch_settings(self)
+        with patch.object(embeddings, "_get_model", return_value=model), use_settings(settings), patch.object(embeddings, "_cache", embeddings._Cache()):
             scores = embeddings.score_documents("w5", docs)
         # Nothing indexed yet: the background indexer's job, scored 0 for now.
         self.assertEqual(model.documents, [])
@@ -223,10 +220,10 @@ class BlockEmbeddingTests(unittest.TestCase):
 
         fake_pylate = types.ModuleType("pylate")
         fake_pylate.models = types.SimpleNamespace(ColBERT=SlowColBERT)
-        settings = type("Settings", (), {"embeddings_enabled": True, "colbert_model": "fake"})()
+        settings = _scratch_settings(self, colbert_model="fake")
         with patch.dict(sys.modules, {"pylate": fake_pylate}), patch.object(
             embeddings, "_cache", embeddings._Cache()
-        ), patch.object(embeddings, "get_settings", return_value=settings):
+        ), use_settings(settings):
             results = []
             threads = [
                 threading.Thread(target=lambda: results.append(embeddings.load_model()))
@@ -338,8 +335,8 @@ class EncoderTests(unittest.TestCase):
         model = _RacyModel()
         documents = [" ".join(f"d{i}w{j}" for j in range(40)) for i in range(48)]
         queries = [f"q{i} a b c d e f" for i in range(30)]
-        settings = type("Settings", (), {"embeddings_enabled": True})()
-        with patch.object(embeddings, "get_settings", return_value=settings), patch.object(
+        settings = _scratch_settings(self)
+        with use_settings(settings), patch.object(
             embeddings, "_cache", embeddings._Cache()
         ):
             want_docs = embeddings._encode(model, documents, is_query=False)
@@ -434,13 +431,11 @@ class ModelLoadingTests(unittest.TestCase):
 
         fake_pylate = types.ModuleType("pylate")
         fake_pylate.models = types.SimpleNamespace(ColBERT=SlowColBERT)
-        settings = type(
-            "Settings", (), {"embeddings_enabled": True, "colbert_model": "fake", "block_db_path": None}
-        )()
+        settings = _scratch_settings(self, colbert_model="fake")
         docs = [("a", "v1", "kyoto temples"), ("b", "v1", "bread starter")]
         with patch.dict(sys.modules, {"pylate": fake_pylate}), patch.object(
             embeddings, "_cache", embeddings._Cache()
-        ), patch.object(embeddings, "get_settings", return_value=settings):
+        ), use_settings(settings):
             # Nothing loads the model on a request's behalf.
             self.assertIsNone(embeddings.model_if_ready())
             self.assertFalse(loading.is_set())

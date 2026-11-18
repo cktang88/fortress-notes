@@ -10,12 +10,13 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app import auth, onenote_import
+from support import make_settings, use_settings
+
 
 TOKEN = "s3cret-token-for-tests"
 EVIL = {"Origin": "https://evil.example"}
@@ -30,17 +31,7 @@ class _BackendTestCase(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         notes = Path(directory.name)
-        settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=notes / ".fortress.sqlite3",
-            notes_path=notes,
-            assets_path=notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        settings.assets_path.mkdir()
+        settings = make_settings(notes, reindex_interval_s=5.0)
         (settings.assets_path / "a.txt").write_text("hello")
         self.notes = notes
         environment = {auth.TOKEN_ENV: self.token} if self.token else {}
@@ -49,12 +40,9 @@ class _BackendTestCase(unittest.TestCase):
         self.addCleanup(env_patch.stop)
         if not self.token:
             os.environ.pop(auth.TOKEN_ENV, None)
-        for item in (
-            patch.object(main, "settings", settings),
-            patch.object(documents, "get_settings", lambda: settings),
-        ):
-            item.start()
-            self.addCleanup(item.stop)
+        patcher = use_settings(settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.client = TestClient(main.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
@@ -158,18 +146,8 @@ class LifecycleTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         notes = Path(directory.name)
-        settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=notes / ".fortress.sqlite3",
-            notes_path=notes,
-            assets_path=notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        settings.assets_path.mkdir()
-        with patch.object(main, "settings", settings), patch.object(auth, "stop_children") as stop:
+        settings = make_settings(notes, reindex_interval_s=5.0)
+        with use_settings(settings), patch.object(auth, "stop_children") as stop:
             with TestClient(main.app):
                 stop.assert_not_called()
             stop.assert_called_once()

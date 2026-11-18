@@ -4,12 +4,13 @@ import random
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from app import block_schema as schema
 from app import order_keys
 from app.block_schema import BlockShapeError
+
+from support import make_settings, use_settings
 
 
 class RegistryTests(unittest.TestCase):
@@ -79,14 +80,9 @@ class RegistryTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)
-            settings = SimpleNamespace(
-                block_db_import_on_startup=False, block_db_path=notes / ".fortress.sqlite3",
-                notes_path=notes, assets_path=notes / "assets", embeddings_enabled=False,
-                vision_enabled=False, auto_backup_enabled=False, reindex_interval_s=3600.0,
-            )
-            settings.assets_path.mkdir()
-            with patch.object(main, "settings", settings), \
-                    patch.object(documents, "get_settings", lambda: settings), \
+            settings = make_settings(notes)
+            with use_settings(settings), \
+                    use_settings(settings), \
                     TestClient(main.app) as client:
                 response = client.get("/api/block-schema")
                 self.assertEqual(response.status_code, 200)

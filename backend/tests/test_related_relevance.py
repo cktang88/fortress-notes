@@ -9,13 +9,14 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 from fastapi.testclient import TestClient
 
 from app import block_query
+from support import make_settings, use_settings
+
 
 _DIM = 512
 
@@ -38,30 +39,14 @@ class _FakeColBERT:
         ]
 
 
-def _settings(notes: Path, embeddings_enabled: bool) -> SimpleNamespace:
-    return SimpleNamespace(
-        block_db_enabled=True,
-        block_db_import_on_startup=False,
-        block_db_path=notes / ".fortress.sqlite3",
-        notes_path=notes,
-        assets_path=notes / "assets",
-        embeddings_enabled=embeddings_enabled,
-        vision_enabled=False,
-        reindex_interval_s=3600.0,
-    )
-
-
 class RelatedRelevanceApiTests(unittest.TestCase):
     def _related(self, model, notes_to_create, source_body):
         from app import documents, embeddings, main, search
 
         with tempfile.TemporaryDirectory() as directory:
-            settings = _settings(Path(directory), model is not None)
+            settings = make_settings(Path(directory), embeddings_enabled=model is not None)
             with (
-                patch.object(main, "settings", settings),
-                patch.object(documents, "get_settings", return_value=settings),
-                patch.object(search, "get_settings", return_value=settings),
-                patch.object(embeddings, "get_settings", return_value=settings),
+                use_settings(settings),
                 patch.object(embeddings, "_get_model", return_value=model),
                 patch.object(embeddings, "_cache", embeddings._Cache()),
                 TestClient(main.app) as client,
@@ -120,12 +105,9 @@ class RelatedRelevanceApiTests(unittest.TestCase):
             return real_score_note(texts, docs)
 
         with tempfile.TemporaryDirectory() as directory:
-            settings = _settings(Path(directory), True)
+            settings = make_settings(Path(directory), embeddings_enabled=True)
             with (
-                patch.object(main, "settings", settings),
-                patch.object(documents, "get_settings", return_value=settings),
-                patch.object(search, "get_settings", return_value=settings),
-                patch.object(embeddings, "get_settings", return_value=settings),
+                use_settings(settings),
                 patch.object(embeddings, "_get_model", return_value=_FakeColBERT()),
                 patch.object(embeddings, "_cache", embeddings._Cache()),
                 patch.object(embeddings, "score_note", side_effect=counting_score_note),

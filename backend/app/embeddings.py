@@ -48,9 +48,9 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-from . import block_query
+from . import background, block_query
 from . import corpus as corpus_store
-from .config import get_settings
+from .config import Settings, get_settings
 
 _log = logging.getLogger("fortress")
 
@@ -260,9 +260,6 @@ _model_lock = threading.Lock()
 _index_lock = threading.RLock()
 # Guards the query caches.
 _queries_lock = threading.Lock()
-# Searches in flight; the background indexer pauses between batches while any are.
-_active_queries = 0
-_active_lock = threading.Lock()
 
 _FOREGROUND, _BACKGROUND = 0, 1
 
@@ -330,7 +327,7 @@ def _get_model(wait: bool = False):
     loads it.
     """
     settings = get_settings()
-    if not getattr(settings, "embeddings_enabled", True) or _cache.failed:
+    if not settings.embeddings_enabled or _cache.failed:
         return None
     if _cache.model is not None or not wait:
         return _cache.model
@@ -341,11 +338,14 @@ def _get_model(wait: bool = False):
             import torch
             from pylate import models  # heavy import; do it lazily
 
+            # One encode at a time runs (the encoder thread); more threads than
+            # this oversubscribe the cores that requests and OCR also need.
+            torch.set_num_threads(Settings.default_threads(settings.embeddings_threads))
             model = models.ColBERT(model_name_or_path=settings.colbert_model)
             _cache.dtype = torch.float32
             if isinstance(model, torch.nn.Module):
                 model.eval()
-                precision = getattr(settings, "embeddings_precision", "auto")
+                precision = settings.embeddings_precision
                 if precision == "bfloat16" or (precision == "auto" and _bf16_supported()):
                     model = model.to(torch.bfloat16)
                     _cache.dtype = torch.bfloat16
@@ -389,8 +389,7 @@ def scoring_state(corpus) -> object | None:
     (ahead of background work) rather than left for the indexer.
     """
 
-    settings = get_settings()
-    if not getattr(settings, "embeddings_enabled", True) or _cache.failed:
+    if not get_settings().embeddings_enabled or _cache.failed:
         return ("keywords",)
     model = _get_model()
     if model is None:
@@ -541,15 +540,13 @@ def query_token_count(query: str) -> int:
 # ---- persistent store ---------------------------------------------------------
 
 
-def _store_path() -> Path | None:
-    db_path = getattr(get_settings(), "block_db_path", None)
-    return Path(db_path).with_name(_STORE_NAME) if db_path else None
+def _store_path() -> Path:
+    return get_settings().embeddings_path
 
 
 def _store_key() -> str:
-    settings = get_settings()
     dtype = str(_cache.dtype or "torch.float32")
-    return f"{_STORE_FORMAT}|{getattr(settings, 'colbert_model', '')}|{dtype}"
+    return f"{_STORE_FORMAT}|{get_settings().colbert_model}|{dtype}"
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -769,14 +766,14 @@ def warm_index(time_limit: float | None = None, *, queries: bool = True) -> int:
         _load_store()
         missing = _sync(corpus)
     if not missing:
-        if queries and getattr(get_settings(), "precompute_query_embeddings", True):
+        if queries and get_settings().precompute_query_embeddings:
             _warm_queries(model, time_limit)
         return 0
     started = time.monotonic()
     missing.sort(key=lambda doc: len(doc[2]))
     encoded = 0
     for start in range(0, len(missing), INDEX_CHUNK):
-        while _active_queries:
+        while background.foreground_active():
             time.sleep(0.005)
         _add(model, missing[start : start + INDEX_CHUNK])
         encoded += len(missing[start : start + INDEX_CHUNK])
@@ -786,6 +783,33 @@ def warm_index(time_limit: float | None = None, *, queries: bool = True) -> int:
         with _index_lock:
             _cache.index.trim()
     return encoded
+
+
+class Reindexer(background.Service):
+    """The ``index`` lane: keeps embeddings current so searches stay instant.
+
+    Runs from startup: the first unit loads the model and the saved embeddings
+    (and, on a first run, starts encoding everything). Each unit encodes for
+    about :data:`SLICE_S`, so pausing (a restore) and searches wait little.
+    """
+
+    name = "index"
+    priority = background.LOW
+    SLICE_S = 2.0
+
+    def step(self) -> float | None:
+        settings = get_settings()
+        model = load_model()
+        if model is None:
+            return None  # disabled or unavailable: nothing to do until restarted
+        if warm_index(self.SLICE_S, queries=False):
+            return 0
+        if settings.precompute_query_embeddings and _warm_queries(model, self.SLICE_S):
+            return 0
+        return settings.reindex_interval_s
+
+
+background.register(Reindexer())
 
 
 def _warm_queries(model, time_limit: float | None = None) -> int:
@@ -818,7 +842,7 @@ def _warm_queries(model, time_limit: float | None = None) -> int:
     started = time.monotonic()
     done = 0
     for start in range(0, len(pending), INDEX_CHUNK):
-        while _active_queries:
+        while background.foreground_active():
             time.sleep(0.005)
         chunk = pending[start : start + INDEX_CHUNK]
         encoded = _encode(model, [text for _hash, text in chunk], is_query=True, background=True)
@@ -977,10 +1001,7 @@ def score_note(texts: list[str], docs: list[tuple[str, str, str]]) -> tuple[dict
 def _score_with(model, query_emb, docs: list[tuple[str, str, str]], weights=None) -> dict[str, float]:
     """MaxSim of a ready query embedding against ``docs``, indexing stale ones as needed."""
 
-    global _active_queries
-    with _active_lock:
-        _active_queries += 1
-    try:
+    with background.foreground():
         with _index_lock:
             _load_store()
             where = _cache.index.where
@@ -1001,9 +1022,6 @@ def _score_with(model, query_emb, docs: list[tuple[str, str, str]], weights=None
         blank.update(block_id for block_id, _version, _text in stale)
         with _index_lock:
             scores = _score_indexed(query_emb, docs, blank, weights)
-    finally:
-        with _active_lock:
-            _active_queries -= 1
     return scores
 
 

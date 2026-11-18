@@ -1,11 +1,32 @@
-from functools import lru_cache
+"""Settings, read once per process from the environment and ``backend/.env``.
+
+Everything else asks :func:`get_settings` for the one active :class:`Settings`
+(tests install their own with :func:`use_settings`). Paths are resolved once,
+when the settings are made: a relative ``NOTES_DIR`` (or converter path) is
+relative to the backend directory, never to the current directory, so the
+backend finds the same notes however it is started.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+DB_FILENAME = ".fortress.sqlite3"
+EMBEDDINGS_FILENAME = ".fortress-embeddings.sqlite3"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Environment variables win over backend/.env (whatever the current directory).
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_DIR / ".env", extra="ignore", populate_by_name=True
+    )
 
     notes_dir: Path = Path("../notes")
     openrouter_api_key: str = ""
@@ -23,6 +44,10 @@ class Settings(BaseSettings):
     # "auto" runs ColBERT in bfloat16 on CPUs with native support (AVX512-BF16/AMX):
     # several times faster and within ~0.3% of float32 scores. Or "float32"/"bfloat16".
     embeddings_precision: str = "auto"
+    # Threads torch may use for one encode. 0 = half the cores, at most 4: a search
+    # encodes one short query (more threads barely help), and background indexing
+    # must leave cores to the requests and OCR running beside it.
+    embeddings_threads: int = 0
     # Also precompute each paragraph's query encoding (after indexing, in the
     # background) so "related to this paragraph" skips the model entirely.
     precompute_query_embeddings: bool = True
@@ -34,24 +59,70 @@ class Settings(BaseSettings):
     block_db_import_on_startup: bool = True
     # Keep a daily SQLite snapshot in NOTES_DIR/.fortress-backups (last 7 kept).
     auto_backup_enabled: bool = True
+    # The OneNote converter (tools/fortress-onenote): an explicit binary, else it is
+    # looked up (app/onenote_import.converter_path). Seconds before a run is stopped.
+    onenote_bin: str = Field("", validation_alias="FORTRESS_ONENOTE_BIN")
+    onenote_timeout_s: float = Field(3600.0, validation_alias="FORTRESS_ONENOTE_TIMEOUT_S")
 
+    def model_post_init(self, _context: object) -> None:
+        notes = self.notes_dir.expanduser()
+        if not notes.is_absolute():
+            notes = BACKEND_DIR / notes
+        self.notes_dir = notes.resolve()
+        if self.onenote_bin.strip():
+            binary = Path(self.onenote_bin.strip()).expanduser()
+            self.onenote_bin = str(binary if binary.is_absolute() else BACKEND_DIR / binary)
+
+    # Derived paths (fixed once notes_dir is resolved).
     @property
     def notes_path(self) -> Path:
-        p = self.notes_dir.expanduser().resolve()
-        p.mkdir(parents=True, exist_ok=True)
-        return p
+        return self.notes_dir
 
     @property
     def assets_path(self) -> Path:
-        p = self.notes_path / "assets"
-        p.mkdir(parents=True, exist_ok=True)
-        return p
+        return self.notes_dir / "assets"
 
     @property
     def block_db_path(self) -> Path:
-        return self.notes_path / ".fortress.sqlite3"
+        return self.notes_dir / DB_FILENAME
+
+    @property
+    def embeddings_path(self) -> Path:
+        return self.notes_dir / EMBEDDINGS_FILENAME
+
+    def create_directories(self) -> None:
+        self.assets_path.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def default_threads(configured: int) -> int:
+        """``configured``, or (for 0) half the cores, at most 4."""
+
+        return configured if configured > 0 else max(1, min(4, (os.cpu_count() or 2) // 2))
 
 
-@lru_cache
+_active: Settings | None = None
+
+
 def get_settings() -> Settings:
-    return Settings()
+    """The process's settings (read from the environment on first use)."""
+
+    global _active
+    if _active is None:
+        settings = Settings()
+        settings.create_directories()
+        _active = settings
+    return _active
+
+
+@contextmanager
+def use_settings(settings: Settings) -> Iterator[Settings]:
+    """Make ``settings`` the active ones for the duration (tests, scripts)."""
+
+    global _active
+    previous = _active
+    settings.create_directories()
+    _active = settings
+    try:
+        yield settings
+    finally:
+        _active = previous

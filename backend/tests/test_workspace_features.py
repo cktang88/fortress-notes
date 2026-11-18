@@ -2,10 +2,11 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from support import make_settings, use_settings
 
 
 class WorkspaceFeatureTests(unittest.TestCase):
@@ -14,24 +15,12 @@ class WorkspaceFeatureTests(unittest.TestCase):
 
         self.main = main
         self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
         notes = Path(self._directory.name)
         self.notes = notes
-        self.settings = SimpleNamespace(
-            block_db_enabled=True,
-            block_db_import_on_startup=True,
-            block_db_path=notes / ".fortress.sqlite3",
-            notes_path=notes,
-            assets_path=notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        self.settings.assets_path.mkdir()
+        self.settings = make_settings(notes, block_db_import_on_startup=True, reindex_interval_s=5.0)
         patches = [
-            patch.object(main, "settings", self.settings),
-            patch.object(documents, "get_settings", lambda: self.settings),
-            patch.object(search, "get_settings", lambda: self.settings),
+            use_settings(self.settings),
         ]
         for item in patches:
             item.start()
@@ -39,7 +28,6 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.client = TestClient(main.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
-        self.addCleanup(self._directory.cleanup)
 
     def create(self, title: str, body: str = "", folder=None):
         response = self.client.post(
@@ -254,15 +242,17 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.assertEqual(self.client.delete(f"/api/block-documents/{ids['B']}").status_code, 404)
 
     def test_markdown_mirror_follows_the_document_lifecycle(self) -> None:
+        from app import documents
+
+        # Mirrors are written in the background; flush_mirrors waits for them.
         created = self.client.post("/api/block-documents", json={"title": "Block doc"}).json()
         mirror = self.notes / f"{created['id']}.md"
+        documents.flush_mirrors()
         self.assertTrue(mirror.exists())
         self.assertEqual(self.client.get(f"/api/block-documents/{created['id']}").json()["title"], "Block doc")
 
-        from app import documents
-
         self.client.patch(f"/api/block-documents/{created['id']}", json={"status": "polished"})
-        documents.flush_mirrors()  # rewritten in the background after a metadata change
+        documents.flush_mirrors()
         self.assertIn("status: polished", mirror.read_text())
         self.assertEqual(
             [note["id"] for note in self.documents() if note["status"] == "polished"],
@@ -270,6 +260,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
         )
 
         self.client.delete(f"/api/block-documents/{created['id']}")
+        documents.flush_mirrors()
         self.assertFalse(mirror.exists())
         self.assertEqual(self.documents(), [])
         self.assertEqual(

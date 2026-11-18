@@ -1,7 +1,6 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -9,6 +8,8 @@ from fastapi.testclient import TestClient
 
 # A block reference reads as its target's current text.
 EDITED = "Edited searchable phrase A migrated searchable block"
+
+from support import make_settings, use_settings
 
 
 class BlockApiFlowTests(unittest.TestCase):
@@ -21,22 +22,11 @@ class BlockApiFlowTests(unittest.TestCase):
                 "---\ntitle: Target\n---\nA migrated searchable block\n",
                 encoding="utf-8",
             )
-            settings = SimpleNamespace(
-                block_db_enabled=True,
-                block_db_import_on_startup=True,
-                block_db_path=notes / ".fortress.sqlite3",
-                notes_path=notes,
-                assets_path=notes / "assets",
-                embeddings_enabled=False,
-                vision_enabled=False,
-                reindex_interval_s=5.0,
-            )
+            settings = make_settings(notes, block_db_import_on_startup=True, reindex_interval_s=5.0)
 
             from app import documents
 
-            with patch.object(main, "settings", settings), patch.object(
-                documents, "get_settings", return_value=settings
-            ):
+            with use_settings(settings), use_settings(settings):
                 with TestClient(main.app) as client:
                     migrated = client.get("/api/block-documents/target")
                     self.assertEqual(migrated.status_code, 200)

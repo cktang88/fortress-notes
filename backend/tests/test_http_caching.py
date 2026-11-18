@@ -8,7 +8,6 @@ import time
 import unittest
 from contextlib import closing
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -18,6 +17,8 @@ from starlette.routing import Mount
 from app import block_store, http_cache
 from app.media import MediaFiles
 from app.models import BlockOperation
+
+from support import make_settings, use_settings
 
 
 class ApiCase(unittest.TestCase):
@@ -29,23 +30,10 @@ class ApiCase(unittest.TestCase):
         self.addCleanup(self._directory.cleanup)
         self.notes = Path(self._directory.name)
         self.db = self.notes / ".fortress.sqlite3"
-        settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=self.db,
-            notes_path=self.notes,
-            assets_path=self.notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        settings.assets_path.mkdir()
-        for item in (
-            patch.object(main, "settings", settings),
-            patch.object(documents, "get_settings", lambda: settings),
-        ):
-            item.start()
-            self.addCleanup(item.stop)
+        settings = make_settings(self.notes, reindex_interval_s=5.0)
+        patcher = use_settings(settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         main._clear_response_caches()
         self.client = TestClient(main.app, raise_server_exceptions=False)
         self.client.__enter__()
@@ -201,7 +189,7 @@ class DocumentValidatorTests(ApiCase):
         block_store._opened_marks.clear()
         self.client.post(f"{url}/opened")
         opened = self.client.get(f"{url}/info").json()["last_opened_at"]
-        with patch.object(block_store, "_now", return_value="2099-01-01T00:00:00+00:00"):
+        with patch.object(block_store, "utc_now", return_value="2099-01-01T00:00:00+00:00"):
             self.client.post(f"{url}/opened")
             self.assertEqual(self.client.get(f"{url}/info").json()["last_opened_at"], opened)
             later = time.monotonic() + block_store.OPEN_MARK_INTERVAL_S + 1
@@ -346,7 +334,7 @@ class MediaTests(unittest.TestCase):
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
         self.assets = Path(self._directory.name)
-        app = Starlette(routes=[Mount("/media", MediaFiles(directory=self.assets))])
+        app = Starlette(routes=[Mount("/media", MediaFiles(lambda: self.assets))])
         self.client = TestClient(app)
 
     def test_content_addressed_media_is_immutable_with_hash_etag_and_ranges(self) -> None:

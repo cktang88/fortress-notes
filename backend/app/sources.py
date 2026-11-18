@@ -51,18 +51,18 @@ from . import provenance as _provenance
 from .block_markdown import BlockSpec, legalize, parse_markdown
 from .block_schema import BlockShapeError
 from .block_store import (
-    _Changes,
-    _document_insert_position,
-    _new_ulid,
-    _now,
-    _shift_document_positions,
-    _write_sync,
     apply_transaction,
+    ChangeRecorder,
     connection_scope,
+    document_insert_position,
     document_retitled,
     document_tree,
     initialize,
+    new_id,
     rebuild_document_derived,
+    shift_document_positions,
+    utc_now,
+    write_block_sync,
 )
 from .models import BlockOperation
 
@@ -290,12 +290,12 @@ def ensure_folder_path(
                 if row["name"] == row["source_name"] and name != row["name"]:
                     connection.execute(
                         "UPDATE folders SET name = ?, source_name = ?, updated_at = ? WHERE id = ?",
-                        (name, name, _now(), row["id"]),
+                        (name, name, utc_now(), row["id"]),
                     )
                 parent_id = row["id"]
                 continue
-            now = _now()
-            folder_id = _new_ulid()
+            now = utc_now()
+            folder_id = new_id()
             position = connection.execute(
                 "SELECT COUNT(*) FROM folders WHERE parent_id IS ?", (parent_id,)
             ).fetchone()[0]
@@ -497,7 +497,7 @@ def mark_documents_source_removed(
     "newly_removed"}`` per note of ``source`` that is not in the trash.
     """
 
-    now = at or _now()
+    now = at or utc_now()
     result: list[dict[str, Any]] = []
     initialize(path)
     with connection_scope(path, immediate=True) as connection:
@@ -559,7 +559,7 @@ def _insert_planned(
             _provenance.dumps(_block_provenance(source, block)), revision,
         ),
     )
-    _write_sync(connection, block_id, {"source_hash": block.hash})
+    write_block_sync(connection, block_id, {"source_hash": block.hash})
 
 
 def _dumps(value: object) -> str:
@@ -580,10 +580,10 @@ def _create(
     modified_at: str | None,
     document_provenance: dict[str, Any],
 ) -> UpsertResult:
-    now = _now()
-    document_id = _new_ulid()
+    now = utc_now()
+    document_id = new_id()
     created = created_at or now
-    position = _document_insert_position(connection, folder_id, None)
+    position = document_insert_position(connection, folder_id, None)
     connection.execute(
         """INSERT INTO documents(id, title, status, folder_id, position,
                created_at, updated_at, provenance_json, source_kind, source_external_id,
@@ -611,7 +611,7 @@ def _create(
     def insert(blocks: list[_Planned], parent_id: str | None) -> None:
         nonlocal count
         for block, key in zip(blocks, order_keys.keys_between(None, None, len(blocks))):
-            block_id = _new_ulid()
+            block_id = new_id()
             _insert_planned(
                 connection, document_id, document_provenance["source"], block,
                 block_id, parent_id, key, created, None,
@@ -647,7 +647,7 @@ def _update(
     modified_at: str | None,
     document_provenance: dict[str, Any],
 ) -> UpsertResult:
-    now = _now()
+    now = utc_now()
     document_id = document["id"]
     revision = int(document["revision"]) + 1
     sync = _provenance.loads(document["sync_json"])
@@ -737,7 +737,7 @@ def _update(
             ):
                 result.blocks_skipped += 1
             else:
-                block_id = _new_ulid()
+                block_id = new_id()
                 inserts[block_id] = (parent_id, block)
                 order.append(block_id)
                 plan(block.children, block_id)
@@ -811,7 +811,7 @@ def _update(
     )
 
     if blocks_changed:
-        changes = _Changes(connection)
+        changes = ChangeRecorder(connection)
         for block_id in deletable:
             changes.touch_subtree(block_id)
         for parent_id in reordered:
@@ -868,7 +868,7 @@ def _update(
                 (_provenance.dumps(value), block_id),
             )
         for block_id, value in sync_updates.items():
-            _write_sync(connection, block_id, value)
+            write_block_sync(connection, block_id, value)
         # Matched children were moved out above; what cascades is deletable too.
         for block_id in deletable:
             connection.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
@@ -901,8 +901,8 @@ def _update(
         sync["folder_id"] = folder_id
     if new_folder != document["folder_id"]:
         document_changed = True
-        _shift_document_positions(connection, document["folder_id"], document["position"] + 1, -1)
-        position = _document_insert_position(connection, new_folder, None, exclude_id=document_id)
+        shift_document_positions(connection, document["folder_id"], document["position"] + 1, -1)
+        position = document_insert_position(connection, new_folder, None, exclude_id=document_id)
         connection.execute(
             "UPDATE documents SET folder_id = ?, position = ? WHERE id = ?",
             (new_folder, position, document_id),
@@ -1192,7 +1192,7 @@ def resolve_block_conflict(path: Path, document_id: str, block_id: str, keep: st
     else:
         resolved["dismissed_hash"] = conflict.get("source_hash")
     with connection_scope(path) as connection:
-        _write_sync(connection, block_id, resolved)
+        write_block_sync(connection, block_id, resolved)
     tree = document_tree(path, document_id)
     assert tree is not None
     return tree

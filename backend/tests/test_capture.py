@@ -2,10 +2,11 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from support import make_settings, use_settings
 
 
 class QuickCaptureTests(unittest.TestCase):
@@ -13,28 +14,15 @@ class QuickCaptureTests(unittest.TestCase):
         from app import documents, main
 
         self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
         self.notes = Path(self._directory.name)
-        settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=self.notes / ".fortress.sqlite3",
-            notes_path=self.notes,
-            assets_path=self.notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        settings.assets_path.mkdir()
-        for item in (
-            patch.object(main, "settings", settings),
-            patch.object(documents, "get_settings", lambda: settings),
-        ):
-            item.start()
-            self.addCleanup(item.stop)
+        settings = make_settings(self.notes, reindex_interval_s=5.0)
+        patcher = use_settings(settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.client = TestClient(main.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
-        self.addCleanup(self._directory.cleanup)
 
     def folder(self) -> dict:
         items = self.client.get("/api/navigation").json()["items"]
@@ -77,6 +65,9 @@ class QuickCaptureTests(unittest.TestCase):
         )
         note = self.client.get(f"/api/block-documents/{second['document_id']}").json()
         self.assertIn("with the whole family", " ".join(b["text"] for b in note["children"]))
+        from app import documents
+
+        documents.flush_mirrors()
         self.assertTrue((self.notes / f"{second['document_id']}.md").exists())
         from app import block_store
 

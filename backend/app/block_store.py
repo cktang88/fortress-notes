@@ -5,6 +5,16 @@ The block model itself (types, inline content, derived text) is in
 contract. This module stores blocks, applies transactions (with undo/redo),
 and keeps the derived data in step: text, links, asset links and full-text
 search.
+
+Other modules that write documents with SQL of their own (sources, workspace,
+duplicates, migrations) use only the public names here, mostly
+:func:`document_write`. Everything that must follow a write follows from it:
+
+* derived rows (text, links, asset links, the FTS row) of the documents a
+  :class:`DocumentWrite` marks are rebuilt before it commits;
+* response caches, the search corpus (``corpus``) and the Markdown mirrors
+  (``documents.MirrorWriter``) follow ``change_log``, which triggers keep, so
+  no writer has to tell them.
 """
 
 from __future__ import annotations
@@ -53,7 +63,7 @@ _MIME_BY_EXTENSION = {
 }
 
 
-def _new_ulid() -> str:
+def new_id() -> str:
     """Generate a stable-format ID for records created by the block store."""
 
     return str(ULID())
@@ -456,7 +466,7 @@ def _initialize(path: Path) -> None:
         if row is None:
             connection.execute(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                (SCHEMA_VERSION, _now()),
+                (SCHEMA_VERSION, utc_now()),
             )
         elif row["version"] > SCHEMA_VERSION:
             raise RuntimeError(
@@ -478,7 +488,7 @@ def _initialize(path: Path) -> None:
                         raise RuntimeError(f"migration {current} broke a foreign key")
                     connection.execute(
                         "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                        (current, _now()),
+                        (current, utc_now()),
                     )
                     connection.commit()
                 except BaseException:
@@ -506,7 +516,7 @@ def _initialize(path: Path) -> None:
         _drop_retired_schema(connection)
         _ensure_change_tracking(connection)
         if not _fts_rowids_aligned(connection):
-            _rebuild_fts(connection)
+            rebuild_fts_rows(connection)
 
 
 # Lookups that EXPLAIN QUERY PLAN showed as full scans: backlinks (by target),
@@ -666,7 +676,7 @@ def register_asset(db_path: Path, asset_path: Path, content_hash: str, mime_type
                VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(content_hash, media_name) DO UPDATE SET
                  mime_type = excluded.mime_type, file_path = excluded.file_path""",
-            (content_hash, asset_path.name, mime_type, str(asset_path), _now()),
+            (content_hash, asset_path.name, mime_type, str(asset_path), utc_now()),
         )
 
 
@@ -676,7 +686,7 @@ def store_asset_text(path: Path, content_hash: str, text: str) -> None:
         cursor = connection.execute(
             "UPDATE assets SET text = ?, text_updated_at = ? "
             "WHERE content_hash = ? AND text <> ?",
-            (text, _now(), content_hash, text),
+            (text, utc_now(), content_hash, text),
         )
         if cursor.rowcount == 0:
             return
@@ -744,7 +754,7 @@ def backfill_assets(db_path: Path, assets_path: Path) -> int:
                 except OSError:
                     continue
             changed = True
-            registered_at = _now()
+            registered_at = utc_now()
             connection.execute(
                 """INSERT INTO assets(
                        content_hash, media_name, mime_type, file_path, text,
@@ -939,7 +949,7 @@ def bootstrap_markdown(notes_path: Path, path: Path) -> int:
             ).fetchone():
                 continue
             post = frontmatter.load(note_path)
-            now = _now()
+            now = utc_now()
             created_at = _iso(post.metadata.get("created_at", now))
             updated_at = _iso(post.metadata.get("updated_at", now))
             title = str(post.metadata.get("title") or derive_title(post.content))
@@ -954,7 +964,7 @@ def bootstrap_markdown(notes_path: Path, path: Path) -> int:
                 post.content,
                 created_at,
                 updated_at,
-                provenance=_markdown_import_provenance(
+                provenance=markdown_import_provenance(
                     post.metadata, note_path.name, now
                 ),
             )
@@ -965,7 +975,7 @@ def bootstrap_markdown(notes_path: Path, path: Path) -> int:
 MARKDOWN_IMPORTER = {"name": "fortress-markdown", "version": "1"}
 
 
-def _markdown_import_provenance(
+def markdown_import_provenance(
     metadata: dict, source_path: str, now: str
 ) -> dict[str, object]:
     """Provenance for a note read from a Markdown file.
@@ -1028,7 +1038,7 @@ def create_document(
             provenance,
         )
         if folder_id is not None:
-            position = _document_insert_position(connection, folder_id, None)
+            position = document_insert_position(connection, folder_id, None)
             connection.execute(
                 "UPDATE documents SET folder_id = ?, position = ? WHERE id = ?",
                 (folder_id, position, document_id),
@@ -1064,7 +1074,7 @@ def mark_opened(path: Path, document_id: str, *, wait: bool = True) -> bool:
             try:
                 connection.execute(
                     "UPDATE documents SET last_opened_at = ? WHERE id = ? AND deleted_at IS NULL",
-                    (_now(), document_id),
+                    (utc_now(), document_id),
                 )
             finally:
                 if not wait:
@@ -1195,7 +1205,7 @@ def ensure_editable_block(path: Path, document_id: str | None = None) -> int:
             return 0
     with connection_scope(path, immediate=True) as connection:
         ids = _needs_editable_block(connection, document_id)
-        now = _now()
+        now = utc_now()
         for empty_id in ids:
             _insert_markdown_body(connection, empty_id, "", now, now, ensure_empty_paragraph=True)
     return len(ids)
@@ -1243,8 +1253,8 @@ def create_block_document(
 ) -> dict:
     """Create a document; with ``title_auto`` its title follows its first line."""
 
-    document_id = _new_ulid()
-    now = _now()
+    document_id = new_id()
+    now = utc_now()
     create_document(
         path, document_id, title, status, body,
         _iso(created_at) if created_at is not None else now, now,
@@ -1269,7 +1279,7 @@ def rename_document(path: Path, document_id: str, title: str) -> dict:
         cursor = connection.execute(
             """UPDATE documents SET title = ?, title_auto = 0, updated_at = ?
                  WHERE id = ? AND deleted_at IS NULL""",
-            (title, _now(), document_id),
+            (title, utc_now(), document_id),
         )
         if cursor.rowcount == 0:
             raise KeyError("document not found")
@@ -1315,7 +1325,7 @@ def update_document_metadata(
             (
                 row["title"] if title is None or clearing else title,
                 status or row["status"],
-                _now(),
+                utc_now(),
                 clearing,
                 title is not None,
                 document_id,
@@ -1335,7 +1345,7 @@ def delete_document(path: Path, document_id: str) -> None:
     """Move a document to the trash: hidden everywhere, recoverable until purged."""
 
     initialize(path)
-    now = _now()
+    now = utc_now()
     with connection_scope(path, immediate=True) as connection:
         row = connection.execute(
             "SELECT folder_id, position FROM documents WHERE id = ? AND deleted_at IS NULL",
@@ -1348,18 +1358,18 @@ def delete_document(path: Path, document_id: str) -> None:
             (now, now, document_id),
         )
         connection.execute("DELETE FROM blocks_fts WHERE document_id = ?", (document_id,))
-        _shift_document_positions(connection, row["folder_id"], row["position"] + 1, -1)
+        shift_document_positions(connection, row["folder_id"], row["position"] + 1, -1)
 
 
 def create_folder(
     path: Path, name: str, parent_id: str | None = None, position: int | None = None
 ) -> dict[str, object]:
     initialize(path)
-    now = _now()
+    now = utc_now()
     with connection_scope(path, immediate=True) as connection:
         _validate_folder_parent(connection, parent_id)
         target_position = _folder_insert_position(connection, parent_id, position)
-        folder_id = _new_ulid()
+        folder_id = new_id()
         connection.execute(
             """INSERT INTO folders(id, parent_id, name, position, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
@@ -1371,7 +1381,7 @@ def create_folder(
 
 def rename_folder(path: Path, folder_id: str, name: str) -> dict[str, object]:
     initialize(path)
-    now = _now()
+    now = utc_now()
     with connection_scope(path) as connection:
         cursor = connection.execute(
             "UPDATE folders SET name = ?, updated_at = ? WHERE id = ?",
@@ -1390,7 +1400,7 @@ def move_folder(
     position: int | None = None,
 ) -> dict[str, object]:
     initialize(path)
-    now = _now()
+    now = utc_now()
     with connection_scope(path, immediate=True) as connection:
         folder = _folder_row(connection, folder_id)
         target_parent = folder["parent_id"] if parent_id is UNSET else parent_id
@@ -1438,7 +1448,7 @@ def move_document(
     position: int | None = None,
 ) -> dict[str, object]:
     initialize(path)
-    now = _now()
+    now = utc_now()
     with connection_scope(path, immediate=True) as connection:
         document = connection.execute(
             """SELECT id, folder_id, position FROM documents
@@ -1449,10 +1459,10 @@ def move_document(
             raise KeyError("document not found")
         target_folder = document["folder_id"] if folder_id is UNSET else folder_id
         _validate_folder_parent(connection, target_folder)
-        _shift_document_positions(
+        shift_document_positions(
             connection, document["folder_id"], document["position"] + 1, -1
         )
-        target_position = _document_insert_position(
+        target_position = document_insert_position(
             connection, target_folder, position, exclude_id=document_id
         )
         connection.execute(
@@ -1605,7 +1615,7 @@ def _shift_folder_positions(
     )
 
 
-def _document_insert_position(
+def document_insert_position(
     connection: sqlite3.Connection,
     folder_id: str | None,
     position: int | None,
@@ -1617,11 +1627,11 @@ def _document_insert_position(
         (folder_id, exclude_id),
     ).fetchone()[0]
     target_position = count if position is None else min(position, count)
-    _shift_document_positions(connection, folder_id, target_position, 1)
+    shift_document_positions(connection, folder_id, target_position, 1)
     return target_position
 
 
-def _shift_document_positions(
+def shift_document_positions(
     connection: sqlite3.Connection, folder_id: str | None, from_position: int, delta: int
 ) -> None:
     connection.execute(
@@ -1675,10 +1685,10 @@ def rebuild_fts(path: Path) -> None:
 
     initialize(path)
     with connection_scope(path) as connection:
-        _rebuild_fts(connection)
+        rebuild_fts_rows(connection)
 
 
-def _rebuild_fts(connection: sqlite3.Connection) -> None:
+def rebuild_fts_rows(connection: sqlite3.Connection) -> None:
     connection.execute("DELETE FROM blocks_fts")
     connection.execute(
         """INSERT INTO blocks_fts(rowid, block_id, document_id, text)
@@ -1969,7 +1979,7 @@ def insert_specs(
     created_at: str,
     updated_at: str,
     revision: int | None,
-    changes: "_Changes | None" = None,
+    changes: "ChangeRecorder | None" = None,
     default_provenance: dict[str, object] | None = None,
 ) -> list[str]:
     """Insert canonical block trees between two sibling keys; returns the new ids.
@@ -1992,7 +2002,7 @@ def insert_specs(
         if not block_id or connection.execute(
             "SELECT 1 FROM blocks WHERE id = ?", (block_id,)
         ).fetchone():
-            block_id = _new_ulid()
+            block_id = new_id()
         if changes is not None:
             changes.touch(block_id)
         provenance = block_spec.provenance or default_provenance
@@ -2184,6 +2194,54 @@ def document_retitled(connection: sqlite3.Connection, document_id: str) -> None:
     """A note's title changed: text that shows links to it follows."""
 
     refresh_derived(connection, document_id, [], retitled=[document_id])
+
+
+class DocumentWrite:
+    """One write transaction over documents (see :func:`document_write`)."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+        self._rederive: dict[str, None] = {}
+        self._retitled: dict[str, None] = {}
+
+    def rederive(self, document_id: str) -> None:
+        """Rebuild every derived row of ``document_id``'s blocks before commit."""
+
+        self._rederive[document_id] = None
+
+    def retitled(self, document_id: str) -> None:
+        """``document_id``'s title changed: text showing links to it follows."""
+
+        self._retitled[document_id] = None
+
+    def purge(self, document_ids: Iterable[str]) -> None:
+        """Delete documents for good, with everything hanging off them."""
+
+        for document_id in document_ids:
+            self.connection.execute(
+                "DELETE FROM blocks_fts WHERE document_id = ?", (document_id,)
+            )
+            # Children reference parents with ON DELETE CASCADE: blocks, refs,
+            # history and receipts go with the document.
+            self.connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+            self._rederive.pop(document_id, None)
+
+    def finish(self) -> None:
+        for document_id in self._rederive:
+            rebuild_document_derived(self.connection, document_id)
+        for document_id in self._retitled:
+            document_retitled(self.connection, document_id)
+
+
+@contextmanager
+def document_write(path: Path, immediate: bool = True):
+    """A write transaction whose marked documents get their derived data rebuilt."""
+
+    initialize(path)
+    with connection_scope(path, immediate=immediate) as connection:
+        write = DocumentWrite(connection)
+        yield write
+        write.finish()
 
 
 # --- Reading -------------------------------------------------------------------------------------
@@ -2381,7 +2439,7 @@ _SNAPSHOT_COLUMNS = (
 )
 
 
-class _Changes:
+class ChangeRecorder:
     """The blocks one write touched, with their state before it (one undo step)."""
 
     def __init__(self, connection: sqlite3.Connection):
@@ -2455,7 +2513,7 @@ def _restore(connection: sqlite3.Connection, document_id: str, entries: list[dic
             "INSERT INTO block_user_attrs(block_id, name, value) VALUES (?, ?, ?)",
             [(entry["id"], name, value) for name, value in state["user_attrs"].items()],
         )
-        _write_sync(connection, entry["id"], state["sync"])
+        write_block_sync(connection, entry["id"], state["sync"])
     # Search rows go first: deleting a parent cascades to its children.
     doomed = [entry["id"] for entry in entries if entry[key] is None and entry["id"] in present]
     _delete_fts(connection, doomed)
@@ -2463,7 +2521,7 @@ def _restore(connection: sqlite3.Connection, document_id: str, entries: list[dic
         connection.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
 
 
-def _write_sync(connection: sqlite3.Connection, block_id: str, sync: dict | None) -> None:
+def write_block_sync(connection: sqlite3.Connection, block_id: str, sync: dict | None) -> None:
     if sync is None:
         connection.execute("DELETE FROM block_sync WHERE block_id = ?", (block_id,))
         return
@@ -2519,7 +2577,7 @@ def apply_transaction(
     """
 
     initialize(path)
-    now = _now()
+    now = utc_now()
     with connection_scope(path) as connection:
         # Take the writer lock before reading the revision: two writers must not
         # both read the same revision before either writes.
@@ -2580,7 +2638,7 @@ class _Writer:
         self.document_id = document_id
         self.now = now
         self.revision = revision
-        self.changes = _Changes(connection)
+        self.changes = ChangeRecorder(connection)
         self.content_changed: list[str] = []
         self.removed: list[str] = []
 
@@ -2658,7 +2716,7 @@ class _Writer:
 
     def insert(self, operation: BlockOperation) -> None:
         block, extra_children = _operation_block(operation)
-        block_id = operation.block_id or _new_ulid()
+        block_id = operation.block_id or new_id()
         if self.connection.execute("SELECT 1 FROM blocks WHERE id = ?", (block_id,)).fetchone():
             raise ValueError(f"block already exists: {block_id}")
         parent_id, key = self.placement(operation)
@@ -2863,7 +2921,7 @@ def _change_history(
     path: Path, document_id: str, base_revision: int, redo: bool
 ) -> dict:
     initialize(path)
-    now = _now()
+    now = utc_now()
     with connection_scope(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         document = connection.execute(
@@ -2911,7 +2969,7 @@ def redo_transaction(path: Path, document_id: str, base_revision: int) -> dict:
     return _change_history(path, document_id, base_revision, redo=True)
 
 
-def _document_provenance(connection: sqlite3.Connection, document_id: str) -> dict:
+def stored_document_provenance(connection: sqlite3.Connection, document_id: str) -> dict:
     row = connection.execute(
         "SELECT provenance_json, source_kind FROM documents WHERE id = ?", (document_id,)
     ).fetchone()
@@ -3022,5 +3080,5 @@ def _iso(value: object) -> str:
     return str(value)
 
 
-def _now() -> str:
+def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()

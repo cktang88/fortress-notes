@@ -1,10 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from support import make_settings, use_settings
 
 
 class UploadLimitTests(unittest.TestCase):
@@ -15,25 +16,10 @@ class UploadLimitTests(unittest.TestCase):
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
         notes = Path(self._directory.name)
-        settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=notes / ".fortress.sqlite3",
-            notes_path=notes,
-            assets_path=notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            vlm_caption_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=3600.0,
-        )
-        settings.assets_path.mkdir()
+        settings = make_settings(notes)
         self.assets_path = settings.assets_path
         for item in (
-            patch.object(main, "settings", settings),
-            patch.object(documents, "get_settings", lambda: settings),
-            patch.object(search, "get_settings", lambda: settings),
-            patch.object(images, "get_settings", lambda: settings),
-            patch.object(assets, "get_settings", lambda: settings),
+            use_settings(settings),
             patch.object(main, "MAX_UPLOAD_BYTES", 3 * 1024 * 1024 + 5),
         ):
             item.start()

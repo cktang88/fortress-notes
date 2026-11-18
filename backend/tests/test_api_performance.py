@@ -17,6 +17,8 @@ from app.block_store import (
     rebuild_fts,
 )
 
+from support import make_settings, use_settings
+
 
 def _document(database: Path, document_id: str, blocks: int) -> None:
     create_document(
@@ -189,8 +191,7 @@ class LargeDocumentTransactionTests(unittest.TestCase):
 
 class ApiWorkTests(unittest.TestCase):
     def setUp(self) -> None:
-        from types import SimpleNamespace
-
+        
         from fastapi.testclient import TestClient
 
         from app import assets, documents, images, main, search
@@ -200,27 +201,10 @@ class ApiWorkTests(unittest.TestCase):
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
         self.notes = Path(self._directory.name)
-        settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=self.notes / ".fortress.sqlite3",
-            notes_path=self.notes,
-            assets_path=self.notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            vlm_caption_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        settings.assets_path.mkdir()
-        for item in (
-            patch.object(main, "settings", settings),
-            patch.object(documents, "get_settings", lambda: settings),
-            patch.object(assets, "get_settings", lambda: settings),
-            patch.object(images, "get_settings", lambda: settings),
-            patch.object(search, "get_settings", lambda: settings),
-        ):
-            item.start()
-            self.addCleanup(item.stop)
+        settings = make_settings(self.notes, reindex_interval_s=5.0)
+        patcher = use_settings(settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         main._clear_response_caches()
         self.client = TestClient(main.app)
         self.client.__enter__()
@@ -241,9 +225,19 @@ class ApiWorkTests(unittest.TestCase):
 
     def test_transactions_write_the_mirror_in_the_background(self) -> None:
         mirror = self.notes / f"{self.note['id']}.md"
-        with patch.object(self.documents, "write_mirror") as synchronous:
+        import threading
+
+        writers = []
+        original = self.documents._mirror_document
+
+        def record(*args):
+            writers.append(threading.current_thread().name)
+            return original(*args)
+
+        with patch.object(self.documents, "_mirror_document", record):
             self.assertEqual(self.transact("Background").status_code, 200)
-        synchronous.assert_not_called()
+        # Only the mirrors lane writes mirrors, never the request.
+        self.assertEqual(set(writers) - {"fortress-mirrors"}, set())
         self.documents.flush_mirrors()
         self.assertIn("Background", mirror.read_text(encoding="utf-8"))
 

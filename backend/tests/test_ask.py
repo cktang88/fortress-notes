@@ -2,10 +2,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+
+from support import make_settings, use_settings
 
 
 def streaming(fake):
@@ -25,24 +26,11 @@ class AskYourNotesTests(unittest.TestCase):
         from app import ask, documents, embeddings, main, search
 
         self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
         notes = Path(self._directory.name)
-        settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=notes / ".fortress.sqlite3",
-            notes_path=notes,
-            assets_path=notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-            ask_model="test/fast-model",
-        )
-        settings.assets_path.mkdir()
+        settings = make_settings(notes, reindex_interval_s=5.0, ask_model="test/fast-model")
         for item in (
-            patch.object(main, "settings", settings),
-            patch.object(documents, "get_settings", lambda: settings),
-            patch.object(search, "get_settings", lambda: settings),
-            patch.object(ask, "get_settings", lambda: settings),
+            use_settings(settings),
             patch.object(embeddings, "_get_model", lambda wait=False: None),
         ):
             item.start()
@@ -50,7 +38,6 @@ class AskYourNotesTests(unittest.TestCase):
         self.client = TestClient(main.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
-        self.addCleanup(self._directory.cleanup)
         self.hotel = self.client.post(
             "/api/block-documents",
             json={"title": "Lisbon trip", "body": "We picked the hotel in Alfama, 3 nights."},

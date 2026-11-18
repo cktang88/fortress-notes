@@ -7,11 +7,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app import block_store, corpus, ocr
 from app.models import BlockOperation
+from support import make_settings, use_settings
+
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
@@ -73,17 +74,11 @@ class _Workspace(unittest.TestCase):
         self.addCleanup(self._directory.cleanup)
         self.root = Path(self._directory.name)
         self.db = self.root / ".fortress.sqlite3"
-        self.assets = self.root / "assets"
-        self.assets.mkdir()
-        self.settings = SimpleNamespace(
-            block_db_path=self.db, notes_path=self.root, assets_path=self.assets, ocr_threads=2,
-            vision_enabled=True,
-        )
-        for item in (
-            patch.object(ocr, "get_settings", lambda: self.settings),
-        ):
-            item.start()
-            self.addCleanup(item.stop)
+        self.settings = make_settings(self.root, ocr_threads=2, vision_enabled=True)
+        self.assets = self.settings.assets_path
+        patcher = use_settings(self.settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         block_store.initialize(self.db)
 
     def asset(self, name: str, data: bytes, mime: str) -> tuple[Path, str]:
@@ -256,27 +251,12 @@ class OcrTextIsSearchableTests(unittest.TestCase):
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
         notes = Path(self._directory.name)
-        self.settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=notes / ".fortress.sqlite3",
-            notes_path=notes,
-            assets_path=notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,  # the test drives the queue itself
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-            ask_model="test/fast-model",
-            ocr_threads=2,
+        # vision_enabled stays off: the test drives the queue itself.
+        self.settings = make_settings(
+            notes, reindex_interval_s=5.0, ask_model="test/fast-model", ocr_threads=2
         )
-        self.settings.assets_path.mkdir()
         for item in (
-            patch.object(main, "settings", self.settings),
-            patch.object(documents, "get_settings", lambda: self.settings),
-            patch.object(search, "get_settings", lambda: self.settings),
-            patch.object(ask, "get_settings", lambda: self.settings),
-            patch.object(ocr, "get_settings", lambda: self.settings),
-            patch("app.assets.get_settings", lambda: self.settings),
-            patch("app.images.get_settings", lambda: self.settings),
+            use_settings(self.settings),
             patch.object(embeddings, "_get_model", lambda: None),
         ):
             item.start()
@@ -398,20 +378,9 @@ class EndToEndTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)
-            settings = SimpleNamespace(
-                block_db_import_on_startup=False, block_db_path=notes / ".fortress.sqlite3",
-                notes_path=notes, assets_path=notes / "assets", embeddings_enabled=False,
-                vision_enabled=True, auto_backup_enabled=False, reindex_interval_s=5.0,
-                ocr_threads=2,
-            )
-            settings.assets_path.mkdir()
+            settings = make_settings(notes, vision_enabled=True, reindex_interval_s=5.0, ocr_threads=2)
             patches = [
-                patch.object(main, "settings", settings),
-                patch.object(documents, "get_settings", lambda: settings),
-                patch.object(search, "get_settings", lambda: settings),
-                patch.object(ask, "get_settings", lambda: settings),
-                patch.object(ocr, "get_settings", lambda: settings),
-                patch("app.assets.get_settings", lambda: settings),
+                use_settings(settings),
                 patch.object(embeddings, "_get_model", lambda: None),
             ]
             for item in patches:
@@ -466,11 +435,11 @@ class RealColbertTests(unittest.TestCase):
                                          "Boarding pass Zeppelin NT flight to Friedrichshafen, gate 4")
             block_store.store_asset_text(database, hashlib.sha256(b"b").hexdigest(),
                                          "Grocery receipt: milk, eggs, bread, total 6.20")
-            settings = SimpleNamespace(
-                block_db_path=database, colbert_model="lightonai/Agent-ModernColBERT",
+            settings = make_settings(
+                Path(directory), embeddings_enabled=True, colbert_model="lightonai/Agent-ModernColBERT",
                 embeddings_precision="float32", precompute_query_embeddings=False,
             )
-            with patch.object(embeddings, "get_settings", return_value=settings), patch.object(
+            with use_settings(settings), patch.object(
                 embeddings, "_cache", embeddings._Cache()
             ):
                 if embeddings._get_model() is None:

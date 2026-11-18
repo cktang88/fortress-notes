@@ -7,10 +7,11 @@ block for it, the first keystrokes refer to a block it never heard of.
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from support import make_settings, use_settings
 
 
 class EmptyDocumentTests(unittest.TestCase):
@@ -20,24 +21,10 @@ class EmptyDocumentTests(unittest.TestCase):
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
         notes = Path(self._directory.name)
-        self.settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=notes / ".fortress.sqlite3",
-            notes_path=notes,
-            assets_path=notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=3600.0,
-        )
-        self.settings.assets_path.mkdir()
-        for item in (
-            patch.object(main, "settings", self.settings),
-            patch.object(documents, "get_settings", lambda: self.settings),
-            patch.object(search, "get_settings", lambda: self.settings),
-        ):
-            item.start()
-            self.addCleanup(item.stop)
+        self.settings = make_settings(notes)
+        patcher = use_settings(self.settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.client = TestClient(main.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)

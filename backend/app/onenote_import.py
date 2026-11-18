@@ -74,7 +74,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from . import block_store, documents, provenance, sources
+from . import background, block_store, provenance, sources
+from .config import get_settings
 
 SOURCE = "onenote_import"
 IMPORTER_NAME = "fortress-onenote-import"
@@ -82,7 +83,6 @@ IMPORTER_VERSION = "1"
 MANIFEST_FORMAT = "fortress-onenote-manifest"
 SUPPORTED_FORMAT_VERSION = 1
 PX_PER_UNIT = 48.0  # OneNote half-inch geometry units -> CSS px at 96 dpi
-CONVERTER_TIMEOUT_S = float(os.environ.get("FORTRESS_ONENOTE_TIMEOUT_S", "3600"))
 MAX_WARNINGS = 300
 IMPORTS_DIRNAME = ".fortress-imports"
 
@@ -122,7 +122,7 @@ def converter_path() -> Path | None:
     """
 
     candidates: list[Path] = []
-    configured = os.environ.get("FORTRESS_ONENOTE_BIN", "").strip()
+    configured = get_settings().onenote_bin
     if configured:
         return Path(configured).expanduser() if Path(configured).expanduser().is_file() else None
     repo = Path(__file__).resolve().parents[2]
@@ -164,7 +164,7 @@ def run_converter(input_path: Path, out_dir: Path, *, timeout: float | None = No
             "or build it: cd tools/fortress-onenote && cargo build --release"
         )
     out_dir.mkdir(parents=True, exist_ok=True)
-    limit = timeout or CONVERTER_TIMEOUT_S
+    limit = timeout or get_settings().onenote_timeout_s
     try:
         process = subprocess.Popen(
             [str(binary), str(input_path), "--out", str(out_dir), "-q"],
@@ -1186,8 +1186,6 @@ class _Importer:
             importer=self.importer_info,
         )
         self._block_index.pop(result.document_id, None)
-        if result.status in {"created", "updated"}:
-            documents.mirror_document(self.db_path, self.notes_path, result.document_id)
         if result.status != "skipped_deleted":
             target = _Target(result.document_id, title)
             self.page_docs[guid] = target
@@ -1382,8 +1380,9 @@ CANCELLED_MESSAGE = "Import cancelled. Pages imported before cancelling are kept
 _SAVE_INTERVAL_S = 1.0
 
 
-class ImportJobs:
-    """One-at-a-time background import jobs with an in-memory registry.
+class ImportJobs(background.Service):
+    """One-at-a-time background import jobs (the ``imports`` lane, app/background.py)
+    with an in-memory registry.
 
     Every job's record is written to ``NOTES_DIR/.fortress-imports/<job_id>.json``
     when it is queued, at each status change, about once a second while it runs,
@@ -1392,6 +1391,9 @@ class ImportJobs:
     with :data:`INTERRUPTED_MESSAGE` (re-running an import is idempotent).
     """
 
+    name = "imports"
+    long_running = True
+
     def __init__(self) -> None:
         self._jobs: dict[str, dict[str, Any]] = {}
         self._notes: dict[str, Path] = {}
@@ -1399,13 +1401,12 @@ class ImportJobs:
         self._saved_at: dict[str, float] = {}
         self._lock = threading.Lock()
         self._queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
-        self._worker: threading.Thread | None = None
         # Set by the app to its OCR queue's wake-up (app/ocr.py); None: no OCR.
         self.ocr: Callable[[list[Path]], None] | None = None
 
     @staticmethod
     def new_id() -> str:
-        return block_store._new_ulid()
+        return block_store.new_id()
 
     def submit(self, job_id: str, *, input_path: Path, input_name: str, owned_input: Path | None,
                db_path: Path, notes_path: Path, assets_path: Path,
@@ -1418,7 +1419,7 @@ class ImportJobs:
             "error": None,
             "input_name": input_name,
             "folder_id": folder_id,
-            "created_at": block_store._now(),
+            "created_at": block_store.utc_now(),
             "finished_at": None,
         }
         snapshot = json.loads(json.dumps(record))
@@ -1426,14 +1427,13 @@ class ImportJobs:
             self._jobs[job_id] = record
             self._notes[job_id] = notes_path
             self._cancel[job_id] = threading.Event()
-            if self._worker is None or not self._worker.is_alive():
-                self._worker = threading.Thread(target=self._work, name="onenote-import", daemon=True)
-                self._worker.start()
         self._save(job_id, notes_path)
         self._queue.put((job_id, {
             "input_path": input_path, "owned_input": owned_input, "db_path": db_path,
             "notes_path": notes_path, "assets_path": assets_path, "folder_id": folder_id,
         }))
+        background.ensure(self)
+        background.wake(self.name)
         return snapshot
 
     def _update(self, job_id: str, **changes: Any) -> None:
@@ -1463,29 +1463,39 @@ class ImportJobs:
                 accepted = True
                 event.set()
                 if record["status"] == "queued":
-                    record.update(status="cancelled", error=CANCELLED_MESSAGE, finished_at=block_store._now())
+                    record.update(status="cancelled", error=CANCELLED_MESSAGE, finished_at=block_store.utc_now())
                 else:
                     record["cancel_requested"] = True
         if accepted:
             self._save(job_id, self._notes.get(job_id, notes_path))
         return self.get(job_id, notes_path), accepted
 
-    def _work(self) -> None:
-        while True:
-            job_id, options = self._queue.get()
-            try:
-                with self._lock:
-                    skip = self._jobs[job_id]["status"] == "cancelled"
-                if skip:
-                    for leftover in (options.get("owned_input"),):
-                        if leftover is not None:
-                            shutil.rmtree(leftover, ignore_errors=True)
-                else:
-                    self._run(job_id, **options)
-            except Exception:  # pragma: no cover - _run records its own failures
-                traceback.print_exc()
-            finally:
-                self._queue.task_done()
+    def step(self) -> float | None:
+        """Run the next queued job (the lane calls this); None when there is none."""
+
+        try:
+            job_id, options = self._queue.get_nowait()
+        except queue.Empty:
+            return None
+        try:
+            with self._lock:
+                skip = self._jobs[job_id]["status"] == "cancelled"
+            if skip:
+                for leftover in (options.get("owned_input"),):
+                    if leftover is not None:
+                        shutil.rmtree(leftover, ignore_errors=True)
+            else:
+                self._run(job_id, **options)
+        except Exception:  # pragma: no cover - _run records its own failures
+            traceback.print_exc()
+        finally:
+            self._queue.task_done()
+        return 0
+
+    def stop(self) -> None:
+        """Shutdown: a running converter is stopped (its job then fails)."""
+
+        terminate_converters()
 
     def _run(self, job_id: str, *, input_path: Path, owned_input: Path | None, db_path: Path,
              notes_path: Path, assets_path: Path, folder_id: str | None) -> None:
@@ -1508,17 +1518,17 @@ class ImportJobs:
                                      assets_path=assets_path, folder_id=folder_id, progress=progress,
                                      cancelled=event.is_set, ocr=self.ocr)
             result["duration_ms"] = int((time.monotonic() - started) * 1000)
-            self._update(job_id, status="done", result=result, finished_at=block_store._now(),
+            self._update(job_id, status="done", result=result, finished_at=block_store.utc_now(),
                          progress={"current": None})
         except ImportCancelled:
             self._update(job_id, status="cancelled", error=CANCELLED_MESSAGE,
-                         finished_at=block_store._now(), progress={"current": None})
+                         finished_at=block_store.utc_now(), progress={"current": None})
         except OneNoteImportError as exc:
-            self._update(job_id, status="failed", error=str(exc), finished_at=block_store._now())
+            self._update(job_id, status="failed", error=str(exc), finished_at=block_store.utc_now())
         except Exception as exc:
             traceback.print_exc()
             self._update(job_id, status="failed", error=f"Import failed: {exc}",
-                         finished_at=block_store._now())
+                         finished_at=block_store.utc_now())
         finally:
             shutil.rmtree(work, ignore_errors=True)
             if owned_input is not None:
@@ -1543,7 +1553,7 @@ class ImportJobs:
             return None
         if value.get("status") not in TERMINAL_STATUSES:
             value.update(status="failed", error=INTERRUPTED_MESSAGE, interrupted=True,
-                         finished_at=value.get("finished_at") or block_store._now())
+                         finished_at=value.get("finished_at") or block_store.utc_now())
             value["progress"] = {**(value.get("progress") or {}), "current": None}
             try:
                 _write_record(notes_path, value)
@@ -1593,4 +1603,4 @@ def _write_record(notes_path: Path, record: dict[str, Any]) -> None:
     os.replace(temporary, target)
 
 
-jobs = ImportJobs()
+jobs = background.register(ImportJobs())

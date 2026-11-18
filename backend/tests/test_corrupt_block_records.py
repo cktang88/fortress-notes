@@ -3,10 +3,11 @@ from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from support import make_settings, use_settings
 
 
 class CorruptBlockRecordTests(unittest.TestCase):
@@ -25,17 +26,8 @@ class CorruptBlockRecordTests(unittest.TestCase):
                     ("{not valid json", block_id),
                 )
 
-            settings = SimpleNamespace(
-                block_db_enabled=True,
-                block_db_import_on_startup=False,
-                block_db_path=database,
-                notes_path=notes,
-                assets_path=notes / "assets",
-                embeddings_enabled=False,
-                vision_enabled=False,
-                reindex_interval_s=5.0,
-            )
-            with patch.object(main, "settings", settings):
+            settings = make_settings(notes, reindex_interval_s=5.0)
+            with use_settings(settings):
                 with TestClient(main.app, raise_server_exceptions=False) as client:
                     response = client.get(f"/api/block-documents/{document['id']}")
 

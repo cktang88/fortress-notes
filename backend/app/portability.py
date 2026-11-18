@@ -17,11 +17,11 @@ import frontmatter
 
 from . import provenance as _provenance
 from .block_store import (
-    _markdown_import_provenance,
     connection_scope,
     create_document,
     derive_title as _derive_title,
     document_tree,
+    markdown_import_provenance,
     render_markdown as _render_markdown,
 )
 
@@ -118,7 +118,7 @@ def import_markdown_directory(database_path: Path, source_directory: Path) -> Im
                 updated_at,
                 # The editor always has a paragraph to type into, even in an empty file.
                 ensure_empty_paragraph=True,
-                provenance=_markdown_import_provenance(
+                provenance=markdown_import_provenance(
                     post.metadata, source_path.name, datetime.now(timezone.utc).isoformat()
                 ),
             )
@@ -246,7 +246,7 @@ def parse_uploaded_markdown(filename: str, raw: bytes) -> UploadedNote:
         status=status if isinstance(status, str) and status in {"rough", "polished"} else "rough",
         body=post.content,
         created_at=created_at if isinstance(created_at, (str, datetime)) else None,
-        provenance=_markdown_import_provenance(
+        provenance=markdown_import_provenance(
             metadata, Path(filename).name, datetime.now(timezone.utc).isoformat()
         ),
     )

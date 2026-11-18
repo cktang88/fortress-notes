@@ -15,6 +15,8 @@ from __future__ import annotations
 import mimetypes
 import os
 import re
+from collections.abc import Callable
+from pathlib import Path
 
 from starlette.datastructures import Headers
 from starlette.responses import FileResponse, Response
@@ -71,6 +73,26 @@ def is_immutable(name: str) -> bool:
 
 
 class MediaFiles(StaticFiles):
+    """Files in the directory ``directory()`` names, looked up per request (the
+    active settings' assets folder)."""
+
+    def __init__(self, directory: Callable[[], Path]) -> None:
+        super().__init__(check_dir=False)
+        self._directory = directory
+
+    def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
+        # StaticFiles.lookup_path for one directory, symlinks resolved (never followed out).
+        if path.startswith(("/", "\\")):
+            return "", None
+        directory = os.path.realpath(self._directory())
+        full_path = os.path.realpath(os.path.join(directory, path))
+        if os.path.commonpath([full_path, directory]) != directory:
+            return "", None
+        try:
+            return full_path, os.stat(full_path)
+        except (FileNotFoundError, NotADirectoryError):
+            return "", None
+
     def file_response(
         self,
         full_path,

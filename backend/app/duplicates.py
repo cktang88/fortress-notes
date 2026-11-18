@@ -13,11 +13,11 @@ from pathlib import Path
 from . import provenance as _provenance
 from . import order_keys
 from .block_store import (
-    _document_provenance,
-    _now,
     connection_scope,
     initialize,
     rebuild_document_derived,
+    stored_document_provenance,
+    utc_now,
 )
 
 MIN_WORDS = 12
@@ -86,7 +86,7 @@ def move_into(path: Path, source_id: str, target_id: str) -> int:
     if source_id == target_id:
         raise ValueError("a note can't be moved into itself")
     initialize(path)
-    now = _now()
+    now = utc_now()
     with connection_scope(path) as connection:
         active = {
             row["id"]
@@ -106,7 +106,7 @@ def move_into(path: Path, source_id: str, target_id: str) -> int:
         ).fetchone()[0]
         # Each moved block remembers the note it came from, and keeps its own
         # source (a block that inherited the old note's provenance gets a copy).
-        source_provenance = _document_provenance(connection, source_id)
+        source_provenance = stored_document_provenance(connection, source_id)
         source_title = connection.execute(
             "SELECT title FROM documents WHERE id = ?", (source_id,)
         ).fetchone()["title"]

@@ -13,7 +13,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from . import block_store
+from . import background, block_store
+from .config import get_settings
 
 BACKUP_DIRNAME = ".fortress-backups"
 _NAME_RE = re.compile(r"^fortress-(\d{8}T\d{6}\d{6}Z)-(auto|manual|pre-restore)\.sqlite3$")
@@ -74,6 +75,22 @@ def list_backups(directory: Path) -> list[dict[str, object]]:
         )
     items.sort(key=lambda item: item["created_at"], reverse=True)
     return items
+
+
+class DailyBackup(background.Service):
+    """The ``backups`` lane: one automatic snapshot per day (checking hourly is cheap)."""
+
+    name = "backups"
+    poll = 3600.0
+
+    def step(self) -> float | None:
+        settings = get_settings()
+        if settings.block_db_path.exists():
+            ensure_daily_backup(settings.block_db_path, backup_directory(settings.notes_path))
+        return None
+
+
+background.register(DailyBackup())
 
 
 def resolve_backup(directory: Path, name: str) -> Path:

@@ -7,12 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .block_store import (
-    _now,
-    connection_scope,
-    initialize,
-    rebuild_document_derived,
-)
+from .block_store import connection_scope, document_write, initialize, utc_now
 
 # --- Trash -------------------------------------------------------------------
 
@@ -44,9 +39,9 @@ def list_trash(path: Path) -> list[dict[str, object]]:
 def restore_document(path: Path, document_id: str) -> dict[str, object]:
     """Bring a trashed document back to the end of its folder (or the top level)."""
 
-    initialize(path)
-    now = _now()
-    with connection_scope(path, immediate=True) as connection:
+    now = utc_now()
+    with document_write(path) as write:
+        connection = write.connection
         row = connection.execute(
             "SELECT folder_id FROM documents WHERE id = ? AND deleted_at IS NOT NULL",
             (document_id,),
@@ -71,43 +66,33 @@ def restore_document(path: Path, document_id: str) -> dict[str, object]:
         )
         # Trashing removed the document from search; put it back. (Links to and
         # from it were kept: link rows don't depend on their target being live.)
-        rebuild_document_derived(connection, document_id)
+        write.rederive(document_id)
     return {"id": document_id, "folder_id": folder_id, "position": position}
 
 
 def purge_document(path: Path, document_id: str) -> None:
     """Permanently remove one trashed document and everything that hangs off it."""
 
-    initialize(path)
-    with connection_scope(path) as connection:
-        if connection.execute(
+    with document_write(path) as write:
+        if write.connection.execute(
             "SELECT 1 FROM documents WHERE id = ? AND deleted_at IS NOT NULL", (document_id,)
         ).fetchone() is None:
             raise KeyError("document is not in the trash")
-        _purge(connection, [document_id])
+        write.purge([document_id])
 
 
 def empty_trash(path: Path) -> list[str]:
     """Purge every trashed document; returns the purged IDs."""
 
-    initialize(path)
-    with connection_scope(path) as connection:
+    with document_write(path) as write:
         ids = [
             row["id"]
-            for row in connection.execute(
+            for row in write.connection.execute(
                 "SELECT id FROM documents WHERE deleted_at IS NOT NULL"
             ).fetchall()
         ]
-        _purge(connection, ids)
+        write.purge(ids)
     return ids
-
-
-def _purge(connection, document_ids: list[str]) -> None:
-    for document_id in document_ids:
-        connection.execute("DELETE FROM blocks_fts WHERE document_id = ?", (document_id,))
-        # Children reference parents with ON DELETE CASCADE, so removing the
-        # document cascades through blocks, refs, history, and receipts.
-        connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
 
 
 # --- Saved searches ----------------------------------------------------------

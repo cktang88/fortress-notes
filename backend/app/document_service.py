@@ -8,31 +8,18 @@ of every note or block it links to). A client that holds a body under an ETag
 can send it back as ``If-None-Match`` or as a batch ``known`` entry.
 
 Bodies are rendered at most once per ETag and shared by all of those routes.
-The module reads the settings through a provider that ``main`` installs, so
-nothing here imports ``main`` (tests patch ``main.settings``).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 from . import block_store, http_cache
 from .config import get_settings
 
-_settings: Callable[[], Any] = get_settings
-
-
-def use_settings(provider: Callable[[], Any]) -> None:
-    """Read the settings through ``provider`` (``main`` passes its own)."""
-
-    global _settings
-    _settings = provider
-
 
 def db_path() -> Path:
-    return _settings().block_db_path
+    return get_settings().block_db_path
 
 
 # Rendered note trees by ETag: a repeated read skips SQLite and JSON encoding.

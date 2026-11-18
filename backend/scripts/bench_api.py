@@ -180,7 +180,7 @@ def build_onenote(directory: Path, pages: int) -> None:
             f"[[{target}|Page]]" for target in targets
         ) + f" see (({target_block}))"
         block_store.apply_transaction(db, document_id, [BlockOperation(
-            operation="insert", block_id=block_store._new_ulid(), parent_id=None,
+            operation="insert", block_id=block_store.new_id(), parent_id=None,
             position=len(tree["children"]), type="paragraph", text=text,
             content={"blocknote": [{"type": "text", "text": text, "styles": {}}]},
         )], tree["revision"])

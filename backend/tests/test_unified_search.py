@@ -1,10 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from support import make_settings, use_settings
 
 
 class UnifiedSearchTests(unittest.TestCase):
@@ -12,22 +13,11 @@ class UnifiedSearchTests(unittest.TestCase):
         from app import documents, embeddings, main, search
 
         self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
         notes = Path(self._directory.name)
-        self.settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=notes / ".fortress.sqlite3",
-            notes_path=notes,
-            assets_path=notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        self.settings.assets_path.mkdir()
+        self.settings = make_settings(notes, reindex_interval_s=5.0)
         for item in (
-            patch.object(main, "settings", self.settings),
-            patch.object(documents, "get_settings", lambda: self.settings),
-            patch.object(search, "get_settings", lambda: self.settings),
+            use_settings(self.settings),
             # Keyword overlap stands in for the ColBERT model.
             patch.object(embeddings, "_get_model", lambda wait=False: None),
         ):
@@ -36,7 +26,6 @@ class UnifiedSearchTests(unittest.TestCase):
         self.client = TestClient(main.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
-        self.addCleanup(self._directory.cleanup)
 
     def create(self, title: str, body: str, status: str = "rough") -> str:
         response = self.client.post(

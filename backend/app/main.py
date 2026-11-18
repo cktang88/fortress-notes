@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import hashlib
 import json
 import logging
@@ -19,6 +18,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from . import (
     ask as ask_notes,
     assets,
+    background,
     backups,
     block_query,
     block_store,
@@ -63,9 +63,14 @@ from .models import (
     SourceConflictResolution,
 )
 
-settings = get_settings()
+def _db() -> Path:
+    """The notes database of the active settings (app/config.py)."""
 
-# Hold references to fire-and-forget tasks so they aren't garbage-collected mid-run.
+    return get_settings().block_db_path
+
+
+# Hold references to fire-and-forget tasks (I/O only, e.g. warming the LLM
+# connection) so they aren't garbage-collected mid-run.
 _background_tasks: set[asyncio.Task] = set()
 
 
@@ -84,34 +89,32 @@ def _spawn(coro) -> None:
     task.add_done_callback(_done)
 
 
-async def _reindex_loop() -> None:
-    """Keep embeddings current so searches stay instant.
-
-    Starts right away: the first pass loads the model and the saved embeddings
-    (and, on a first run, encodes everything in the background).
-    """
-    while True:
-        with contextlib.suppress(Exception):
-            await asyncio.to_thread(embeddings.warm_index)
-        await asyncio.sleep(settings.reindex_interval_s)
+# Background lanes the app runs (app/background.py); each module registers its own.
+onenote_import.jobs.ocr = ocr.wake
 
 
-async def _backup_loop() -> None:
-    """Keep one automatic snapshot per day; checking hourly is cheap."""
-    while True:
-        try:
-            await asyncio.to_thread(
-                backups.ensure_daily_backup,
-                settings.block_db_path,
-                backups.backup_directory(settings.notes_path),
-            )
-        except Exception:
-            logging.getLogger("fortress").exception("automatic backup failed")
-        await asyncio.sleep(3600)
+def _start_background(settings) -> None:
+    lanes = ["mirrors", "imports"]
+    if settings.auto_backup_enabled:
+        lanes.append("backups")
+    if settings.embeddings_enabled:
+        lanes.append("index")
+    if settings.vision_enabled:
+        # Reads text in pictures and PDFs, starting with whatever an earlier run left.
+        ocr.start(settings.block_db_path)
+    background.start(*lanes)
+
+
+def _stop_background() -> None:
+    """Stop every lane (and the converter it may run), then write pending mirrors."""
+
+    background.stop()
+    documents.flush_mirrors()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    settings = get_settings()
     if settings.block_db_import_on_startup:
         await asyncio.to_thread(
             import_markdown_if_empty, settings.block_db_path, settings.notes_path
@@ -124,29 +127,11 @@ async def lifespan(_app: FastAPI):
     await asyncio.to_thread(block_store.ensure_fts_integrity, settings.block_db_path)
     # Older data may hold notes with no blocks; reads never add the paragraph.
     await asyncio.to_thread(block_store.ensure_editable_block, settings.block_db_path)
-    backup_task = (
-        asyncio.create_task(_backup_loop())
-        if getattr(settings, "auto_backup_enabled", True)
-        else None
-    )
-    task = (
-        asyncio.create_task(_reindex_loop()) if settings.embeddings_enabled else None
-    )
-    # Reads text in pictures and PDFs in the background, starting with whatever an
-    # earlier run left unread.
-    if settings.vision_enabled:
-        ocr.start(settings.block_db_path)
-        onenote_import.jobs.ocr = ocr.wake
+    _start_background(settings)
     try:
         yield
     finally:
-        await asyncio.to_thread(ocr.stop)
-        for running in (task, backup_task):
-            if running:
-                running.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await running
-        await asyncio.to_thread(documents.flush_mirrors)
+        await asyncio.to_thread(_stop_background)
 
 
 app = FastAPI(title="Fortress Notes", lifespan=lifespan)
@@ -219,12 +204,10 @@ async def unexpected_error(_request: Request, exc: Exception) -> JSONResponse:
 
 
 # Serve stored files at /media/<file> (immutable caching, ranges, real types).
-app.mount("/media", media.MediaFiles(directory=settings.assets_path), name="media")
+app.mount("/media", media.MediaFiles(lambda: get_settings().assets_path), name="media")
 
 # Rendered note bodies and the one document ETag live in app/document_service.py
-# (shared with the batch read); it reads settings through main so tests that patch
-# ``main.settings`` reach it.
-document_service.use_settings(lambda: settings)
+# (shared with the batch read).
 _api_cache = document_service.responses
 
 
@@ -280,14 +263,14 @@ def _tree_response(
 def _workspace_response(request: Request, name: str, build, *key_parts) -> Response:
     """A response that depends on the whole workspace (navigation, trash, ...)."""
 
-    epoch, seq = block_store.change_state(settings.block_db_path)
+    epoch, seq = block_store.change_state(_db())
     tag = http_cache.etag(name, epoch, seq, *key_parts)
     return http_cache.conditional(
         request.headers.get("if-none-match"),
         tag,
         lambda: http_cache.render(build()),
         _api_cache,
-        (settings.block_db_path, name, *key_parts),
+        (_db(), name, *key_parts),
     )
 
 # Batch reads and moves for the native app (app/batch.py).
@@ -299,11 +282,11 @@ app.include_router(batch_router)
 def health() -> dict:
     return {
         "status": "ok",
-        "embeddings_enabled": settings.embeddings_enabled,
+        "embeddings_enabled": get_settings().embeddings_enabled,
         "model_loaded": embeddings.model_loaded(),
-        "vision_enabled": settings.vision_enabled,
+        "vision_enabled": get_settings().vision_enabled,
         "vision_loaded": ocr.loaded(),
-        "block_db_ready": block_store.is_ready(settings.block_db_path),
+        "block_db_ready": block_store.is_ready(_db()),
     }
 
 
@@ -311,7 +294,7 @@ def health() -> dict:
 def ocr_status() -> dict:
     """Background reading of pictures and PDFs: model, queued/done/failed counts."""
 
-    return {"enabled": settings.vision_enabled, **ocr.status_counts(settings.block_db_path)}
+    return {"enabled": get_settings().vision_enabled, **ocr.status_counts(_db())}
 
 
 @app.get("/api/block-schema")
@@ -326,7 +309,7 @@ def get_navigation(request: Request, recent_limit: int = Query(10, ge=1, le=50))
     return _workspace_response(
         request,
         "navigation",
-        lambda: block_store.navigation(settings.block_db_path, recent_limit),
+        lambda: block_store.navigation(_db(), recent_limit),
         recent_limit,
     )
 
@@ -335,7 +318,7 @@ def get_navigation(request: Request, recent_limit: int = Query(10, ge=1, le=50))
 def create_folder(data: FolderCreate):
     try:
         return block_store.create_folder(
-            settings.block_db_path, data.name, data.parent_id, data.position
+            _db(), data.name, data.parent_id, data.position
         )
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -344,7 +327,7 @@ def create_folder(data: FolderCreate):
 @app.patch("/api/folders/{folder_id}", response_model=Folder)
 def rename_folder(folder_id: str, data: FolderRename):
     try:
-        return block_store.rename_folder(settings.block_db_path, folder_id, data.name)
+        return block_store.rename_folder(_db(), folder_id, data.name)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -358,7 +341,7 @@ def move_folder(folder_id: str, data: FolderMove):
             else block_store.UNSET
         )
         return block_store.move_folder(
-            settings.block_db_path, folder_id, parent_id, data.position
+            _db(), folder_id, parent_id, data.position
         )
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -369,7 +352,7 @@ def move_folder(folder_id: str, data: FolderMove):
 @app.delete("/api/folders/{folder_id}", status_code=204)
 def delete_folder(folder_id: str):
     try:
-        block_store.delete_folder(settings.block_db_path, folder_id)
+        block_store.delete_folder(_db(), folder_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
@@ -388,7 +371,7 @@ def move_block_document(document_id: str, data: DocumentMove):
             else block_store.UNSET
         )
         return block_store.move_document(
-            settings.block_db_path, document_id, folder_id, data.position
+            _db(), document_id, folder_id, data.position
         )
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -448,9 +431,9 @@ def record_opened(document_id: str):
     the database. Not part of the note's ETag.
     """
 
-    if not block_store.document_exists(settings.block_db_path, document_id):
+    if not block_store.document_exists(_db(), document_id):
         raise HTTPException(404, "Block document not found")
-    block_store.mark_opened(settings.block_db_path, document_id, wait=False)
+    block_store.mark_opened(_db(), document_id, wait=False)
     return Response(status_code=204)
 
 
@@ -458,13 +441,13 @@ def record_opened(document_id: str):
 def get_block_document_info(document_id: str, request: Request):
     """Metadata for an info panel: dates, provenance, counts, re-import conflicts."""
 
-    validator = block_store.document_info_validator(settings.block_db_path, document_id)
+    validator = block_store.document_info_validator(_db(), document_id)
     if validator is None:
         raise HTTPException(404, "Block document not found")
 
     def build() -> bytes:
         try:
-            return http_cache.render(sources.document_info(settings.block_db_path, document_id))
+            return http_cache.render(sources.document_info(_db(), document_id))
         except KeyError as exc:
             raise HTTPException(404, "Block document not found") from exc
 
@@ -473,7 +456,7 @@ def get_block_document_info(document_id: str, request: Request):
         http_cache.etag("info", document_id, *validator),
         build,
         _api_cache,
-        (settings.block_db_path, "info", document_id),
+        (_db(), "info", document_id),
     )
 
 
@@ -485,25 +468,24 @@ def resolve_block_source_conflict(
 
     try:
         tree = sources.resolve_block_conflict(
-            settings.block_db_path, document_id, block_id, data.keep
+            _db(), document_id, block_id, data.keep
         )
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    documents.write_mirror(document_id)
     return tree
 
 
 @app.get("/api/block-documents/{document_id}/markdown")
 def export_block_document_markdown(document_id: str, download: bool = False):
     try:
-        markdown = export_document_markdown(settings.block_db_path, document_id)
+        markdown = export_document_markdown(_db(), document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     headers = {}
     if download:
-        tree = block_store.document_tree(settings.block_db_path, document_id)
+        tree = block_store.document_tree(_db(), document_id)
         title = safe_filename(str(tree["title"])) if tree else document_id
         headers["Content-Disposition"] = _attachment(f"{title}.md")
     return Response(content=markdown, media_type="text/markdown", headers=headers)
@@ -520,7 +502,7 @@ async def import_uploaded_markdown(
 
     folder_id = folder_id or None
     if folder_id is not None and not await run_in_threadpool(
-        block_store.folder_exists, settings.block_db_path, folder_id
+        block_store.folder_exists, _db(), folder_id
     ):
         raise HTTPException(404, "folder not found")
     imported: list[dict[str, str]] = []
@@ -581,7 +563,7 @@ async def start_onenote_import(request: Request):
             if suffix not in _ONENOTE_UPLOAD_SUFFIXES:
                 raise HTTPException(415, "Choose a OneNote export: a .zip, .onepkg or .one file.")
             await run_in_threadpool(_check_import_folder, folder_id)
-            owned = onenote_import.imports_dir(settings.notes_path) / f"{job_id}-upload"
+            owned = onenote_import.imports_dir(get_settings().notes_path) / f"{job_id}-upload"
             # The converter names things after the file (a loose .one's section) and
             # its folder (that section's notebook): keep the user's file name.
             (owned / "OneNote").mkdir(parents=True, exist_ok=True)
@@ -618,27 +600,27 @@ async def start_onenote_import(request: Request):
         input_path=input_path,
         input_name=input_name,
         owned_input=owned,
-        db_path=settings.block_db_path,
-        notes_path=settings.notes_path,
-        assets_path=settings.assets_path,
+        db_path=_db(),
+        notes_path=get_settings().notes_path,
+        assets_path=get_settings().assets_path,
         folder_id=folder_id,
     )
     return {"job_id": record["job_id"], "status": record["status"]}
 
 
 def _check_import_folder(folder_id: str | None) -> None:
-    if folder_id is not None and not block_store.folder_exists(settings.block_db_path, folder_id):
+    if folder_id is not None and not block_store.folder_exists(_db(), folder_id):
         raise HTTPException(404, "folder not found")
 
 
 @app.get("/api/import/onenote")
 def list_onenote_imports(limit: int = Query(20, ge=1, le=100)):
-    return onenote_import.jobs.list(settings.notes_path, limit)
+    return onenote_import.jobs.list(get_settings().notes_path, limit)
 
 
 @app.get("/api/import/onenote/{job_id}")
 def get_onenote_import(job_id: str):
-    record = onenote_import.jobs.get(job_id, settings.notes_path)
+    record = onenote_import.jobs.get(job_id, get_settings().notes_path)
     if record is None:
         raise HTTPException(404, "import job not found")
     return record
@@ -648,7 +630,7 @@ def get_onenote_import(job_id: str):
 def cancel_onenote_import(job_id: str):
     """Stop an import between pages; imported pages are kept (status ``cancelled``)."""
 
-    record, accepted = onenote_import.jobs.cancel(job_id, settings.notes_path)
+    record, accepted = onenote_import.jobs.cancel(job_id, get_settings().notes_path)
     if record is None:
         raise HTTPException(404, "import job not found")
     if not accepted:
@@ -676,7 +658,7 @@ def similar_documents(document_id: str):
     """Other notes containing most of this note's distinctive words."""
 
     try:
-        return duplicates.similar_documents(settings.block_db_path, document_id)
+        return duplicates.similar_documents(_db(), document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -700,7 +682,7 @@ def move_document_into(document_id: str, target_id: str):
 @app.get("/api/trash")
 def list_trash(request: Request):
     return _workspace_response(
-        request, "trash", lambda: workspace.list_trash(settings.block_db_path)
+        request, "trash", lambda: workspace.list_trash(_db())
     )
 
 
@@ -731,7 +713,7 @@ def empty_trash():
 
 @app.get("/api/backups")
 def list_backups(request: Request):
-    body = http_cache.render(backups.list_backups(backups.backup_directory(settings.notes_path)))
+    body = http_cache.render(backups.list_backups(backups.backup_directory(get_settings().notes_path)))
     return http_cache.conditional(
         request.headers.get("if-none-match"), http_cache.body_etag(body), lambda: body
     )
@@ -739,22 +721,31 @@ def list_backups(request: Request):
 
 @app.post("/api/backups", status_code=201)
 def create_backup():
-    directory = backups.backup_directory(settings.notes_path)
-    path = backups.create_backup(settings.block_db_path, directory, "manual")
+    directory = backups.backup_directory(get_settings().notes_path)
+    path = backups.create_backup(_db(), directory, "manual")
     return next(item for item in backups.list_backups(directory) if item["name"] == path.name)
 
 
 @app.post("/api/backups/{name}/restore")
 def restore_backup(name: str):
-    directory = backups.backup_directory(settings.notes_path)
+    directory = backups.backup_directory(get_settings().notes_path)
     try:
-        safety = backups.restore_backup(settings.block_db_path, directory, name)
+        backups.resolve_backup(directory, name)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    _clear_response_caches()
-    documents.rebuild_mirrors(directory / f"mirrors-before-{safety.stem}")
+    # No background writer runs while the database is swapped; mirrors of the
+    # edits made so far are written first, then all of them follow the backup.
+    try:
+        with background.paused():
+            documents.flush_mirrors()
+            try:
+                safety = backups.restore_backup(_db(), directory, name)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            _clear_response_caches()
+            documents.rebuild_mirrors(directory / f"mirrors-before-{safety.stem}")
+    except background.Busy as exc:
+        raise HTTPException(409, f"{exc}; try again when it has finished") from exc
     return {"restored": name, "safety_backup": safety.name}
 
 
@@ -811,23 +802,23 @@ async def ask(data: AskRequest, request: Request):
 
 @app.get("/api/block-link-targets", response_model=list[BlockLinkTarget])
 def block_link_targets(q: str = "", limit: int = Query(50, ge=1, le=200)):
-    return block_store.block_link_targets(settings.block_db_path, q, limit)
+    return block_store.block_link_targets(_db(), q, limit)
 
 
 @app.get("/api/block-documents/{document_id}/backlinks", response_model=list[Backlink])
 def get_backlinks(document_id: str, request: Request, limit: int = Query(100, ge=1, le=500)):
     # (This used to build the note's whole tree just to answer 404.)
-    validator = block_store.document_info_validator(settings.block_db_path, document_id)
+    validator = block_store.document_info_validator(_db(), document_id)
     if validator is None:
         raise HTTPException(404, "Block document not found")
     return http_cache.conditional(
         request.headers.get("if-none-match"),
         http_cache.etag("backlinks", document_id, limit, *validator[:2]),
         lambda: http_cache.render(
-            block_store.document_backlinks(settings.block_db_path, document_id, limit)
+            block_store.document_backlinks(_db(), document_id, limit)
         ),
         _api_cache,
-        (settings.block_db_path, "backlinks", document_id, limit),
+        (_db(), "backlinks", document_id, limit),
     )
 
 
@@ -844,7 +835,7 @@ def apply_block_transaction(
     try:
         validator: list = []
         tree = block_store.apply_transaction(
-            settings.block_db_path,
+            _db(),
             document_id,
             transaction.operations,
             transaction.base_revision,
@@ -852,7 +843,6 @@ def apply_block_transaction(
             validator_out=validator,
             include_children=response == "document",
         )
-        documents.schedule_mirror(document_id)
         if not validator:
             return _written_response(document_id)
         return _tree_response(document_id, tree, validator[0], cache=response == "document")
@@ -871,9 +861,8 @@ def apply_block_transaction(
 def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
     try:
         block_store.undo_transaction(
-            settings.block_db_path, document_id, request.base_revision
+            _db(), document_id, request.base_revision
         )
-        documents.schedule_mirror(document_id)
         return _written_response(document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -887,9 +876,8 @@ def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
 def redo_block_transaction(document_id: str, request: BlockHistoryRequest):
     try:
         block_store.redo_transaction(
-            settings.block_db_path, document_id, request.base_revision
+            _db(), document_id, request.base_revision
         )
-        documents.schedule_mirror(document_id)
         return _written_response(document_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -961,7 +949,7 @@ async def upload_file(file: UploadFile = File(...)):
     name = assets.safe_filename(file.filename)
     url = f"/media/{path.name}"
     await run_in_threadpool(
-        block_store.register_asset, settings.block_db_path, path, digest,
+        block_store.register_asset, _db(), path, digest,
         media_type or "application/octet-stream",
     )
     ocr.wake()
@@ -974,7 +962,7 @@ async def upload_file(file: UploadFile = File(...)):
 def related(document_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None = None):
     """Notes like this one (or like one of its blocks, with ``block_id``)."""
 
-    if not block_store.document_exists(settings.block_db_path, document_id):
+    if not block_store.document_exists(_db(), document_id):
         raise HTTPException(404, "Block document not found")
     try:
         return search.related_notes(document_id, k, block_id)

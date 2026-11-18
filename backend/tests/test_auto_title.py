@@ -1,10 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from support import make_settings, use_settings
 
 
 class AutoTitleTests(unittest.TestCase):
@@ -12,29 +13,15 @@ class AutoTitleTests(unittest.TestCase):
         from app import documents, main, search
 
         self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
         notes = Path(self._directory.name)
-        settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=notes / ".fortress.sqlite3",
-            notes_path=notes,
-            assets_path=notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        settings.assets_path.mkdir()
-        for item in (
-            patch.object(main, "settings", settings),
-            patch.object(documents, "get_settings", lambda: settings),
-            patch.object(search, "get_settings", lambda: settings),
-        ):
-            item.start()
-            self.addCleanup(item.stop)
+        settings = make_settings(notes, reindex_interval_s=5.0)
+        patcher = use_settings(settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.client = TestClient(main.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
-        self.addCleanup(self._directory.cleanup)
 
     def write(self, document: dict, text: str) -> dict:
         """Replace the note's blocks with ``text`` parsed as Markdown, as typed."""

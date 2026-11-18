@@ -1,10 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from support import make_settings, use_settings
 
 
 class FocusedRelatedTests(unittest.TestCase):
@@ -13,21 +14,9 @@ class FocusedRelatedTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)
-            settings = SimpleNamespace(
-                block_db_enabled=True,
-                block_db_import_on_startup=False,
-                block_db_path=notes / ".fortress.sqlite3",
-                notes_path=notes,
-                assets_path=notes / "assets",
-                embeddings_enabled=False,
-                vision_enabled=False,
-                reindex_interval_s=5.0,
-            )
+            settings = make_settings(notes, reindex_interval_s=5.0)
             with (
-                patch.object(main, "settings", settings),
-                patch.object(documents, "get_settings", return_value=settings),
-                patch.object(search, "get_settings", return_value=settings),
-                patch.object(embeddings, "get_settings", return_value=settings),
+                use_settings(settings),
                 TestClient(main.app) as client,
             ):
                 def create(title: str, body: str) -> dict:

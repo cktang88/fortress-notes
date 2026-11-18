@@ -120,7 +120,7 @@ def migrate(connection: sqlite3.Connection) -> None:
     ):
         connection.execute(statement)
     for block_id, sync in syncs:
-        block_store._write_sync(connection, block_id, sync)
+        block_store.write_block_sync(connection, block_id, sync)
     for (document_id,) in connection.execute("SELECT id FROM documents").fetchall():
         block_store.refresh_derived(
             connection, document_id,
@@ -128,7 +128,7 @@ def migrate(connection: sqlite3.Connection) -> None:
                 "SELECT id FROM blocks WHERE document_id = ?", (document_id,)
             )],
         )
-    block_store._rebuild_fts(connection)
+    block_store.rebuild_fts_rows(connection)
 
 
 def _move_document_sync_state(connection: sqlite3.Connection) -> None:
@@ -274,7 +274,7 @@ class _Parent:
 def _new_id() -> str:
     from . import block_store
 
-    return block_store._new_ulid()
+    return block_store.new_id()
 
 
 def _conflict(conflict: dict[str, Any]) -> dict[str, Any]:

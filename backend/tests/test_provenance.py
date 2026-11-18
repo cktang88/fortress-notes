@@ -6,7 +6,6 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -25,6 +24,8 @@ from app.block_store import (
 from app.models import BlockOperation
 from app.portability import export_document_markdown, import_markdown_directory
 from app.sources import SourceBlock, document_info, upsert_document_from_source
+
+from support import make_settings, use_settings
 
 
 def _texts(nodes):
@@ -577,23 +578,10 @@ class ProvenanceApiTests(unittest.TestCase):
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
         self.notes = Path(self._directory.name)
-        settings = SimpleNamespace(
-            block_db_import_on_startup=False,
-            block_db_path=self.notes / ".fortress.sqlite3",
-            notes_path=self.notes,
-            assets_path=self.notes / "assets",
-            embeddings_enabled=False,
-            vision_enabled=False,
-            auto_backup_enabled=False,
-            reindex_interval_s=5.0,
-        )
-        settings.assets_path.mkdir()
-        for item in (
-            patch.object(main, "settings", settings),
-            patch.object(documents, "get_settings", lambda: settings),
-        ):
-            item.start()
-            self.addCleanup(item.stop)
+        settings = make_settings(self.notes, reindex_interval_s=5.0)
+        patcher = use_settings(settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.client = TestClient(main.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
@@ -645,6 +633,7 @@ class ProvenanceApiTests(unittest.TestCase):
             blocks=[SourceBlock("Para", external_id="{B}")],
         )
         exported = self.client.get(f"/api/block-documents/{result.document_id}/markdown").text
+        documents.flush_mirrors()
         mirror = (self.notes / f"{result.document_id}.md").read_text(encoding="utf-8")
         self.assertIn("onenote_import", mirror)
         self.assertIn("fortress:block", mirror)
