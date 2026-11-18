@@ -56,8 +56,11 @@ public struct ActivePalettes: Hashable, Sendable {
 
     public func palette(for appearance: NSAppearance) -> Palette {
         let match = appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])
-        return palette(dark: match == .darkAqua || match == .accessibilityHighContrastDarkAqua,
-                       increasedContrast: match == .accessibilityHighContrastAqua || match == .accessibilityHighContrastDarkAqua)
+        // A window's appearance carries Increase Contrast as the high-contrast names; an
+        // appearance made by name doesn't, so ask the workspace as well.
+        let increased = match == .accessibilityHighContrastAqua || match == .accessibilityHighContrastDarkAqua
+            || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        return palette(dark: match == .darkAqua || match == .accessibilityHighContrastDarkAqua, increasedContrast: increased)
     }
 }
 

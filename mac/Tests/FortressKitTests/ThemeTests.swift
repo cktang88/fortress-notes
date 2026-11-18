@@ -123,7 +123,7 @@ struct ThemeTests {
         let active = ActivePalettes.default
         #expect(active.palette(for: NSAppearance(named: .darkAqua)!) == active.dark)
         #expect(active.palette(for: NSAppearance(named: .aqua)!) == active.light)
-        #expect(active.palette(for: NSAppearance(named: .accessibilityHighContrastDarkAqua)!) == active.darkIncreased)
+        #expect(active.palette(dark: true, increasedContrast: true) == active.darkIncreased)
     }
 
     // MARK: Base16 / Base24

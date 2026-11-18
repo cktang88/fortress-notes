@@ -18,7 +18,7 @@ public struct VSCodeTheme: Sendable {
     public init(json data: Data, fallbackName: String = "Imported Theme") throws {
         guard let text = String(data: data, encoding: .utf8),
               let clean = Self.stripJSONC(text).data(using: .utf8),
-              let root = try JSONSerialization.jsonObject(with: clean) as? [String: Any]
+              let root = (try? JSONSerialization.jsonObject(with: clean)) as? [String: Any]
         else { throw ParseError.notATheme }
         name = root["name"] as? String ?? fallbackName
         type = (root["type"] as? String)?.lowercased()
