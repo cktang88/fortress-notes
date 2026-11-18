@@ -217,11 +217,11 @@ struct BlockTextEditor: NSViewRepresentable {
             return output
         }
         let targets = (try? await model.api.linkTargets(query: trimmed, limit: 40)) ?? []
-        let lowered = trimmed.lowercased()
-        let titled = targets.filter { $0.documentTitle.lowercased().contains(lowered) }
+        // Case- and diacritic-insensitive, as the locale compares ("cafe" finds "Café").
+        let titled = targets.filter { $0.documentTitle.localizedStandardContains(trimmed) }
         for target in titled + targets where !seen.contains(target.documentId) {
             seen.insert(target.documentId)
-            let detail = target.documentTitle.lowercased().contains(lowered) ? "" : target.text
+            let detail = target.documentTitle.localizedStandardContains(trimmed) ? "" : target.text
             output.append(LinkSuggestion(documentId: target.documentId, title: target.documentTitle, detail: detail))
         }
         return output

@@ -947,6 +947,30 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         }
     }
 
+    /// Writing Tools rewrites prose, not what has to stay exact: links, note links and
+    /// block references (their labels are the target's title), inline code, code blocks
+    /// and attachments.
+    func textView(_ textView: NSTextView, writingToolsIgnoredRangesInEnclosingRange enclosingRange: NSRange) -> [NSValue] {
+        Self.writingToolsIgnoredRanges(in: storage, enclosing: enclosingRange).map { NSValue(range: $0) }
+    }
+
+    static func writingToolsIgnoredRanges(in text: NSAttributedString, enclosing: NSRange) -> [NSRange] {
+        let range = NSIntersectionRange(enclosing, NSRange(location: 0, length: text.length))
+        var ignored: [NSRange] = []
+        text.enumerateAttributes(in: range, options: []) { attributes, run, _ in
+            let marks = (attributes[.fnMarks] as? MarksBox)?.marks
+            let exact = attributes[.fnNode] != nil || attributes[.attachment] != nil || attributes[.link] != nil
+                || marks?.code == true || marks?.link != nil || (attributes[.fnBlock] as? BlockInfo)?.kind == .code
+            guard exact else { return }
+            if let last = ignored.last, NSMaxRange(last) == run.location {
+                ignored[ignored.count - 1].length += run.length
+            } else {
+                ignored.append(run)
+            }
+        }
+        return ignored
+    }
+
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let href = (link as? URL)?.absoluteString ?? (link as? String) ?? ""
         if let id = NoteLinks.documentId(from: link) {

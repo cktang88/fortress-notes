@@ -319,7 +319,7 @@ struct EditorTheme: Sendable {
                 // A note link keeps the URL that opens it.
                 if let box = node as? NodeBox, let id = NoteLinks.documentTarget(box.node), let url = NoteLinks.documentURL(id: id) {
                     updated[.link] = url
-                    updated[.toolTip] = "Open note"
+                    updated[.toolTip] = String(localized: "Open note")
                 }
             }
             if let attachment = attributes[.attachment] { updated[.attachment] = attachment }

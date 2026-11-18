@@ -95,4 +95,22 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
         PendingEdits.directory = other
         #expect(PendingEdits.url(for: "doc/1").deletingLastPathComponent().path == other.path)
     }
+
+    // I5: Writing Tools leaves links, inline code and code blocks alone.
+    @Test func writingToolsSkipsExactText() {
+        let controller = BlockEditorController(baseURL: URL(string: "http://127.0.0.1:9")!)
+        controller.load([
+            EditorBlock(id: "a", runs: [InlineRun("Read "), InlineRun("the docs", InlineMarks(link: "https://example.com")),
+                                        InlineRun(" and run "), InlineRun("make", InlineMarks(code: true)), InlineRun(".")]),
+            EditorBlock(id: "c", kind: .code, runs: [InlineRun("let x = 1")]),
+        ])
+        let text = controller.storage.string as NSString
+        let ignored = BlockEditorController.writingToolsIgnoredRanges(
+            in: controller.storage, enclosing: NSRange(location: 0, length: text.length))
+        let words = ignored.map { text.substring(with: $0).trimmingCharacters(in: .newlines) }
+        #expect(words.contains("the docs"))
+        #expect(words.contains("make"))
+        #expect(words.contains("let x = 1"))
+        #expect(!words.contains { $0.contains("Read") || $0.contains("and run") })
+    }
 }
