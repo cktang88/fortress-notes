@@ -289,7 +289,7 @@ private struct MetaLine: View {
             if let updatedAt = session.updatedAt {
                 Text("·").foregroundStyle(.quaternary)
                 TimelineView(.periodic(from: .now, by: 60)) { context in
-                    Text(Self.edited(updatedAt, now: context.date))
+                    Text(EditorDates.edited(updatedAt, now: context.date))
                 }
             }
             if let folder {
@@ -301,7 +301,10 @@ private struct MetaLine: View {
         .foregroundStyle(.secondary)
         .monospacedDigit()
     }
+}
 
+/// Dates on the meta line and in the block popover.
+enum EditorDates {
     /// "Edited just now", "Edited 5 min. ago": one localizable sentence, the relative
     /// date from a format style (no formatter made per render).
     static func edited(_ date: Date, now: Date) -> String {

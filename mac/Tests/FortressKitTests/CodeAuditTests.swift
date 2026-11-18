@@ -42,8 +42,8 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
     // N2: sentences with a date are one localizable string, not concatenations.
     @Test func relativeDatesAreOneSentence() {
         let now = Date()
-        #expect(NoteEditorView.edited(now.addingTimeInterval(-20), now: now) == "Edited just now")
-        let edited = NoteEditorView.edited(now.addingTimeInterval(-300), now: now)
+        #expect(EditorDates.edited(now.addingTimeInterval(-20), now: now) == "Edited just now")
+        let edited = EditorDates.edited(now.addingTimeInterval(-300), now: now)
         #expect(edited.hasPrefix("Edited ") && edited.contains("5"))
         let stamp = Timestamp.serverString(now.addingTimeInterval(-3 * 86_400))
         #expect(NoteListing.deletedLabel(stamp, now: now).hasPrefix("Deleted "))

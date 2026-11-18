@@ -110,6 +110,10 @@ final class FortressTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // One interval per key in Instruments (Points of Interest): the whole edit, from
+        // the key to the text, normalizing and the change callbacks (not the redraw).
+        let interval = Signposts.begin("Keystroke")
+        defer { Signposts.end("Keystroke", interval) }
         if let controller, controller.handleKeyDown(event) { return }
         super.keyDown(with: event)
     }

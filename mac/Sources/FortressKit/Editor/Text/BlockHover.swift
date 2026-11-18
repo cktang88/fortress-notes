@@ -140,7 +140,7 @@ private struct BlockInfoView: View {
                 row("pencil", String(localized: "Written just now"))
             }
             if let edited = details.edited {
-                row("pencil", NoteEditorView.edited(edited, now: Date()))
+                row("pencil", EditorDates.edited(edited, now: Date()))
             }
             if let source = details.source {
                 HStack(spacing: 6) {

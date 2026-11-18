@@ -111,7 +111,7 @@ Strict concurrency is a build error now (`treatAllWarnings(as: .error)`, Swift 6
     the scope, the notes, the sort or the day change (test
     `noteListIsRemadeOnlyWhenItsInputsChange`).
   - `MetaLine` made a `RelativeDateTimeFormatter` per render; now a `FormatStyle`
-    (`NoteEditorView.edited`), and the block hover popover likewise.
+    (`EditorDates.edited`), and the block hover popover likewise.
   - Left: `MetaLine` walks the folder tree for the note's folder name per render
     (`AppModel.folderName(forNote:)`); small trees, one row.
 - **L4 [M] stable identity — pass.** `ForEach` uses model ids; the `id: \.self` hits are
