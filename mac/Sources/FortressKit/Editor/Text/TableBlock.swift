@@ -618,7 +618,9 @@ final class CellTextView: NSTextView {
         view.isAutomaticQuoteSubstitutionEnabled = true
         view.isAutomaticDashSubstitutionEnabled = true
         view.isAutomaticLinkDetectionEnabled = false
-        view.isContinuousSpellCheckingEnabled = true
+        // Only the cell being edited is spell-checked (see becomeFirstResponder): with it on
+        // in every cell, scrolling a 50 × 8 table into view checked 400 views at once.
+        view.isContinuousSpellCheckingEnabled = false
         view.focusRingType = .none
         view.displaysLinkToolTips = true
         view.linkTextAttributes = [.foregroundColor: NSColor.controlAccentColor, .cursor: NSCursor.pointingHand]
@@ -627,12 +629,16 @@ final class CellTextView: NSTextView {
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
-        if accepted { table?.cellDidFocus(self) }
+        if accepted {
+            isContinuousSpellCheckingEnabled = true
+            table?.cellDidFocus(self)
+        }
         return accepted
     }
 
     override func resignFirstResponder() -> Bool {
         let accepted = super.resignFirstResponder()
+        if accepted { isContinuousSpellCheckingEnabled = false }
         if accepted, table?.focusedCell === self { table?.cellDidFocus(nil) }
         return accepted
     }

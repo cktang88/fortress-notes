@@ -17,7 +17,13 @@ jobs:
       - name: Build
         run: swift build
       - name: Test and render snapshots
-        run: SNAPSHOT_DIR="$PWD/snapshots" swift test
+        run: SNAPSHOT_DIR="$PWD/snapshots" swift test --skip EditorPerformanceTests
+      # On their own: the perf suite holds the main actor for long stretches, which made
+      # timing-sensitive tests running beside it flaky, and its numbers noisy.
+      - name: Editor performance
+        run: |
+          SNAPSHOT_DIR="$PWD/snapshots" swift test --filter EditorPerformanceTests 2>&1 | tee "$RUNNER_TEMP/perf.log"
+          grep "^PERF" "$RUNNER_TEMP/perf.log" | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
       - name: Upload snapshots
         if: always()
         uses: actions/upload-artifact@v4
