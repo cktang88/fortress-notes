@@ -44,9 +44,10 @@ class Settings(BaseSettings):
     # "auto" runs ColBERT in bfloat16 on CPUs with native support (AVX512-BF16/AMX):
     # several times faster and within ~0.3% of float32 scores. Or "float32"/"bfloat16".
     embeddings_precision: str = "auto"
-    # Threads torch may use for one encode. 0 = half the cores, at most 4: a search
-    # encodes one short query (more threads barely help), and background indexing
-    # must leave cores to the requests and OCR running beside it.
+    # Threads torch may use for one encode. 0 = half the cores, at most 4. Measured on
+    # 4 cores (query encode / 16-paragraph batch): 1 thread 141 ms / 2.2 s, 2 threads
+    # 77 ms / 1.3 s, 4 threads 69 ms / 1.0 s; with two other busy processes (OCR,
+    # requests) 2 threads stay at 78 ms / 1.3 s but 4 threads go to p90 983 ms / 4.4 s.
     embeddings_threads: int = 0
     # Also precompute each paragraph's query encoding (after indexing, in the
     # background) so "related to this paragraph" skips the model entirely.

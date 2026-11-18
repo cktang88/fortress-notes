@@ -68,7 +68,10 @@ backend  (FastAPI, Python)
         ├── search        full-text + ColBERT late-interaction (PyLate)
         ├── ocr           background OCR queue for pictures and PDFs (PP-OCRv6)
         ├── ask           Ask your notes (cited answers)
-        └── llm           OpenRouter chat completions
+        ├── llm           OpenRouter chat completions
+        ├── background    the one owner of background work: mirrors, imports,
+        │                 backups, OCR, indexing (paused for restore, stopped on quit)
+        └── config        settings, read once from the environment + backend/.env
         │
         ▼
    ./notes/.fortress.sqlite3 ← the canonical local store
@@ -111,7 +114,9 @@ integration tests against a real backend.
 
 ## Configuration
 
-Backend `.env` (see `backend/.env.example`):
+Backend `.env` (see `backend/.env.example`): always `backend/.env`, whatever the
+current directory; environment variables override it. Relative paths are relative to
+`backend/`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -121,9 +126,12 @@ Backend `.env` (see `backend/.env.example`):
 | `EMBEDDINGS_ENABLED` | `true` | Turn off to skip the ColBERT model |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
 | `REINDEX_INTERVAL_S` | `5` | Background re-encode interval for changed notes |
+| `EMBEDDINGS_THREADS` | `0` | Torch threads for the model (0 = half the cores, at most 4) |
 | `VISION_ENABLED` | `true` | Background OCR of pictures and PDFs — makes their text searchable |
 | `OCR_THREADS` | `0` | ONNX Runtime threads for OCR (0 = half the cores, at most 4) |
 | `AUTO_BACKUP_ENABLED` | `true` | Keep a daily SQLite snapshot in `NOTES_DIR/.fortress-backups` |
+| `FORTRESS_ONENOTE_BIN` | — | The OneNote converter binary (else the repo build, app bundle or `PATH`) |
+| `FORTRESS_ONENOTE_TIMEOUT_S` | `3600` | Seconds before a OneNote conversion is stopped |
 
 ## Tech choices (short version)
 
