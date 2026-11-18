@@ -53,20 +53,29 @@ private struct LibraryRow: View {
     @State private var isTargeted = false
 
     var body: some View {
-        let model = self.model, scope = self.scope, dropFolder = self.dropFolder
         Label(title, systemImage: symbol)
             .tag(scope)
-            .modifier(SidebarDropTarget(
-                isEnabled: dropFolder != nil || scope == .trash,
-                isTargeted: $isTargeted,
-                onNote: { [model, scope, dropFolder] id in
-                    if scope == .trash {
-                        await model.trashNote(id: id)
-                    } else if case .some(let folder) = dropFolder {
-                        await model.moveNote(id: id, toFolder: folder)
-                    }
-                },
-                onFiles: scope == .trash ? nil : { [model] urls in model.beginImport(urls, into: nil) }))
+            .modifier(dropTarget)
+    }
+
+    private var dropTarget: SidebarDropTarget {
+        let model: AppModel = self.model
+        let scope: LibraryScope = self.scope
+        let destination: String?? = self.dropFolder
+        let onNote: @MainActor @Sendable (String) async -> Void = { id in
+            if scope == .trash {
+                await model.trashNote(id: id)
+            } else if let folder = destination {
+                await model.moveNote(id: id, toFolder: folder)
+            }
+        }
+        var onFiles: (@MainActor @Sendable ([URL]) -> Void)?
+        if scope != .trash {
+            onFiles = { urls in model.beginImport(urls, into: nil) }
+        }
+        return SidebarDropTarget(
+            isEnabled: destination != nil || scope == .trash, isTargeted: $isTargeted,
+            onNote: onNote, onFiles: onFiles)
     }
 }
 
@@ -101,10 +110,7 @@ private struct FolderRow: View {
             }
         }
         .tag(LibraryScope.folder(id: node.id))
-        .modifier(SidebarDropTarget(
-            isEnabled: true, isTargeted: $isTargeted,
-            onNote: { [model, folderId = node.id] id in await model.moveNote(id: id, toFolder: folderId) },
-            onFiles: { [model, folderId = node.id] urls in model.beginImport(urls, into: folderId) }))
+        .modifier(dropTarget)
         .contextMenu {
             Button("New Note") { Task { await model.newNote(in: node.id) } }
             Button("New Folder Inside") { Task { await model.newFolder(in: node.id) } }
@@ -135,6 +141,18 @@ private struct FolderRow: View {
         if notes > 0 { parts.append(notes == 1 ? "1 note" : "\(notes) notes") }
         if folders > 0 { parts.append(folders == 1 ? "1 folder" : "\(folders) folders") }
         return "Its \(parts.joined(separator: " and ")) will move to \(destination)."
+    }
+
+    private var dropTarget: SidebarDropTarget {
+        let model: AppModel = self.model
+        let folderId = node.id
+        let onNote: @MainActor @Sendable (String) async -> Void = { id in
+            await model.moveNote(id: id, toFolder: folderId)
+        }
+        let onFiles: @MainActor @Sendable ([URL]) -> Void = { urls in
+            model.beginImport(urls, into: folderId)
+        }
+        return SidebarDropTarget(isEnabled: true, isTargeted: $isTargeted, onNote: onNote, onFiles: onFiles)
     }
 
     private func commit() {
