@@ -181,6 +181,11 @@ async def secure_uploaded_files(
 # Serve stored images at /media/<file>.
 app.mount("/media", StaticFiles(directory=settings.assets_path), name="media")
 
+# Batch reads and moves for the native app (app/batch.py).
+from .batch import router as batch_router  # noqa: E402
+
+app.include_router(batch_router)
+
 
 @app.get("/api/health")
 def health() -> dict:

@@ -27,7 +27,8 @@ extension APIClient {
     /// The note as Markdown, the same text the backend mirrors to disk.
     public func markdown(documentId: String) async throws -> String {
         var request = URLRequest(url: markdownURL(documentId: documentId))
-        request.timeoutInterval = 30
+        request.timeoutInterval = RequestKind.document.timeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         return String(decoding: try await shellPerform(request), as: UTF8.self)
     }
 
@@ -66,21 +67,18 @@ extension APIClient {
     private func shellSend(_ method: String, _ path: String, body: Data, contentType: String) async throws -> Data {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method
-        request.timeoutInterval = 60
+        request.timeoutInterval = RequestKind.upload.timeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.httpBody = body
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        return try await shellPerform(request)
+        return try await asMutation { try await shellPerform(request) }
     }
 
+    /// Through the client's own session. (It used `URLSession.shared`, bypassing the
+    /// configured session, its timeouts and the request counters.)
     private func shellPerform(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            var message = HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
-            if let detail = try? JSONDecoder().decode([String: JSONValue].self, from: data)["detail"]?.stringValue {
-                message = detail
-            }
-            throw APIError(status: http.statusCode, message: message)
-        }
+        let (data, response) = try await load(request)
+        try check(response, body: data)
         return data
     }
 }
