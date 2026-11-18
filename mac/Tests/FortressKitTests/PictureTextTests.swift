@@ -253,6 +253,14 @@ final class FakeRecognizer: TextRecognizer, Sendable {
         #expect(found.text.lowercased().contains("москва"))
     }
 
+    /// The macOS 26 document request itself (not only through its fallback).
+    @Test func theDocumentRequestReadsParagraphs() async throws {
+        let image = Self.textImage(["Meeting notes", "Ship the Vision reader on Friday"])
+        let text = try await VisionTextRecognizer.readDocument(image, orientation: .up)
+        print("VISION document: \(text.replacingOccurrences(of: "\n", with: " | "))")
+        #expect(text.contains("Friday"))
+    }
+
     @Test func readsDarkTextOnATransparentScreenshot() async throws {
         let data = Self.png(Self.textImage(["Quarterly offsite in Reykjavik"], transparent: true))
         let found = try await VisionTextRecognizer().recognize(data, mimeType: "image/png")

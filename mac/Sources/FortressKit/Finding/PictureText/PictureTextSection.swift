@@ -100,8 +100,8 @@ struct PictureTextCard: View {
                 Text(source)
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 12) {
                 if !picture.text.isEmpty {
@@ -203,7 +203,7 @@ struct PictureTextCard: View {
     }
 
     /// Who read the text, in words.
-    static func readerName(model: String?, method: String?) -> String {
+    nonisolated static func readerName(model: String?, method: String?) -> String {
         let reader = (model ?? "").hasPrefix("apple-vision/") ? "Apple Vision" : "Fortress OCR"
         switch method {
         case "pdf-text": return "PDF text"
@@ -213,7 +213,7 @@ struct PictureTextCard: View {
     }
 
     /// A backend error ("FileNotFoundError: x.png") as a sentence.
-    static func reason(_ error: String) -> String {
+    nonisolated static func reason(_ error: String) -> String {
         if error.hasPrefix("FileNotFoundError") { return "The file is missing." }
         if let colon = error.firstIndex(of: ":"), error[..<colon].hasSuffix("Error") {
             let rest = error[error.index(after: colon)...].trimmingCharacters(in: .whitespaces)
