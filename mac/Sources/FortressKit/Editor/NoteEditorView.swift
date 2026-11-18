@@ -50,11 +50,8 @@ struct NoteEditorView: View {
         .onDisappear {
             guard let session else { return }
             model.focusedBlockId = nil
-            Task {
-                await session.flush()
-                await session.commitTitle()
-                session.detach()
-            }
+            // Everything typed is sent (after a save already on the wire), or kept on disk.
+            Task { await session.close() }
         }
     }
 }
@@ -105,6 +102,7 @@ struct BlockTextEditor: NSViewRepresentable {
 
     final class Coordinator {
         let controller: BlockEditorController
+        var documentId = ""
         var focusedRequest: String?
         var focusRequest = 0
         init(controller: BlockEditorController) { self.controller = controller }
@@ -128,6 +126,8 @@ struct BlockTextEditor: NSViewRepresentable {
         controller.textView.header = header
 
         context.coordinator.focusRequest = focusRequest
+        context.coordinator.documentId = session.documentId
+        controller.context.session = api.session
         controller.context.adoptResolvedLinks(session.document?.resolvedLinks)
         controller.load(session.initialBlocks)
         session.resetBase(to: controller.currentBlocks())
@@ -138,8 +138,7 @@ struct BlockTextEditor: NSViewRepresentable {
         }
         session.onDocumentChange = { document in model.noteDidChange(document) }
         controller.onChange = {
-            session.textDidChange()
-            session.updateAutoTitle(from: controller.leadingTexts())
+            session.editorDidChange(leadingTexts: { controller.leadingTexts() })
         }
         controller.onFocusBlock = { id in model.focusedBlockId = id }
         controller.onOpenNote = { id, block in model.open(noteId: id, blockId: block) }
@@ -151,11 +150,14 @@ struct BlockTextEditor: NSViewRepresentable {
             let targets = try? await api.linkTargets(query: blockId, limit: 5)
             return targets?.first { $0.blockId == blockId }?.text
         }
-        controller.uploadFile = { data, name, type in try await EditorUpload.upload(data, name: name, type: type, baseURL: api.baseURL) }
+        controller.uploadFile = { data, name, type in try await EditorUpload.upload(data, name: name, type: type, baseURL: api.baseURL, session: api.session) }
 
         if let focusBlockId {
             context.coordinator.focusedRequest = focusBlockId
             Self.later { controller.focus(blockId: focusBlockId) }
+        } else if let anchor = EditorSelectionMemory.anchors[session.documentId] {
+            // Back to a note: the caret where it was.
+            Self.later { controller.restoreSelection(anchor) }
         } else if session.document?.children.allSatisfy({ $0.text.isEmpty && $0.children.isEmpty }) ?? false {
             // A new, empty note: start typing.
             Self.later { controller.focusStart() }
@@ -166,6 +168,7 @@ struct BlockTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         if focusRequest != context.coordinator.focusRequest {
             context.coordinator.focusRequest = focusRequest
+        context.coordinator.documentId = session.documentId
             let controller = context.coordinator.controller
             Self.later { controller.focusCaret() }
         }
@@ -183,6 +186,9 @@ struct BlockTextEditor: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        if let anchor = coordinator.controller.selectionAnchor() {
+            EditorSelectionMemory.anchors[coordinator.documentId] = anchor
+        }
         coordinator.controller.onChange = nil
         coordinator.controller.onFocusBlock = nil
     }
@@ -211,6 +217,12 @@ struct BlockTextEditor: NSViewRepresentable {
         }
         return output
     }
+}
+
+/// Where the caret was in each note opened this session, restored when it opens again.
+@MainActor
+enum EditorSelectionMemory {
+    static var anchors: [String: (blockId: String, offset: Int)] = [:]
 }
 
 /// Title (28 bold; ↩ moves into the body) and the meta line: status, edited, folder.
@@ -337,7 +349,7 @@ enum EditorUpload {
         var props: Props
     }
 
-    static func upload(_ data: Data, name: String, type: String, baseURL: URL) async throws -> (url: String, name: String) {
+    static func upload(_ data: Data, name: String, type: String, baseURL: URL, session: URLSession = .shared) async throws -> (url: String, name: String) {
         let boundary = "fortress-\(UUID().uuidString)"
         var request = URLRequest(url: baseURL.appending(path: "api/files"))
         request.httpMethod = "POST"
@@ -348,7 +360,7 @@ enum EditorUpload {
         body.append(data)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         request.httpBody = body
-        let (responseData, response) = try await URLSession.shared.data(for: request)
+        let (responseData, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw APIError(status: http.statusCode, message: HTTPURLResponse.localizedString(forStatusCode: http.statusCode))
         }

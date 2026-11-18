@@ -166,8 +166,7 @@ final class PerfEditor {
         let session = session
         session.currentBlocks = { controller.currentBlocks() }
         controller.onChange = {
-            session.textDidChange()
-            session.updateAutoTitle(from: controller.leadingTexts())
+            session.editorDidChange(leadingTexts: { controller.leadingTexts() })
         }
         layoutViewport()
     }
@@ -312,6 +311,58 @@ final class PerfEditor {
         let second = milliseconds { operations = editor.session.pendingOperationsForTests() }
         PerfLog.record("save.diff.second", second, budget: 8)
         #expect(operations.count == 1)
+    }
+
+    @Test func pastingFiveMegabytes() throws {
+        let editor = PerfEditor(document: LongNote.document(blocks: 50))
+        editor.open()
+        let line = String(repeating: "Pasted log line with some words in it. ", count: 5) + "\n"
+        let text = String(repeating: line, count: 5_000_000 / line.utf8.count)
+        editor.controller.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        let paste = milliseconds { editor.type(text) }
+        PerfLog.record("paste.5MB(\(text.utf8.count / 1_000_000) MB, \(5_000_000 / line.utf8.count) lines)", paste)
+        var operations: [FortressKit.BlockOperation] = []
+        let diff = milliseconds { operations = editor.session.pendingOperationsForTests() }
+        PerfLog.record("paste.5MB.saveDiff", diff)
+        #expect(operations.filter { $0.operation == .insert }.count >= 5_000_000 / line.utf8.count - 1)
+        let keystroke = milliseconds { editor.type("a") }
+        PerfLog.record("paste.5MB.keystrokeAfter", keystroke, budget: 8)
+    }
+
+    @Test func hundredLargeImages() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "perf-images-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let jpeg = ImagePipelineTests.jpeg(width: 3000, height: 2000)
+        for index in 0..<100 { try jpeg.write(to: folder.appending(path: "photo-\(index).jpg")) }
+        ImagePipeline.shared.removeAll()
+        let document = LongNote.document(blocks: 2000) { folder.appending(path: "photo-\($0).jpg").absoluteString }
+        let before = footprintMB()
+        let editor = PerfEditor(document: document)
+        let open = milliseconds { editor.open() }
+        PerfLog.record("images.open", open, budget: 150)
+        // Scroll through the whole note so every picture is asked for, drawing each screen.
+        var y: CGFloat = 0
+        var draws: [Double] = []
+        let bitmap = editor.controller.scrollView.bitmapImageRepForCachingDisplay(in: editor.controller.scrollView.bounds)!
+        while y < editor.controller.textView.frame.height {
+            editor.scroll(to: y)
+            draws.append(milliseconds { editor.controller.scrollView.cacheDisplay(in: editor.controller.scrollView.bounds, to: bitmap) })
+            y += 700
+        }
+        // Wait for decoding (off the main thread).
+        for _ in 0..<100 { try await Task.sleep(for: .milliseconds(50)) }
+        y = 0
+        var loadedDraws: [Double] = []
+        while y < editor.controller.textView.frame.height {
+            editor.scroll(to: y)
+            loadedDraws.append(milliseconds { editor.controller.scrollView.cacheDisplay(in: editor.controller.scrollView.bounds, to: bitmap) })
+            y += 700
+        }
+        let sorted = loadedDraws.sorted()
+        PerfLog.record("images.frame.median", sorted[sorted.count / 2], budget: 16)
+        PerfLog.record("images.frame.max", sorted.last ?? 0)
+        PerfLog.record("images.memory(100 × 3000x2000 JPEG)", footprintMB() - before, unit: "MB")
     }
 
     @Test func scrollingLaysOutOnlyTheViewport() throws {

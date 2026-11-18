@@ -16,8 +16,20 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     let grid = TableGridView()
     var view: NSView { grid }
 
-    private(set) var cells: [[CellTextView]] = []
+    /// The cell editors, made the first time the table is laid out or entered: a note
+    /// with twenty 50 × 8 tables would otherwise make 8,000 text views when it opens,
+    /// most of them never scrolled to.
+    var cells: [[CellTextView]] {
+        buildIfNeeded()
+        return cellViews
+    }
+    private var cellViews: [[CellTextView]] = []
+    private var isBuilt = false
     private var nested: [[NSView?]] = []
+    /// Each cell's text height and nested blocks' height at the measured width, so an
+    /// edit re-measures one cell (and moves the rows below), not the whole table.
+    private var textHeights: [[CGFloat]] = []
+    private var nestedHeights: [[CGFloat]] = []
     /// Logical column edges (count + 1) and row edges, in grid coordinates.
     private(set) var columnEdges: [CGFloat] = []
     private(set) var rowEdges: [CGFloat] = []
@@ -32,6 +44,11 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         self.attachment = attachment
         super.init()
         grid.controller = self
+    }
+
+    private func buildIfNeeded() {
+        guard !isBuilt else { return }
+        isBuilt = true
         rebuild()
     }
 
@@ -68,12 +85,12 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         return cellTheme
     }
 
-    /// Creates the cell views for the current table (after loading or a shape change).
+    /// Creates the cell views for the current table (on first layout or a shape change).
     private func rebuild() {
         let focus = focusedCell.map { ($0.row, $0.column) }
-        for row in cells { for cell in row { cell.removeFromSuperview() } }
+        for row in cellViews { for cell in row { cell.removeFromSuperview() } }
         for row in nested { for view in row { view?.removeFromSuperview() } }
-        cells = []
+        cellViews = []
         nested = []
         for (r, row) in table.rows.enumerated() {
             var rowViews: [CellTextView] = []
@@ -98,11 +115,11 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
                     rowNested.append(hosting)
                 }
             }
-            cells.append(rowViews)
+            cellViews.append(rowViews)
             nested.append(rowNested)
         }
         measuredWidth = -1
-        if let focus { self.focus(row: min(focus.0, cells.count - 1), column: focus.1, atEnd: true) }
+        if let focus { self.focus(row: min(focus.0, cellViews.count - 1), column: focus.1, atEnd: true) }
     }
 
     private func load(_ runs: [InlineRun], into view: CellTextView) {
@@ -136,27 +153,26 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     /// Lays the grid out for `width` (cached until something changes).
     func layout(width: CGFloat) {
         guard abs(width - measuredWidth) > 0.5 else { return }
+        buildIfNeeded()
         measuredWidth = width
         let widths = table.layoutWidths(available: Double(max(80, width - 1)), minimum: Double(56 * theme.scale))
         columnEdges = [0]
         for value in widths { columnEdges.append((columnEdges.last ?? 0) + CGFloat(value).rounded(.down)) }
-        rowEdges = [0]
-        for (r, row) in cells.enumerated() {
-            var rowHeight = theme.lineHeight(for: .paragraph) * 0.875 + 2 * padding.height
+        textHeights = []
+        nestedHeights = []
+        for (r, row) in cellViews.enumerated() {
+            var texts: [CGFloat] = []
+            var nesteds: [CGFloat] = []
             for (c, cell) in row.enumerated() {
-                let span = horizontalSpan(row: r, column: c)
-                let inner = max(20, span.width - 2 * padding.width)
-                var height = textHeight(cell, width: inner)
-                if let extra = nested[r][c] {
-                    _ = extra
-                    height += 4 * theme.scale + nestedHeight(row: r, column: c, width: inner)
-                }
-                rowHeight = max(rowHeight, ceil(height) + 2 * padding.height)
+                let inner = innerWidth(row: r, column: c)
+                texts.append(textHeight(cell, width: inner))
+                nesteds.append(nested[r][c] == nil ? 0 : nestedHeight(row: r, column: c, width: inner))
             }
-            rowEdges.append((rowEdges.last ?? 0) + rowHeight)
+            textHeights.append(texts)
+            nestedHeights.append(nesteds)
         }
-        measuredHeight = (rowEdges.last ?? 0) + 2
-        placeViews()
+        updateRowEdges(from: 0)
+        placeViews(fromRow: 0)
         grid.needsDisplay = true
     }
 
@@ -169,6 +185,52 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         if abs(before - measuredHeight) > 0.5, let attachment {
             context?.attachmentDidResize?(attachment)
         }
+    }
+
+    /// Re-measures one edited cell: its row, and the rows below only if its height changed.
+    private func remeasure(row: Int, column: Int) {
+        guard measuredWidth > 0, textHeights.indices.contains(row), textHeights[row].indices.contains(column),
+              cellViews.indices.contains(row), cellViews[row].indices.contains(column) else { remeasure(); return }
+        let before = measuredHeight
+        let rowBefore = rowEdges[row + 1] - rowEdges[row]
+        textHeights[row][column] = textHeight(cellViews[row][column], width: innerWidth(row: row, column: column))
+        if abs(rowHeight(row) - rowBefore) > 0.5 {
+            updateRowEdges(from: row)
+            placeViews(fromRow: row)
+            grid.needsDisplay = true
+        } else {
+            placeViews(row: row)
+        }
+        if abs(before - measuredHeight) > 0.5, let attachment {
+            context?.attachmentDidResize?(attachment)
+        }
+    }
+
+    private func innerWidth(row: Int, column: Int) -> CGFloat {
+        max(20, horizontalSpan(row: row, column: column).width - 2 * padding.width)
+    }
+
+    private func rowHeight(_ row: Int) -> CGFloat {
+        var height = theme.lineHeight(for: .paragraph) * 0.875 + 2 * padding.height
+        for column in textHeights[row].indices {
+            var cell = textHeights[row][column]
+            if nested[row][column] != nil { cell += 4 * theme.scale + nestedHeights[row][column] }
+            height = max(height, ceil(cell) + 2 * padding.height)
+        }
+        return height
+    }
+
+    /// Row edges from `row` down, from the measured cell heights.
+    private func updateRowEdges(from row: Int) {
+        if row <= 0 || rowEdges.count <= row {
+            rowEdges = [0]
+        } else {
+            rowEdges.removeSubrange((row + 1)...)
+        }
+        for r in (rowEdges.count - 1)..<textHeights.count {
+            rowEdges.append((rowEdges.last ?? 0) + rowHeight(r))
+        }
+        measuredHeight = (rowEdges.last ?? 0) + 2
     }
 
     /// The read-only nested blocks' height at `width`.
@@ -208,20 +270,27 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         return (x0, max(0, columnEdges[end] - x0))
     }
 
-    private func placeViews() {
-        for (r, row) in cells.enumerated() {
-            for (c, cell) in row.enumerated() {
-                let frame = cellFrame(row: r, column: c)
-                let inner = frame.insetBy(dx: padding.width, dy: padding.height)
-                let textHeight = self.textHeight(cell, width: max(20, inner.width))
-                cell.frame = CGRect(x: inner.minX, y: inner.minY, width: max(20, inner.width), height: textHeight)
-                if let extra = nested[r][c] {
-                    let height = nestedHeight(row: r, column: c, width: max(20, inner.width))
-                    extra.frame = CGRect(x: inner.minX, y: inner.minY + textHeight + 4 * theme.scale, width: max(20, inner.width), height: height)
-                }
+    private func placeViews(fromRow start: Int) {
+        guard start < cellViews.count else { return }
+        for row in start..<cellViews.count { placeViews(row: row) }
+    }
+
+    /// Frames for one row's cell views, from the measured heights (no measuring here).
+    private func placeViews(row r: Int) {
+        guard textHeights.indices.contains(r) else { return }
+        for (c, cell) in cellViews[r].enumerated() where textHeights[r].indices.contains(c) {
+            let frame = cellFrame(row: r, column: c)
+            let inner = frame.insetBy(dx: padding.width, dy: padding.height)
+            let width = max(20, inner.width)
+            let textFrame = CGRect(x: inner.minX, y: inner.minY, width: width, height: textHeights[r][c])
+            if cell.frame != textFrame { cell.frame = textFrame }
+            if let extra = nested[r][c] {
+                extra.frame = CGRect(x: inner.minX, y: inner.minY + textHeights[r][c] + 4 * theme.scale, width: width,
+                                     height: nestedHeights[r][c])
             }
         }
     }
+
 
     // MARK: Editing (NSTextViewDelegate)
 
@@ -235,7 +304,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
             storage.endEditing()
         }
         table.setRuns(DocumentText.runs(in: storage, range: full), row: view.row, column: view.column)
-        remeasure()
+        remeasure(row: view.row, column: view.column)
         context?.contentDidChange?()
     }
 
@@ -449,6 +518,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         let undoManager = grid.window?.undoManager
         table = updated
         focusedCell = nil
+        isBuilt = true
         rebuild()
         remeasureAfterShapeChange()
         undoManager?.registerUndo(withTarget: self) { target in
@@ -501,6 +571,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     }
 
     func handleKeyEquivalent(_ event: NSEvent, in view: CellTextView) -> Bool {
+        guard !view.hasMarkedText() else { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
         switch (flags, key) {

@@ -172,7 +172,10 @@ final class FortressTextView: NSTextView {
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        if let controller, controller.pasteFiles(from: sender.draggingPasteboard) { return true }
+        let point = convert(sender.draggingLocation, from: nil)
+        if let controller, controller.pasteFiles(from: sender.draggingPasteboard, at: characterIndexForInsertion(at: point)) {
+            return true
+        }
         return super.performDragOperation(sender)
     }
 

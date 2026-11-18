@@ -39,7 +39,13 @@ enum DocumentText {
                 continue
             }
             if !run.marks.isPlain { attributes[.fnMarks] = MarksBox(run.marks) }
-            output.append(NSAttributedString(string: run.text, attributes: attributes))
+            // A paragraph separator inside a block's text would split it in the editor.
+            var text = run.text
+            if text.utf16.contains(where: { $0 == 0x0D || $0 == 0x0A || $0 == 0x2029 }) {
+                text = text.replacingOccurrences(of: "\r\n", with: softBreak).replacingOccurrences(of: "\r", with: softBreak)
+                    .replacingOccurrences(of: "\n", with: softBreak).replacingOccurrences(of: "\u{2029}", with: softBreak)
+            }
+            output.append(NSAttributedString(string: text, attributes: attributes))
         }
         return output
     }
@@ -62,21 +68,27 @@ enum DocumentText {
                 renamed.append((paragraph, info))
             }
             seen.insert(info.id)
-            var block = EditorBlock(id: info.id, kind: info.kind, depth: info.depth, checked: info.checked,
-                                    language: info.language, origin: info.origin?.origin,
-                                    newProvenance: info.newProvenance)
-            var content = paragraph
-            if content.length > 0, string.character(at: NSMaxRange(content) - 1) == 0x0A { content.length -= 1 }
-            if info.kind.hasInlineText {
-                block.runs = runs(in: text, range: content)
-            } else if let attachment = text.attribute(.attachment, at: paragraph.location, effectiveRange: nil) as? BlockAttachment,
-                      let live = attachment.live {
-                // Tables and columns hold their edits in the attachment.
-                live.write(into: &block)
-            }
-            blocks.append(block)
+            blocks.append(block(in: text, paragraph: paragraph, info: info))
         }
         return (blocks, renamed)
+    }
+
+    /// One paragraph read back as a block.
+    static func block(in text: NSAttributedString, paragraph: NSRange, info: BlockInfo) -> EditorBlock {
+        let string = text.string as NSString
+        var block = EditorBlock(id: info.id, kind: info.kind, depth: info.depth, checked: info.checked,
+                                language: info.language, origin: info.origin?.origin,
+                                newProvenance: info.newProvenance)
+        var content = paragraph
+        if content.length > 0, string.character(at: NSMaxRange(content) - 1) == 0x0A { content.length -= 1 }
+        if info.kind.hasInlineText {
+            block.runs = runs(in: text, range: content)
+        } else if let attachment = text.attribute(.attachment, at: paragraph.location, effectiveRange: nil) as? BlockAttachment,
+                  let live = attachment.live {
+            // Tables and columns hold their edits in the attachment.
+            live.write(into: &block)
+        }
+        return block
     }
 
     static func runs(in text: NSAttributedString, range: NSRange) -> [InlineRun] {

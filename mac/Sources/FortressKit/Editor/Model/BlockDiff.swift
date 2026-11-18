@@ -8,25 +8,53 @@ public struct SyncedTree: Hashable, Sendable {
     public var fields: [String: BlockFields] = [:]
     /// Every block in document order.
     public var order: [String] = []
+    /// The editor blocks `fields` were encoded from, so the next diff re-encodes only the
+    /// blocks that changed (an unchanged block shares its storage and compares in O(1)).
+    var encoded: [String: EditorBlock] = [:]
 
     public init() {}
 
     /// The tree a list of editor blocks describes.
     public init(_ blocks: [EditorBlock]) {
+        self.init(blocks, reusing: nil)
+    }
+
+    /// The tree for `blocks`, taking the fields of blocks unchanged since `previous` from it
+    /// instead of encoding them again (encoding is the expensive part of a diff).
+    init(_ blocks: [EditorBlock], reusing previous: SyncedTree?) {
         children[nil] = []
-        add(blocks, under: nil)
+        parent.reserveCapacity(blocks.count)
+        fields.reserveCapacity(blocks.count)
+        encoded.reserveCapacity(blocks.count)
+        order.reserveCapacity(blocks.count)
+        add(blocks, under: nil, reusing: previous)
+    }
+
+    public static func == (lhs: SyncedTree, rhs: SyncedTree) -> Bool {
+        lhs.order == rhs.order && lhs.parent == rhs.parent && lhs.children == rhs.children && lhs.fields == rhs.fields
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(order)
+        hasher.combine(fields)
+    }
+
+    private func reusedFields(_ block: EditorBlock, from previous: SyncedTree?) -> BlockFields? {
+        guard let previous, let old = previous.encoded[block.id], old == block else { return nil }
+        return previous.fields[block.id]
     }
 
     /// Adds a flat run of blocks under `root`; a columns block brings its column blocks
     /// and their blocks along (they are ordinary children on the server).
-    private mutating func add(_ blocks: [EditorBlock], under root: String?) {
+    private mutating func add(_ blocks: [EditorBlock], under root: String?, reusing previous: SyncedTree?) {
         for item in BlockDiff.shape(blocks) {
             let id = item.block.id
             let parentId = item.parent ?? root
             parent.updateValue(parentId, forKey: id)
             children[parentId, default: []].append(id)
-            children[id] = children[id] ?? []
-            fields[id] = BlockCodec.encode(item.block)
+            if children[id] == nil { children[id] = [] }
+            fields[id] = reusedFields(item.block, from: previous) ?? BlockCodec.encode(item.block)
+            encoded[id] = item.block
             order.append(id)
             guard item.block.kind == .columns, let columns = item.block.columns else { continue }
             for column in columns {
@@ -35,7 +63,7 @@ public struct SyncedTree: Hashable, Sendable {
                 children[column.id] = children[column.id] ?? []
                 fields[column.id] = column.fields
                 order.append(column.id)
-                add(column.blocks, under: column.id)
+                add(column.blocks, under: column.id, reusing: previous)
             }
         }
     }
@@ -77,7 +105,7 @@ public enum BlockDiff {
 
     /// Operations from `base` to `target`, and the tree the server will then hold.
     public static func operations(from base: SyncedTree, to target: [EditorBlock]) -> (operations: [BlockOperation], result: SyncedTree) {
-        let result = SyncedTree(target)
+        let result = SyncedTree(target, reusing: base)
         var newProvenance: [String: JSONValue] = [:]
         func collect(_ blocks: [EditorBlock]) {
             for block in blocks {
@@ -117,8 +145,11 @@ public enum BlockDiff {
             let fields = result.fields[id]!
 
             if let currentParent = parent[id] {
+                // Siblings before `position` are the target's, already placed, so the block
+                // is in place exactly when it sits at `position` (O(1), not a search).
                 let siblings = children[currentParent] ?? []
-                if currentParent != targetParent || siblings.firstIndex(of: id) != position {
+                let inPlace = currentParent == targetParent && siblings.indices.contains(position) && siblings[position] == id
+                if !inPlace {
                     children[currentParent]?.removeAll { $0 == id }
                     children[targetParent, default: []].insert(id, at: min(position, children[targetParent, default: []].count))
                     parent.updateValue(targetParent, forKey: id)

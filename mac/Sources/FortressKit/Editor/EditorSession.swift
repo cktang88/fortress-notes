@@ -1,15 +1,22 @@
+import AppKit
 import Foundation
 import Observation
 
 /// One open note: loads it, and saves edits as block transactions.
 ///
 /// Saving: a change schedules a flush 400 ms later. A flush diffs the text against what
-/// the server holds (`base`) into one transaction at the current revision. One is in
-/// flight at a time; edits made meanwhile go in the next. The returned revision is
-/// adopted. A 409 means the note changed elsewhere: sending stops and a banner offers
-/// to load the latest version. A network failure keeps the edits (they are still in
-/// the text) and retries the same transaction with backoff, so a request that did
-/// reach the server is not applied twice (the server deduplicates by transaction id).
+/// the server holds (`base`) into one transaction at the current revision, so everything
+/// typed in a debounce window (any number of edits to any blocks) is one transaction and
+/// each changed block one operation. One is in flight at a time; edits made meanwhile go
+/// in the next. The returned revision is adopted. A 409 means the note changed elsewhere:
+/// sending stops and a banner offers to load the latest version. A network failure or a
+/// 5xx keeps the edits (they are still in the text) and retries the same transaction with
+/// backoff, so a request that did reach the server is not applied twice (the server
+/// deduplicates by transaction id).
+///
+/// Durability: before a transaction is sent, the edits not yet confirmed are written to
+/// disk (`PendingEdits`), and again when the app quits; they are removed once the server
+/// has everything. Opening a note with such edits replays them onto it and saves them.
 @MainActor
 @Observable
 public final class EditorSession {
@@ -40,22 +47,30 @@ public final class EditorSession {
     @ObservationIgnored private var flushTask: Task<Void, Never>?
     @ObservationIgnored private var titleTask: Task<Void, Never>?
     @ObservationIgnored private var inFlight = false
+    @ObservationIgnored private var inFlightWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored private var dirty = false
     @ObservationIgnored private var unsent: (transaction: BlockTransaction, result: SyncedTree)?
     @ObservationIgnored private var retryDelay: Double = 0
+    /// Edits from an earlier visit replayed onto the loaded note (shown, not yet saved).
+    @ObservationIgnored private var recovered: [EditorBlock]?
     /// Debounce for edits.
     @ObservationIgnored var saveDelay: Duration = .milliseconds(400)
+    /// Whether unconfirmed edits are written to disk (off for previews and most tests).
+    @ObservationIgnored var persistsPendingEdits = true
 
     public init(documentId: String, api: APIClient) {
         self.documentId = documentId
         self.api = api
+        Self.register(self)
     }
 
     /// For previews and tests: a session showing a document without a server.
     init(document: BlockDocument, api: APIClient = APIClient()) {
         self.documentId = document.id
         self.api = api
+        persistsPendingEdits = false
         adopt(document, replaceText: false)
+        Self.register(self)
     }
 
     public var hasUnsavedChanges: Bool { dirty || inFlight || unsent != nil }
@@ -66,7 +81,8 @@ public final class EditorSession {
         do {
             let document = try await api.document(id: documentId)
             loadError = nil
-            adopt(document, replaceText: true)
+            let pending = persistsPendingEdits ? PendingEdits.load(documentId: documentId) : nil
+            adopt(document, replaceText: true, pending: pending)
         } catch {
             loadError = error.localizedDescription
         }
@@ -77,11 +93,13 @@ public final class EditorSession {
         flushTask?.cancel()
         unsent = nil
         dirty = false
+        recovered = nil
+        if persistsPendingEdits { PendingEdits.remove(documentId: documentId) }
         await load()
         if loadError == nil { saveState = .saved }
     }
 
-    private func adopt(_ document: BlockDocument, replaceText: Bool) {
+    private func adopt(_ document: BlockDocument, replaceText: Bool, pending: PendingEdits.Record? = nil) {
         self.document = document
         revision = document.revision
         titleAuto = document.titleAuto ?? false
@@ -89,27 +107,49 @@ public final class EditorSession {
         status = document.status
         updatedAt = Timestamp.date(document.updatedAt)
         let blocks = BlockCodec.flatten(document.children, resolved: document.resolvedLinks)
+        var shown = blocks
+        recovered = nil
+        if let pending, !pending.operations.isEmpty {
+            // Edits from last time that never reached the server: show them on top of
+            // the note and save them (the diff against the server's version sends only
+            // what is still missing, so ones that did arrive aren't repeated).
+            shown = BlockCodec.flatten(PendingEdits.apply(pending.operations, to: document.children), resolved: document.resolvedLinks)
+            recovered = shown
+        }
         if replaceText, let showBlocks {
-            showBlocks(blocks)
+            showBlocks(shown)
             // The baseline is what the editor reads back, so an untouched note never saves.
-            base = SyncedTree((currentBlocks?() ?? nil) ?? blocks)
+            base = recovered == nil ? SyncedTree((currentBlocks?() ?? nil) ?? blocks) : SyncedTree(blocks)
         } else {
             base = SyncedTree(blocks)
+        }
+        if recovered != nil {
+            dirty = true
+            saveState = .saving
+            scheduleFlush(after: saveDelay)
         }
     }
 
     /// The blocks to show when the editor appears.
     var initialBlocks: [EditorBlock] {
-        document.map { BlockCodec.flatten($0.children, resolved: $0.resolvedLinks) } ?? []
+        if let recovered { return recovered }
+        return document.map { BlockCodec.flatten($0.children, resolved: $0.resolvedLinks) } ?? []
     }
 
     func resetBase(to blocks: [EditorBlock]) {
+        // Recovered edits stay pending against the server's version.
+        guard recovered == nil else { return }
         base = SyncedTree(blocks)
     }
 
-    /// Lets go of the editor once the note is closed and saved.
+    /// Lets go of the editor once the note is closed. What it shows last stays readable,
+    /// so a retry after the editor is gone still has the edits.
     func detach() {
-        currentBlocks = nil
+        if let blocks = currentBlocks?() {
+            currentBlocks = { blocks }
+        } else {
+            currentBlocks = nil
+        }
         showBlocks = nil
     }
 
@@ -130,9 +170,13 @@ public final class EditorSession {
         }
     }
 
-    /// Sends pending edits now (also used when the note closes).
+    /// Sends pending edits now. If a transaction is already in flight, the edits go
+    /// after it (they are never dropped).
     public func flush() async {
-        guard !inFlight, saveState != .conflict else { return }
+        guard !inFlight, saveState != .conflict else {
+            if inFlight, dirty { scheduleFlush(after: .milliseconds(50)) }
+            return
+        }
         let pending: (transaction: BlockTransaction, result: SyncedTree)
         if let unsent {
             pending = unsent
@@ -145,19 +189,32 @@ public final class EditorSession {
             let (operations, result) = BlockDiff.operations(from: base, to: blocks)
             guard !operations.isEmpty else {
                 base = result
-                if saveState == .saving { saveState = .saved }
+                recovered = nil
+                if persistsPendingEdits { PendingEdits.remove(documentId: documentId) }
+                if saveState == .saving || saveState == .offline { saveState = .saved }
                 return
             }
             pending = (BlockTransaction(baseRevision: revision, operations: operations), result)
         }
+        // Durable before it is sent: quitting or losing the connection now loses nothing.
+        if persistsPendingEdits {
+            PendingEdits.save(PendingEdits.Record(documentId: documentId, baseRevision: pending.transaction.baseRevision,
+                                                  operations: pending.transaction.operations, savedAt: Date()))
+        }
         inFlight = true
         saveState = .saving
-        defer { inFlight = false }
+        defer {
+            inFlight = false
+            let waiters = inFlightWaiters
+            inFlightWaiters = []
+            for waiter in waiters { waiter.resume() }
+        }
         do {
             let document = try await api.apply(pending.transaction, to: documentId)
             unsent = nil
             retryDelay = 0
             base = pending.result
+            recovered = nil
             revision = document.revision
             self.document = document
             updatedAt = Timestamp.date(document.updatedAt)
@@ -166,9 +223,11 @@ public final class EditorSession {
                 title = document.title
             }
             onDocumentChange?(document)
+            if !dirty, persistsPendingEdits { PendingEdits.remove(documentId: documentId) }
             saveState = dirty ? .saving : .saved
             if dirty { scheduleFlush(after: .milliseconds(50)) }
         } catch let error as APIError where (400..<500).contains(error.status) && error.status != 408 && error.status != 429 {
+            // The edits stay on disk: Load Latest discards them, reopening replays them.
             unsent = nil
             saveState = .conflict
         } catch {
@@ -177,6 +236,65 @@ public final class EditorSession {
             saveState = .offline
             retryDelay = min(30, max(2, retryDelay * 2))
             scheduleFlush(after: .seconds(retryDelay))
+        }
+    }
+
+    /// Waits for a transaction on the wire to come back.
+    private func waitForInFlight() async {
+        guard inFlight else { return }
+        await withCheckedContinuation { inFlightWaiters.append($0) }
+    }
+
+    /// Closing the note (switching to another): sends everything typed, waiting for a
+    /// transaction already in flight first, and keeps on disk whatever can't be sent now.
+    public func close() async {
+        flushTask?.cancel()
+        detach()
+        for _ in 0..<4 {
+            await waitForInFlight()
+            guard hasUnsavedChanges, saveState != .conflict else { break }
+            await flush()
+            if saveState == .offline { break }
+        }
+        if hasUnsavedChanges { persistUnsavedEdits(synchronously: false) }
+        await commitTitle()
+    }
+
+    /// Writes the edits the server hasn't confirmed to disk (also on quit).
+    func persistUnsavedEdits(synchronously: Bool) {
+        guard persistsPendingEdits, hasUnsavedChanges || recovered != nil, let blocks = currentBlocks?() ?? nil else { return }
+        let operations = BlockDiff.operations(from: base, to: blocks).operations
+        guard !operations.isEmpty else { return }
+        PendingEdits.save(PendingEdits.Record(documentId: documentId, baseRevision: revision, operations: operations,
+                                              savedAt: Date()), synchronously: synchronously)
+    }
+
+    // MARK: Quitting
+
+    private final class WeakSession {
+        weak var session: EditorSession?
+        init(_ session: EditorSession) { self.session = session }
+    }
+
+    private static var sessions: [WeakSession] = []
+    private static var terminationObserver: NSObjectProtocol?
+
+    private static func register(_ session: EditorSession) {
+        sessions.removeAll { $0.session == nil }
+        sessions.append(WeakSession(session))
+        guard terminationObserver == nil else { return }
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { EditorSession.applicationWillTerminate() }
+        }
+    }
+
+    /// The app is quitting: there is no time for a request, so unsaved edits go to disk
+    /// (synchronously) and are saved the next time their note opens.
+    static func applicationWillTerminate() {
+        for box in sessions {
+            box.session?.persistUnsavedEdits(synchronously: true)
         }
     }
 
@@ -210,6 +328,13 @@ public final class EditorSession {
         } catch {
             saveState = .offline
         }
+    }
+
+    /// The editor's text changed: save it, and keep an automatic title on the first line.
+    /// The first lines are read only while the title follows them (not per keystroke).
+    func editorDidChange(leadingTexts: () -> [String]) {
+        textDidChange()
+        if titleAuto, titleTask == nil { updateAutoTitle(from: leadingTexts()) }
     }
 
     /// While the title follows the first line, show the first line as it is typed.

@@ -7,8 +7,12 @@ import SwiftUI
 @Observable
 final class AttachmentContext {
     let baseURL: URL
-    var images: [URL: NSImage] = [:]
-    @ObservationIgnored private var loading: Set<URL> = []
+    /// The app's session (APIClient's), so pictures share its URL cache and configuration.
+    @ObservationIgnored var session: URLSession = .shared
+    @ObservationIgnored var pipeline = ImagePipeline.shared
+    @ObservationIgnored private var slots: [URL: ImageSlot] = [:]
+    /// A picture arrived (blocks without a stored size lay out again).
+    @ObservationIgnored var imageDidLoad: ((URL) -> Void)?
     /// Current text of referenced blocks (block references are living).
     var referenceText: [String: String] = [:]
     @ObservationIgnored private var resolving: Set<String> = []
@@ -42,22 +46,27 @@ final class AttachmentContext {
         return URL(string: string)
     }
 
-    func image(for url: URL) -> NSImage? {
-        if let image = images[url] { return image }
-        guard !loading.contains(url) else { return nil }
-        loading.insert(url)
-        if url.isFileURL {
-            let image = NSImage(contentsOf: url)
-            images[url] = image
-            return image
-        }
-        Task {
-            if let (data, _) = try? await URLSession.shared.data(from: url), let image = NSImage(data: data) {
-                images[url] = image
-                relayout?()
+    /// The picture's slot; asking starts loading it (off the main thread, downsampled).
+    func slot(for url: URL) -> ImageSlot {
+        if let slot = slots[url] { return slot }
+        let slot = ImageSlot(image: pipeline.cached(url))
+        slots[url] = slot
+        if slot.image == nil {
+            let session = session
+            let pipeline = pipeline
+            Task { [weak self, weak slot] in
+                let image = await pipeline.image(for: url, session: session)
+                guard let image, let slot else { return }
+                slot.image = image
+                self?.imageDidLoad?(url)
             }
         }
-        return nil
+        return slot
+    }
+
+    /// The picture if it has arrived (and starts loading it if not).
+    func image(for url: URL) -> NSImage? {
+        slot(for: url).image
     }
 
     func referenceLabel(blockId: String, fallback: String) -> String {
@@ -96,6 +105,8 @@ final class BlockAttachment: NSTextAttachment {
     let info: BlockInfo
     nonisolated(unsafe) weak var context: AttachmentContext?
     nonisolated(unsafe) var live: (any LiveBlock)?
+    /// Last measured (width, height) of a hosted embed or math view (measuring hosts a view).
+    nonisolated(unsafe) private var measured: (width: CGFloat, height: CGFloat)?
 
     @MainActor init(info: BlockInfo, context: AttachmentContext, block: EditorBlock? = nil) {
         self.info = info
@@ -135,9 +146,12 @@ final class BlockAttachment: NSTextAttachment {
             let size = ImageLayout.size(attrs: origin?.attrs ?? [:], image: imageNow(origin), width: width, theme: theme)
             return size.height + ImageLayout.captionHeight(attrs: origin?.attrs ?? [:], width: width, theme: theme)
         default:
+            if let measured, abs(measured.width - width) < 0.5 { return measured.height }
             let view = NSHostingView(rootView: BlockEmbedView(info: info, context: context, width: width))
             view.frame.size.width = width
-            return max(36, view.fittingSize.height)
+            let height = max(36, view.fittingSize.height)
+            measured = (width, height)
+            return height
         }
     }
 
@@ -151,6 +165,12 @@ final class BlockAttachment: NSTextAttachment {
 /// doesn't jump when the picture arrives; otherwise the picture's own size. Never wider
 /// than the column, never taller than 480.
 enum ImageLayout {
+    /// Width and height stored with the block: the space is known before the picture arrives.
+    static func hasStoredSize(_ attrs: [String: JSONValue]) -> Bool {
+        guard case .number(let width)? = attrs["width"], case .number(let height)? = attrs["height"] else { return false }
+        return width > 0 && height > 0
+    }
+
     @MainActor static func size(attrs: [String: JSONValue], image: NSImage?, width: CGFloat, theme: EditorTheme) -> CGSize {
         func number(_ key: String) -> CGFloat? {
             if case .number(let value)? = attrs[key], value > 0 { return CGFloat(value) }
@@ -286,7 +306,7 @@ private struct ImageBlockView: View {
 
     @ViewBuilder private func content(width: CGFloat) -> some View {
         let theme = context?.theme ?? EditorTheme()
-        let image = url.flatMap { context?.images[$0] }
+        let image = url.flatMap { context?.slot(for: $0).image }
         let size: CGSize? = ImageLayout.size(attrs: attrs, image: image, width: width, theme: theme)
         VStack(alignment: .leading, spacing: 6 * theme.scale) {
             Group {
