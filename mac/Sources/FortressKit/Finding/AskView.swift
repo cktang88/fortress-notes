@@ -364,7 +364,9 @@ struct AskTrace: View {
     }
 
     static func seconds(_ interval: TimeInterval) -> String {
-        String(format: "%.1f s", max(0, interval))
+        // "12.3s" in the locale's digits and unit (not a fixed "%.1f s").
+        Duration.milliseconds(Int64((max(0, interval) * 1000).rounded()))
+            .formatted(.units(allowed: [.seconds], width: .narrow, fractionalPart: .show(length: 1)))
     }
 }
 

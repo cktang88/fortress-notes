@@ -298,9 +298,12 @@ import Testing
     @Test func shortcutConflictIsReportedAndRetriedAndSurvivesSleep() {
         let workspace = NotificationCenter()
         let app = NotificationCenter()
-        var available = false
+        // A box, not a captured `var`: the register closure is main-actor isolated (so
+        // Sendable), and a captured variable mutated after capture is a data-race warning.
+        final class Flag { var value = false }
+        let available = Flag()
         var conflicts = 0
-        let keeper = HotKeyKeeper(register: { available ? NSObject() : nil }, workspaceCenter: workspace, appCenter: app)
+        let keeper = HotKeyKeeper(register: { available.value ? NSObject() : nil }, workspaceCenter: workspace, appCenter: app)
         keeper.onConflict = { conflicts += 1 }
         keeper.activate()
         #expect(keeper.status == .conflict)
@@ -309,7 +312,7 @@ import Testing
         #expect(keeper.status == .conflict)
         #expect(conflicts == 1)  // Said once.
 
-        available = true  // The other app quit.
+        available.value = true  // The other app quit.
         app.post(name: NSApplication.didBecomeActiveNotification, object: nil)
         #expect(keeper.status == .registered)
         let registrations = keeper.registrations

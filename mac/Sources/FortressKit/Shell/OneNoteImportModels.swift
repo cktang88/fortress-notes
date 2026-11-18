@@ -298,7 +298,10 @@ public enum OneNoteImport {
     /// "12 of 48 pages".
     public static func pageCount(_ progress: OneNoteImportJob.Progress) -> String? {
         guard progress.pagesTotal > 0 else { return nil }
-        return "\(progress.pagesDone) of \(progress.pagesTotal) \(progress.pagesTotal == 1 ? "page" : "pages")"
+        let done = progress.pagesDone, total = progress.pagesTotal
+        // Agreement with the total ("1 of 1 page", "61 of 148 pages") from the catalog's
+        // inflection, not an English "s".
+        return String(AttributedString(localized: "\(done) of ^[\(total) page](inflect: true)").characters)
     }
 
     /// "148 pages · 36 images · 9 files · 12 tables".
@@ -307,28 +310,42 @@ public enum OneNoteImport {
         if result.images > 0 { parts.append(plural(result.images, "image")) }
         if result.files > 0 { parts.append(plural(result.files, "file")) }
         if result.tables > 0 { parts.append(plural(result.tables, "table")) }
-        if let duration = result.durationMs, duration > 0 { parts.append("in \(durationText(duration))") }
+        if let duration = result.durationMs, duration > 0 { parts.append(String(localized: "in \(durationText(duration))", comment: "OneNote import summary; the argument is a duration")) }
         return parts.joined(separator: " · ")
     }
 
     public static func headline(_ result: OneNoteImportResult) -> String {
         let notebooks = result.notebooks.count
-        let what = notebooks == 1 ? "1 notebook" : "\(notebooks) notebooks"
-        if notebooks == 0 { return "Nothing was imported" }
-        if result.pagesCreated == 0 && result.pagesUpdated == 0 { return "\(what) already up to date" }
-        return "Imported \(what)"
+        if notebooks == 0 { return String(localized: "Nothing was imported") }
+        if result.pagesCreated == 0 && result.pagesUpdated == 0 {
+            return String(AttributedString(localized: "^[\(notebooks) notebook](inflect: true) already up to date").characters)
+        }
+        return String(AttributedString(localized: "Imported ^[\(notebooks) notebook](inflect: true)").characters)
     }
 
+    /// "1 page", "147 pages": the count formatted for the locale and the noun agreeing
+    /// with it (Foundation's automatic grammar agreement; one key per noun, so each can
+    /// be translated). Unknown nouns fall back to the English plural.
     public static func plural(_ count: Int, _ noun: String) -> String {
-        "\(count.formatted()) \(count == 1 ? noun : noun + "s")"
+        let text: AttributedString
+        switch noun {
+        case "page": text = AttributedString(localized: "^[\(count) page](inflect: true)")
+        case "image": text = AttributedString(localized: "^[\(count) image](inflect: true)")
+        case "file": text = AttributedString(localized: "^[\(count) file](inflect: true)")
+        case "table": text = AttributedString(localized: "^[\(count) table](inflect: true)")
+        case "section": text = AttributedString(localized: "^[\(count) section](inflect: true)")
+        case "note": text = AttributedString(localized: "^[\(count) note](inflect: true)")
+        case "link": text = AttributedString(localized: "^[\(count) link](inflect: true)")
+        default: return "\(count.formatted()) \(count == 1 ? noun : noun + "s")"
+        }
+        return String(text.characters)
     }
 
+    /// "under a second", "42 sec", "2 min, 5 sec" (the locale's unit names).
     public static func durationText(_ milliseconds: Int) -> String {
-        let seconds = Double(milliseconds) / 1000
-        if seconds < 1 { return "under a second" }
-        if seconds < 60 { return "\(Int(seconds.rounded())) s" }
-        let minutes = Int(seconds) / 60
-        return "\(minutes) min \(Int(seconds) % 60) s"
+        if milliseconds < 1000 { return String(localized: "under a second") }
+        return Duration.milliseconds(milliseconds).formatted(
+            .units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, fractionalPart: .hide(rounded: .toNearestOrEven)))
     }
 
     /// Recent jobs come as a list or as `{"jobs": [...]}`.

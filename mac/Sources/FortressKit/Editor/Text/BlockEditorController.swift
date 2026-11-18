@@ -185,7 +185,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     var storage: NSTextStorage { textView.textStorage! }
-    private var string: NSString { storage.string as NSString }
+    private var string: NSString { storage.nsString }
 
     // MARK: Loading and reading
 
@@ -218,6 +218,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             let generation = loadGeneration
             Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
         }
+        // Touching `layoutManager` or inserting an NSTextTable anywhere silently switches
+        // the view to TextKit 1 (and every later open to the slow path): catch it in debug.
+        assert(textView.textLayoutManager != nil, "The editor fell back to TextKit 1")
     }
 
     /// A text block just shown is what reading it back gives (unless building the text
@@ -742,6 +745,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     // MARK: Normalizing (NSTextStorageDelegate)
 
+    // NSTextStorageDelegate isn't main-actor isolated (a text storage may be edited on
+    // any thread). This storage belongs to the editor's text view and is only edited on
+    // the main thread, so the callback asserts that with `MainActor.assumeIsolated`
+    // (which traps rather than races if it's ever wrong); `nonisolated(unsafe)` carries
+    // the non-Sendable storage into that closure, on the same thread.
+
     nonisolated func textStorage(
         _ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
         range editedRange: NSRange, changeInLength delta: Int
@@ -765,7 +774,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// One block per paragraph, unique ids between neighbours, atomic blocks keep their
     /// attachment, the text ends with "\n", and presentation follows the semantics.
     private func normalize(_ storage: NSTextStorage, _ editedRange: NSRange) {
-        let string = storage.string as NSString
+        let string = storage.nsString
         if string.length == 0 || string.character(at: string.length - 1) != 0x0A {
             let info = string.length > 0 ? (storage.blockInfo(at: string.length - 1) ?? BlockInfo()) : BlockInfo()
             storage.append(NSAttributedString(string: "\n", attributes: [.fnBlock: info]))
@@ -783,7 +792,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             }
             if mutable.range(of: "\n", options: .literal, range: edited).location != NSNotFound { structuralEdit = true }
         }
-        let text = storage.string as NSString
+        let text = storage.nsString
         let start = text.paragraphRange(at: min(editedRange.location, text.length - 1)).location
         let end = min(text.length, NSMaxRange(editedRange) + 1)
         var location = start
@@ -936,6 +945,30 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             focusedBlockId = id
             onFocusBlock?(id)
         }
+    }
+
+    /// Writing Tools rewrites prose, not what has to stay exact: links, note links and
+    /// block references (their labels are the target's title), inline code, code blocks
+    /// and attachments.
+    func textView(_ textView: NSTextView, writingToolsIgnoredRangesInEnclosingRange enclosingRange: NSRange) -> [NSValue] {
+        Self.writingToolsIgnoredRanges(in: storage, enclosing: enclosingRange).map { NSValue(range: $0) }
+    }
+
+    static func writingToolsIgnoredRanges(in text: NSAttributedString, enclosing: NSRange) -> [NSRange] {
+        let range = NSIntersectionRange(enclosing, NSRange(location: 0, length: text.length))
+        var ignored: [NSRange] = []
+        text.enumerateAttributes(in: range, options: []) { attributes, run, _ in
+            let marks = (attributes[.fnMarks] as? MarksBox)?.marks
+            let exact = attributes[.fnNode] != nil || attributes[.attachment] != nil || attributes[.link] != nil
+                || marks?.code == true || marks?.link != nil || (attributes[.fnBlock] as? BlockInfo)?.kind == .code
+            guard exact else { return }
+            if let last = ignored.last, NSMaxRange(last) == run.location {
+                ignored[ignored.count - 1].length += run.length
+            } else {
+                ignored.append(run)
+            }
+        }
+        return ignored
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
@@ -1667,7 +1700,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                 do {
                     let data: Data
                     if let file = source.url {
-                        data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: file, options: .mappedIfSafe) }.value
+                        data = try await Self.read(file)
                     } else {
                         data = source.data ?? Data()
                     }
@@ -1696,16 +1729,19 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         return true
     }
 
-    /// An image's pixel size from its header (no decoding).
-    nonisolated static func pixelSize(of data: Data) async -> CGSize? {
-        await Task.detached(priority: .utility) { () -> CGSize? in
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
-                  let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
-            let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
-            return orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
-        }.value
+    /// A dropped or pasted file's bytes, read off the main thread.
+    @concurrent nonisolated static func read(_ file: URL) async throws -> Data {
+        try Data(contentsOf: file, options: .mappedIfSafe)
+    }
+
+    /// An image's pixel size from its header (no decoding), off the main thread.
+    @concurrent nonisolated static func pixelSize(of data: Data) async -> CGSize? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        return orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
     }
 
     // MARK: Copying blocks within and between notes

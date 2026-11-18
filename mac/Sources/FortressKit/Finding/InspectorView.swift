@@ -345,7 +345,8 @@ struct InfoSection: View {
 
     static func format(_ date: Date) -> String {
         if Calendar.current.isDateInToday(date) {
-            return "Today, " + date.formatted(date: .omitted, time: .shortened)
+            let time = date.formatted(date: .omitted, time: .shortened)
+            return String(localized: "Today, \(time)", comment: "Inspector date; the argument is a time")
         }
         return date.formatted(date: .abbreviated, time: .shortened)
     }

@@ -169,6 +169,7 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
     @Test func rowsAndColumnsAreAddedAndUndone() throws {
         let document = try RichPage.load()
         let (controller, window) = editor(document)
+        defer { withExtendedLifetime(window) {} }  // The window owns the undo manager.
         let base = SyncedTree(controller.currentBlocks())
         let table = try #require(live(controller, TableBlockController.self))
         table.perform("Insert Column") { $0.insertColumn(at: 1); return true }

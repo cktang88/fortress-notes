@@ -138,8 +138,8 @@ struct EditorTheme: Sendable {
     // Every colour here comes from the theme palette (App/Theme): stable dynamic colours
     // that resolve per appearance, so cached attributes survive theme changes.
 
-    nonisolated(unsafe) private static let markTextColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markText($0)) })
-    nonisolated(unsafe) private static let markHighlightColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markHighlight($0)) })
+    private static let markTextColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markText($0)) })
+    private static let markHighlightColors = Dictionary(uniqueKeysWithValues: MarkHue.allCases.map { ($0, ThemeRuntime.markHighlight($0)) })
 
     /// A text colour by name ("red", the theme's red) or hex (made legible on the page).
     static func color(named name: String) -> NSColor? {
@@ -226,6 +226,10 @@ struct EditorTheme: Sendable {
         var textColorName: String?
     }
 
+    /// `@unchecked Sendable`: every access to `attributes` holds `lock`. (Not a `Mutex`:
+    /// the values, fonts, colors and paragraph styles, aren't `Sendable`, so a `Mutex`
+    /// can't hand them out; they are immutable once made, which is what makes sharing
+    /// them between the main thread and the decoding task safe.)
     private final class StyleCache: @unchecked Sendable {
         let lock = NSLock()
         var attributes: [StyleKey: [NSAttributedString.Key: Any]] = [:]
@@ -237,17 +241,13 @@ struct EditorTheme: Sendable {
         let key = StyleKey(kind: info.kind, depth: info.depth, checked: info.checked, marks: marks, baseSize: baseSize,
                            isCompact: isCompact, alignment: alignment.rawValue, emphasized: emphasized, textColorName: textColorName)
         let cache = Self.styleCache
-        cache.lock.lock()
-        if let found = cache.attributes[key] {
-            cache.lock.unlock()
-            return found
-        }
-        cache.lock.unlock()
+        if let found = cache.lock.withLock({ cache.attributes[key] }) { return found }
+        // Made outside the lock (it's the slow part); two threads may both make one.
         let made = attributes(info: info, marks: marks, paragraphStyle: paragraphStyle(for: info))
-        cache.lock.lock()
-        if cache.attributes.count > 4096 { cache.attributes.removeAll() }
-        cache.attributes[key] = made
-        cache.lock.unlock()
+        cache.lock.withLock {
+            if cache.attributes.count > 4096 { cache.attributes.removeAll() }
+            cache.attributes[key] = made
+        }
         return made
     }
 
@@ -260,7 +260,7 @@ struct EditorTheme: Sendable {
     /// paragraph one block (the one on its first character) and turns pasted rich text
     /// into marks.
     func restyle(_ storage: NSMutableAttributedString, range: NSRange) {
-        let string = storage.string as NSString
+        let string = storage.nsString
         guard string.length > 0 else { return }
         var location = string.paragraphRange(at: range.location).location
         let end = min(string.length, NSMaxRange(range))
@@ -287,7 +287,7 @@ struct EditorTheme: Sendable {
                 // A note link keeps the URL that opens it.
                 if let box = node as? NodeBox, let id = NoteLinks.documentTarget(box.node), let url = NoteLinks.documentURL(id: id) {
                     updated[.link] = url
-                    updated[.toolTip] = "Open note"
+                    updated[.toolTip] = String(localized: "Open note")
                 }
             }
             if let attachment = attributes[.attachment] { updated[.attachment] = attachment }

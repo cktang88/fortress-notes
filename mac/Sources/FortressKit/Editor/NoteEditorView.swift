@@ -45,8 +45,14 @@ struct NoteEditorView: View {
             guard session?.document == nil else { return }
             let session = self.session ?? EditorSession(documentId: documentId, api: model.api)
             self.session = session
-            Task { try? await Task.sleep(for: .milliseconds(300)); showProgress = true }
             await session.load(debounce: .milliseconds(40))
+        }
+        .task(id: documentId) {
+            // The spinner only for a slow load; cancelled with the view (an unstructured
+            // Task here outlived it and could show the spinner after the note was gone).
+            showProgress = false
+            try? await Task.sleep(for: .milliseconds(300))
+            if !Task.isCancelled { showProgress = true }
         }
         .onDisappear {
             guard let session else { return }
@@ -169,9 +175,10 @@ struct BlockTextEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        // Never touches the text: it's the source of truth while the note is open (the
+        // view is recreated per note), so only focus requests come through here.
         if focusRequest != context.coordinator.focusRequest {
             context.coordinator.focusRequest = focusRequest
-        context.coordinator.documentId = session.documentId
             let controller = context.coordinator.controller
             Self.later { controller.focusCaret() }
         }
@@ -211,11 +218,11 @@ struct BlockTextEditor: NSViewRepresentable {
             return output
         }
         let targets = (try? await model.api.linkTargets(query: trimmed, limit: 40)) ?? []
-        let lowered = trimmed.lowercased()
-        let titled = targets.filter { $0.documentTitle.lowercased().contains(lowered) }
+        // Case- and diacritic-insensitive, as the locale compares ("cafe" finds "Café").
+        let titled = targets.filter { $0.documentTitle.localizedStandardContains(trimmed) }
         for target in titled + targets where !seen.contains(target.documentId) {
             seen.insert(target.documentId)
-            let detail = target.documentTitle.lowercased().contains(lowered) ? "" : target.text
+            let detail = target.documentTitle.localizedStandardContains(trimmed) ? "" : target.text
             output.append(LinkSuggestion(documentId: target.documentId, title: target.documentTitle, detail: detail))
         }
         return output
@@ -288,7 +295,7 @@ private struct MetaLine: View {
             if let updatedAt = session.updatedAt {
                 Text("·").foregroundStyle(.themeTertiary)
                 TimelineView(.periodic(from: .now, by: 60)) { context in
-                    Text("Edited \(Self.relative(updatedAt, now: context.date))")
+                    Text(EditorDates.edited(updatedAt, now: context.date))
                 }
             }
             if let folder {
@@ -300,20 +307,24 @@ private struct MetaLine: View {
         .foregroundStyle(.themeSecondary)
         .monospacedDigit()
     }
+}
 
-    static func relative(_ date: Date, now: Date) -> String {
-        if now.timeIntervalSince(date) < 60 { return "just now" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: now)
+/// Dates on the meta line and in the block popover.
+enum EditorDates {
+    /// "Edited just now", "Edited 5 min. ago": one localizable sentence, the relative
+    /// date from a format style (no formatter made per render).
+    static func edited(_ date: Date, now: Date) -> String {
+        if now.timeIntervalSince(date) < 60 { return String(localized: "Edited just now") }
+        let relative = date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
+        return String(localized: "Edited \(relative)", comment: "Note meta line; the argument is a relative date such as “5 min. ago”")
     }
 }
 
 extension NoteStatus {
     var label: String {
         switch self {
-        case .rough: "Rough"
-        case .polished: "Polished"
+        case .rough: String(localized: "Rough", comment: "Note status")
+        case .polished: String(localized: "Polished", comment: "Note status")
         }
     }
 

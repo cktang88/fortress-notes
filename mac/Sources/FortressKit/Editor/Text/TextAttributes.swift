@@ -16,7 +16,9 @@ extension NSAttributedString.Key {
 }
 
 /// Identity and kind of one paragraph's block. Immutable; replace it to change a block.
-final class BlockInfo: NSObject, @unchecked Sendable {
+/// (This and the boxes below are checked `Sendable`: final NSObject subclasses with only
+/// `let` properties of Sendable types.)
+final class BlockInfo: NSObject, Sendable {
     let id: String
     let kind: BlockKind
     let depth: Int
@@ -81,19 +83,19 @@ final class BlockInfo: NSObject, @unchecked Sendable {
 }
 
 /// The server's version of a block (boxed so attribute comparisons stay cheap).
-final class OriginBox: NSObject, @unchecked Sendable {
+final class OriginBox: NSObject, Sendable {
     let origin: BlockOrigin
     init(_ origin: BlockOrigin) { self.origin = origin }
 }
 
-final class MarksBox: NSObject, @unchecked Sendable {
+final class MarksBox: NSObject, Sendable {
     let marks: InlineMarks
     init(_ marks: InlineMarks) { self.marks = marks }
     override func isEqual(_ object: Any?) -> Bool { (object as? MarksBox)?.marks == marks }
     override var hash: Int { marks.hashValue }
 }
 
-final class NodeBox: NSObject, @unchecked Sendable {
+final class NodeBox: NSObject, Sendable {
     let node: JSONValue
     init(_ node: JSONValue) { self.node = node }
 }
@@ -107,6 +109,22 @@ extension NSAttributedString {
     func marks(at index: Int) -> InlineMarks {
         guard index >= 0, index < length else { return InlineMarks() }
         return (attribute(.fnMarks, at: index, effectiveRange: nil) as? MarksBox)?.marks ?? InlineMarks()
+    }
+}
+
+extension NSAttributedString {
+    /// The characters as an NSString, without copying them.
+    ///
+    /// `string` is a Swift `String`, and bridging a *mutable* NSString to Swift copies it
+    /// (`CFStringCreateCopy`): for the note's NSTextStorage that is the whole note, on every
+    /// call. The editor reads the text this way many times per keystroke (paragraph ranges,
+    /// selection snapping, normalizing, reading blocks back, numbering), so a 600,000-
+    /// character note spent milliseconds per key just copying it. A mutable attributed
+    /// string answers with its live `mutableString` instead (no copy; it shows later edits
+    /// of the characters, so don't hold it across one expecting the old text).
+    var nsString: NSString {
+        if let mutable = self as? NSMutableAttributedString { return mutable.mutableString }
+        return string as NSString
     }
 }
 

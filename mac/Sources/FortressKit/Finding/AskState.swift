@@ -143,7 +143,7 @@ final class AskTurn: Identifiable {
     /// The "First Ask token" signpost interval, open until the first sentence arrives.
     @ObservationIgnored private var firstTokenInterval: OSSignpostIntervalState?
 
-    private static let log = Logger(subsystem: "FortressNotes", category: "Ask")
+    private static let log = Logger(subsystem: "app.fortress.notes", category: "Ask")
 
     init(question: String, state: AskState = AskState(), started: Date = .now) {
         self.question = question

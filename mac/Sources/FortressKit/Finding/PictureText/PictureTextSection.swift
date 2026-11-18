@@ -35,10 +35,10 @@ struct PictureTextSection: View {
         return pictures.map { picture in
             if picture.isPDF {
                 seen.pdfs += 1
-                return (picture, pdfs > 1 ? "PDF \(seen.pdfs)" : "PDF")
+                return (picture, pdfs > 1 ? String(localized: "PDF \(seen.pdfs)") : String(localized: "PDF"))
             }
             seen.images += 1
-            return (picture, images > 1 ? "Picture \(seen.images)" : "Picture")
+            return (picture, images > 1 ? String(localized: "Picture \(seen.images)") : String(localized: "Picture"))
         }
     }
 }
