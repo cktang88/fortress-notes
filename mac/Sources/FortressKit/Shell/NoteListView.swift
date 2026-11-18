@@ -29,6 +29,7 @@ struct NoteListView: View {
                                     .padding(8)
                             }
                             .contextMenu { NoteContextMenu(note: note) }
+                            .onHover { inside in model.prefetchOnHover(noteId: inside ? note.id : nil) }
                     }
                 } header: {
                     if !section.title.isEmpty {
@@ -41,6 +42,15 @@ struct NoteListView: View {
         .scrollContentBackground(.hidden)
         .background(Color(nsColor: .textBackgroundColor))
         .animation(.smooth(duration: 0.2), value: notes.map(\.id))
+        .task(id: model.openNoteId) {
+            // Load the notes above and below the open one, so ↑/↓ open instantly. A new
+            // selection cancels this before it sends anything.
+            guard let id = model.openNoteId else { return }
+            let neighbours = NoteListing.neighbours(of: id, in: sections.flatMap(\.notes).map(\.id))
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            await model.prefetch(noteIds: neighbours)
+        }
         .overlay {
             if notes.isEmpty && model.isConnected && model.hasLoadedNavigation {
                 NoteListEmptyView()

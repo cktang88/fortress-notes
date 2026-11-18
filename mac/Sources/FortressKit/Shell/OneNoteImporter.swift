@@ -94,7 +94,9 @@ public final class OneNoteImporter {
         var misses = 0
         while !job.status.isFinished {
             phase = .running(job)
-            try await Task.sleep(for: pollInterval)
+            // While the backend doesn't answer (restarting, say), wait longer each time
+            // instead of hammering it: 1, 2, 4, 8× the interval.
+            try await Task.sleep(for: pollInterval * (1 << min(misses, 3)))
             do {
                 job = try await api.oneNoteImportJob(id: job.jobId)
                 misses = 0
