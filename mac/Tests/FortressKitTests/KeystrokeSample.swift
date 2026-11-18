@@ -10,13 +10,15 @@ import Testing
 @MainActor
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["KEYSTROKE_PROFILE"] == "1"))
 struct KeystrokeSample {
-    @Test func sampleTyping() throws {
+    @Test(arguments: ["whole", "chunked"]) func sampleTyping(mode: String) throws {
         let editor = PerfEditor(document: LongNote.document())
         editor.open()
         // (Finding a block loads the whole note first where loading is chunked.)
+        if mode == "chunked" { editor.settle() }
         _ = editor.range(ofBlock: editor.middleParagraph)
-        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["KEYSTROKE_SAMPLE_OUT"]
-            ?? FileManager.default.temporaryDirectory.appendingPathComponent("keystroke-sample.txt").path)
+        let base = ProcessInfo.processInfo.environment["KEYSTROKE_SAMPLE_OUT"]
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("keystroke-sample.txt").path
+        let output = URL(fileURLWithPath: (base as NSString).deletingPathExtension + "-\(mode).txt")
         try? FileManager.default.removeItem(at: output)
         let sampler = Process()
         sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
@@ -35,6 +37,6 @@ struct KeystrokeSample {
             typed += 1
         }
         sampler.waitUntilExit()
-        print("PROFILE typed \(typed) keystrokes in 6 s: \(String(format: "%.2f", 6000 / Double(max(typed, 1)))) ms each")
+        print("PROFILE \(mode) typed \(typed) keystrokes in 6 s: \(String(format: "%.2f", 6000 / Double(max(typed, 1)))) ms each")
     }
 }

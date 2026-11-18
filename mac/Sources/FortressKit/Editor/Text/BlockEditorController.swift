@@ -198,6 +198,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let interval = Signposts.begin("Load text")
         defer { Signposts.end("Load text", interval) }
         loadGeneration += 1
+        deferredText = nil
+        deferredCount = 0
+        appendLog = []
         let all = blocks.isEmpty ? [EditorBlock()] : blocks
         let headCount = isEmbedded ? all.count : Self.headCount(all)
         let head = Array(all[..<headCount])
@@ -279,6 +282,18 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         return copy
     }
 
+    // EXPERIMENT (profiling): loading knobs and per-append timings.
+    struct LoadTuning {
+        var transaction = false
+        var deferred = false
+        var maxHeight: CGFloat = 3000
+        var maxCount = 80
+    }
+    var loadTuning = LoadTuning()
+    var appendLog: [(blocks: Int, characters: Int, build: Double, append: Double)] = []
+    private var deferredText: NSMutableAttributedString?
+    private var deferredCount = 0
+
     /// Puts the next chunk of a loading note into the text (about a screen's worth of
     /// work per run loop turn, so typing and scrolling go on meanwhile).
     private func appendPendingBlocks(generation: Int) {
@@ -288,12 +303,51 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
             return
         }
+        if loadTuning.deferred {
+            let rest = pendingBlocks[deferredCount...]
+            var height: CGFloat = 0
+            var count = 0
+            for block in rest {
+                height += Self.estimatedHeight(block)
+                count += 1
+                if height > loadTuning.maxHeight || count >= loadTuning.maxCount { break }
+            }
+            let buffer = deferredText ?? NSMutableAttributedString()
+            let start = DispatchTime.now().uptimeNanoseconds
+            buffer.append(DocumentText.build(Array(rest.prefix(count)), theme: theme, context: context))
+            let built = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+            appendLog.append((count, buffer.length, built, 0))
+            deferredText = buffer
+            deferredCount += count
+            if deferredCount >= pendingBlocks.count {
+                let blocks = pendingBlocks
+                pendingBlocks = []
+                deferredText = nil
+                deferredCount = 0
+                isLoading = true
+                let start = storage.length
+                let appendStart = DispatchTime.now().uptimeNanoseconds
+                if loadTuning.transaction, let contentStorage = textView.textContentStorage {
+                    contentStorage.performEditingTransaction { storage.append(buffer) }
+                } else {
+                    storage.append(buffer)
+                }
+                appendLog.append((blocks.count, buffer.length, 0, Double(DispatchTime.now().uptimeNanoseconds - appendStart) / 1e6))
+                blockCache = cachedBlocks(blocks, from: start)
+                extendLastRead(from: start)
+                isLoading = false
+                onLoadComplete?()
+            } else {
+                Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+            }
+            return
+        }
         var height: CGFloat = 0
         var count = 0
         for block in pendingBlocks {
             height += Self.estimatedHeight(block)
             count += 1
-            if height > 3000 || count >= 80 { break }
+            if height > loadTuning.maxHeight || count >= loadTuning.maxCount { break }
         }
         append(Array(pendingBlocks.prefix(count)))
         pendingBlocks.removeFirst(count)
@@ -309,6 +363,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard !pendingBlocks.isEmpty else { return }
         let rest = pendingBlocks
         pendingBlocks = []
+        deferredText = nil
+        deferredCount = 0
         append(rest)
         onLoadComplete?()
     }
@@ -320,8 +376,16 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         isLoading = true
         defer { isLoading = false }
         let start = storage.length
+        let buildStart = DispatchTime.now().uptimeNanoseconds
         let text = DocumentText.build(blocks, theme: theme, context: context)
-        storage.append(text)
+        let appendStart = DispatchTime.now().uptimeNanoseconds
+        if loadTuning.transaction, let contentStorage = textView.textContentStorage {
+            contentStorage.performEditingTransaction { storage.append(text) }
+        } else {
+            storage.append(text)
+        }
+        appendLog.append((blocks.count, text.length, Double(appendStart - buildStart) / 1e6,
+                          Double(DispatchTime.now().uptimeNanoseconds - appendStart) / 1e6))
         blockCache = cachedBlocks(blocks, from: start)
         extendLastRead(from: start)
     }
