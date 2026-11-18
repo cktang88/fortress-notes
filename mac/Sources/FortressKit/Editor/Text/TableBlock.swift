@@ -727,16 +727,21 @@ extension NSTextView {
     /// layout fragments: `usageBoundsForTextContainer` only grows, so it can't be used
     /// after the width changed.
     func fittingTextHeight(width: CGFloat) -> CGFloat {
+        var changed = false
         if abs(frame.width - width) > 0.5 {
             setFrameSize(NSSize(width: width, height: max(frame.height, 10)))
+            changed = true
         }
         guard let manager = textLayoutManager, let container = manager.textContainer else { return 0 }
         let inset = textContainerInset
         let containerWidth = max(1, width - 2 * inset.width)
         if abs(container.size.width - containerWidth) > 0.5 {
             container.size = NSSize(width: containerWidth, height: CGFloat.greatestFiniteMagnitude)
-            manager.invalidateLayout(for: manager.documentRange)
+            changed = true
         }
+        // The container follows the view's width, but laid-out fragments keep the old
+        // width until they are invalidated.
+        if changed { manager.invalidateLayout(for: manager.documentRange) }
         var bottom: CGFloat = 0
         manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: [.ensuresLayout]) { fragment in
             bottom = max(bottom, fragment.layoutFragmentFrame.maxY)
