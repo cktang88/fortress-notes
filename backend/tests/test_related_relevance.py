@@ -68,10 +68,10 @@ class RelatedRelevanceApiTests(unittest.TestCase):
             ):
                 ids = {}
                 for title, body in notes_to_create:
-                    ids[title] = client.post("/api/notes", json={"title": title, "body": body}).json()["id"]
-                source = client.post("/api/notes", json={"title": "Draft", "body": source_body}).json()
+                    ids[title] = client.post("/api/block-documents", json={"title": title, "body": body}).json()["id"]
+                source = client.post("/api/block-documents", json={"title": "Draft", "body": source_body}).json()
                 block = client.get(f"/api/block-documents/{source['id']}").json()["children"][0]
-                endpoint = f"/api/notes/{source['id']}/related"
+                endpoint = f"/api/block-documents/{source['id']}/related"
                 by_block = client.get(endpoint, params={"block_id": block["id"]}).json()
                 whole = client.get(endpoint).json()
                 names = {value: key for key, value in ids.items()}

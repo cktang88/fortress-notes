@@ -23,21 +23,17 @@ The JSON shape (all keys but ``source`` are optional)::
                  "at": "..."},             # derived from another note/block
       "via": {"source": "markdown_import", "source_path": "x.md", "at": "..."},
       "extra": {...},                       # importer-specific details
-      # set by re-imports (blocks only):
-      "source_hash": "...",                 # hash of the content the source last wrote
-      "conflict": {...},                    # source changed a locally edited block
-      "source_removed": true,               # gone from the source; kept (edited locally),
-                                            # or (notes) the page was deleted in the source
-      "source_removed_at": "...",           # notes: when a re-import first missed the page
-      "backfilled": true                    # guessed by the schema migration
+      "backfilled": true                    # guessed by a schema migration
     }
+
+Re-import (sync) state is not provenance: it lives in the ``block_sync`` table
+and ``documents.sync_json`` (see sources.py), so edits never touch it.
 
 Provenance is never indexed for search and never part of a block's text.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from typing import Any
@@ -66,15 +62,10 @@ _STRING_FIELDS = {
     "synced_at": 64,
 }
 _ORIGIN_OPERATIONS = {"move_into", "duplicate", "split"}
-# Written only by the server (re-imports and migrations), never accepted from clients.
-INTERNAL_FIELDS = (
-    "source_hash", "conflict", "source_removed", "source_removed_at", "dismissed_hash", "backfilled",
-)
+# Written only by the server (migrations), never accepted from clients.
+INTERNAL_FIELDS = ("backfilled",)
 _MAX_EXTRA_BYTES = 16_384
 
-# A block's provenance in exported Markdown: one comment line right before the block.
-COMMENT_PREFIX = "<!-- fortress:block "
-_COMMENT_RE = re.compile(r"^<!-- fortress:block (\{.*\}) -->$")
 
 
 class ProvenanceError(ValueError):
@@ -205,67 +196,6 @@ def materialize(
     value = effective_block_provenance(block_raw, document_provenance_value)
     value.pop("inherited", None)
     return value
-
-
-def derived_copy(value: dict[str, Any], origin: dict[str, Any]) -> dict[str, Any]:
-    """Provenance for a copy of a block: same source, but not the source's block."""
-
-    copy = {
-        key: item
-        for key, item in value.items()
-        if key not in {"external_id", "inherited", "origin"} and key not in INTERNAL_FIELDS
-    }
-    copy.setdefault("source", DEFAULT_SOURCE)
-    copy["origin"] = {key: item for key, item in origin.items() if item not in (None, "")}
-    return copy
-
-
-def content_hash(block_type: str, text: str) -> str:
-    """What a re-import compares to tell untouched blocks from locally edited ones."""
-
-    digest = hashlib.sha256(f"{block_type}\n{text}".encode("utf-8")).hexdigest()
-    return digest[:32]
-
-
-# --- Markdown representation -------------------------------------------------
-
-
-def comment(value: dict[str, Any]) -> str:
-    """One-line HTML comment carrying a block's provenance (survives Markdown tools)."""
-
-    encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    # JSON never needs a raw '>' outside strings; escaping it means '-->' can't occur.
-    encoded = encoded.replace(">", "\\u003e")
-    return f"{COMMENT_PREFIX}{encoded} -->"
-
-
-def parse_comment(source: str) -> dict[str, Any] | None:
-    match = _COMMENT_RE.match(source.strip())
-    if not match:
-        return None
-    try:
-        value = json.loads(match.group(1))
-    except ValueError:
-        return None
-    if not isinstance(value, dict):
-        return None
-    try:
-        return normalize(value, trusted=True)
-    except ProvenanceError:
-        return None
-
-
-def exportable_block_provenance(
-    block_raw: object, document_provenance_value: dict[str, Any]
-) -> dict[str, Any] | None:
-    """What a Markdown export writes for a block: only what the document doesn't say."""
-
-    own = loads(block_raw)
-    if not own:
-        return None
-    if own == {"source": document_provenance_value.get("source", DEFAULT_SOURCE)}:
-        return None
-    return own
 
 
 def front_matter(value: dict[str, Any]) -> dict[str, Any]:

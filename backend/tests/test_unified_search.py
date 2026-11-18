@@ -40,7 +40,7 @@ class UnifiedSearchTests(unittest.TestCase):
 
     def create(self, title: str, body: str, status: str = "rough") -> str:
         response = self.client.post(
-            "/api/notes", json={"title": title, "body": body, "status": status}
+            "/api/block-documents", json={"title": title, "body": body, "status": status}
         )
         return response.json()["id"]
 
@@ -137,7 +137,7 @@ class UnifiedSearchTests(unittest.TestCase):
 
     def test_trashed_notes_and_empty_queries_return_nothing(self) -> None:
         gone = self.create("Gone", "zebracorn")
-        self.client.delete(f"/api/notes/{gone}")
+        self.client.delete(f"/api/block-documents/{gone}")
         self.assertEqual(self.find("zebracorn"), [])
         self.assertEqual(self.find("   "), [])
 

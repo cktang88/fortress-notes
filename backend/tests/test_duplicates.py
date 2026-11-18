@@ -43,7 +43,7 @@ class DuplicateCheckTests(unittest.TestCase):
         self.addCleanup(self._directory.cleanup)
 
     def create(self, title: str, body: str) -> str:
-        return self.client.post("/api/notes", json={"title": title, "body": body}).json()["id"]
+        return self.client.post("/api/block-documents", json={"title": title, "body": body}).json()["id"]
 
     def test_finds_a_note_that_repeats_this_one(self) -> None:
         original = self.create("Kitchen", PLAN + "\n\nPaint colour still undecided.")
@@ -82,8 +82,11 @@ class DuplicateCheckTests(unittest.TestCase):
         self.assertEqual([b["source_document_id"] for b in backlinks], [linker])
         self.assertEqual(self.client.get(f"/api/block-documents/{source}").status_code, 404)
         self.assertIn(source, [item["id"] for item in self.client.get("/api/trash").json()])
-        hits = self.client.get("/api/block-search", params={"q": "Moved"}).json()
-        self.assertEqual({hit["document_id"] for hit in hits}, {target})
+        from app import block_store
+
+        hits = block_store.search_blocks(self.notes / ".fortress.sqlite3", "Moved")
+        # The linker shows (and so indexes) the referenced block's text.
+        self.assertEqual({hit["document_id"] for hit in hits}, {target, linker})
         self.assertIn("Moved two", (self.notes / f"{target}.md").read_text())
 
     def test_move_into_rejects_itself_and_missing_notes(self) -> None:

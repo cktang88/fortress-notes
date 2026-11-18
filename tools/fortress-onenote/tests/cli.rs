@@ -116,6 +116,198 @@ fn garbage_section_is_reported_as_failed() {
     fs::remove_dir_all(&d).unwrap();
 }
 
+/// A `.onepkg` (CAB) with the given files, MSZIP-compressed in one folder.
+fn cab_with(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut builder = cab::CabinetBuilder::new();
+    {
+        let folder = builder.add_folder(cab::CompressionType::MsZip);
+        for (name, _) in entries {
+            folder.add_file(*name);
+        }
+    }
+    let mut writer = builder.build(fs::File::create(path).unwrap()).unwrap();
+    let mut i = 0;
+    while let Some(mut file) = writer.next_file().unwrap() {
+        file.write_all(entries[i].1).unwrap();
+        i += 1;
+    }
+    writer.finish().unwrap();
+}
+
+/// First 0x48 bytes of a OneNote section header ([MS-ONESTORE] 2.3.1) with
+/// the given file-format version (0x2A: OneNote 2010+, 0x1B: OneNote 2007).
+fn section_header(ffv: u8) -> Vec<u8> {
+    let mut h = vec![
+        0xe4, 0x52, 0x5c, 0x7b, 0x8c, 0xd8, 0xa7, 0x4d, 0xae, 0xb1, 0x53, 0x78, 0xd0, 0x29, 0x96,
+        0xd3,
+    ];
+    h.extend([0x11; 16]); // guidFile
+    h.extend([0; 16]); // guidLegacyFileVersion
+    h.extend([
+        0x3f, 0xdd, 0x9a, 0x10, 0x1b, 0x91, 0xf5, 0x49, 0xa5, 0xd0, 0x17, 0x91, 0xed, 0xc8, 0xae,
+        0xd8,
+    ]);
+    for _ in 0..4 {
+        h.extend([ffv, 0, 0, 0]);
+    }
+    h.extend([0; 8]);
+    h
+}
+
+fn convert(input: &Path, out_dir: &Path) -> (std::process::Output, Option<Value>) {
+    let out = Command::new(bin())
+        .arg(input)
+        .arg("--out")
+        .arg(out_dir)
+        .arg("-q")
+        .output()
+        .unwrap();
+    let m = fs::read(out_dir.join("manifest.json"))
+        .ok()
+        .map(|b| serde_json::from_slice(&b).unwrap());
+    (out, m)
+}
+
+fn failed_reasons(m: &Value) -> Vec<(String, String)> {
+    m["notebooks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|nb| nb["report"]["failed_sections"].as_array().unwrap().clone())
+        .map(|f| {
+            (
+                f["file"].as_str().unwrap_or("").to_string(),
+                f["reason"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn failed_sections_get_specific_reasons() {
+    // Corpus findings: OneNote 2007 sections, truncated sections and
+    // non-OneNote files all got "could not be read (unsupported or damaged)".
+    let d = tmp("reasons");
+    let src = d.join("in");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("Old.one"), section_header(0x1b)).unwrap();
+    fs::write(src.join("Truncated.one"), section_header(0x2a)).unwrap();
+    fs::write(
+        src.join("Html.one"),
+        b"<html><body>Not a section</body></html>",
+    )
+    .unwrap();
+    fs::write(src.join("Empty.one"), b"").unwrap();
+    let (out, m) = convert(&src, &d.join("out"));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let reasons = failed_reasons(&m.unwrap());
+    let reason = |f: &str| {
+        reasons
+            .iter()
+            .find(|(file, _)| file == f)
+            .map(|(_, r)| r.clone())
+            .unwrap_or_else(|| panic!("{f} not failed: {reasons:?}"))
+    };
+    assert!(reason("Old.one").contains("OneNote 2007"));
+    assert!(reason("Truncated.one").contains("incomplete"));
+    assert!(reason("Html.one").contains("not a OneNote section"));
+    assert!(reason("Empty.one").contains("empty"));
+    fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn onepkg_sections_are_reported_not_dropped() {
+    // Corpus findings: a .onepkg whose sections cannot be read converted to
+    // an empty notebook with no failure, and one without a .onetoc2 was
+    // rejected as a whole.
+    let d = tmp("onepkg");
+    let pkg = d.join("Notebook.onepkg");
+    cab_with(
+        &pkg,
+        &[
+            ("Old.one", &section_header(0x1b)),
+            ("Group\\Broken.one", &[0x42u8; 300]),
+        ],
+    );
+    let (out, m) = convert(&pkg, &d.join("out"));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let m = m.unwrap();
+    let nb = &m["notebooks"][0];
+    assert_eq!(nb["source_kind"], "onepkg");
+    assert_eq!(nb["name"], "Notebook");
+    assert_eq!(nb["source_path"], "Notebook.onepkg");
+    let reasons = failed_reasons(&m);
+    assert_eq!(reasons.len(), 2, "{reasons:?}");
+    assert!(
+        reasons
+            .iter()
+            .any(|(f, r)| f == "Notebook.onepkg/Old.one" && r.contains("OneNote 2007")),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(f, _)| f == "Notebook.onepkg/Group/Broken.one"),
+        "{reasons:?}"
+    );
+    assert_eq!(m["report"]["sections_failed"], 2);
+    // The unpacked package is cleaned up.
+    assert!(!d.join("out/.extracted").exists());
+
+    // A package without any section is reported too.
+    let empty = d.join("Empty.onepkg");
+    cab_with(&empty, &[("readme.txt", b"nothing here")]);
+    let (out, m) = convert(&empty, &d.join("out2"));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let reasons = failed_reasons(&m.unwrap());
+    assert_eq!(reasons.len(), 1);
+    assert!(reasons[0].1.contains("no readable sections"));
+    fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn corrupt_onepkg_never_aborts_the_conversion() {
+    // Corpus finding: cab 0.6.0 panicked (exit 101, no manifest) on
+    // corrupted packages (folder.rs index out of bounds).
+    let d = tmp("cabfuzz");
+    let pkg = d.join("P.onepkg");
+    let body: Vec<u8> = (0..20_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    cab_with(&pkg, &[("A.one", &body), ("B.one", &section_header(0x2a))]);
+    let good = fs::read(&pkg).unwrap();
+    let mut cases: Vec<Vec<u8>> = Vec::new();
+    // Every header byte set to 0xFF, and the file truncated at many points.
+    for i in 0..good.len().min(120) {
+        let mut v = good.clone();
+        v[i] = 0xFF;
+        cases.push(v);
+    }
+    for cut in (8..good.len()).step_by(good.len() / 40 + 1) {
+        cases.push(good[..cut].to_vec());
+    }
+    for (i, data) in cases.iter().enumerate() {
+        let p = d.join(format!("c{i}.onepkg"));
+        fs::write(&p, data).unwrap();
+        let (out, m) = convert(&p, &d.join(format!("o{i}")));
+        let code = out.status.code();
+        assert!(
+            code == Some(0) || code == Some(1),
+            "case {i}: {code:?} {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if code == Some(0) {
+            // Nothing is silently lost: either sections or failures.
+            let m = m.unwrap();
+            assert!(
+                m["report"]["sections"].as_u64().unwrap()
+                    + m["report"]["sections_failed"].as_u64().unwrap()
+                    > 0,
+                "case {i}"
+            );
+        }
+    }
+    fs::remove_dir_all(&d).unwrap();
+}
+
 // ---- sample-based checks ------------------------------------------------------
 
 /// Per-page object id bookkeeping: ids seen and (text blocks, with an id).

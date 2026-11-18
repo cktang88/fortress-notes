@@ -1,6 +1,6 @@
 """Every live document the editor opens has a block to type into.
 
-BlockNote shows a blank paragraph for an empty document; if the server has no
+An editor shows a blank paragraph for an empty document; if the server has no
 block for it, the first keystrokes refer to a block it never heard of.
 """
 
@@ -48,10 +48,13 @@ class EmptyDocumentTests(unittest.TestCase):
         block = document["children"][0]
         self.assertEqual((block["type"], block["text"]), ("paragraph", ""))
         response = self.client.post(
-            f"/api/block-documents/{document_id}/transactions",
+            f"/api/block-documents/{document_id}/transactions?response=document",
             json={
                 "base_revision": document["revision"],
-                "operations": [{"operation": "update", "block_id": block["id"], "text": text}],
+                "operations": [{
+                    "operation": "update", "block_id": block["id"],
+                    "content": [{"type": "text", "text": text}],
+                }],
             },
         )
         self.assertEqual(response.status_code, 200, response.text)
@@ -76,18 +79,30 @@ class EmptyDocumentTests(unittest.TestCase):
         self.open_and_type(result["imported"][0]["id"], "Typed after import")
 
     def test_a_note_emptied_by_move_into_and_restored_can_be_typed_into(self) -> None:
-        source = self.client.post("/api/notes", json={"title": "Source", "body": "Moved away"}).json()
-        target = self.client.post("/api/notes", json={"title": "Target", "body": "Stays"}).json()
+        source = self.client.post("/api/block-documents", json={"title": "Source", "body": "Moved away"}).json()
+        target = self.client.post("/api/block-documents", json={"title": "Target", "body": "Stays"}).json()
         moved = self.client.post(f"/api/block-documents/{source['id']}/move-into/{target['id']}")
         self.assertEqual(moved.status_code, 200, moved.text)
         restored = self.client.post(f"/api/trash/{source['id']}/restore")
         self.assertEqual(restored.status_code, 200, restored.text)
         self.open_and_type(source["id"], "Fresh start")
 
+    def test_older_empty_notes_get_their_paragraph_at_startup_not_on_read(self) -> None:
+        from app import block_store, main
+
+        db = self.settings.block_db_path
+        block_store.create_document(db, "legacy", "Legacy", "rough", "", "t", "t")
+        state = block_store.change_state(db)
+        self.assertEqual(self.client.get("/api/block-documents/legacy").json()["children"], [])
+        self.assertEqual(block_store.change_state(db), state)  # reads never write
+        with TestClient(main.app):
+            pass  # startup repairs it
+        self.open_and_type("legacy", "Typed after a restart")
+
     def test_an_empty_note_still_exports_as_empty(self) -> None:
         from app.portability import export_document_markdown
 
-        note = self.client.post("/api/notes", json={"title": "Empty", "body": ""}).json()
+        note = self.client.post("/api/block-documents", json={"title": "Empty", "body": ""}).json()
         self.client.get(f"/api/block-documents/{note['id']}")
         markdown = export_document_markdown(self.settings.block_db_path, note["id"])
         self.assertEqual(markdown.split("---", 2)[2].strip(), "")

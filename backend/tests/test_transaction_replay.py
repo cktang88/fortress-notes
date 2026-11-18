@@ -13,16 +13,18 @@ class TransactionReplayTests(unittest.TestCase):
     def test_resending_a_saved_transaction_returns_the_note_without_reapplying(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            document = create_block_document(database, "Replay", "rough", [], "First line")
+            document = create_block_document(database, "Replay", "rough", "First line")
             block = document["children"][0]
             operations = [
                 BlockOperation(
                     operation="update",
                     block_id=block["id"],
-                    text="First line, then more",
-                    expected_updated_at=block["updated_at"],
+                    content=[{"type": "text", "text": "First line, then more"}],
                 ),
-                BlockOperation(operation="insert", block_id="01JABCDEFGHJKMNPQRSTVWXYZ0", text="Added"),
+                BlockOperation(
+                    operation="insert", block_id="01JABCDEFGHJKMNPQRSTVWXYZ0", type="paragraph",
+                    content=[{"type": "text", "text": "Added"}],
+                ),
             ]
             first = apply_transaction(
                 database, document["id"], operations, document["revision"], "tx-1"
@@ -40,12 +42,13 @@ class TransactionReplayTests(unittest.TestCase):
     def test_a_reused_transaction_id_with_different_edits_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            document = create_block_document(database, "Replay", "rough", [], "Line")
+            document = create_block_document(database, "Replay", "rough", "Line")
             block_id = document["children"][0]["id"]
             apply_transaction(
                 database,
                 document["id"],
-                [BlockOperation(operation="update", block_id=block_id, text="One")],
+                [BlockOperation(operation="update", block_id=block_id,
+                                content=[{"type": "text", "text": "One"}])],
                 document["revision"],
                 "tx-2",
             )
@@ -53,7 +56,8 @@ class TransactionReplayTests(unittest.TestCase):
                 apply_transaction(
                     database,
                     document["id"],
-                    [BlockOperation(operation="update", block_id=block_id, text="Two")],
+                    [BlockOperation(operation="update", block_id=block_id,
+                                    content=[{"type": "text", "text": "Two"}])],
                     document["revision"],
                     "tx-2",
                 )

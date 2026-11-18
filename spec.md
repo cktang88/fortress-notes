@@ -4,9 +4,9 @@
 
 A local-first block-centric notes app where **SQLite is the live source of truth** for
 documents, nested blocks, references, and indexes. Markdown remains the portable
-import/export format. The app provides a fast two-pane UI, two search modes
-(full-text + ColBERT late-interaction embedding search), live related results,
-rough→polished workflow, and an LLM "review" of the current document.
+import/export format. The native Mac app provides one search box (full text +
+ColBERT late-interaction embedding search + titles), live related results, a
+rough→polished workflow, and Ask (cited answers from your notes).
 
 Non-goals (for v1): multi-user, auth, real-time collaboration, mobile, cloud sync,
 nested folders.
@@ -26,7 +26,6 @@ A mirror looks like this (extra front-matter keys added by hand are preserved):
 id: 01HZX...            # ULID, also the filename
 title: My note
 status: rough           # "rough" | "polished"
-tags: [ideas, project]
 created_at: 2026-06-20T10:00:00Z
 updated_at: 2026-06-20T10:05:00Z
 images:                  # cached caption+OCR per referenced image (see §6)
@@ -49,150 +48,39 @@ resized width survives the round-trip).
 On first start an empty database imports any existing `NOTES_DIR/*.md` files once,
 copying the originals to a timestamped backup folder first.
 
-## 2a. Block shapes (`block_types.py`)
+## 2a. Block shapes
 
-Every block row has `type`, `attrs` (JSON, indexed in `block_attrs`), `content`
-(JSON), `text`, children (`parent_id`/`position`) and provenance (§7a).
-
-- **`text` is the searchable plain text**: FTS, ColBERT embeddings, Ask grep and
-  read_note read it. Blocks with structure or rich runs get it derived by the
-  server (no Markdown, no HTML); plain Markdown-only blocks (imported `.md`)
-  keep their Markdown source there, minus inline mark HTML.
-- **`content.markdown`** is what Markdown export/mirrors write for the block. The
-  server derives it for structured blocks and for rich text whose stored Markdown
-  lacks the marks; otherwise a writer's Markdown is kept.
-
-### Inline marks (the one canonical form)
-
-Rich text lives in `content.blocknote` as BlockNote inline content (what the web
-editor already stores), extended with `superscript`/`subscript` and hex colours:
-
-```jsonc
-{"type": "text", "text": "Hello", "styles": {
-   "bold": true, "italic": true, "underline": true, "strike": true, "code": true,
-   "superscript": true, "subscript": true,          // new (not BlockNote defaults)
-   "textColor": "#C00000",                           // CSS name ("red") or #hex
-   "backgroundColor": "#FFFF00"}}                    // highlight
-{"type": "link", "href": "https://…" /* or "[[doc_id|Title]]" */, "content": [<text runs>]}
-```
-
-Omitted styles are off; `"default"` colours are dropped. Text blocks (`paragraph`,
-`heading` attrs `level`, `list` attrs `ordered`/`checked`/`checked_at`, `quote`,
-`code` attrs `language`, and the web editor's `bulletListItem`, `numberedListItem`,
-`checkListItem`, `codeBlock`, `callout`) store
-`content: {"blocknote": [runs], "markdown": "…"}`; a block with only
-`{"markdown": …}` is plain Markdown (editors parse it). A newline inside a run is a
-line break.
-
-Markdown: bold `**`, italic `*`, strike `~~`, code `` ` ``, links `[t](url)`
-natively; `<u>`, `<sup>`, `<sub>`, `<span style="color:#C00000">`,
-`<mark style="background:#FFFF00">` for the rest. If native emphasis would not
-parse back to the same runs (e.g. `**"x"**y`), the block's marks are all written
-as HTML (`<strong>`, `<em>`, `<s>`, `<code>`, `<a href>`). Import parses all of
-these back into runs (only blocks that contain mark HTML get runs; others stay
-plain Markdown).
-
-### Table (`type: "table"`)
-
-```jsonc
-{"type": "table",
- "attrs": {"borders": true},                 // false: no visible borders (default true)
- "content": {"blocknote": {                  // BlockNote's tableContent, extended
-    "type": "tableContent",
-    "columnWidths": [200, null],             // CSS px per column; null = automatic
-    "headerRows": 1,                         // optional; also "headerCols"
-    "rows": [{"cells": [
-      {"type": "tableCell",
-       "props": {"backgroundColor": "#DEEAF6", "textColor": "red",
-                 "textAlignment": "center", "colspan": 1, "rowspan": 1},  // all optional
-       "content": [<runs>],                  // the cell's first line of text
-       "blocks": [<nested blocks>]}          // optional, after content (OneNote cells)
-    ]}]},
-   "markdown": "…"},
- "text": "Name\tQty\nApples\t3"}              // rows on lines, cells tab-separated
-```
-
-Nested (in-cell) blocks are `{"type", "attrs", "content", "children"?}` with no id:
-text types (content `{"blocknote": runs}`), `table` (nested tables), `image`,
-`file`, `math`, `thematic_break`. Rows need ≥ 1 cell; garbage is rejected with
-**422** by the transactions API (`BlockShapeError`). A cell saved without a
-`blocks` key keeps its nested blocks while the table keeps its shape (the web
-editor cannot show them); `"blocks": []` clears them.
-
-Markdown: a **GFM table** when there is exactly one header row and every cell is
-one line of text (column-uniform alignment allowed); otherwise an HTML
-`<table>` (one HTML block, no blank lines): `data-borders="false"`,
-`<colgroup><col style="width:200px">…`, header cells as `<th>`, cell
-`style="background-color:…;color:…;text-align:…"`, `colspan`/`rowspan`, cell content
-as inline HTML then `<p>`/`<ul>`/`<ol>`/`<li data-checked>`/`<pre><code>`/`<img>`/
-nested `<table>`; other table attrs in `data-attrs='{json}'`. Both import back
-(GFM tables no longer become `raw`).
-
-### Columns (`type: "columns"` → `type: "column"`)
-
-```jsonc
-{"type": "columns", "attrs": {/* free, e.g. onenote geometry */}, "content": {}, "text": "",
- "children": [
-   {"type": "column", "attrs": {"width": 0.4}, "content": {}, "text": "",   // relative width
-    "children": [<ordinary blocks>]},
-   {"type": "column", "attrs": {"width": 0.6}, "children": […]}]}
-```
-
-Columns are ordinary tree nodes: children are indexed, linked, moved, duplicated
-and undone like any block. A `columns` block holds only `column` blocks and a
-`column` lives only in a `columns` block (insert/move/type change otherwise → 409).
-Markdown (columns written one after another; the comments are invisible):
-
-```markdown
-<!-- fortress:columns {"onenote_y":3} -->
-
-<!-- fortress:column {"width":0.4} -->
-
-Left column blocks…
-
-<!-- fortress:column {"width":0.6} -->
-
-Right column blocks…
-
-<!-- /fortress:columns -->
-```
-
-### Image, file, math
-
-```jsonc
-{"type": "image", "attrs": {"url": "/media/01J….png", "alt": "OCR / alt text",
-  "caption": "…", "width": 480, "height": 320, "name": "scan.png"},   // px; all but url optional
- "text": "OCR / alt text\n…caption"}          // searchable
-// Markdown: <img src="/media/01J….png" alt="…" title="caption" width="480" height="320" data-name="…">
-//   (other attrs, e.g. the web editor's previewWidth, in data-attrs='{json}')
-
-{"type": "file", "attrs": {"url": "/media/01J….pdf", "name": "Contract.pdf",
-  "size": 48213, "mime": "application/pdf"}, "text": "Contract.pdf"}
-// Markdown: <!-- fortress:file {"mime":…,"name":…,"size":…,"url":…} -->
-//           [Contract.pdf](/media/01J….pdf) (47.1 KB)
-
-{"type": "math", "content": {"latex": "E = mc^2", "mathml": "<math>…"}, "text": "E = mc^2"}
-// Markdown: $$\nE = mc^2\n$$  (mathml is not exported)
-```
-
-A single `<img>` line in imported Markdown becomes an image block. Splitting and
-merging apply to text blocks only.
+The block model is specified in **[docs/block-model.md](docs/block-model.md)**, the
+contract between the backend and every client. In short: a block is a `type`
+from one registry (`block_schema.py`, served at `GET /api/block-schema`), `attrs`,
+inline `content` (text blocks: text/link/docLink/blockRef nodes with marks) and a
+`payload` (math, html). Tables, columns, quotes and callouts are container blocks
+with child blocks. Siblings are ordered by fractional `order` keys
+(`order_keys.py`). The server derives `text` (plain, no Markdown: FTS, embeddings,
+Ask and titles read it), Markdown (`block_markdown.py`), links, backlinks and asset
+links; it rejects unknown types, illegal nesting and cross-category type changes
+with **422**.
 
 ## 3. Backend (FastAPI, Python / uv)
 
 ### Modules (`backend/app/`)
 - `config.py` — settings from env (`pydantic-settings`).
-- `models.py` — Pydantic schemas (`Note`, `NoteSummary`, `NoteCreate`, `NoteUpdate`,
-  `SearchResult`, `ReviewResponse`).
-- `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS, rendering.
-- `block_types.py` — rich inline marks, tables, columns, image/file/math: validation,
-  derived Markdown/plain text, Markdown/HTML round trip (§2a).
+- `models.py` — Pydantic schemas (`NoteSummary`, `NoteCreate`, `NoteUpdate`,
+  `BlockTransaction`, `RelatedResult`, ...).
+- `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS.
+- `block_schema.py` — the block type registry and inline content rules (§2a).
+- `order_keys.py` — fractional sibling order keys.
+- `block_markdown.py` — Markdown in and out of canonical blocks (ids in comments).
+- `block_legacy.py`, `block_migration.py` — older block shapes (the Mac app's
+  current requests, importer dicts) and the schema-14 migration of stored data.
 - `documents.py` — note lifecycle (create/update/trash/restore/purge) and Markdown mirrors.
 - `embeddings.py` — ColBERT late-interaction via PyLate; encode + MaxSim scoring,
   with a keyword fallback when disabled/unavailable.
-- `search.py` — full-text search + orchestration of embedding search & related notes.
-- `llm.py` — OpenRouter chat completion (`z-ai/glm-5.3-flash`) for note review.
-- `main.py` — FastAPI app, routes, CORS.
+- `search.py` — unified search (words + meaning + titles) and related notes.
+- `ask.py` / `llm.py` — Ask your notes over OpenRouter chat completions.
+- `main.py` — FastAPI app and routes.
+- `document_service.py` — rendered note bodies and the one document ETag, shared by
+  the single GET, the batch read and the writes that answer with a tree.
 - `http_cache.py` — ETags, `If-None-Match` → 304, rendered-body caches, API gzip.
 - `media.py` — `/media` file serving (immutable caching, ranges, content types).
 - `batch.py` — batch reads and moves for the native app.
@@ -202,28 +90,31 @@ merging apply to text blocks only.
 
 | Method | Path | Body / Query | Returns |
 | --- | --- | --- | --- |
-| `GET` | `/api/notes` | `?status=` | `NoteSummary[]` (id, title, status, tags, updated_at, snippet) |
-| `POST` | `/api/notes` | `NoteCreate` | `Note` |
-| `GET` | `/api/notes/{id}` | — | `Note` |
-| `PUT` | `/api/notes/{id}` | `NoteUpdate` | `Note` |
-| `DELETE` | `/api/notes/{id}` | — | `204` |
-| `POST` | `/api/notes/{id}/promote` | — | `Note` (status→polished) |
-| `GET` | `/api/search` | `?q=&mode=text\|embedding` | `SearchResult[]` (summary + score) |
-| `GET` | `/api/notes/{id}/related` | `?k=5` | `SearchResult[]` |
-| `POST` | `/api/notes/{id}/review` | `?kind=factcheck\|clarify\|object` | `ReviewResponse` |
-| `POST` | `/api/block-documents/{id}/link-checks` | — | `{links: [{url, status, checked_at, block_ids}]}` |
-| `POST` | `/api/images` | multipart `file` | `{url, text}` (saves image, runs caption+OCR) |
+| `GET` | `/api/navigation` | `?recent_limit=` | folder tree + recent notes |
+| `POST` · `PATCH` · `DELETE` | `/api/folders` · `/api/folders/{id}` | `{name, parent_id?}` | folder |
+| `POST` | `/api/folders/{id}/move` · `/api/block-documents/{id}/move` | `{parent_id}` · `{folder_id}` | the moved item |
+| `POST` | `/api/block-documents` | `NoteCreate` | `201` document tree; header `X-Document-ETag` |
+| `GET` | `/api/block-documents/{id}` | `If-None-Match` | document tree (`ETag`), or `304`; never writes |
+| `PATCH` | `/api/block-documents/{id}` | `{title?, status?}` (anything else: 422) | metadata payload (`children: []`); header `X-Document-ETag`. Title `""` hands it back to the first line |
+| `DELETE` | `/api/block-documents/{id}` | — | `204` (to the Trash) |
+| `POST` | `/api/block-documents/{id}/opened` | — | `204`; records `last_opened_at` (debounced, skipped while a writer is busy; not in the ETag) |
+| `POST` | `/api/block-documents/{id}/undo` · `/redo` | `{base_revision}` | document tree; header `X-Document-ETag` |
+| `GET` | `/api/block-documents/{id}/related` | `?k=5&block_id=` | `RelatedResult[]` |
+| `GET` | `/api/block-documents/{id}/backlinks` · `/similar` | — | backlinks · notes repeating this one |
+| `POST` | `/api/block-documents/{id}/move-into/{target_id}` | — | `{moved, document_id}` |
+| `GET` | `/api/block-link-targets` | `?q=&limit=` | link autocomplete |
+| `GET` | `/api/unified-search` | `?q=&limit=` + filters | ranked blocks (words, meaning, titles) |
+| `POST` | `/api/ask` | `{question}` (`Accept: application/x-ndjson` streams) | cited answer |
+| `POST` | `/api/capture` | `{text, provenance?}` | `201 {document_id, title, folder}` |
+| `POST` | `/api/files` | multipart `file` | `{props: {url, name}}` (images get OCR in the background) |
 | `GET` | `/media/{file}` | — | stored file bytes (ranges, immutable caching; see below) |
-| `POST` | `/api/batch/block-documents` | `{ids: [≤50], known: {id: revision}}` | `{documents: [tree], unchanged: [id], missing: [id]}`; does not mark notes opened |
+| `POST` | `/api/batch/block-documents` | `{ids: [≤50], known: {id: ETag}}` | `{documents: [tree], etags: {id: ETag}, unchanged: [id], missing: [id]}`; never writes |
 | `POST` | `/api/batch/move` | `{documents: [{id, folder_id}], folders: [{id, parent_id}]}` | `{folders, documents}` (counts moved) |
-| `POST` | `/api/block-documents/{id}/transactions` | `BlockTransaction`, `?response=document\|meta` | document tree (`meta`: without `children`); header `X-Document-ETag` |
+| `POST` | `/api/block-documents/{id}/transactions` | `BlockTransaction`, `?response=meta\|document` | metadata payload (`children: []`, the default) or the tree; header `X-Document-ETag` |
 | `GET` | `/api/trash` | — | trashed documents, newest first |
 | `POST` | `/api/trash/{id}/restore` | — | `{id, folder_id, position}` (also rewrites the Markdown mirror) |
 | `DELETE` | `/api/trash/{id}` · `/api/trash` | — | delete one forever · empty the trash |
-| `GET` · `POST` | `/api/saved-searches` | `{name, query, mode, filters}` | saved searches |
-| `DELETE` | `/api/saved-searches/{id}` | — | `204` |
 | `GET` · `POST` | `/api/backups` | — | list snapshots · take a manual snapshot |
-| `GET` | `/api/backups/{name}/download` | — | SQLite snapshot file |
 | `POST` | `/api/backups/{name}/restore` | — | `{restored, safety_backup}` |
 | `GET` | `/api/block-documents/{id}/markdown` | `?download=true` | one note as Markdown (with provenance, §7a) |
 | `GET` | `/api/block-documents/{id}/info` | — | note metadata: dates, provenance, counts, conflicts (§7a) |
@@ -232,6 +123,7 @@ merging apply to text blocks only.
 | `POST` | `/api/import/onenote` | multipart `file` (+ `folder_id?`) or JSON `{path, folder_id?}` | `202 {job_id, status: "queued"}` (§7b) |
 | `GET` | `/api/import/onenote/{job_id}` | — | import job (§7b) |
 | `GET` | `/api/import/onenote` | `?limit=20` | recent import jobs, newest first |
+| `POST` | `/api/import/onenote/{job_id}/cancel` | — | `202` the job |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
 
 ### HTTP caching, compression, errors
@@ -240,22 +132,26 @@ merging apply to text blocks only.
   (keep, but revalidate); a request whose `If-None-Match` matches gets `304` with no
   body:
   - `GET /api/block-documents/{id}` — changes with anything in the payload: the note's
-    own rows (blocks, user attrs, links, history, title/status/provenance/...),
-    `last_opened_at`, and every linked note or block (titles and text in
+    own rows (blocks, user attrs, links, history, title/status/provenance/...)
+    and every linked note or block (titles and text in
     `resolved_links`, `[[id|Title]]` labels).
   - `GET /api/navigation` (per `recent_limit`), `GET /api/trash`,
     `GET /api/block-documents/{id}/info`, `GET /api/block-documents/{id}/backlinks`
-    — change with any change in the workspace (they show other notes).
+    — change with any change in the workspace (they show other notes); `/info` also
+    with `last_opened_at`.
+  - One document validator everywhere: the batch read's `known`/`etags` are these
+    ETags, and every write that answers with a note sends `X-Document-ETag`.
   - `GET /api/backups` — changes with the snapshot list.
 
   The server tracks changes with SQLite triggers (`change_log.seq`, an `epoch` renewed
   by every restore, and `documents.change_seq`), so writes from any code path — and
   restores — invalidate validators. Other API responses also get
   `Cache-Control: no-cache` unless they set their own (the Ask stream: `no-store`).
-- **Opening is cheap.** `GET /api/block-documents/{id}` sets `last_opened_at` at most
-  once a minute per note, and skips (does not wait for) the write while another
-  writer holds the database. A transaction response carries `X-Document-ETag`, the
-  ETag the next GET of that note answers 304 to, and primes the server's cache.
+- **Reads never write.** `GET /api/block-documents/{id}` and the batch read change
+  nothing (no `last_opened_at`, no repair): the app records an open with
+  `POST .../opened`, and the empty paragraph an empty note needs is made at create,
+  import and restore (and once at startup for older data). A write's
+  `X-Document-ETag` is the ETag the next GET of that note answers 304 to.
 - **Server caches.** Rendered bodies are cached per validator (documents: 256 entries
   / 64 MB; others: 256 / 32 MB), so repeated GETs skip SQLite and JSON encoding.
 - **gzip.** `/api` responses of 1 KB or more are gzipped when the client sends
@@ -268,7 +164,7 @@ merging apply to text blocks only.
   for content-addressed names (else size/mtime), `Last-Modified`, `Accept-Ranges`
   (`Range` → 206), explicit `Content-Type` (e.g. `.m4a` `audio/mp4`, `.webm`
   `audio/webm`), `X-Content-Type-Options: nosniff`. Text sidecars (`<id>.txt`) are
-  `no-cache`. Uploads (`/api/images`, `/api/files`) stream to disk while hashing.
+  `no-cache`. Uploads (`/api/files`) stream to disk while hashing.
 - **Errors** are JSON `{"detail": ...}`: unknown routes 404, a database still locked
   after the 5 s busy timeout `503` with `Retry-After: 1`, anything unexpected `500`
   `{"detail": "Internal server error"}`.
@@ -293,67 +189,19 @@ merging apply to text blocks only.
 - **Fallback**: if embeddings disabled or model missing, score by keyword overlap so
   the UI still works.
 
-### LLM review (`llm.py`)
-- POST to `https://openrouter.ai/api/v1/chat/completions`, model `OPENROUTER_MODEL`.
-- Three `kind`s, each a different system prompt:
-  - `factcheck` — flag claims that are wrong/unsupported; cite uncertainty.
-  - `clarify` — ask clarifying questions about gaps/ambiguity.
-  - `object` — steelman objections, surface inconsistencies/faulty reasoning
-    ("code review for your notes").
-- Returns structured `ReviewResponse { kind, summary, items[] }`.
+## 4. Client
 
-## 4. Frontend (Vite + React + TanStack Query + Tailwind + BlockNote)
-
-### Layout
-```
-┌──────────────────────────┬─────────────────────────────────────┐
-│ Search bar  [text|embed] │                                     │
-│ [+ New]   [All|Rough|Pol]│         Note title                  │
-├──────────────────────────┤   [status badge] [Promote] [AI ▾]   │
-│ ▸ Document tree (scroll) │                                     │
-│   • note A    rough      │   ┌───────────────────────────────┐ │
-│   • note B    polished   │   │  BlockNote rich-text editor  │ │
-│   • ...                  │   │  (SQLite-backed)              │ │
-│                          │   │                               │ │
-├──────────────────────────┤   └───────────────────────────────┘ │
-│ Related notes (auto)     │   [AI review panel, when open]      │
-│   • note C   0.82        │                                     │
-│   • note D   0.79        │                                     │
-└──────────────────────────┴─────────────────────────────────────┘
-```
-
-### Features → components (`src/features/notes/`)
-- `NoteList` — list + status filter; clicking selects a note.
-- `SearchBar` — query input + mode toggle (text/embedding); drives the list.
-- `RelatedNotes` — bottom-left; refetches on selected-note or focused-block change.
-- `BlockNoteEditor` — nested block editor; debounced transactional autosave.
-- `NoteHeader` — title, status badge, Promote button.
-- `BlockReviewPanel` — fact-checks highlighted text or selected blocks.
-- `api.ts` — typed fetch wrappers; `hooks.ts` — TanStack Query hooks.
-
-State: TanStack Query for server state; a little local UI state (selected id, search
-mode, query). No `useEffect` for data; rely on React Compiler (no manual memoization).
-
-## 5. Automatic link checks
-
-When a document opens, the client requests `POST /api/block-documents/{id}/link-checks`.
-The server checks links in blocks last edited at least 30 days ago. Successful checks
-are cached in SQLite for 30 days. Failed status codes and network error names are
-returned and retried on a later open; they never edit note content. Results include
-the current block IDs for each link, so removed or changed links do not keep stale
-associations.
+The native macOS app in `mac/` (SwiftUI + TextKit 2) is the only client; see
+`mac/DESIGN.md`. The web UI (Vite/React/BlockNote) was removed.
 
 ## 6. Images & vision (`images.py`, `vision.py`)
 
-- **Paste/drop**: the editor's `handlePaste`/`handleDrop` (logic in `paste.ts`,
-  unit-tested) pull image files from the clipboard/drop, `POST /api/images`, and insert
-  an `<img>` with the returned `/media/…` URL. Markdown stays small — images are files.
-- **Fast & non-blocking**: `/api/images` saves the file and returns **immediately**
+- **Paste/drop**: the editor uploads pasted or dropped files with `POST /api/files` and
+  inserts an image or file block with the returned `/media/…` URL. Markdown stays
+  small — images are files.
+- **Fast & non-blocking**: `/api/files` saves the file and returns **immediately**
   (~ms); caption/OCR runs in a tracked background task (`asyncio.to_thread`, references
   held so it isn't GC'd) so the image appears instantly and the event loop never blocks.
-- **Resize**: `ImageResize` (extends Tiptap `Image`) adds a drag handle that writes a
-  `width` attribute; turndown `keep(['img'])` preserves `<img width=…>` as raw HTML so
-  the size round-trips through Markdown.
 - **Searchable images**: **RapidOCR** and local SmolVLM captions run once per image and
   write per-image and content-hash sidecars (cache reused across duplicate bytes). `note_search_text`
   folds title + body + sidecar text so full-text and embedding search cover image text;
@@ -364,17 +212,14 @@ associations.
 ## 7. Workspace safety and organization
 
 - **Trash**: deleting a note soft-deletes it in SQLite. The app shows an Undo toast;
-  the Trash dialog (⋯ menu) restores notes or deletes them forever.
+  the Trash restores notes or deletes them forever.
 - **Backups**: a background task keeps one automatic snapshot per day in
   `NOTES_DIR/.fortress-backups` (last 7 daily, 10 manual, 5 pre-restore). Restoring
   verifies the snapshot, saves the current state as `pre-restore` first, and moves
   Markdown mirrors of documents that are not in the snapshot aside rather than
   deleting them. Set `AUTO_BACKUP_ENABLED=false` to turn off daily snapshots.
-- **Import/export**: the ⋯ menu imports `.md` files as new notes; each note exports
-  from its header or right-click menu.
-- **Saved searches**: saved from the search box and re-run from chips beneath it.
-- **Keyboard**: ⌘/Ctrl+K or `/` search, Alt+N new note, ↑/↓/Enter through results,
-  Esc clears search, `?` shows tips.
+- **Import/export**: File ▸ Import brings in `.md` files or a OneNote export; each
+  note exports as Markdown.
 
 ## 7a. Provenance, metadata and living documents
 
@@ -452,8 +297,8 @@ settles a block conflict (taking the source's version is an ordinary undoable ed
 created_at=, modified_at=, provenance=, importer=)` (or
 `sources.upsert_document_from_source(db_path, …)`), with `blocks` a list of
 `SourceBlock(markdown, external_id, type, attrs, children, created_at, modified_at,
-provenance, content, text)` or a Markdown body. A SourceBlock carries either
-Markdown or `type` + structured `content` (§2a; Markdown and text are derived).
+provenance, content, payload, previous_external_ids)` or a Markdown body. A SourceBlock carries either
+Markdown or a canonical `type` + `attrs`/`content`/`payload` (§2a; text is derived).
 `sources.source_block(dict)` / `source_blocks([dict])` build them from plain dicts:
 
 ```python

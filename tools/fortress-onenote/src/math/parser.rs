@@ -174,9 +174,9 @@ impl Parser {
     fn parse_equation_array(&mut self) -> Result<MathOp> {
         let (object, rows) = self.parse_object_n(MathObjectType::EquationArray)?;
 
-        let columns = object
-            .column()
-            .ok_or_else(|| eyre!("Equation array columns are not set"))?;
+        // fortress-onenote change: writers other than OneNote may omit the
+        // column count of a one-column array.
+        let columns = object.column().unwrap_or(1);
 
         let align = object
             .align()
@@ -235,9 +235,9 @@ impl Parser {
             .column()
             .ok_or_else(|| eyre!("Equation array columns are not set"))?;
 
-        let char = object
-            .char()
-            .ok_or_else(|| eyre!("Matrix has no brackets specifier"))?;
+        // fortress-onenote change: a missing brackets specifier (other
+        // writers) means a plain matrix.
+        let char = object.char().unwrap_or('\u{25a0}');
         let brackets = match char {
             '\u{25a0}' => None,
             '\u{24a8}' => Some(MatrixBrackets::Parentheses),

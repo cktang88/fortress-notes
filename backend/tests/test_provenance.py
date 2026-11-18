@@ -31,6 +31,14 @@ def _texts(nodes):
     return [node["text"] for node in nodes]
 
 
+def _runs(text):
+    return [{"type": "text", "text": text}]
+
+
+def _paragraph(text, **fields):
+    return BlockOperation(operation="insert", type="paragraph", content=_runs(text), **fields)
+
+
 def _find(nodes, text):
     for node in nodes:
         if node["text"] == text:
@@ -68,24 +76,22 @@ class ProvenanceStoreTests(unittest.TestCase):
     # --- Basic provenance --------------------------------------------------
 
     def test_new_documents_default_to_manual_and_blocks_inherit(self) -> None:
-        create_document(self.db, "doc", "Doc", "rough", [], "One\n\nTwo", "t", "t")
+        create_document(self.db, "doc", "Doc", "rough", "One\n\nTwo", "t", "t")
         tree = document_tree(self.db, "doc")
         self.assertEqual(tree["provenance"], {"source": "manual"})
         self.assertEqual(
             tree["children"][0]["provenance"], {"source": "manual", "inherited": True}
         )
         self.assertIsNone(tree["children"][0]["revision"])
-        self.assertIsNone(tree["last_opened_at"])
+        self.assertNotIn("last_opened_at", tree)  # in /info; not part of the note's ETag
 
     def test_editor_inserts_are_manual_or_what_the_client_says_and_survive_undo(self) -> None:
-        create_document(self.db, "doc", "Doc", "rough", [], "One", "t", "t",
+        create_document(self.db, "doc", "Doc", "rough", "One", "t", "t",
                         provenance={"source": "capture"})
         tree = apply_transaction(self.db, "doc", [
-            BlockOperation(operation="insert", block_id="01J00000000000000000000001", text="typed"),
-            BlockOperation(
-                operation="insert", block_id="01J00000000000000000000002", text="pasted",
-                provenance={"source": "web", "source_url": "https://example.com/a"},
-            ),
+            _paragraph("typed", block_id="01J00000000000000000000001"),
+            _paragraph("pasted", block_id="01J00000000000000000000002",
+                       provenance={"source": "web", "source_url": "https://example.com/a"}),
         ], 0)
         typed, pasted = tree["children"][1], tree["children"][2]
         self.assertEqual(typed["provenance"], {"source": "manual"})
@@ -95,7 +101,7 @@ class ProvenanceStoreTests(unittest.TestCase):
 
         # Editing keeps provenance; the block's revision follows the edit.
         tree = apply_transaction(self.db, "doc", [
-            BlockOperation(operation="update", block_id=pasted["id"], text="pasted, edited"),
+            BlockOperation(operation="update", block_id=pasted["id"], content=_runs("pasted, edited")),
         ], 1)
         self.assertEqual(tree["children"][2]["provenance"]["source"], "web")
         self.assertEqual(tree["children"][2]["revision"], 2)
@@ -111,6 +117,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(tree["children"][2]["provenance"]["source_url"], "https://example.com/a")
         self.assertEqual(tree["children"][2]["revision"], 1)
 
+
     def test_client_provenance_is_validated_and_cannot_set_internal_fields(self) -> None:
         with self.assertRaises(provenance.ProvenanceError):
             provenance.normalize({"source": "Not A Kind"})
@@ -121,33 +128,13 @@ class ProvenanceStoreTests(unittest.TestCase):
             {"source": "paste"},
         )
 
-    def test_duplicate_and_split_record_their_origin_without_the_source_id(self) -> None:
-        self.page([SourceBlock("Alpha beta", external_id="{A}")])
-        document_id = self._page_id()
-        tree = document_tree(self.db, document_id)
-        original = tree["children"][0]
-        tree = apply_transaction(self.db, document_id, [
-            BlockOperation(operation="duplicate", block_id=original["id"]),
-        ], tree["revision"])
-        copy = tree["children"][1]
-        self.assertEqual(copy["provenance"]["source"], "onenote_import")
-        self.assertNotIn("external_id", copy["provenance"])
-        self.assertEqual(copy["provenance"]["origin"]["operation"], "duplicate")
-        self.assertEqual(copy["provenance"]["origin"]["block_id"], original["id"])
-        tree = apply_transaction(self.db, document_id, [
-            BlockOperation(operation="split", block_id=original["id"], split_at=5),
-        ], tree["revision"])
-        second = tree["children"][1]
-        self.assertEqual(second["text"], " beta")
-        self.assertEqual(second["provenance"]["origin"]["operation"], "split")
-        self.assertNotIn("external_id", second["provenance"])
 
     def test_move_into_keeps_each_blocks_source_and_records_the_old_note(self) -> None:
         from app import duplicates
 
-        create_document(self.db, "captured", "Captured", "rough", [], "Thought", "t", "t",
+        create_document(self.db, "captured", "Captured", "rough", "Thought", "t", "t",
                         provenance={"source": "capture"})
-        create_document(self.db, "target", "Target", "rough", [], "Body", "t", "t")
+        create_document(self.db, "target", "Target", "rough", "Body", "t", "t")
         duplicates.move_into(self.db, "captured", "target")
         tree = document_tree(self.db, "target")
         moved = tree["children"][1]
@@ -179,14 +166,13 @@ class ProvenanceStoreTests(unittest.TestCase):
         document_id = self._page_id()
         tree = document_tree(self.db, document_id)
         apply_transaction(self.db, document_id, [
-            BlockOperation(operation="insert", block_id="01J00000000000000000000003",
-                           text="Typed here", provenance={"source": "paste"}),
+            _paragraph("Typed here", block_id="01J00000000000000000000003", provenance={"source": "paste"}),
         ], tree["revision"])
         markdown = export_document_markdown(self.db, document_id)
         self.assertIn("source: onenote_import", markdown)
         self.assertIn("external_id: '{PAGE-1}'", markdown)
-        self.assertIn('<!-- fortress:block {"external_id":"{C}"', markdown)
-        self.assertIn("  <!-- fortress:block", markdown)  # nested child keeps its indent
+        self.assertIn('"provenance":{"external_id":"{C}","source":"onenote_import"}', markdown)
+        self.assertIn("  - Child <!-- fortress:block", markdown)  # nested child keeps its indent
         self.assertNotIn(document_id, markdown.split("---", 2)[2])
 
         other = self.root / "other"
@@ -198,9 +184,12 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(restored["provenance"]["source"], "onenote_import")
         self.assertEqual(restored["provenance"]["external_id"], "{PAGE-1}")
         self.assertEqual(restored["provenance"]["source_path"], "Work › Meetings › Meeting")
-        self.assertEqual(_texts(restored["children"]), ["# Agenda", "- Item", "```\ncode\n```", "Typed here"])
+        self.assertEqual(_texts(restored["children"]), ["Agenda", "Item", "code", "Typed here"])
+        # Block ids travel with the export.
+        self.assertEqual([node["id"] for node in restored["children"]],
+                         [node["id"] for node in document_tree(self.db, document_id)["children"]])
         child = restored["children"][1]["children"][0]
-        self.assertEqual(child["text"], "- Child")
+        self.assertEqual(child["text"], "Child")
         self.assertEqual(child["provenance"]["external_id"], "{C}")
         self.assertEqual(restored["children"][3]["provenance"], {"source": "paste"})
         # No comment line became a block, and a second export is identical.
@@ -213,6 +202,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         copy = document_tree(self.db, "copy")
         self.assertNotIn("external_id", copy["provenance"])
         self.assertEqual(copy["provenance"]["extra"]["copy_of_external_id"], "{PAGE-1}")
+
 
     def test_plain_markdown_imports_are_marked_markdown_import(self) -> None:
         (self.root / "note.md").write_text(
@@ -228,46 +218,41 @@ class ProvenanceStoreTests(unittest.TestCase):
     # --- Links follow renames ----------------------------------------------
 
     def test_note_links_show_the_current_title_after_a_rename(self) -> None:
-        create_document(self.db, "target", "Old title", "rough", [], "Target body", "t", "t")
-        create_document(self.db, "source", "Source", "rough", [], "", "t", "t")
+        create_document(self.db, "target", "Old title", "rough", "Target body", "t", "t")
+        create_document(self.db, "source", "Source", "rough", "", "t", "t")
         target_block = document_tree(self.db, "target")["children"][0]["id"]
         apply_transaction(self.db, "source", [
             BlockOperation(
-                operation="insert", block_id="01J00000000000000000000004",
-                text=f"See [[target|Old title]] and (( {target_block} ))",
-                content={"blocknote": [
-                    {"type": "link", "href": "[[target|Old title]]",
-                     "content": [{"type": "text", "text": "Old title", "styles": {}}]},
-                    {"type": "link", "href": "[[target|Old title]]",
-                     "content": [{"type": "text", "text": "custom words", "styles": {}}]},
-                ]},
+                operation="insert", block_id="01J00000000000000000000004", type="paragraph",
+                content=[
+                    {"type": "text", "text": "See "}, {"type": "docLink", "id": "target"},
+                    {"type": "text", "text": " and "}, {"type": "blockRef", "id": target_block},
+                    {"type": "text", "text": " or "},
+                    {"type": "link", "href": "https://example.com",
+                     "content": [{"type": "text", "text": "custom words"}]},
+                ],
             ),
             BlockOperation(
-                operation="insert", block_id="01J0000000000000000000000A",
-                text="Plain [[target|Old title]]",
+                operation="insert", block_id="01J0000000000000000000000A", type="paragraph",
+                content=[{"type": "text", "text": "Plain "}, {"type": "docLink", "id": "target"}],
             ),
         ], 0)
         rename_document(self.db, "target", "New | title")
         apply_transaction(self.db, "target", [
-            BlockOperation(operation="update", block_id=target_block, text="Edited target"),
+            BlockOperation(operation="update", block_id=target_block, content=_runs("Edited target")),
         ], 0)
         tree = document_tree(self.db, "source")
         node = tree["children"][0]
-        self.assertEqual(node["text"], f"See [[target|New title]] and (( {target_block} ))")
-        first, second = node["content"]["blocknote"]
-        self.assertEqual(first["href"], "[[target|New title]]")
-        self.assertEqual(first["content"][0]["text"], "New title")
-        self.assertEqual(second["content"][0]["text"], "custom words")
+        # Links are ids; their text is the target's current title and text.
+        self.assertEqual(node["text"], "See New | title and Edited target or custom words")
+        self.assertEqual(node["content"][1], {"type": "docLink", "id": "target"})
+        self.assertEqual(tree["children"][1]["text"], "Plain New | title")
         self.assertEqual(tree["resolved_links"]["documents"], {"target": {"title": "New | title"}})
         self.assertEqual(tree["resolved_links"]["blocks"][target_block]["text"], "Edited target")
-        # Stored text is unchanged (no edit to the linking note), and backlinks hold.
-        with connection_scope(self.db) as connection:
-            stored = connection.execute(
-                "SELECT text FROM blocks WHERE id = '01J00000000000000000000004'"
-            ).fetchone()["text"]
-        self.assertIn("Old title", stored)
-        self.assertIn("[[target|New title]]", export_document_markdown(self.db, "source"))
+        self.assertIn("New | title", [hit["text"] for hit in block_store.search_blocks(self.db, "title")][0])
+        self.assertIn("[[target]]", export_document_markdown(self.db, "source"))
         self.assertEqual(len(block_store.document_backlinks(self.db, "target")), 3)
+
 
     # --- Living documents ----------------------------------------------------
 
@@ -318,10 +303,11 @@ class ProvenanceStoreTests(unittest.TestCase):
         tree = document_tree(self.db, first.document_id)
         ids = {node["text"]: node["id"] for node in tree["children"]}
         # Another note links to the page and to one of its blocks.
-        create_document(self.db, "linker", "Linker", "rough", [], "", "t", "t")
+        create_document(self.db, "linker", "Linker", "rough", "", "t", "t")
         apply_transaction(self.db, "linker", [BlockOperation(
-            operation="insert", block_id="01J00000000000000000000005",
-            text=f"[[{first.document_id}|Meeting]] (( {ids['Old text']} ))",
+            operation="insert", block_id="01J00000000000000000000005", type="paragraph",
+            content=[{"type": "docLink", "id": first.document_id}, {"type": "text", "text": " "},
+                     {"type": "blockRef", "id": ids["Old text"]}],
         )], 0)
 
         result = self.page([
@@ -338,8 +324,9 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(tree["children"][2]["id"], ids["Old text"])
         self.assertEqual(tree["children"][2]["revision"], tree["revision"])
         self.assertEqual(len(block_store.document_backlinks(self.db, first.document_id)), 2)
+        self.assertEqual(document_tree(self.db, "linker")["children"][0]["text"], "Meeting New text")
         self.assertTrue(block_store.fts_is_consistent(self.db))
-        self.assertEqual(len(block_store.search_blocks(self.db, "New text")), 1)
+        self.assertEqual(len(block_store.search_blocks(self.db, "Keep me")), 1)
         self.assertEqual(tree["provenance"]["source_modified_at"], "2020-02-01T00:00:00+00:00")
         self.assertIn("synced_at", tree["provenance"])
 
@@ -350,12 +337,13 @@ class ProvenanceStoreTests(unittest.TestCase):
         tree = redo_transaction(self.db, first.document_id, tree["revision"])
         self.assertEqual(_texts(tree["children"]), ["New first", "Keep me", "New text"])
 
+
     def test_local_edits_win_and_conflicts_are_recorded_then_resolved(self) -> None:
         first = self.page([SourceBlock("Shared", external_id="{A}"), SourceBlock("Other", external_id="{B}")])
         tree = document_tree(self.db, first.document_id)
         block_id = tree["children"][0]["id"]
         tree = apply_transaction(self.db, first.document_id, [
-            BlockOperation(operation="update", block_id=block_id, text="Shared, edited here"),
+            BlockOperation(operation="update", block_id=block_id, content=_runs("Shared, edited here")),
         ], tree["revision"])
 
         # The source didn't change this block: nothing to report.
@@ -370,10 +358,12 @@ class ProvenanceStoreTests(unittest.TestCase):
         tree = document_tree(self.db, first.document_id)
         node = tree["children"][0]
         self.assertEqual(node["text"], "Shared, edited here")
-        self.assertEqual(node["provenance"]["conflict"]["source_markdown"], "Shared, edited in OneNote")
+        self.assertNotIn("conflict", node["provenance"])  # sync state is not provenance
         info = document_info(self.db, first.document_id)
         self.assertEqual(info["conflicts"][0]["kind"], "block")
         self.assertEqual(info["conflicts"][0]["local_text"], "Shared, edited here")
+        self.assertEqual(info["conflicts"][0]["source_text"], "Shared, edited in OneNote")
+        self.assertEqual(info["conflicts"][0]["source"]["type"], "paragraph")
         self.assertEqual(info["sync"]["blocks_edited_here"], 1)
 
         # Same source version again: still one conflict, not a new one.
@@ -384,18 +374,19 @@ class ProvenanceStoreTests(unittest.TestCase):
         tree = sources.resolve_block_conflict(self.db, first.document_id, block_id, "source")
         node = tree["children"][0]
         self.assertEqual(node["text"], "Shared, edited in OneNote")
-        self.assertNotIn("conflict", node["provenance"])
+        self.assertEqual(document_info(self.db, first.document_id)["conflicts"], [])
         self.assertEqual(document_info(self.db, first.document_id)["sync"]["blocks_edited_here"], 0)
         # Now untouched again: the next source change applies.
         self.page([SourceBlock("Third version", external_id="{A}"), SourceBlock("Other", external_id="{B}")])
         self.assertEqual(document_tree(self.db, first.document_id)["children"][0]["text"], "Third version")
+
 
     def test_keeping_the_local_version_silences_that_source_version(self) -> None:
         first = self.page([SourceBlock("Shared", external_id="{A}")])
         tree = document_tree(self.db, first.document_id)
         block_id = tree["children"][0]["id"]
         apply_transaction(self.db, first.document_id, [
-            BlockOperation(operation="update", block_id=block_id, text="Mine"),
+            BlockOperation(operation="update", block_id=block_id, content=_runs("Mine")),
         ], tree["revision"])
         self.page([SourceBlock("Theirs", external_id="{A}")])
         sources.resolve_block_conflict(self.db, first.document_id, block_id, "local")
@@ -404,6 +395,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         newer = self.page([SourceBlock("Theirs v2", external_id="{A}")])
         self.assertEqual(len(newer.conflicts), 1)
         self.assertEqual(document_tree(self.db, first.document_id)["children"][0]["text"], "Mine")
+
 
     def test_local_additions_stay_put_and_local_deletions_stick(self) -> None:
         first = self.page([
@@ -414,10 +406,8 @@ class ProvenanceStoreTests(unittest.TestCase):
         tree = document_tree(self.db, first.document_id)
         a, b, c = (node["id"] for node in tree["children"])
         tree = apply_transaction(self.db, first.document_id, [
-            BlockOperation(operation="insert", block_id="01J00000000000000000000006",
-                           text="mine after A", position=1),
-            BlockOperation(operation="insert", block_id="01J00000000000000000000007",
-                           text="mine under C", parent_id=c),
+            _paragraph("mine after A", block_id="01J00000000000000000000006", after_id=a),
+            _paragraph("mine under C", block_id="01J00000000000000000000007", parent_id=c),
             BlockOperation(operation="delete", block_id=b),
         ], tree["revision"])
         result = self.page([
@@ -431,6 +421,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(_texts(tree["children"]), ["Z", "C", "A", "mine after A"])
         self.assertEqual(_texts(tree["children"][1]["children"]), ["mine under C"])
 
+
     def test_blocks_removed_from_the_source_go_unless_edited_here(self) -> None:
         first = self.page([
             SourceBlock("Stay", external_id="{A}"),
@@ -440,28 +431,29 @@ class ProvenanceStoreTests(unittest.TestCase):
         tree = document_tree(self.db, first.document_id)
         edited = tree["children"][2]["id"]
         apply_transaction(self.db, first.document_id, [
-            BlockOperation(operation="update", block_id=edited, text="Edited locally"),
+            BlockOperation(operation="update", block_id=edited, content=_runs("Edited locally")),
         ], tree["revision"])
         self.page([SourceBlock("Stay", external_id="{A}")])
         tree = document_tree(self.db, first.document_id)
         self.assertEqual(_texts(tree["children"]), ["Stay", "Edited locally"])
-        self.assertTrue(tree["children"][1]["provenance"]["source_removed"])
         self.assertEqual(
             document_info(self.db, first.document_id)["sync"]["blocks_removed_in_source"], [edited]
         )
 
+
     def test_nested_source_blocks_and_markdown_bodies(self) -> None:
         result = self.page("# Title\n\n- Parent\n  - Child\n\nTail")
         tree = document_tree(self.db, result.document_id)
-        self.assertEqual(_texts(tree["children"]), ["# Title", "- Parent", "Tail"])
-        self.assertEqual(_texts(tree["children"][1]["children"]), ["- Child"])
+        self.assertEqual(_texts(tree["children"]), ["Title", "Parent", "Tail"])
+        self.assertEqual(_texts(tree["children"][1]["children"]), ["Child"])
         child_id = tree["children"][1]["children"][0]["id"]
         # Content-derived ids: an unchanged block keeps its Fortress id.
         self.assertEqual(self.page("# Title\n\n- Parent\n  - Child\n\nTail").status, "unchanged")
         self.page("# Title\n\n- Parent\n  - Child\n\nNew tail")
         tree = document_tree(self.db, result.document_id)
         self.assertEqual(tree["children"][1]["children"][0]["id"], child_id)
-        self.assertEqual(_texts(tree["children"]), ["# Title", "- Parent", "New tail"])
+        self.assertEqual(_texts(tree["children"]), ["Title", "Parent", "New tail"])
+
 
     def test_title_and_folder_follow_the_source_unless_changed_here(self) -> None:
         first = self.page([SourceBlock("x", external_id="{A}")],
@@ -508,15 +500,17 @@ class ProvenanceStoreTests(unittest.TestCase):
     # --- Metadata -------------------------------------------------------------
 
     def test_document_info_counts(self) -> None:
-        create_document(self.db, "a", "A", "rough", [], "Hello world, it's me.\n\nSecond block", "t", "t")
-        create_document(self.db, "b", "B", "rough", [], "", "t", "t")
+        create_document(self.db, "a", "A", "rough", "Hello world, it's me.\n\nSecond block", "t", "t")
+        create_document(self.db, "b", "B", "rough", "", "t", "t")
         a_block = document_tree(self.db, "a")["children"][0]["id"]
         apply_transaction(self.db, "b", [BlockOperation(
-            operation="insert", block_id="01J00000000000000000000008",
-            text=f"[[a|A]] and (( {a_block} ))",
+            operation="insert", block_id="01J00000000000000000000008", type="paragraph",
+            content=[{"type": "docLink", "id": "a"}, {"type": "text", "text": " and "},
+                     {"type": "blockRef", "id": a_block}],
         )], 0)
         apply_transaction(self.db, "a", [BlockOperation(
-            operation="insert", block_id="01J00000000000000000000009", text="[[b|B]]",
+            operation="insert", block_id="01J00000000000000000000009", type="paragraph",
+            content=[{"type": "docLink", "id": "b"}],
         )], 0)
         info = document_info(self.db, "a")
         # Hello world it's me / Second block / B (a link counts as its label).
@@ -532,18 +526,18 @@ class ProvenanceStoreTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             document_info(self.db, "missing")
 
+
     # --- Migration and backups -------------------------------------------------
 
     def test_migration_backfills_capture_markdown_import_and_manual(self) -> None:
-        initialize(self.db)
-        folder = block_store.create_folder(self.db, "Uncategorized")
-        create_document(self.db, "captured", "C", "rough", [], "x", "t", "t", folder_id=folder["id"])
-        create_document(self.db, "imported", "I", "rough", [], "x", "t", "t")
-        create_document(self.db, "written", "W", "rough", [], "x", "t", "t")
+        # A schema-12 database written by the code of that time.
+        with closing(sqlite3.connect(self.db)) as connection:
+            connection.executescript(
+                (Path(__file__).parent / "fixtures" / "legacy_v12.sql").read_text(encoding="utf-8")
+            )
         backup = self.root / ".fortress-import-backups" / "20260101T000000000000Z"
         backup.mkdir(parents=True)
         (backup / "imported.md").write_text("x", encoding="utf-8")
-        self._downgrade_to_v12()
 
         initialize(self.db)
         sources_by_id = {
@@ -557,23 +551,10 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(tree["children"][0]["provenance"]["source"], "capture")
         with connection_scope(self.db) as connection:
             self.assertEqual(
-                connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 13
+                connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 14
             )
 
-    def _downgrade_to_v12(self) -> None:
-        with closing(sqlite3.connect(self.db)) as connection:
-            connection.execute("DROP INDEX documents_source_key")
-            connection.execute("DROP INDEX folders_source_key")
-            for table, columns in (
-                ("documents", ["provenance_json", "source_kind", "source_external_id",
-                               "sync_json", "last_opened_at"]),
-                ("blocks", ["provenance_json", "revision"]),
-                ("folders", ["source_kind", "source_external_id", "source_name"]),
-            ):
-                for column in columns:
-                    connection.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
-            connection.execute("UPDATE schema_migrations SET version = 12 WHERE version = 13")
-            connection.commit()
+
 
     def test_backup_and_restore_keep_provenance(self) -> None:
         first = self.page([SourceBlock("Saved", external_id="{A}")])
@@ -624,7 +605,12 @@ class ProvenanceApiTests(unittest.TestCase):
         ).json()
         tree = self.client.get(f"/api/block-documents/{captured['document_id']}").json()
         self.assertEqual(tree["provenance"], {"source": "capture", "source_url": "https://example.com/x"})
-        self.assertIsNotNone(tree["last_opened_at"])
+        self.assertEqual(
+            self.client.post(f"/api/block-documents/{captured['document_id']}/opened").status_code,
+            204,
+        )
+        info = self.client.get(f"/api/block-documents/{captured['document_id']}/info").json()
+        self.assertIsNotNone(info["last_opened_at"])
         navigation = self.client.get("/api/navigation").json()
         self.assertEqual(navigation["recent"][0]["source"], "capture")
 

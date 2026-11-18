@@ -20,8 +20,7 @@ from app.block_store import (
 
 def _document(database: Path, document_id: str, blocks: int) -> None:
     create_document(
-        database, document_id, document_id, "rough", [],
-        "\n\n".join(f"Paragraph {index} of {document_id}" for index in range(blocks)),
+        database, document_id, document_id, "rough", "\n\n".join(f"Paragraph {index} of {document_id}" for index in range(blocks)),
         "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
     )
 
@@ -64,7 +63,7 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(backfill_assets(self.database, media), 1)
         with (
             patch.object(block_store, "rebuild_fts") as rebuild,
-            patch.object(block_store, "_rebuild_document_assets") as relink,
+            patch.object(block_store, "rebuild_document_derived") as relink,
             patch.object(Path, "read_bytes", side_effect=AssertionError("re-read")),
         ):
             self.assertEqual(backfill_assets(self.database, media), 1)
@@ -122,11 +121,12 @@ class LargeDocumentTransactionTests(unittest.TestCase):
         target = self.tree["children"][10]["id"]
         with (
             patch.object(
-                block_store, "_replace_references", wraps=block_store._replace_references
+                block_store, "_refresh_row", wraps=block_store._refresh_row
             ) as references,
             patch.object(block_store, "_refresh_fts", wraps=block_store._refresh_fts) as fts,
         ):
-            self.apply(BlockOperation(operation="update", block_id=target, text="Edited"))
+            self.apply(BlockOperation(operation="update", block_id=target,
+                                      content=[{"type": "text", "text": "Edited"}]))
         self.assertLessEqual(references.call_count, 3)
         self.assertLessEqual(fts.call_count, 3)
         self.assertEqual(
@@ -141,11 +141,13 @@ class LargeDocumentTransactionTests(unittest.TestCase):
         mentioning = self.tree["children"][1]["id"]
         new_id = "01J00000000000000000000077"
         # A reference typed before its target exists...
-        self.apply(BlockOperation(operation="update", block_id=mentioning,
-                                  text=f"see (({new_id}))"))
+        self.apply(BlockOperation(operation="update", block_id=mentioning, content=[
+            {"type": "text", "text": "see "}, {"type": "blockRef", "id": new_id},
+        ]))
         self.assertEqual(block_store.document_backlinks(self.database, "big"), [])
         # ...is linked once the target is inserted.
-        self.apply(BlockOperation(operation="insert", block_id=new_id, text=f"(({target}))"))
+        self.apply(BlockOperation(operation="insert", block_id=new_id, type="paragraph",
+                                  content=[{"type": "blockRef", "id": target}]))
         links = sorted(
             (link["source_block_id"], link["target_block_id"])
             for link in block_store.document_backlinks(self.database, "big")
@@ -234,7 +236,7 @@ class ApiWorkTests(unittest.TestCase):
             f"/api/block-documents/{self.note['id']}/transactions?response={response}",
             json={"base_revision": revision, "operations": [{
                 "operation": "update", "block_id": self.note["children"][0]["id"],
-                "text": text,
+                "content": [{"type": "text", "text": text}],
             }]},
         )
 
@@ -273,9 +275,6 @@ class ApiWorkTests(unittest.TestCase):
     def test_async_routes_do_not_run_blocking_work_on_the_event_loop(self) -> None:
         import asyncio
 
-        from app import llm
-        from app.models import BlockReviewResponse
-
         on_loop: list[bool] = []
 
         def running_loop() -> bool:
@@ -286,34 +285,17 @@ class ApiWorkTests(unittest.TestCase):
             return True
 
         real_register = block_store.register_asset
-        real_subtree = block_store.document_subtree
 
         def register(*args, **kwargs):
             on_loop.append(running_loop())
             return real_register(*args, **kwargs)
 
-        def subtree(*args, **kwargs):
-            on_loop.append(running_loop())
-            return real_subtree(*args, **kwargs)
-
-        async def review(kind, block_id, text, content):
-            return BlockReviewResponse(kind=kind, summary="", block_id=block_id)
-
-        with (
-            patch.object(block_store, "register_asset", register),
-            patch.object(block_store, "document_subtree", subtree),
-            patch.object(llm, "review_block", review),
-        ):
+        with patch.object(block_store, "register_asset", register):
             uploaded = self.client.post(
                 "/api/files", files={"file": ("a.pdf", b"%PDF-1.4 data", "application/pdf")}
             )
-            reviewed = self.client.post(
-                f"/api/block-documents/{self.note['id']}/blocks/"
-                f"{self.note['children'][0]['id']}/review"
-            )
         self.assertEqual(uploaded.status_code, 200, uploaded.text)
-        self.assertEqual(reviewed.status_code, 200, reviewed.text)
-        self.assertEqual(on_loop, [False, False])
+        self.assertEqual(on_loop, [False])
 
     def test_uploads_are_streamed_to_disk_with_their_hash(self) -> None:
         import hashlib
@@ -343,7 +325,7 @@ class ApiWorkTests(unittest.TestCase):
             "/api/block-documents",
             json={"title": "Mine", "body": "kyoto temples gardens autumn trip"},
         ).json()
-        url = f"/api/notes/{mine['id']}/related"
+        url = f"/api/block-documents/{mine['id']}/related"
         calls: list[int] = []
 
         def scores(texts, docs):
@@ -354,7 +336,6 @@ class ApiWorkTests(unittest.TestCase):
             patch.object(embeddings, "_get_model", lambda: None),
             patch.object(embeddings._cache, "failed", True),
             patch.object(search.relevance, "related_note_scores", scores),
-            patch.object(self.documents, "get_note", side_effect=AssertionError("built")),
             patch.object(block_store, "document_tree", side_effect=AssertionError("built")),
         ):
             first = self.client.get(url).json()
@@ -365,10 +346,10 @@ class ApiWorkTests(unittest.TestCase):
                 f"/api/block-documents/{other['id']}/transactions",
                 json={"base_revision": other["revision"], "operations": [{
                     "operation": "update", "block_id": other["children"][0]["id"],
-                    "text": "unrelated words entirely"}]},
+                    "content": [{"type": "text", "text": "unrelated words entirely"}]}]},
             )
             self.assertEqual(self.client.get(url).json(), [])
-            self.assertEqual(self.client.get("/api/notes/missing/related").status_code, 404)
+            self.assertEqual(self.client.get("/api/block-documents/missing/related").status_code, 404)
         search._related_cache.clear()
 
     def test_concurrent_transactions_on_one_note_conflict_cleanly(self) -> None:
@@ -381,7 +362,8 @@ class ApiWorkTests(unittest.TestCase):
             return self.client.post(
                 f"/api/block-documents/{self.note['id']}/transactions",
                 json={"base_revision": revision, "operations": [{
-                    "operation": "update", "block_id": block, "text": f"writer {number}"}]},
+                    "operation": "update", "block_id": block,
+                    "content": [{"type": "text", "text": f"writer {number}"}]}]},
             ).status_code
 
         with ThreadPoolExecutor(8) as pool:

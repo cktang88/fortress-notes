@@ -2,38 +2,26 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 NoteStatus = Literal["rough", "polished"]
-ReviewKind = Literal["factcheck", "object"]
-BlockReviewContextKind = Literal["current", "selected", "document", "linked"]
-BlockOperationKind = Literal[
-    "insert", "update", "move", "delete", "set_attrs", "set_user_attrs",
-    "duplicate", "split", "merge"
-]
+BlockOperationKind = Literal["insert", "update", "move", "delete"]
 
 
 class NoteSummary(BaseModel):
     id: str
     title: str
     status: NoteStatus
-    tags: list[str] = []
     updated_at: datetime
     snippet: str = ""
 
 
-class Note(NoteSummary):
-    body: str
-    created_at: datetime
-    # Cached VLM caption + OCR text per referenced image id (mirrors the sidecar cache).
-    images: dict[str, str] = {}
 
 
 class NoteCreate(BaseModel):
     title: str = ""
     body: str = ""
     status: NoteStatus = "rough"
-    tags: list[str] = []
     folder_id: str | None = None
     # Where the note came from (see app/provenance.py), e.g.
     # {"source": "ai", "extra": {"question": "..."}} for a saved Ask answer or
@@ -42,36 +30,43 @@ class NoteCreate(BaseModel):
 
 
 class NoteUpdate(BaseModel):
+    # The body changes through block transactions; anything else is refused (422).
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = None
-    body: str | None = None
     status: NoteStatus | None = None
-    tags: list[str] | None = None
 
 
 class BlockOperation(BaseModel):
+    """One operation of a block transaction (docs/block-model.md §4).
+
+    Unknown fields (``text``, ``expected_updated_at``, ...) are ignored.
+    """
+
     operation: BlockOperationKind
     block_id: str | None = None
+    # Placement (insert, move): after or before a sibling, else last child of parent_id.
     parent_id: str | None = None
+    after_id: str | None = None
+    before_id: str | None = None
+    # Deprecated (the Mac app's current requests): index among the parent's children.
     position: int | None = Field(default=None, ge=0)
     type: str | None = None
+    # Insert: the block's attrs. Update: a patch (null deletes a key).
     attrs: dict[str, Any] | None = None
+    # Update: a patch of the person's own attributes (null deletes a key).
     user_attrs: dict[str, Any] | None = None
-    content: dict[str, Any] | None = None
-    text: str | None = None
-    split_at: int | None = Field(default=None, ge=0)
-    # insert/update: where the block's content came from (pasted, web, ai, ...).
-    # Omitted on insert means typed here ("manual"); omitted on update keeps it.
+    # Inline nodes (text types). The Mac app's current {"blocknote": runs} is read too.
+    content: list[dict[str, Any]] | dict[str, Any] | None = None
+    # Structured data (math, html).
+    payload: dict[str, Any] | None = None
+    # Insert: where the content came from (pasted, web, ai, ...; default manual).
+    # Update: merged into the block's provenance.
     provenance: dict[str, Any] | None = None
-    # For split, the offset in the block text in UTF-16 code units (JavaScript string
-    # indices, as the browser counts; an emoji is 2). For duplicate/merge,
-    # position keeps its existing sibling-position meaning.
-    expected_updated_at: str | None = None
 
     @model_validator(mode="after")
     def validate_insert_block_id(self) -> "BlockOperation":
-        # BlockNote currently supplies UUIDs. The server may omit the ID and
-        # generate a ULID; accept both formats so validation doesn't rewrite
-        # client IDs or constrain IDs already stored for other operations.
+        # Clients may supply ULIDs or UUIDs; the server generates a ULID when omitted.
         if self.operation == "insert" and self.block_id is not None:
             if (
                 len(self.block_id) == 26
@@ -146,13 +141,6 @@ class RelatedResult(SearchResult):
     matched_block_text: str = ""
 
 
-class BlockSearchResult(BaseModel):
-    block_id: str
-    document_id: str
-    document_title: str
-    block_type: str
-    text: str
-    score: float = Field(description="Higher is more relevant")
 
 
 class BlockLinkTarget(BaseModel):
@@ -172,60 +160,18 @@ class Backlink(BaseModel):
     target_block_id: str | None = None
 
 
-class ReviewItem(BaseModel):
-    label: str = ""
-    detail: str
-    quote: str = Field(default="", description="Verbatim text from the note this refers to")
-    severity: Literal["high", "medium", "low"] = "medium"
 
 
-class ReviewResponse(BaseModel):
-    kind: ReviewKind
-    summary: str
-    items: list[ReviewItem] = []
 
 
-class BlockReviewItem(ReviewItem):
-    block_id: str
 
 
-class BlockReviewResponse(BaseModel):
-    kind: ReviewKind
-    summary: str
-    block_id: str
-    items: list[BlockReviewItem] = []
 
 
-class BlockReviewContextRequest(BaseModel):
-    kind: ReviewKind
-    context: BlockReviewContextKind
-    block_ids: list[str] = []
-
-    @model_validator(mode="after")
-    def validate_context_ids(self) -> "BlockReviewContextRequest":
-        if self.context in ("current", "linked") and len(self.block_ids) != 1:
-            raise ValueError(f"{self.context} context requires exactly one block_id")
-        if self.context == "selected" and not self.block_ids:
-            raise ValueError("selected context requires at least one block_id")
-        if len(set(self.block_ids)) != len(self.block_ids):
-            raise ValueError("block_ids must not contain duplicates")
-        if self.context == "document" and self.block_ids:
-            raise ValueError("document context does not accept block_ids")
-        return self
 
 
-class BlockReviewContextResponse(BaseModel):
-    kind: ReviewKind
-    context: BlockReviewContextKind
-    summary: str
-    items: list[BlockReviewItem] = []
 
 
-class SavedSearchCreate(BaseModel):
-    name: str = Field(default="", max_length=100)
-    query: str = Field(min_length=1, max_length=500)
-    mode: Literal["text", "embedding"] = "text"
-    filters: dict[str, str] = {}
 
 
 class AskRequest(BaseModel):

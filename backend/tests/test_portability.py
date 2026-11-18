@@ -2,63 +2,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.block_store import create_document, delete_document, document_tree
+from app.block_store import create_document, document_tree
 from app.portability import (
-    export_all_markdown,
     export_document_markdown,
     import_markdown_directory,
-    preview_markdown_directory,
 )
 
 
 class PortabilityTests(unittest.TestCase):
-    def test_preview_reports_ready_skipped_conflict_and_malformed_files_without_importing(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database = root / ".fortress.sqlite3"
-            create_document(
-                database,
-                "existing",
-                "Existing",
-                "rough",
-                [],
-                "Stored body",
-                "2026-01-01T00:00:00+00:00",
-                "2026-01-01T00:00:00+00:00",
-            )
-            create_document(
-                database,
-                "deleted",
-                "Deleted",
-                "rough",
-                [],
-                "",
-                "2026-01-01T00:00:00+00:00",
-                "2026-01-01T00:00:00+00:00",
-            )
-            delete_document(database, "deleted")
-            (root / "new.md").write_text("A new document\n", encoding="utf-8")
-            (root / "existing.md").write_text("Should be skipped\n", encoding="utf-8")
-            (root / "deleted.md").write_text("Cannot replace deleted document\n", encoding="utf-8")
-            (root / "broken.md").write_bytes(b"\xff not valid UTF-8\n")
-
-            preview = preview_markdown_directory(database, root)
-
-            self.assertEqual(
-                [(item.document_id, item.status) for item in preview.items],
-                [
-                    ("broken", "error"),
-                    ("deleted", "conflict"),
-                    ("existing", "skipped"),
-                    ("new", "ready"),
-                ],
-            )
-            self.assertEqual((preview.ready_count, preview.skipped_count), (1, 1))
-            self.assertEqual((preview.conflict_count, preview.error_count), (1, 1))
-            self.assertIsNone(document_tree(database, "new"))
-            self.assertFalse((root / ".fortress-import-backups").exists())
-
-    def test_exports_nested_blocks_without_sqlite_ids(self) -> None:
+    def test_exports_nested_blocks_with_their_block_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             create_document(
@@ -66,7 +18,6 @@ class PortabilityTests(unittest.TestCase):
                 "guide",
                 "Guide",
                 "polished",
-                ["docs"],
                 "# Guide\n\n- Parent\n  - Child\n\nAfter",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-02T00:00:00+00:00",
@@ -78,8 +29,8 @@ class PortabilityTests(unittest.TestCase):
 
             self.assertIn("title: Guide", markdown)
             self.assertIn("  - Child", markdown)
-            self.assertNotIn(tree["children"][0]["id"], markdown)
-            self.assertEqual(set(export_all_markdown(database)), {"guide"})
+            # Ids travel in Fortress comments, so a re-import keeps links working.
+            self.assertIn(f'# Guide <!-- fortress:block {{"id":"{tree["children"][0]["id"]}"}} -->', markdown)
 
     def test_export_import_round_trip_preserves_document_and_block_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -91,7 +42,6 @@ class PortabilityTests(unittest.TestCase):
                 "round-trip",
                 "Round trip",
                 "polished",
-                ["portable", "notes"],
                 "# Heading\n\nParagraph with **formatting**.\n\n- First\n  - Nested\n- Second",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-02T00:00:00+00:00",
@@ -110,13 +60,13 @@ class PortabilityTests(unittest.TestCase):
             self.assertEqual(imported_tree["status"], source_tree["status"])
             # Tags were removed from the product: not exported, ignored on import.
             self.assertNotIn("tags:", markdown)
-            self.assertEqual(imported_tree["tags"], [])
+            self.assertNotIn("tags", imported_tree)
             self.assertEqual(
                 _block_shape(imported_tree["children"]),
                 _block_shape(source_tree["children"]),
             )
 
-    def test_empty_document_exports_and_imports_with_no_blocks(self) -> None:
+    def test_empty_document_imports_with_one_empty_paragraph(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source_database = root / "source.sqlite3"
@@ -126,7 +76,6 @@ class PortabilityTests(unittest.TestCase):
                 "empty",
                 "Empty",
                 "rough",
-                [],
                 "",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -141,7 +90,11 @@ class PortabilityTests(unittest.TestCase):
             imported_tree = document_tree(imported_database, "empty")
             assert imported_tree is not None
             self.assertEqual(imported_tree["title"], "Empty")
-            self.assertEqual(imported_tree["children"], [])
+            # Something to type into, created at import (reads never write).
+            self.assertEqual(
+                [(block["type"], block["text"]) for block in imported_tree["children"]],
+                [("paragraph", "")],
+            )
 
     def test_import_creates_backups_and_preserves_originals(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -160,7 +113,7 @@ class PortabilityTests(unittest.TestCase):
             tree = document_tree(database, "imported")
             assert tree is not None
             self.assertEqual(tree["title"], "Imported")
-            self.assertEqual(tree["tags"], [])
+            self.assertNotIn("tags", tree)
 
     def test_repeated_import_reports_existing_document_and_makes_new_backup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -231,7 +184,7 @@ class NestedBlockRoundTripTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             create_document(
-                root / "0.sqlite3", "doc", "Doc", "rough", [], body,
+                root / "0.sqlite3", "doc", "Doc", "rough", body,
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             first_tree = document_tree(root / "0.sqlite3", "doc")
@@ -251,12 +204,10 @@ class NestedBlockRoundTripTests(unittest.TestCase):
             item = first_tree["children"][0]
             self.assertEqual(
                 [child["text"] for child in item["children"][:2]],
-                [
-                    "```bash\npip install x\n    indented arg\n```",
-                    "A second paragraph\nover two lines",
-                ],
+                ["pip install x\n    indented arg", "A second paragraph\nover two lines"],
             )
-            self.assertEqual(item["children"][2]["children"][0]["text"], "```\ndeep code\n```")
+            self.assertEqual(item["children"][0]["attrs"], {"language": "bash"})
+            self.assertEqual(item["children"][2]["children"][0]["text"], "deep code")
 
 
 def _block_shape(blocks: list[dict]) -> list[tuple[str, str, list]]:
