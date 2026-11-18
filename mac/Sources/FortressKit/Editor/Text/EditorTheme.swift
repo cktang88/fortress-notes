@@ -47,7 +47,8 @@ struct EditorTheme: Sendable {
         case .heading3: (16 * scale, 4 * scale)
         case .bullet, .numbered, .check: (0, 4 * scale)
         case .code: ((8 + 10) * scale, (12 + 10) * scale)
-        case .image, .embed, .file: (6 * scale, 14 * scale)
+        case .image, .embed: (14 * scale, 18 * scale)
+        case .file: (6 * scale, 12 * scale)
         case .divider: (6 * scale, 10 * scale)
         default: (0, 10 * scale)
         }

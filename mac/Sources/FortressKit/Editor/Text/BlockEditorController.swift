@@ -137,7 +137,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard let manager = textView.textLayoutManager, let contentManager = manager.textContentManager,
               let start = contentManager.location(contentManager.documentRange.location, offsetBy: range.location)
         else { textView.scrollRangeToVisible(range); return }
-        manager.ensureLayout(for: NSTextRange(location: start))
+        let end = contentManager.location(start, offsetBy: range.length) ?? start
+        manager.ensureLayout(for: NSTextRange(location: contentManager.documentRange.location, end: end) ?? NSTextRange(location: start))
+        textView.layoutSubtreeIfNeeded()
         guard let fragment = manager.textLayoutFragment(for: start) else { textView.scrollRangeToVisible(range); return }
         let frame = fragment.layoutFragmentFrame.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
         let visible = scrollView.contentView.bounds.height
