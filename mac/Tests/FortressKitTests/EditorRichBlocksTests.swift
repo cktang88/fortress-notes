@@ -205,6 +205,23 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         #expect(result.parent[operations.first?.blockId ?? ""] == .some("01M7ONENOTEBLOCK0000000005"))
     }
 
+    @Test func tableRowsFitTheirText() throws {
+        let document = try RichPage.load()
+        let (controller, _) = editor(document)
+        let table = try #require(live(controller, TableBlockController.self))
+        let height = table.height(forWidth: 640)
+        let cell = table.cells[1][1]
+        var fragments: [String] = []
+        cell.textLayoutManager?.enumerateTextLayoutFragments(from: cell.textLayoutManager!.documentRange.location, options: [.ensuresLayout]) {
+            fragments.append("\($0.layoutFragmentFrame)")
+            return true
+        }
+        let info = "rows \(table.rowEdges) columns \(table.columnEdges) cell frame \(cell.frame) container \(String(describing: cell.textContainer?.size)) fragments \(fragments) fitting \(cell.fittingTextHeight(width: cell.frame.width))"
+        #expect(height < 200, "\(info)")
+        #expect(table.rowEdges.count == 4)
+        #expect(table.rowEdges[1] < 50, "\(info)")
+    }
+
     @Test func columnsLayOutSideBySide() throws {
         let document = try RichPage.load()
         let (controller, _) = editor(document)
