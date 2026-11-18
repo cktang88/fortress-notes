@@ -424,35 +424,30 @@ async def start_onenote_import(request: Request):
         length = request.headers.get("content-length")
         if length and length.isdigit() and int(length) > MAX_ONENOTE_UPLOAD_BYTES + 1024 * 1024:
             raise HTTPException(413, "The file is larger than 2 GB.")
-        form = await request.form()
-        upload = form.get("file")
-        folder_id = str(form.get("folder_id") or "") or None
-        if upload is None or isinstance(upload, str):
-            raise HTTPException(400, "Send the OneNote export as the multipart field 'file'.")
-        name = assets.safe_filename(upload.filename or "export.zip")
-        suffix = Path(name).suffix.lower()
-        if suffix not in _ONENOTE_UPLOAD_SUFFIXES:
-            raise HTTPException(
-                415, "Choose a OneNote export: a .zip, .onepkg or .one file."
-            )
-        _check_import_folder(folder_id)
-        owned = onenote_import.imports_dir(settings.notes_path) / f"{job_id}-upload"
-        owned.mkdir(parents=True, exist_ok=True)
-        input_path = owned / f"export{suffix}"
-        size = 0
-        try:
-            with input_path.open("wb") as handle:
-                while chunk := await upload.read(_UPLOAD_CHUNK):
-                    size += len(chunk)
-                    if size > MAX_ONENOTE_UPLOAD_BYTES:
-                        raise HTTPException(413, "The file is larger than 2 GB.")
-                    handle.write(chunk)
-        except BaseException:
-            shutil.rmtree(owned, ignore_errors=True)
-            raise
-        finally:
-            await upload.close()
-        input_name = name
+        async with request.form() as form:
+            upload = form.get("file")
+            folder_id = str(form.get("folder_id") or "") or None
+            if upload is None or isinstance(upload, str):
+                raise HTTPException(400, "Send the OneNote export as the multipart field 'file'.")
+            input_name = assets.safe_filename(upload.filename or "export.zip")
+            suffix = Path(input_name).suffix.lower()
+            if suffix not in _ONENOTE_UPLOAD_SUFFIXES:
+                raise HTTPException(415, "Choose a OneNote export: a .zip, .onepkg or .one file.")
+            _check_import_folder(folder_id)
+            owned = onenote_import.imports_dir(settings.notes_path) / f"{job_id}-upload"
+            owned.mkdir(parents=True, exist_ok=True)
+            input_path = owned / f"export{suffix}"
+            size = 0
+            try:
+                with input_path.open("wb") as handle:
+                    while chunk := await upload.read(_UPLOAD_CHUNK):
+                        size += len(chunk)
+                        if size > MAX_ONENOTE_UPLOAD_BYTES:
+                            raise HTTPException(413, "The file is larger than 2 GB.")
+                        handle.write(chunk)
+            except BaseException:
+                shutil.rmtree(owned, ignore_errors=True)
+                raise
     else:
         try:
             payload = await request.json()
