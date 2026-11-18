@@ -172,10 +172,8 @@ import Testing
         let inspector = InspectorModel(seenDebounce: .milliseconds(50), infoDebounce: .milliseconds(50))
         inspector.show(noteId: Self.note, revision: "r1", fallback: NoteInfo(), api: stub.api)
         // In parallel: all three are on the wire before the first (1.5 s) answer.
-        await eventually { stub.started.count == 3 }
-        #expect(stub.started.count == 3)
-        #expect(stub.log.finished.isEmpty)
         await eventually { stub.log.finished.count >= 3 && !inspector.related.isEmpty }
+        #expect(stub.log.events == ["start", "start", "start", "finish", "finish", "finish"])
 
         // Open another note, and come back before its answers arrive.
         inspector.show(noteId: "other", revision: "x", fallback: NoteInfo(), api: stub.api)
@@ -183,7 +181,7 @@ import Testing
         await eventually { stub.started.count == 6 }
         inspector.show(noteId: Self.note, revision: "r1", fallback: NoteInfo(), api: stub.api)
         #expect(!inspector.related.isEmpty)  // From the cache, at once.
-        try? await Task.sleep(for: .milliseconds(400))
+        await eventually { stub.log.cancelled.count == 3 }
         #expect(stub.started.count == 6)  // Nothing asked for Kyoto again…
         #expect(stub.log.cancelled.count == 3)  // …and "other"'s three requests were cancelled.
         #expect(inspector.related.first?.note.id == "note-n0")

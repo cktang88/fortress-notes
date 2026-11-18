@@ -193,6 +193,8 @@ extension FindingPerf {
             let url = request.url!
             let path = url.path()
             let block = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "block_id" }?.value
+            // The note "other" never answers in time: it is always left before it does.
+            let latency = path.contains("/other/") ? 30 : latency
             if path.hasSuffix("/related") { return .json(PerfData.related(block ?? "note"), delay: latency) }
             if path.hasSuffix("/backlinks") { return .json([Backlink](), delay: latency) }
             if path.hasSuffix("/info") { return Reply(delay: latency, body: FindingFixtures.info) }

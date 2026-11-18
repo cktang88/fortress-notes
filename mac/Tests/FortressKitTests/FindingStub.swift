@@ -39,6 +39,8 @@ final class FindingStub: Sendable {
         var started: [URL] = []
         var cancelled: [URL] = []
         var finished: [URL] = []
+        /// "start" and "finish" in the order they happened (on the loading threads).
+        var events: [String] = []
     }
 
     let host: String
@@ -73,12 +75,12 @@ final class FindingStub: Sendable {
     }
 
     fileprivate func reply(to request: URLRequest) -> Reply {
-        state.withLock { $0.started.append(request.url!) }
+        state.withLock { $0.started.append(request.url!); $0.events.append("start") }
         return handler(request)
     }
 
     fileprivate func didCancel(_ url: URL) { state.withLock { $0.cancelled.append(url) } }
-    fileprivate func didFinish(_ url: URL) { state.withLock { $0.finished.append(url) } }
+    fileprivate func didFinish(_ url: URL) { state.withLock { $0.finished.append(url); $0.events.append("finish") } }
 }
 
 final class FindingStubProtocol: URLProtocol, @unchecked Sendable {
