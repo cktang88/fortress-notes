@@ -86,6 +86,12 @@ def migrate(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "UPDATE documents SET sync_json = ? WHERE id = ?", (json.dumps(sync), document_id)
             )
+    # Change-tracking triggers name the blocks table; they are created again
+    # once the migrations are done (block_store._ensure_change_tracking).
+    for (trigger,) in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+    ).fetchall():
+        connection.execute(f'DROP TRIGGER "{trigger}"')
     connection.execute("DROP TABLE blocks")
     connection.execute("ALTER TABLE blocks_new RENAME TO blocks")
     connection.execute("CREATE INDEX IF NOT EXISTS blocks_updated_at ON blocks(updated_at)")
@@ -283,7 +289,8 @@ def _conflict(conflict: dict[str, Any]) -> dict[str, Any]:
     )[0]
     result = {
         "detected_at": conflict.get("detected_at"),
-        "source_hash": conflict.get("source_hash"),
+        # The hash a re-import now computes for that source version.
+        "source_hash": schema.canonical_hash(converted.block()),
         "source": {"type": converted.type, "attrs": converted.attrs,
                    "content": converted.content, "payload": converted.payload},
     }
