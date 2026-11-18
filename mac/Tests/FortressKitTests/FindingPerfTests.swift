@@ -112,7 +112,7 @@ final class Host<V: View> {
     func run(_ seconds: TimeInterval) async {
         let deadline = Date.now.addingTimeInterval(seconds)
         while Date.now < deadline {
-            RunLoop.main.run(until: Date.now.addingTimeInterval(0.005))
+            pumpRunLoop(0.005)
             try? await Task.sleep(for: .milliseconds(5))
         }
     }
