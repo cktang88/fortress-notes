@@ -1167,6 +1167,14 @@ class CompareFindingsTests(_Base):
         self.assertNotIn("](file:", visible.lower())
         self.assertNotIn("](data:", visible.lower())
 
+    def test_safe_link(self) -> None:
+        self.assertEqual(onenote_import.safe_link("www.google.com"), "http://www.google.com")
+        self.assertEqual(onenote_import.safe_link("https://a.example/x?y=1"), "https://a.example/x?y=1")
+        self.assertEqual(onenote_import.safe_link("mailto:a@b.c"), "mailto:a@b.c")
+        for bad in ("javascript:x", "jav\tascript:x", "file:///c:/x", "\\\\srv\\x", "ms-word:ofe|u|x", "notes.txt",
+                    "https://x/" + "a" * 3000, "https://x/\x00y"):
+            self.assertIsNone(onenote_import.safe_link(bad), bad)
+
     def test_odd_tag_labels(self) -> None:
         def tag(label, shape):
             return {"label": label, "shape": shape, "checkable": False, "completed": False, "completed_at": None,
@@ -1178,6 +1186,22 @@ class CompareFindingsTests(_Base):
                      tag("x" * 600, "flag")],
         }])
         self.assertEqual(tree["children"][0]["attrs"]["onenote_tags"], ["Yellow star", "Question", "x" * 100])
+
+    def test_tags_on_a_cells_first_line_and_todos_in_numbered_lists_are_kept(self) -> None:
+        star = {"label": "Important", "shape": "yellow_star", "checkable": False, "completed": False,
+                "completed_at": None, "highlight_color": None, "text_color": None}
+        cell = {"background": None, "blocks": [{"type": "paragraph", "indent": 0, "text": "Star", "tags": [star]}]}
+        tree = self.import_blocks([
+            {"type": "table", "indent": 0, "row_count": 1, "col_count": 1, "column_widths": [3.0],
+             "borders_visible": True, "rows": [{"cells": [cell]}]},
+            {"type": "check_item", "indent": 0, "text": "Step", "checked": True, "checked_at": None,
+             "list": {"ordered": True, "style": "lower_alpha", "marker": "%)", "restart": None}},
+        ])
+        table, todo = tree["children"]
+        [first] = table["content"]["blocknote"]["rows"][0]["cells"][0]["blocks"]
+        self.assertEqual(first["attrs"]["onenote_tags"], ["Important"])
+        self.assertEqual((todo["attrs"]["checked"], todo["attrs"]["ordered"], todo["attrs"]["list_style"]),
+                         (True, True, "lower_alpha"))
 
     def test_monospace_runs_become_inline_code(self) -> None:
         tree = self.import_blocks([{

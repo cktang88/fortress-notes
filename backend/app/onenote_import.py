@@ -103,6 +103,7 @@ MAX_TAG_LABEL = 100
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff]")
 _LINK_JUNK_RE = re.compile(r"[\x00-\x20\x7f-\x9f]")
 _SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]{0,31}):")
+_WWW_RE = re.compile(r"^www\.[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+([/?#]\S*)?$", re.IGNORECASE)
 
 
 def _clean(text: str) -> str:
@@ -135,6 +136,9 @@ def safe_link(href: object) -> str | None:
         return None
     # Browsers ignore tabs/newlines/control characters inside a scheme ("java\nscript:").
     probe = _LINK_JUNK_RE.sub("", href)
+    if _SCHEME_RE.match(probe) is None and _WWW_RE.match(href):
+        # OneNote stores "www.example.com" links without a scheme and opens them as web pages.
+        href = probe = "http://" + href
     match = _SCHEME_RE.match(probe)
     if match is None or match.group(1).lower() not in _SAFE_LINK_SCHEMES:
         return None
@@ -455,9 +459,12 @@ def _text_block(block: dict[str, Any], ctx: _PageContext) -> tuple[dict[str, Any
     if kind == "heading":
         level = block.get("level")
         result.update(type="heading", level=level if isinstance(level, int) and 1 <= level <= 6 else 1)
-    elif kind == "list_item":
-        info = block.get("list") or {}
+    elif kind in {"list_item", "check_item"}:
+        # A to-do may also sit in a numbered / bulleted list (``list`` is then set).
+        info = block.get("list") if isinstance(block.get("list"), dict) else {}
         result.update(type="list", ordered=bool(info.get("ordered")))
+        if kind == "check_item":
+            result["checked"] = bool(block.get("checked"))
         if info.get("marker"):
             result["list_format"] = str(info["marker"])
         if info.get("ordered") and info.get("style") in _NUMBER_STYLES:
@@ -465,9 +472,6 @@ def _text_block(block: dict[str, Any], ctx: _PageContext) -> tuple[dict[str, Any
             result.setdefault("attrs", {})["list_style"] = info["style"]
         if isinstance(info.get("restart"), int) and not isinstance(info["restart"], bool):
             result.setdefault("attrs", {})["list_start"] = info["restart"]
-    elif kind == "check_item":
-        info = block.get("list") or {}
-        result.update(type="list", ordered=bool(info.get("ordered")), checked=bool(block.get("checked")))
         if block.get("checked_at"):
             result["checked_at"] = str(block["checked_at"])
     elif kind == "quote":
@@ -678,6 +682,8 @@ def _table(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
             if (
                 first is not None and first.get("type") == "paragraph"
                 and not first.get("children") and "inline" in first
+                # A cell's first line holds only runs: a tagged paragraph stays a block.
+                and set(first.get("attrs") or {}) <= {"textAlignment"}
             ):
                 entry["inline"] = first["inline"]
                 align = (first.get("attrs") or {}).get("textAlignment")

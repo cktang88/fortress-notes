@@ -82,8 +82,10 @@ def _multiset_check(name, ref_items, our_items, fmt):
 
 
 def check_headings(ref: Model, ours: Model):
-    return _multiset_check("headings", [(lvl, " ".join(words(t))) for lvl, t in ref.headings],
-                           [(lvl, " ".join(words(t))) for lvl, t in ours.headings], lambda i: f"h{i[0]} {i[1]!r}")
+    # Empty heading-styled lines are blank lines (dropped on import).
+    return _multiset_check("headings", [(lvl, " ".join(words(t))) for lvl, t in ref.headings if words(t)],
+                           [(lvl, " ".join(words(t))) for lvl, t in ours.headings if words(t)],
+                           lambda i: f"h{i[0]} {i[1]!r}")
 
 
 def check_lists(ref: Model, ours: Model):
@@ -130,11 +132,13 @@ def check_links(ref: Model, ours: Model, imported_pages: set[str]):
                 info.append(f"onenote link to a page outside this export (kept as text): {text!r}")
             continue
         scheme = re.match(r"^\s*([A-Za-z][A-Za-z0-9+.-]*):", href)
-        if scheme is None or scheme.group(1).lower() not in WEB_SCHEMES:
+        if (scheme is None and not href.lower().startswith("www.")) or (scheme and scheme.group(1).lower() not in WEB_SCHEMES):
             # The importer keeps only web/mail links clickable (file:, UNC, javascript:, ms-word: ...
             # stay text; the target is in the block's provenance).
             info.append(f"non-web link kept as text by design: {text[:60]!r} -> {href[:80]}")
             continue
+        if scheme is None and re.match(r"^www\.[^\s/]+", href):
+            href = "http://" + href  # OneNote opens scheme-less www. links as web links (so does the importer)
         normalized = href.rstrip("/")
         hit = next((h for h in candidates if h.rstrip("/") == normalized), None)
         if hit is not None:

@@ -128,6 +128,14 @@ def _run_marks(styles: dict) -> frozenset[str]:
     return frozenset(marks)
 
 
+TEXT_KINDS = {"paragraph", "heading", "list", "quote", "code", "bulletListItem", "numberedListItem", "checkListItem"}
+
+
+def _is_equation(run: dict) -> bool:
+    text = run.get("text", "")
+    return bool((run.get("styles") or {}).get("code")) and len(text) > 2 and text.startswith("$") and text.endswith("$")
+
+
 class _TreeWalker:
     def __init__(self, notes: FortressNotes, model: Model):
         self.notes, self.model = notes, model
@@ -176,6 +184,13 @@ class _TreeWalker:
     def block(self, block: dict, list_depth: int) -> None:
         kind = block.get("type")
         attrs = block.get("attrs") or {}
+        if attrs.get("onenote_tags"):
+            # One entry per tagged block (whatever the number of labels), as on the reference side.
+            label = str(attrs["onenote_tags"][0])
+            text = "" if kind not in TEXT_KINDS else norm_text("".join(
+                r.get("text", "") if r.get("type") != "link" else "".join(x.get("text", "") for x in r.get("content") or [])
+                for r in _runs(block) if not _is_equation(r)))
+            self.model.tags.append((label, text))
         content = block.get("content") or {}
         child_depth = list_depth
         if kind in {"paragraph", "heading", "list", "quote", "code", "bulletListItem", "numberedListItem",
@@ -192,12 +207,11 @@ class _TreeWalker:
             if kind == "list":
                 if "checked" in attrs:
                     self.model.checks.append((text, bool(attrs.get("checked"))))
-                else:
+                if "checked" not in attrs or attrs.get("ordered") or attrs.get("list_format"):
+                    # (a to-do that is also in a numbered / bulleted list counts as a list item too)
                     fmt = str(attrs.get("list_style") or "decimal") if attrs.get("ordered") else "bullet"
                     self.model.list_items.append((text, bool(attrs.get("ordered")), list_depth, fmt))
                 child_depth = list_depth + 1
-            for tag in attrs.get("onenote_tags") or []:
-                self.model.tags.append((str(tag), text))
             align = attrs.get("align") or attrs.get("textAlignment")
             if align in {"center", "right"}:
                 self.model.aligned.append((align, text))

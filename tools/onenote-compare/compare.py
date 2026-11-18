@@ -310,7 +310,7 @@ def process_unit(unit: Path, out: Path, args, renderer: Renderer) -> dict:
                 entry["checks"] = [checks._result("page", False, "page missing in Fortress")]
                 entry["status"] = "missing"
             else:
-                if not ref_model.title and (page_info or {}).get("title_derived"):
+                if ref_model.title in {"", "Untitled Page"} and (page_info or {}).get("title_derived"):
                     # Untitled in OneNote: Fortress names the note after its first line.
                     our_model.notes.append(f"untitled page named {our_model.title!r}")
                     ref_model.title = our_model.title

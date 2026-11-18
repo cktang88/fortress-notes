@@ -229,6 +229,8 @@ class _State:
         self.model, self.container, self.base, self.cwords, self.readable = model, container, base, cwords, readable
         self.pieces: list[tuple[str, frozenset[str]]] = []
         self.tables = 0
+        self.checked_paragraphs: set[int] = set()
+        self.tagged_paragraphs: set[int] = set()
 
     def flush(self) -> None:
         if self.pieces:
@@ -290,11 +292,17 @@ def _element(child: Node, tag: str, classes: set[str], st: _State) -> None:
         model.math.append(norm_text(child.text_content()))
         return
     if "note-tag-icon" in classes:
+        # One check / one "tagged" entry per paragraph: OneNote allows several tags on a
+        # paragraph, Fortress keeps one checkbox and a list of labels.
         para = _paragraph(child)
         text = norm_text(_own_text(para)) if para is not None else ""
+        key = id(para) if para is not None else id(child)
         if child.attrs.get("role") == "checkbox":
-            model.checks.append((text, child.attrs.get("aria-checked") == "true"))
-        else:
+            if key not in st.checked_paragraphs:
+                st.checked_paragraphs.add(key)
+                model.checks.append((text, child.attrs.get("aria-checked") == "true"))
+        elif key not in st.tagged_paragraphs:
+            st.tagged_paragraphs.add(key)
             title = _find(child, "title")
             model.tags.append((norm_text(title.text_content()) if title else "tag", text))
         return
