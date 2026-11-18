@@ -727,8 +727,9 @@ def _markdown_import_provenance(
 ) -> dict[str, object]:
     """Provenance for a note read from a Markdown file.
 
-    Our own export writes the note's provenance as front matter; it is restored,
-    with ``via`` recording this import. Any other file is a ``markdown_import``.
+    Our own export writes the note's provenance as front matter; it is restored
+    as it was (so export -> import -> export is stable). Any other file is a
+    ``markdown_import``.
     """
 
     exported = metadata.get("provenance")
@@ -738,7 +739,6 @@ def _markdown_import_provenance(
         except _provenance.ProvenanceError:
             restored = {}
         if restored:
-            restored["via"] = {"source": "markdown_import", "source_path": source_path, "at": now}
             return restored
     value: dict[str, object] = {
         "source": "markdown_import",
@@ -792,6 +792,17 @@ def create_document(
                 "UPDATE documents SET folder_id = ?, position = ? WHERE id = ?",
                 (folder_id, position, document_id),
             )
+
+
+def mark_opened(path: Path, document_id: str) -> None:
+    """Remember when a note was last opened (metadata only: no revision, no edit time)."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        connection.execute(
+            "UPDATE documents SET last_opened_at = ? WHERE id = ? AND deleted_at IS NULL",
+            (_now(), document_id),
+        )
 
 
 def ensure_editable_block(path: Path, document_id: str) -> bool:
@@ -1594,10 +1605,33 @@ def _insert_document(
                ) VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?)""",
         (document_id, title, status, json.dumps(tags), position, created_at, updated_at),
     )
-    _set_document_provenance(connection, document_id, provenance or {"source": "manual"})
+    _set_document_provenance(
+        connection, document_id, _unclaimed_source_key(connection, provenance or {"source": "manual"})
+    )
     _insert_blocks(
         connection, document_id, body, created_at, updated_at, ensure_empty_paragraph
     )
+
+
+def _unclaimed_source_key(
+    connection: sqlite3.Connection, value: dict[str, object]
+) -> dict[str, object]:
+    """``value``, minus its source id when another note already holds that key.
+
+    Importing a copy (e.g. our own Markdown export of a OneNote page, into the
+    same workspace) must not take over the original's identity for re-imports.
+    """
+
+    external_id = value.get("external_id")
+    if not external_id or connection.execute(
+        "SELECT 1 FROM documents WHERE source_kind = ? AND source_external_id = ?",
+        (value.get("source", _provenance.DEFAULT_SOURCE), external_id),
+    ).fetchone() is None:
+        return value
+    copy = {key: item for key, item in value.items() if key != "external_id"}
+    extra = copy.get("extra") if isinstance(copy.get("extra"), dict) else {}
+    copy["extra"] = {**extra, "copy_of_external_id": external_id}
+    return copy
 
 
 def _set_document_provenance(
@@ -1770,14 +1804,26 @@ def _replace_references(
             )
 
 
-def render_markdown(nodes: list[dict], depth: int = 0) -> str:
-    """Render a block tree as portable Markdown (block IDs are not included)."""
+def render_markdown(
+    nodes: list[dict], depth: int = 0, document_provenance: dict | None = None
+) -> str:
+    """Render a block tree as portable Markdown (block IDs are not included).
+
+    With ``document_provenance``, a block whose provenance differs from the
+    document's gets it on a ``<!-- fortress:block {...} -->`` line right before it,
+    which Markdown import reads back.
+    """
 
     fragments: list[str] = []
     for node in nodes:
         source = _node_markdown(node)
         if node["type"] == "divider" and not source:
             source = "---"
+        if source and document_provenance is not None:
+            own = node.get("provenance")
+            if isinstance(own, dict) and own and not own.get("inherited"):
+                if own != {"source": document_provenance.get("source", "manual")}:
+                    source = f"{_provenance.comment(own)}\n{source}"
         if depth and source:
             prefix = "  " * depth
             source = "\n".join(
@@ -1787,7 +1833,7 @@ def render_markdown(nodes: list[dict], depth: int = 0) -> str:
             fragments.append(source)
         children = node.get("children", [])
         if children:
-            rendered_children = render_markdown(children, depth + 1)
+            rendered_children = render_markdown(children, depth + 1, document_provenance)
             if rendered_children:
                 fragments.append(rendered_children)
     return "\n\n".join(fragments)
@@ -1889,7 +1935,7 @@ def _document_tree(connection: sqlite3.Connection, document_id: str) -> dict | N
         }
         for row in rows
     }
-    if links["documents"] or links["blocks"]:
+    if links["documents"]:
         for node in nodes.values():
             _refresh_link_labels(node, links)
     roots: list[dict] = []
@@ -1956,19 +2002,16 @@ def _link_label(title: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[|\]]", " ", title)).strip()
 
 
-def _block_label(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[\"')\]]", " ", text)).strip()
-
-
 def _refresh_link_labels(node: dict, links: dict[str, dict]) -> None:
     """Show links with their targets' current titles (stored labels go stale on rename).
 
     Only the served copy changes: ``[[id|Old]]`` becomes ``[[id|Current]]``, and a
     link's visible text is updated when it was the old label (a custom link text is
-    kept). Block references labelled with old text get the target's current text.
+    kept). Block references keep their stored label, which may be custom; their
+    current text is in ``resolved_links["blocks"]``.
     """
 
-    documents, blocks = links["documents"], links["blocks"]
+    documents = links["documents"]
 
     def document_label(match: re.Match) -> str:
         target = documents.get(match.group(1))
@@ -1977,18 +2020,9 @@ def _refresh_link_labels(node: dict, links: dict[str, dict]) -> None:
         label = _link_label(str(target["title"]))
         return f"[[{match.group(1)}|{label}]]" if label else match.group(0)
 
-    def block_label(match: re.Match) -> str:
-        target = blocks.get(match.group(1))
-        if target is None or match.group(2) is None:
-            return match.group(0)
-        label = _block_label(str(target["text"]))
-        return f'(( {match.group(1)} "{label}" ))' if label else match.group(0)
-
     def rewrite(value: str) -> str:
         if "[[" in value:
             value = _DOCUMENT_REF_RE.sub(document_label, value)
-        if "((" in value:
-            value = _BLOCK_REF_RE.sub(block_label, value)
         return value
 
     def visit(value: object) -> object:
@@ -2000,15 +2034,11 @@ def _refresh_link_labels(node: dict, links: dict[str, dict]) -> None:
             return value
         if value.get("type") == "link" and isinstance(value.get("href"), str):
             old_href = value["href"]
-            match = _DOCUMENT_REF_RE.fullmatch(old_href.strip()) or _BLOCK_REF_RE.fullmatch(
-                old_href.strip()
-            )
+            match = _DOCUMENT_REF_RE.fullmatch(old_href.strip())
             new_href = rewrite(old_href)
             if match and new_href != old_href:
                 old_label = (match.group(2) or "").strip()
-                new_match = _DOCUMENT_REF_RE.fullmatch(new_href.strip()) or _BLOCK_REF_RE.fullmatch(
-                    new_href.strip()
-                )
+                new_match = _DOCUMENT_REF_RE.fullmatch(new_href.strip())
                 new_label = new_match.group(2) if new_match else old_label
                 content = value.get("content")
                 if isinstance(content, str) and content.strip() == old_label:
@@ -2025,10 +2055,9 @@ def _refresh_link_labels(node: dict, links: dict[str, dict]) -> None:
             return value
         return {key: visit(item) for key, item in value.items()}
 
-    if "[[" in node["text"] or "((" in node["text"]:
+    if "[[" in node["text"]:
         node["text"] = rewrite(node["text"])
-    serialized = json.dumps(node["content"])
-    if "[[" in serialized or "((" in serialized:
+    if "[[" in json.dumps(node["content"]):
         node["content"] = visit(node["content"])
 
 

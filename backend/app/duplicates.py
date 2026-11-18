@@ -10,7 +10,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import provenance as _provenance
 from .block_store import (
+    _document_provenance,
     _now,
     _rebuild_document_assets,
     _rebuild_document_references,
@@ -103,6 +105,31 @@ def move_into(path: Path, source_id: str, target_id: str) -> int:
         moved = connection.execute(
             "SELECT COUNT(*) FROM blocks WHERE document_id = ?", (source_id,)
         ).fetchone()[0]
+        # Each moved block remembers the note it came from, and keeps its own
+        # source (a block that inherited the old note's provenance gets a copy).
+        source_provenance = _document_provenance(connection, source_id)
+        source_title = connection.execute(
+            "SELECT title FROM documents WHERE id = ?", (source_id,)
+        ).fetchone()["title"]
+        target_revision = connection.execute(
+            "SELECT revision FROM documents WHERE id = ?", (target_id,)
+        ).fetchone()["revision"] + 1
+        updates = []
+        for row in connection.execute(
+            "SELECT id, provenance_json FROM blocks WHERE document_id = ?", (source_id,)
+        ).fetchall():
+            value = _provenance.materialize(row["provenance_json"], source_provenance)
+            value["origin"] = {
+                "operation": "move_into",
+                "document_id": source_id,
+                "document_title": source_title,
+                "block_id": row["id"],
+                "at": now,
+            }
+            updates.append((_provenance.dumps(value), target_revision, row["id"]))
+        connection.executemany(
+            "UPDATE blocks SET provenance_json = ?, revision = ? WHERE id = ?", updates
+        )
         connection.execute(
             """UPDATE blocks
                   SET document_id = ?,

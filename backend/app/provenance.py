@@ -65,7 +65,7 @@ _STRING_FIELDS = {
 }
 _ORIGIN_OPERATIONS = {"move_into", "duplicate", "split"}
 # Written only by the server (re-imports and migrations), never accepted from clients.
-INTERNAL_FIELDS = ("source_hash", "conflict", "source_removed", "backfilled")
+INTERNAL_FIELDS = ("source_hash", "conflict", "source_removed", "dismissed_hash", "backfilled")
 _MAX_EXTRA_BYTES = 16_384
 
 # A block's provenance in exported Markdown: one comment line right before the block.
