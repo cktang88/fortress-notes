@@ -189,8 +189,8 @@ struct DesktopBackdrop: View {
 /// from the (fake) backend and stream answers have settled.
 @MainActor
 func settledSnapshot<V: View>(
-    _ view: V, named name: String, size: CGSize, appearance: NSAppearance.Name, seconds: Double = 3
-) throws {
+    _ view: V, named name: String, size: CGSize, appearance: NSAppearance.Name, seconds: Double = 2.5
+) async throws {
     guard let directory = ProcessInfo.processInfo.environment["SNAPSHOT_DIR"] else { return }
     try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     let app = NSApplication.shared
@@ -209,7 +209,11 @@ func settledSnapshot<V: View>(
     window.orderFrontRegardless()
     app.activate()
     let deadline = Date().addingTimeInterval(seconds)
-    while Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    // Alternate: the run loop draws, the await lets tasks on the main actor (loads, streams) resume.
+    while Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+        try? await Task.sleep(for: .milliseconds(30))
+    }
 
     let url = URL(fileURLWithPath: directory).appendingPathComponent("\(name).png")
     let capture = Process()
@@ -221,13 +225,13 @@ func settledSnapshot<V: View>(
 }
 
 extension GallerySnapshotTests {
-    private func both<V: View>(_ name: String, size: CGSize = CGSize(width: 1000, height: 660), _ make: () -> V) throws {
-        try settledSnapshot(make(), named: "\(name)-light", size: size, appearance: .aqua)
-        try settledSnapshot(make(), named: "\(name)-dark", size: size, appearance: .darkAqua)
+    private func both<V: View>(_ name: String, size: CGSize = CGSize(width: 1000, height: 660), _ make: () -> V) async throws {
+        try await settledSnapshot(make(), named: "\(name)-light", size: size, appearance: .aqua)
+        try await settledSnapshot(make(), named: "\(name)-dark", size: size, appearance: .darkAqua)
     }
 
-    @Test func findingSearchResults() throws {
-        try both("finding-search") {
+    @Test func findingSearchResults() async throws {
+        try await both("finding-search") {
             let model = FindingFixtures.model()
             model.query = "ryokan"
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: FindingFixtures.kyotoRyokanBlock)
@@ -235,23 +239,23 @@ extension GallerySnapshotTests {
         }
     }
 
-    @Test func findingAskAnswered() throws {
-        try both("finding-ask") {
+    @Test func findingAskAnswered() async throws {
+        try await both("finding-ask") {
             let model = FindingFixtures.model()
             model.route = .ask(question: FindingFixtures.question)
             return MainWindow().environment(model)
         }
     }
 
-    @Test func findingAskStates() throws {
-        try both("finding-ask-streaming", size: CGSize(width: 760, height: 560)) {
+    @Test func findingAskStates() async throws {
+        try await both("finding-ask-streaming", size: CGSize(width: 760, height: 560)) {
             var state = AskState()
             FindingFixtures.steps.prefix(1).forEach { state.apply(.step($0)) }
             FindingFixtures.sentences.prefix(2).forEach { state.apply(.sentence($0)) }
             let turn = AskTurn(question: FindingFixtures.question, state: state, started: .now.addingTimeInterval(-1.2))
             return AskView(question: FindingFixtures.question, turns: [turn]).environment(FindingFixtures.model())
         }
-        try both("finding-ask-states", size: CGSize(width: 760, height: 660)) {
+        try await both("finding-ask-states", size: CGSize(width: 760, height: 660)) {
             var notConfigured = AskState()
             notConfigured.apply(.done(AskResponse(
                 status: .notConfigured, answer: [],
@@ -270,14 +274,14 @@ extension GallerySnapshotTests {
         }
     }
 
-    @Test func findingPalette() throws {
-        try both("finding-palette") {
+    @Test func findingPalette() async throws {
+        try await both("finding-palette") {
             let model = FindingFixtures.model()
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
             model.isPaletteShown = true
             return MainWindow().environment(model)
         }
-        try both("finding-palette-query") {
+        try await both("finding-palette-query") {
             let model = FindingFixtures.model()
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
             model.isPaletteShown = true
@@ -286,15 +290,15 @@ extension GallerySnapshotTests {
         }
     }
 
-    @Test func findingInspector() throws {
-        try both("finding-inspector-window") {
+    @Test func findingInspector() async throws {
+        try await both("finding-inspector-window") {
             let model = FindingFixtures.model()
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
             model.focusedBlockId = FindingFixtures.kyotoRyokanBlock
             model.isInspectorShown = true
             return MainWindow().environment(model)
         }
-        try both("finding-inspector", size: CGSize(width: 300, height: 660)) {
+        try await both("finding-inspector", size: CGSize(width: 300, height: 660)) {
             let model = FindingFixtures.model()
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
             model.focusedBlockId = FindingFixtures.kyotoRyokanBlock
@@ -304,14 +308,14 @@ extension GallerySnapshotTests {
         }
     }
 
-    @Test func findingQuickCapture() throws {
-        try both("finding-capture", size: CGSize(width: 720, height: 300)) {
+    @Test func findingQuickCapture() async throws {
+        try await both("finding-capture", size: CGSize(width: 720, height: 300)) {
             ZStack {
                 DesktopBackdrop()
                 QuickCaptureView(state: QuickCaptureState(text: "Call the dentist about the cleaning\nAsk about the Tuesday slot"))
             }
         }
-        try both("finding-capture-saved", size: CGSize(width: 720, height: 300)) {
+        try await both("finding-capture-saved", size: CGSize(width: 720, height: 300)) {
             ZStack {
                 DesktopBackdrop()
                 QuickCaptureView(state: QuickCaptureState(phase: .saved(title: "Call the dentist about the cleaning", folder: "Uncategorized")))
