@@ -137,13 +137,18 @@ public final class AppModel {
 
     /// Applies a change to the tree now, and keeps it so a fetch already in flight
     /// doesn't undo it.
-    func patchNavigation(_ apply: @escaping (inout NavigationResponse) -> Void) {
+    /// `replay` (default: `apply`) is what runs over a fetched tree that started before
+    /// the change; it may skip what the fetched tree already has newer.
+    func patchNavigation(
+        _ apply: @escaping (inout NavigationResponse) -> Void,
+        replay: ((inout NavigationResponse) -> Void)? = nil
+    ) {
         patchSequence += 1
         var updated = navigation
         apply(&updated)
         if updated != navigation { navigation = updated }
         if navigationFetchesInFlight > 0 {
-            navigationPatches.append(NavigationPatch(sequence: patchSequence, apply: apply))
+            navigationPatches.append(NavigationPatch(sequence: patchSequence, apply: replay ?? apply))
         }
     }
 

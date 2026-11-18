@@ -222,20 +222,22 @@ extension AppModel {
     /// save's answer patches the tree (no reload), and the note moves to the top of Recent.
     public func noteDidChange(_ document: BlockDocument) {
         let snippet = document.children.first?.text
-        patchNavigation { navigation in
-            var edited: NavigationDocument?
+        let edited = Timestamp.date(document.updatedAt)
+        func patch(_ navigation: inout NavigationResponse, onlyIfNewer: Bool) {
+            var changed: NavigationDocument?
             NavigationEdits.updateDocument(document.id, in: &navigation.items) { note in
-                // An older answer never replaces a newer one.
-                guard document.updatedAt >= note.updatedAt else { return }
+                // Over a tree fetched later, an older answer never replaces a newer one.
+                if onlyIfNewer, let edited, let current = Timestamp.date(note.updatedAt), current > edited { return }
                 note.title = document.title
                 note.status = document.status
                 note.updatedAt = document.updatedAt
                 if let snippet { note.snippet = snippet }
-                edited = note
+                changed = note
             }
-            guard let edited else { return }
-            NavigationEdits.touchRecent(edited, in: &navigation.recent, limit: Self.recentLimit)
+            guard let changed else { return }
+            NavigationEdits.touchRecent(changed, in: &navigation.recent, limit: Self.recentLimit)
         }
+        patchNavigation({ patch(&$0, onlyIfNewer: false) }, replay: { patch(&$0, onlyIfNewer: true) })
     }
 
     // MARK: Notes
