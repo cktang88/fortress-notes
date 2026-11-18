@@ -38,7 +38,6 @@ class ApiCase(unittest.TestCase):
             vision_enabled=False,
             auto_backup_enabled=False,
             reindex_interval_s=5.0,
-            frontend_origin="http://localhost:5173",
         )
         settings.assets_path.mkdir()
         for item in (
@@ -275,8 +274,8 @@ class ErrorShapeTests(ApiCase):
 
     def test_a_locked_database_is_503_json(self) -> None:
         error = sqlite3.OperationalError("database is locked")
-        with patch.object(block_store, "list_documents", side_effect=error):
-            response = self.client.get("/api/block-documents")
+        with patch.object(block_store, "change_state", side_effect=error):
+            response = self.client.get("/api/trash")
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.headers["retry-after"], "1")
         self.assertIn("busy", response.json()["detail"])

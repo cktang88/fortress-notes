@@ -45,7 +45,7 @@ class UploadLimitTests(unittest.TestCase):
 
     def test_oversized_uploads_are_refused_with_413_and_nothing_is_saved(self) -> None:
         too_big = b"\x89PNG\r\n\x1a\n" + b"0" * (3 * 1024 * 1024)
-        for endpoint, content_type in (("/api/files", "application/pdf"), ("/api/images", "image/png")):
+        for endpoint, content_type in (("/api/files", "application/pdf"), ("/api/files", "image/png")):
             with self.subTest(endpoint=endpoint):
                 response = self.client.post(
                     endpoint, files={"file": ("big.bin", too_big, content_type)}
@@ -56,7 +56,7 @@ class UploadLimitTests(unittest.TestCase):
 
     def test_uploads_at_the_limit_are_saved(self) -> None:
         fits = b"\x89PNG\r\n\x1a\n" + b"0" * (3 * 1024 * 1024 - 3)
-        for endpoint, content_type in (("/api/files", "application/pdf"), ("/api/images", "image/png")):
+        for endpoint, content_type in (("/api/files", "application/pdf"), ("/api/files", "image/png")):
             with self.subTest(endpoint=endpoint):
                 response = self.client.post(
                     endpoint, files={"file": ("ok.bin", fits, content_type)}

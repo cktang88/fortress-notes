@@ -2,62 +2,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.block_store import create_document, delete_document, document_tree
+from app.block_store import create_document, document_tree
 from app.portability import (
-    export_all_markdown,
     export_document_markdown,
     import_markdown_directory,
-    preview_markdown_directory,
 )
 
 
 class PortabilityTests(unittest.TestCase):
-    def test_preview_reports_ready_skipped_conflict_and_malformed_files_without_importing(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database = root / ".fortress.sqlite3"
-            create_document(
-                database,
-                "existing",
-                "Existing",
-                "rough",
-                [],
-                "Stored body",
-                "2026-01-01T00:00:00+00:00",
-                "2026-01-01T00:00:00+00:00",
-            )
-            create_document(
-                database,
-                "deleted",
-                "Deleted",
-                "rough",
-                [],
-                "",
-                "2026-01-01T00:00:00+00:00",
-                "2026-01-01T00:00:00+00:00",
-            )
-            delete_document(database, "deleted")
-            (root / "new.md").write_text("A new document\n", encoding="utf-8")
-            (root / "existing.md").write_text("Should be skipped\n", encoding="utf-8")
-            (root / "deleted.md").write_text("Cannot replace deleted document\n", encoding="utf-8")
-            (root / "broken.md").write_bytes(b"\xff not valid UTF-8\n")
-
-            preview = preview_markdown_directory(database, root)
-
-            self.assertEqual(
-                [(item.document_id, item.status) for item in preview.items],
-                [
-                    ("broken", "error"),
-                    ("deleted", "conflict"),
-                    ("existing", "skipped"),
-                    ("new", "ready"),
-                ],
-            )
-            self.assertEqual((preview.ready_count, preview.skipped_count), (1, 1))
-            self.assertEqual((preview.conflict_count, preview.error_count), (1, 1))
-            self.assertIsNone(document_tree(database, "new"))
-            self.assertFalse((root / ".fortress-import-backups").exists())
-
     def test_exports_nested_blocks_without_sqlite_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
@@ -79,7 +31,6 @@ class PortabilityTests(unittest.TestCase):
             self.assertIn("title: Guide", markdown)
             self.assertIn("  - Child", markdown)
             self.assertNotIn(tree["children"][0]["id"], markdown)
-            self.assertEqual(set(export_all_markdown(database)), {"guide"})
 
     def test_export_import_round_trip_preserves_document_and_block_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

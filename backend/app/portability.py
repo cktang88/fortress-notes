@@ -22,7 +22,6 @@ from .block_store import (
     create_document,
     derive_title as _derive_title,
     document_tree,
-    navigation,
     render_markdown as _render_markdown,
 )
 
@@ -61,58 +60,6 @@ class ImportReport:
         return sum(item.status == "conflict" for item in self.items)
 
 
-@dataclass(frozen=True)
-class ImportPreview:
-    """A read-only summary of what a directory import would do."""
-
-    items: tuple[ImportItem, ...]
-
-    @property
-    def ready_count(self) -> int:
-        return sum(item.status == "ready" for item in self.items)
-
-    @property
-    def skipped_count(self) -> int:
-        return sum(item.status == "skipped" for item in self.items)
-
-    @property
-    def error_count(self) -> int:
-        return sum(item.status == "error" for item in self.items)
-
-    @property
-    def conflict_count(self) -> int:
-        return sum(item.status == "conflict" for item in self.items)
-
-
-def preview_markdown_directory(database_path: Path, source_directory: Path) -> ImportPreview:
-    """Inspect top-level Markdown files without writing backups or documents."""
-
-    items: list[ImportItem] = []
-    for source_path in sorted(source_directory.glob("*.md")):
-        document_id = source_path.stem
-        try:
-            state = _document_state(database_path, document_id)
-            if state == "active":
-                items.append(ImportItem(source_path, document_id, "skipped", "document exists"))
-                continue
-            if state == "deleted":
-                items.append(
-                    ImportItem(
-                        source_path,
-                        document_id,
-                        "conflict",
-                        "document is soft-deleted; restore or purge it before importing",
-                    )
-                )
-                continue
-            _read_import_source(source_path)
-        except Exception as error:  # File data is an untrusted import boundary.
-            items.append(ImportItem(source_path, document_id, "error", str(error)))
-        else:
-            items.append(ImportItem(source_path, document_id, "ready"))
-    return ImportPreview(tuple(items))
-
-
 def export_document_markdown(database_path: Path, document_id: str) -> str:
     """Return a document's portable Markdown without exposing SQLite block IDs."""
 
@@ -130,19 +77,6 @@ def export_document_markdown(database_path: Path, document_id: str) -> str:
         provenance=_provenance.front_matter(document_provenance),
     )
     return frontmatter.dumps(post)
-
-
-def export_all_markdown(database_path: Path) -> dict[str, str]:
-    """Return every active document keyed by its stable SQLite document ID.
-
-    This function intentionally returns data instead of writing files, so an
-    integration layer can choose an explicit destination and overwrite policy.
-    """
-
-    return {
-        document_id: export_document_markdown(database_path, document_id)
-        for document_id in _navigation_document_ids(navigation(database_path))
-    }
 
 
 def import_markdown_directory(database_path: Path, source_directory: Path) -> ImportReport:

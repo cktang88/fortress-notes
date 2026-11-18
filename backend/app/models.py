@@ -2,11 +2,9 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 NoteStatus = Literal["rough", "polished"]
-ReviewKind = Literal["factcheck", "object"]
-BlockReviewContextKind = Literal["current", "selected", "document", "linked"]
 BlockOperationKind = Literal[
     "insert", "update", "move", "delete", "set_attrs", "set_user_attrs",
     "duplicate", "split", "merge"
@@ -22,11 +20,6 @@ class NoteSummary(BaseModel):
     snippet: str = ""
 
 
-class Note(NoteSummary):
-    body: str
-    created_at: datetime
-    # Cached VLM caption + OCR text per referenced image id (mirrors the sidecar cache).
-    images: dict[str, str] = {}
 
 
 class NoteCreate(BaseModel):
@@ -42,8 +35,10 @@ class NoteCreate(BaseModel):
 
 
 class NoteUpdate(BaseModel):
+    # The body changes through block transactions; anything else is refused (422).
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = None
-    body: str | None = None
     status: NoteStatus | None = None
     tags: list[str] | None = None
 
@@ -146,13 +141,6 @@ class RelatedResult(SearchResult):
     matched_block_text: str = ""
 
 
-class BlockSearchResult(BaseModel):
-    block_id: str
-    document_id: str
-    document_title: str
-    block_type: str
-    text: str
-    score: float = Field(description="Higher is more relevant")
 
 
 class BlockLinkTarget(BaseModel):
@@ -172,60 +160,18 @@ class Backlink(BaseModel):
     target_block_id: str | None = None
 
 
-class ReviewItem(BaseModel):
-    label: str = ""
-    detail: str
-    quote: str = Field(default="", description="Verbatim text from the note this refers to")
-    severity: Literal["high", "medium", "low"] = "medium"
 
 
-class ReviewResponse(BaseModel):
-    kind: ReviewKind
-    summary: str
-    items: list[ReviewItem] = []
 
 
-class BlockReviewItem(ReviewItem):
-    block_id: str
 
 
-class BlockReviewResponse(BaseModel):
-    kind: ReviewKind
-    summary: str
-    block_id: str
-    items: list[BlockReviewItem] = []
 
 
-class BlockReviewContextRequest(BaseModel):
-    kind: ReviewKind
-    context: BlockReviewContextKind
-    block_ids: list[str] = []
-
-    @model_validator(mode="after")
-    def validate_context_ids(self) -> "BlockReviewContextRequest":
-        if self.context in ("current", "linked") and len(self.block_ids) != 1:
-            raise ValueError(f"{self.context} context requires exactly one block_id")
-        if self.context == "selected" and not self.block_ids:
-            raise ValueError("selected context requires at least one block_id")
-        if len(set(self.block_ids)) != len(self.block_ids):
-            raise ValueError("block_ids must not contain duplicates")
-        if self.context == "document" and self.block_ids:
-            raise ValueError("document context does not accept block_ids")
-        return self
 
 
-class BlockReviewContextResponse(BaseModel):
-    kind: ReviewKind
-    context: BlockReviewContextKind
-    summary: str
-    items: list[BlockReviewItem] = []
 
 
-class SavedSearchCreate(BaseModel):
-    name: str = Field(default="", max_length=100)
-    query: str = Field(min_length=1, max_length=500)
-    mode: Literal["text", "embedding"] = "text"
-    filters: dict[str, str] = {}
 
 
 class AskRequest(BaseModel):

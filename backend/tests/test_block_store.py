@@ -20,7 +20,6 @@ from app.block_store import (
     delete_document,
     document_backlinks,
     document_tree,
-    document_subtree,
     embedding_documents,
     ensure_fts_integrity,
     fts_is_consistent,
@@ -31,7 +30,6 @@ from app.block_store import (
     list_documents,
     rename_document,
     rename_folder,
-    replace_document_from_markdown,
     redo_transaction,
     rebuild_fts,
     register_asset,
@@ -266,7 +264,7 @@ class BlockStoreTests(unittest.TestCase):
                 [(block_id, "a" * 64)],
             )
 
-    def test_document_lifecycle_and_focused_subtree(self) -> None:
+    def test_document_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             created = create_block_document(database, "Draft", "rough", ["work"], "Parent")
@@ -280,13 +278,7 @@ class BlockStoreTests(unittest.TestCase):
                 created["revision"],
             )
             child = updated["children"][0]["children"][0]
-
-            subtree = document_subtree(database, created["id"], child["id"])
-            assert subtree is not None
-            self.assertEqual(subtree["parent"]["id"], parent["id"])
-            self.assertEqual(subtree["children"], [])
-            self.assertEqual(subtree["depth"], 1)
-            self.assertEqual([item["id"] for item in subtree["breadcrumbs"]], [parent["id"], child["id"]])
+            self.assertEqual(child["parent_id"], parent["id"])
 
             renamed = rename_document(database, created["id"], "Renamed")
             self.assertEqual(renamed["title"], "Renamed")
@@ -1067,15 +1059,13 @@ class BlockStoreTests(unittest.TestCase):
                 {backlink["source_document_id"] for backlink in backlinks}, {"source"}
             )
 
-            replace_document_from_markdown(
+            source = document_tree(database, "source")
+            assert source is not None
+            apply_transaction(
                 database,
                 "source",
-                "Source",
-                "rough",
-                [],
-                "No links now",
-                "2026-01-01T00:00:00+00:00",
-                "2026-01-02T00:00:00+00:00",
+                [BlockOperation(operation="update", block_id=source["children"][0]["id"], text="No links now")],
+                source["revision"],
             )
             self.assertEqual(document_backlinks(database, "target"), [])
 
@@ -1329,7 +1319,7 @@ class BlockStoreTests(unittest.TestCase):
             self.assertIn("Updated", mirrored)
             self.assertNotIn("Original", mirrored)
 
-    def test_markdown_replacement_and_backup_are_consistent(self) -> None:
+    def test_backup_is_consistent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             database = root / ".fortress.sqlite3"
@@ -1343,68 +1333,15 @@ class BlockStoreTests(unittest.TestCase):
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
             )
-            replace_document_from_markdown(
-                database,
-                "one",
-                "Updated",
-                "polished",
-                ["new"],
-                "# Heading\n\nBody",
-                "2026-01-01T00:00:00+00:00",
-                "2026-01-02T00:00:00+00:00",
-            )
             backup = root / "backup.sqlite3"
             backup_database(database, backup)
 
             tree = document_tree(backup, "one")
             self.assertIsNotNone(tree)
             assert tree is not None
-            self.assertEqual(tree["title"], "Updated")
-            self.assertEqual(tree["status"], "polished")
-            self.assertEqual([block["text"] for block in tree["children"]], ["# Heading", "Body"])
+            self.assertEqual(tree["title"], "One")
+            self.assertEqual([block["text"] for block in tree["children"]], ["First", "Second"])
             self.assertTrue(check_integrity(backup))
-
-    def test_markdown_replacement_advances_revision_and_invalidates_old_undo(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / ".fortress.sqlite3"
-            create_document(
-                database,
-                "one",
-                "One",
-                "rough",
-                [],
-                "Original",
-                "2026-01-01T00:00:00+00:00",
-                "2026-01-01T00:00:00+00:00",
-            )
-            original = document_tree(database, "one")
-            assert original is not None
-            block_id = original["children"][0]["id"]
-            edited = apply_transaction(
-                database,
-                "one",
-                [BlockOperation(operation="update", block_id=block_id, text="Block edit")],
-                original["revision"],
-            )
-
-            replace_document_from_markdown(
-                database,
-                "one",
-                "One",
-                "rough",
-                [],
-                "Markdown edit",
-                "2026-01-01T00:00:00+00:00",
-                "2026-01-02T00:00:00+00:00",
-            )
-            replaced = document_tree(database, "one")
-            assert replaced is not None
-            self.assertEqual(replaced["revision"], edited["revision"] + 1)
-            self.assertEqual(replaced["children"][0]["text"], "Markdown edit")
-            with self.assertRaises(DocumentRevisionConflict):
-                apply_transaction(database, "one", [BlockOperation(operation="update", block_id=block_id, text="Stale")], edited["revision"])
-            with self.assertRaisesRegex(ValueError, "nothing to undo"):
-                undo_transaction(database, "one", replaced["revision"])
 
 if __name__ == "__main__":
     unittest.main()

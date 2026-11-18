@@ -31,7 +31,7 @@ class FocusedRelatedTests(unittest.TestCase):
                 TestClient(main.app) as client,
             ):
                 def create(title: str, body: str) -> dict:
-                    response = client.post("/api/notes", json={"title": title, "body": body})
+                    response = client.post("/api/block-documents", json={"title": title, "body": body})
                     self.assertEqual(response.status_code, 201)
                     return response.json()
 
@@ -40,7 +40,7 @@ class FocusedRelatedTests(unittest.TestCase):
                 bread = create("Kitchen", "baking bread flour")
                 blank = create("Blank", "")
                 blocks = client.get(f"/api/block-documents/{source['id']}").json()["children"]
-                endpoint = f"/api/notes/{source['id']}/related"
+                endpoint = f"/api/block-documents/{source['id']}/related"
 
                 whole_note = client.get(endpoint).json()
                 self.assertEqual({result["note"]["id"] for result in whole_note}, {stars["id"], bread["id"]})
@@ -52,6 +52,6 @@ class FocusedRelatedTests(unittest.TestCase):
                     self.assertTrue(matches[0]["matched_block_id"])
 
                 blank_block = client.get(f"/api/block-documents/{blank['id']}").json()["children"][0]
-                self.assertEqual(client.get(f"/api/notes/{blank['id']}/related", params={"block_id": blank_block["id"]}).json(), [])
+                self.assertEqual(client.get(f"/api/block-documents/{blank['id']}/related", params={"block_id": blank_block["id"]}).json(), [])
                 self.assertEqual(client.get(endpoint, params={"block_id": blank_block["id"]}).status_code, 404)
                 self.assertEqual(client.get(endpoint, params={"block_id": "missing"}).status_code, 404)

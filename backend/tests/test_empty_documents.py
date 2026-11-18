@@ -76,8 +76,8 @@ class EmptyDocumentTests(unittest.TestCase):
         self.open_and_type(result["imported"][0]["id"], "Typed after import")
 
     def test_a_note_emptied_by_move_into_and_restored_can_be_typed_into(self) -> None:
-        source = self.client.post("/api/notes", json={"title": "Source", "body": "Moved away"}).json()
-        target = self.client.post("/api/notes", json={"title": "Target", "body": "Stays"}).json()
+        source = self.client.post("/api/block-documents", json={"title": "Source", "body": "Moved away"}).json()
+        target = self.client.post("/api/block-documents", json={"title": "Target", "body": "Stays"}).json()
         moved = self.client.post(f"/api/block-documents/{source['id']}/move-into/{target['id']}")
         self.assertEqual(moved.status_code, 200, moved.text)
         restored = self.client.post(f"/api/trash/{source['id']}/restore")
@@ -87,7 +87,7 @@ class EmptyDocumentTests(unittest.TestCase):
     def test_an_empty_note_still_exports_as_empty(self) -> None:
         from app.portability import export_document_markdown
 
-        note = self.client.post("/api/notes", json={"title": "Empty", "body": ""}).json()
+        note = self.client.post("/api/block-documents", json={"title": "Empty", "body": ""}).json()
         self.client.get(f"/api/block-documents/{note['id']}")
         markdown = export_document_markdown(self.settings.block_db_path, note["id"])
         self.assertEqual(markdown.split("---", 2)[2].strip(), "")

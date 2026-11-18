@@ -25,7 +25,7 @@ from ulid import ULID
 
 from . import block_types as _types
 from . import provenance as _provenance
-from .models import BlockOperation, BlockReviewContextKind
+from .models import BlockOperation
 
 SCHEMA_VERSION = 13
 DB_FILENAME = ".fortress.sqlite3"
@@ -425,14 +425,6 @@ def _checkin(path: Path, connection: sqlite3.Connection, identity) -> None:
     entries.append((connection, identity))
 
 
-def close_pooled_connections() -> None:
-    """Close this thread's idle connections (tests that delete databases)."""
-
-    for entries in (getattr(_pool, "idle", None) or {}).values():
-        while entries:
-            entries.pop()[0].close()
-
-
 @contextmanager
 def connection_scope(path: Path, immediate: bool = False):
     """One connection and transaction; ``immediate`` takes the write lock up front.
@@ -689,33 +681,6 @@ def store_asset_text(path: Path, content_hash: str, text: str) -> None:
         ).fetchall()
         for row in rows:
             _refresh_fts(connection, row["id"], row["document_id"], row["text"])
-
-
-def get_link_check_cache(path: Path, urls: list[str]) -> dict[str, dict[str, str]]:
-    if not urls:
-        return {}
-    initialize(path)
-    placeholders = ",".join("?" for _ in urls)
-    with connection_scope(path) as connection:
-        rows = connection.execute(
-            f"SELECT url, status, checked_at FROM link_check_cache WHERE url IN ({placeholders})",
-            urls,
-        ).fetchall()
-    return {
-        row["url"]: {"status": row["status"], "checked_at": row["checked_at"]}
-        for row in rows
-    }
-
-
-def store_link_check(path: Path, url: str, status: str, checked_at: str) -> None:
-    initialize(path)
-    with connection_scope(path) as connection:
-        connection.execute(
-            """INSERT INTO link_check_cache(url, status, checked_at) VALUES (?, ?, ?)
-               ON CONFLICT(url) DO UPDATE SET status = excluded.status,
-                                              checked_at = excluded.checked_at""",
-            (url, status, checked_at),
-        )
 
 
 def backfill_assets(db_path: Path, assets_path: Path) -> int:
@@ -1331,55 +1296,6 @@ def update_document_metadata(
         )
         if cursor.rowcount == 0:
             raise KeyError("document not found")
-
-
-def replace_document_from_markdown(
-    path: Path,
-    document_id: str,
-    title: str,
-    status: str,
-    tags: list[str],
-    body: str,
-    created_at: object,
-    updated_at: object,
-) -> None:
-    """Re-import the explicit raw/compatibility edit into the block store."""
-
-    initialize(path)
-    with connection_scope(path, immediate=True) as connection:
-        existing = connection.execute(
-            "SELECT created_at, deleted_at FROM documents WHERE id = ?", (document_id,)
-        ).fetchone()
-        if existing is not None and existing["deleted_at"] is not None:
-            raise KeyError("document not found")
-        if existing is None:
-            _insert_document(
-                connection,
-                document_id,
-                title,
-                status,
-                tags,
-                body,
-                _iso(created_at),
-                _iso(updated_at),
-            )
-            return
-        connection.execute(
-            """UPDATE documents
-               SET title = ?, status = ?, tags_json = ?, updated_at = ?,
-                   revision = revision + 1
-               WHERE id = ?""",
-            (title, status, json.dumps(tags), _iso(updated_at), document_id),
-        )
-        # A whole-document Markdown replacement has no block-level inverse patch.
-        # Treat it as a new revision and discard old undo/redo entries so they
-        # cannot restore a tree from before this compatibility edit.
-        connection.execute(
-            "DELETE FROM document_history WHERE document_id = ?", (document_id,)
-        )
-        connection.execute("DELETE FROM blocks_fts WHERE document_id = ?", (document_id,))
-        connection.execute("DELETE FROM blocks WHERE document_id = ?", (document_id,))
-        _insert_blocks(connection, document_id, body, existing["created_at"], _iso(updated_at))
 
 
 def delete_document(path: Path, document_id: str) -> None:
@@ -2563,121 +2479,6 @@ def _refresh_link_labels(node: dict, links: dict[str, dict]) -> None:
         node["text"] = rewrite(node["text"])
     if "[[" in json.dumps(node["content"]):
         node["content"] = visit(node["content"])
-
-
-def document_subtree(path: Path, document_id: str, block_id: str | None = None) -> dict | None:
-    tree = document_tree(path, document_id)
-    if tree is None:
-        return None
-
-    def find(nodes: list[dict], target: str) -> dict | None:
-        for node in nodes:
-            if node["id"] == target:
-                return node
-            found = find(node["children"], target)
-            if found is not None:
-                return found
-        return None
-
-    if block_id is None:
-        root = {"id": None, "parent": None, "children": tree["children"]}
-        return {"document": tree, "parent": None, "depth": 0, "breadcrumbs": [], "subtree": root}
-    node = find(tree["children"], block_id)
-    if node is None:
-        raise KeyError("block not found")
-    by_id: dict[str, dict] = {}
-    stack = [(child, None) for child in tree["children"]]
-    while stack:
-        current, parent = stack.pop()
-        by_id[current["id"]] = {"node": current, "parent": parent}
-        stack.extend((child, current["id"]) for child in current["children"])
-    breadcrumbs = []
-    current_id: str | None = block_id
-    while current_id is not None:
-        current = by_id[current_id]["node"]
-        breadcrumbs.append({"id": current["id"], "type": current["type"], "text": current["text"]})
-        current_id = by_id[current_id]["parent"]
-    breadcrumbs.reverse()
-    depth = len(breadcrumbs) - 1
-    parent_id = by_id[block_id]["parent"]
-    parent = by_id[parent_id]["node"] if parent_id else None
-    return {
-        "document": tree,
-        "parent": parent,
-        "children": node["children"],
-        "depth": depth,
-        "breadcrumbs": breadcrumbs,
-        "subtree": node,
-    }
-
-
-def document_review_context(
-    path: Path,
-    document_id: str,
-    context: BlockReviewContextKind,
-    block_ids: list[str],
-) -> dict | None:
-    """Resolve canonical target blocks and direct linked context for a review request."""
-    initialize(path)
-    with connection_scope(path) as connection:
-        tree = _document_tree(connection, document_id)
-        if tree is None:
-            return None
-
-        document_blocks: dict[str, dict] = {}
-
-        def collect(nodes: list[dict]) -> None:
-            for node in nodes:
-                document_blocks[node["id"]] = node
-                collect(node["children"])
-
-        collect(tree["children"])
-        if context == "document":
-            target_ids = list(document_blocks)
-        else:
-            invalid_ids = [block_id for block_id in block_ids if block_id not in document_blocks]
-            if invalid_ids:
-                raise ValueError("block_ids must belong to the requested document")
-            target_ids = block_ids
-
-        targets = [document_blocks[block_id] for block_id in target_ids]
-        linked_ids: set[str] = set()
-        if context == "linked":
-            focus_id = target_ids[0]
-            linked_ids = {
-                row["block_id"]
-                for row in connection.execute(
-                    """SELECT target_block_id AS block_id FROM block_refs WHERE source_block_id = ?
-                       UNION
-                       SELECT source_block_id AS block_id FROM block_refs WHERE target_block_id = ?
-                       ORDER BY block_id""",
-                    (focus_id, focus_id),
-                )
-            }
-
-        linked_context: list[dict] = []
-        if linked_ids:
-            placeholders = ",".join("?" for _ in linked_ids)
-            rows = connection.execute(
-                f"""SELECT blocks.id, blocks.document_id, blocks.type, blocks.attrs_json,
-                           blocks.content_json, blocks.text
-                      FROM blocks JOIN documents ON documents.id = blocks.document_id
-                     WHERE blocks.id IN ({placeholders}) AND documents.deleted_at IS NULL
-                     ORDER BY blocks.document_id, blocks.position, blocks.id""",
-                sorted(linked_ids),
-            ).fetchall()
-            linked_context = [
-                {
-                    "id": row["id"],
-                    "document_id": row["document_id"],
-                    "type": row["type"],
-                    "attrs": json.loads(row["attrs_json"]),
-                    "content": json.loads(row["content_json"]),
-                    "text": row["text"],
-                }
-                for row in rows
-            ]
-        return {"targets": targets, "linked_context": linked_context}
 
 
 class DocumentRevisionConflict(RuntimeError):
