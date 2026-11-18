@@ -22,7 +22,11 @@ jobs:
       - name: Package app (hardened runtime)
         run: Scripts/package_app.sh "$RUNNER_TEMP/app"
       - name: Test and render snapshots
-        run: SNAPSHOT_DIR="$PWD/snapshots" swift test --skip EditorPerformanceTests
+        run: SNAPSHOT_DIR="$PWD/snapshots" swift test --skip EditorPerformanceTests --skip ThemeGallerySnapshotTests
+      # On their own: choosing a theme recolours every window in the process.
+      - name: Theme snapshots
+        if: success() || failure()
+        run: SNAPSHOT_DIR="$PWD/snapshots" swift test --filter ThemeGallerySnapshotTests
       # On their own: the perf suite holds the main actor for long stretches, which made
       # timing-sensitive tests running beside it flaky, and its numbers noisy.
       - name: Editor performance

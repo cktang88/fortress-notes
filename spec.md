@@ -13,13 +13,29 @@ Non-goals: multi-user, real-time collaboration, mobile, cloud sync, tags, pinned
 whole-workspace (zip) export. The backend serves one local user; its only access
 control is the per-launch token described in §3 ("Local auth").
 
+### Principle: open standards first
+
+Wherever people or other tools see what Fortress writes or reads — the notes folder,
+exports, imports, the API — it uses the open or de-facto standard (CommonMark, GFM,
+Obsidian Flavored Markdown, YAML front matter, ISO 8601, OpenAPI, ...) instead of
+inventing its own. Our own data goes only where no standard can say it, under a
+`fortress` namespace that other readers don't see. Companion principle, **least
+surprise**: things behave as in Apple's apps and Obsidian, and standard Mac behaviour
+(⌘C/⌘V and pasteboard types, screenshots, system shortcuts, Quick Look, the share
+sheet) is never overridden. The policy and the decision for every format are in
+**[docs/open-standards.md](docs/open-standards.md)**.
+
 ## 2. Data model
 
 SQLite (`NOTES_DIR/.fortress.sqlite3`) is the only source of truth: documents,
 folders, nested blocks with stable IDs, references, history, assets, OCR text and the
 FTS index. Every write goes to SQLite first. Each active note also gets a read-only
-Markdown mirror, `NOTES_DIR/<id>.md`, so notes stay readable outside the app. Writers
-never touch mirrors: the `mirrors` background lane (`documents.MirrorWriter`) follows
+Markdown mirror, so notes stay readable outside the app: the notes folder is an
+**Obsidian vault** of plain CommonMark/GFM/Obsidian Markdown (`vault.py`,
+docs/open-standards.md). A note is `NOTES_DIR/<folder>/<subfolder>/<Title>.md`
+(its Fortress folders; names other tools can't use are cleaned, clashes get " 2");
+renames and moves rename the file and rewrite the wikilinks to it. Writers never
+touch mirrors: the `mirrors` background lane (`documents.MirrorWriter`) follows
 SQLite's change log, rewrites a changed note's mirror atomically (coalesced, about
 0.5 s after the edit) and removes it when the note is trashed. The app never reads
 the mirrors back; only the explicit Markdown importer reads `.md` files. A mirror
@@ -27,33 +43,43 @@ looks like this (extra front-matter keys added by hand are preserved):
 
 ```markdown
 ---
-id: 01HZX...            # ULID, also the filename
 title: My note
-status: rough           # "rough" | "polished"
-created_at: 2026-06-20T10:00:00Z
-updated_at: 2026-06-20T10:05:00Z
-images:                  # text read from each referenced picture/PDF (see §6)
-  01J....png: "Q1 revenue"
-provenance:              # where the note came from (§7a)
-  source: manual
+aliases: [My note?]      # only when the file name differs from the title
+created: '2026-06-20T10:00:00+00:00'
+updated: '2026-06-20T10:05:00+00:00'
+id: 01HZX...             # ULID
+status: rough            # "rough" | "polished"
+source: https://...      # only for a note that came from a web page
+fortress:
+  provenance:            # where the note came from (§7a)
+    source: manual
+  picture_text:          # text read from each picture/PDF it shows (see §6)
+    01J....png: "Q1 revenue"
 ---
 
-The note body in Markdown.
+The note body: see [[Other note]], [[Other note#^01J...|that paragraph]].
+
+![chart|300](assets/01J....png)
 ```
 
-Pasted images are stored as files in `NOTES_DIR/assets/<id>.<ext>` (imported ones as
-`<sha256>.<ext>`); in Markdown they are written as
-`<img src="/media/<id>.<ext>" width=…>` HTML so the width survives the round-trip
-(docs/block-model.md §7).
+`.fortress-mirrors.json` (change-log position and vault format version) and
+`.fortress-mirror-files.json` (each note's path, link name and referenced blocks)
+let a restart rewrite only what changed; a new `vault.FORMAT_VERSION` rewrites every
+mirror once (format 1, `NOTES_DIR/<id>.md`, is removed then).
 
-- **id**: ULID (sortable, unique). Mirror filename = `<id>.md`.
+Pasted images are stored as files in `NOTES_DIR/assets/<id>.<ext>` (imported ones as
+`<sha256>.<ext>`); the API serves them at `/media/…`, and Markdown embeds them as
+`![alt|width](assets/<name>)` relative to the note (docs/block-model.md §7).
+
+- **id**: ULID (sortable, unique), in the mirror's front matter.
 - **status**: `rough` (braindump/brainstorm) or `polished`. Drives UI badge + filter
   and the "promote to polished" action.
 - **title**: if empty, derived from the first heading/line of the body.
 - Timestamps are UTC ISO-8601. `updated_at` is set on every save.
 
-On first start an empty database imports any existing `NOTES_DIR/*.md` files once,
-copying the originals to a timestamped backup folder first.
+On first start an empty database imports the Markdown files of `NOTES_DIR` once
+(subfolders become folders; a note keeps its front-matter `id`), copying the
+originals to a timestamped backup folder first.
 
 ## 2a. Block shapes
 
@@ -81,7 +107,9 @@ with **422**.
 - `block_schema.py` — the block type registry and inline content rules (§2a).
 - `block_query.py` — filtered block-level full-text queries.
 - `order_keys.py` — fractional sibling order keys.
-- `block_markdown.py` — Markdown in and out of canonical blocks (ids in comments).
+- `block_markdown.py` — Markdown (CommonMark/GFM/Obsidian) in and out of canonical blocks.
+- `vault.py` — the notes folder as an Obsidian vault: file names, front matter,
+  wikilink resolution across an import.
 - `block_legacy.py`, `block_migration.py` — the schema-14 migration of stored
   data in older block shapes (the API accepts canonical shapes only).
 - `documents.py` — note lifecycle (create/update/trash/restore/purge/capture/move-into)
@@ -336,8 +364,9 @@ BackendController.swift`: the repository's `backend/.venv/bin/uvicorn`, else
   verifies the snapshot, saves the current state as `pre-restore` first, and moves
   Markdown mirrors of documents that are not in the snapshot aside rather than
   deleting them. Set `AUTO_BACKUP_ENABLED=false` to turn off daily snapshots.
-- **Import/export**: File ▸ Import brings in `.md` files or a OneNote export; each
-  note exports as Markdown.
+- **Import/export**: File ▸ Import brings in `.md` files (Obsidian notes included:
+  wikilinks between the files resolve) or a OneNote export; each note exports as
+  Markdown. The notes folder itself is an Obsidian vault (§2).
 
 ## 7a. Provenance, metadata and living documents
 
@@ -381,9 +410,10 @@ was created with). Provenance is never part of block text, FTS or embeddings.
   `update` (omitted keeps it). Client input is validated (422/409) and cannot set the
   server-maintained keys. Move-into (`POST …/move-into/{target_id}`) stamps
   `origin.operation = "move_into"` on every moved block.
-- **Markdown**: export front matter carries `provenance:`; a block whose provenance
-  differs from the note's is preceded by one line
-  `<!-- fortress:block {"external_id":"{GUID}","source":"onenote_import",…} -->`.
+- **Markdown**: export and mirror front matter carry `fortress: {provenance: …}`
+  (and `source:` for a `source_url`); a block whose provenance differs from the
+  note's carries it in an invisible comment, e.g.
+  `<!-- fortress:block {"provenance":{"external_id":"{GUID}","source":"onenote_import"}} -->`.
   Import (directory, upload, mirrors) restores both, so export → import → export is
   identical. A copy whose source key is already taken gives it up
   (`extra.copy_of_external_id`).

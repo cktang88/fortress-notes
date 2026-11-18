@@ -64,7 +64,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = .textBackgroundColor
+        scrollView.backgroundColor = .themeBackground
         scrollView.contentView.postsBoundsChangedNotifications = false
         textView.controller = self
         textView.delegate = self
@@ -600,7 +600,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     private func flash(_ range: NSRange) {
         guard let manager = textView.textLayoutManager, let textRange = textRange(for: range) else { return }
-        let color = NSColor.controlAccentColor.withAlphaComponent(0.12)
+        let color = NSColor.themeAccent.withAlphaComponent(0.12)
         manager.addRenderingAttribute(.backgroundColor, value: color, for: textRange)
         Task { @MainActor [weak manager] in
             try? await Task.sleep(for: .milliseconds(1200))

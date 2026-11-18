@@ -26,7 +26,7 @@ from app import block_store, documents, images, onenote_import, sources
 from app.block_store import apply_transaction, document_tree, search_blocks
 from app.models import BlockOperation
 from app.portability import export_document_markdown
-from support import make_settings, use_settings
+from support import make_settings, use_settings, mirror_file
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"fake image bytes"
@@ -317,7 +317,7 @@ class ImportManifestTests(_Base):
         self.assertEqual(standup["source_url"], "https://example.org/source")
         self.assertTrue(standup["extra"]["onenote"]["title_derived"])
         documents.flush_mirrors()  # Markdown mirrors follow in the background
-        self.assertTrue((self.notes / f"{ids[P1]}.md").is_file())
+        self.assertTrue(mirror_file(self.notes, ids[P1]).is_file())
 
     def test_local_edit_survives_reimport_and_source_change_is_a_conflict(self) -> None:
         self.run_import()

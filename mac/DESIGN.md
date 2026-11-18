@@ -128,27 +128,24 @@ The body numbers follow the consensus of Bear (16/1.6) and Craft (16, +8 line sp
 
 ### a.4 Color
 
-Use only system semantic colors plus **one accent**:
+Content colours come from **one semantic palette** (`App/Theme/Palette.swift`); chrome (sidebar, toolbar, sheets, popovers, glass) stays native and takes only the palette's accent through `.tint`. Never hex grays in views: use the palette roles.
 
-- **Accent:** "Fortress Ember", `Color.fortressEmber` (a dynamic `NSColor` in `Shell/MainWindow.swift`; a SwiftPM executable has no asset catalog). Light `#B4532A` (sRGB 180,83,42), dark `#F0915A`, plus increased-contrast variants `#8F3D1A` and `#FFB085`. It is applied through `.tint`.
-  - The accent is used **only** for: the insertion point, text selection (system behavior), links and `[[ ]]`, the selected-row glyph in the sidebar, the prominent button in sheets, the "Ask" send button, and the citation chips.
-  - It is never used as a fill behind text blocks.
-- **Backgrounds:**
-  - Editor and list: `Color(nsColor: .textBackgroundColor)` (white / near-black).
-  - Window: system.
-  - Sidebar: system glass.
-  - Inspector: system.
-  - Panels (palette, capture): `.glassEffect(.regular)`.
-- **Text:** `.primary`, `.secondary`, `.tertiary`, `.quaternary`. **Never hex grays.**
-- **Fills:** `quaternarySystemFill` for code and chip backgrounds. `.selection`-style row selection comes from the system List.
-- **Separators:** `Color(nsColor: .separatorColor)`, used rarely. No separators between list rows. The list uses `.listRowSeparator(.hidden)` and 8pt row spacing, as in Linear's "structure should be felt, not seen".
-- **Search highlight:** `NSColor.findHighlightColor` (the system's yellow) at 100% under the matched characters, with matching text staying `.primary`. This is the same as Safari and Notes find.
+- **Roles:** `background` (editor, Ask), `sunken` (note list, search results, inspector, and the window behind the sidebar glass via `containerBackground(_:for: .window)`, so the material picks up the tone instead of being replaced), `surface` (code blocks, inline code, cards, table headers), `border`, `text`, `secondaryText`, `tertiaryText`, `accent`, `link`, `selection`, `highlight` (find matches and the yellow highlighter), `codeText`, `quoteBar`, and ten named mark hues (red … gray) for user-chosen text colours and highlighters.
+- **Access:** AppKit draws with stable dynamic colours (`NSColor.themeText`, …) that resolve per appearance at draw time, so cached text attributes survive a theme change; SwiftUI uses `ThemeStyle` (`.foregroundStyle(.themeSecondary)`, `.background(.themeBackground)`), which resolves from the environment (`.fortressTheme()` at each window root, `.themedContent()` on content columns).
+- **Defaults** (designed in OKLCH; see `Palette.paper` / `Palette.night`):
+  - *Paper* (light): warm cream page `#FBF8F1`, list `#F6F1E7`, surface `#F0EADF`, border `#DCD5C9`, text warm near-black `#221D18` (15.8:1), secondary `#5B544C` (7.0:1), tertiary `#6F6962` (5.1:1).
+  - *Night* (dark, Linear-style blue-grey rather than black): page `#13151C`, list `#0D0F14`, surface `#1C1E26`, border `#2D3039`, text `#E8E9EE` (15:1), secondary `#B1B4BC` (8.8:1), tertiary `#888C96` (5.4:1).
+- **Accent:** "Fortress Ember", light `#AA4C23`, dark `#F09159`, used when the system accent is Multicolor; otherwise the user's accent colour from System Settings (made legible on the page). Themes bring their own accent (Base16 `base0D`). The accent is used **only** for: the insertion point, links and `[[ ]]`, checked checkboxes, the selected-row glyph in the sidebar, the prominent button in sheets, the "Ask" send button, and the citation chips. It is never used as a fill behind text blocks.
+- **Contrast rules** (`Palette.legible`, checked in `ThemeTests`): text ≥ 7:1 on the page; every other text colour (secondary, tertiary, accent, link, code, marks) ≥ 4.5:1 on page, list and surface; text ≥ 4.5:1 on selection, highlights and citation chips. Under Increase Contrast: 10:1 / 7:1 and borders ≥ 3:1. A failing colour keeps its OKLCH hue and chroma and only moves in lightness.
+- **User colours** (OneNote text and cell colours): named colours map onto the theme's hues; hex colours keep their hue and are moved in lightness until they read at 4.5:1 on the page (`legibleText`); fills become a tint the text stays legible on (`legibleFill`, as is on light pages when already legible).
+- **Themes:** Settings ▸ Appearance picks System/Light/Dark, a light theme and a dark theme. Themes are tinted-theming Base16/Base24 YAML schemes (nine MIT-licensed ones bundled, licences shown in Settings) or VS Code colour theme JSON, imported as files into `~/Library/Application Support/Fortress Notes/Themes`. There is no Fortress theme format.
+- **Separators:** used rarely. No separators between list rows. The list uses `.listRowSeparator(.hidden)` and 8pt row spacing, as in Linear's "structure should be felt, not seen".
 - **Status:**
   - *Rough* uses the glyph `circle.dashed` in `.tertiary`.
   - *Polished* uses `checkmark.seal` in `.secondary`.
   - No colors.
 - **Destructive:** `.red` only in confirmation buttons (`role: .destructive`).
-- **Dark mode** is automatic through the semantics above. Verify contrast with Increase Contrast on.
+- **Dark mode** follows the system appearance (or the Appearance setting) through the palette pair. Verify contrast with Increase Contrast on.
 
 ### a.5 Spacing scale (4pt base)
 

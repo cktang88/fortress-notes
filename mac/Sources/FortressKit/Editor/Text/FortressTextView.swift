@@ -29,7 +29,9 @@ final class FortressTextView: NSTextView {
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.drawsBackground = true
-        textView.backgroundColor = .textBackgroundColor
+        textView.backgroundColor = .themeBackground
+        textView.insertionPointColor = .themeAccent
+        textView.selectedTextAttributes = [.backgroundColor: NSColor.themeSelection]
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         // Smart quotes and dashes follow System Settings ▸ Keyboard ▸ Text Input (the app
@@ -41,7 +43,7 @@ final class FortressTextView: NSTextView {
         textView.smartInsertDeleteEnabled = true
         textView.displaysLinkToolTips = true
         textView.linkTextAttributes = [
-            .foregroundColor: NSColor.controlAccentColor,
+            .foregroundColor: NSColor.themeLink,
             .cursor: NSCursor.pointingHand,
         ]
         textView.writingToolsBehavior = .complete

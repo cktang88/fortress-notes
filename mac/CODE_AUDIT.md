@@ -88,9 +88,9 @@ Strict concurrency is a build error now (`treatAllWarnings(as: .error)`, Swift 6
   `textView(_:writingToolsIgnoredRangesInEnclosingRange:)` with links, note links and
   block references, inline code, code blocks and attachments
   (`BlockEditorController.swift:951`), test `writingToolsSkipsExactText`.
-- **I6 [M] system text colors — pass.** `.textBackgroundColor` behind the text,
-  `controlAccentColor` links, system selection; the highlight palette in `EditorTheme` is
-  the theme audit's.
+- **I6 [M] system text colors — pass.** The editor's colors are theme roles
+  (`themeBackground`, `themeAccent` caret, `themeSelection`, `themeLink`; App/Theme/,
+  audited with the theme), which resolve per appearance and contrast setting.
 - **I7 [S] Bigger/Smaller/Actual Size — fail → deferred.** `EditorTheme.baseSize` and
   `FortressTextView.measureCharacters` already scale the editor; what's missing is the
   View menu commands and a stored scale, which is menu/commands work (UX audit, E).

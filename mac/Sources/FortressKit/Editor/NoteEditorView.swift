@@ -23,7 +23,7 @@ struct NoteEditorView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color(nsColor: .textBackgroundColor)
+            Rectangle().fill(.themeBackground)
             if let session, session.document != nil {
                 BlockTextEditor(session: session, model: model, focusBlockId: focusBlockId,
                                 focusRequest: model.editorFocusRequest)
@@ -40,6 +40,7 @@ struct NoteEditorView: View {
                 ProgressView().controlSize(.small).padding(.top, 120)
             }
         }
+        .foregroundStyle(.themeText)
         .task(id: documentId) {
             guard session?.document == nil else { return }
             let session = self.session ?? EditorSession(documentId: documentId, api: model.api)
@@ -87,13 +88,13 @@ private struct SaveBanner: View {
 
     private func banner<Actions: View>(symbol: String, text: String, @ViewBuilder actions: () -> Actions) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: symbol).foregroundStyle(.secondary)
-            Text(text).font(.callout).foregroundStyle(.secondary)
+            Image(systemName: symbol).foregroundStyle(.themeSecondary)
+            Text(text).font(.callout).foregroundStyle(.themeSecondary)
             actions()
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.regularMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(ThemeStyle(.border), lineWidth: 0.5))
         .padding(.top, 12)
         .transition(.opacity)
     }
@@ -241,7 +242,12 @@ struct EditorHeader: View {
     var onSubmitTitle: () -> Void
     var onHeightChange: (CGFloat) -> Void
 
+    // Hosted in its own NSHostingView inside the text view: theme it here.
     var body: some View {
+        themedBody.fortressTheme().foregroundStyle(.themeText)
+    }
+
+    @ViewBuilder private var themedBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Untitled", text: Binding(get: { session.title }, set: { session.titleDidChange($0) }), axis: .vertical)
                 .textFieldStyle(.plain)
@@ -287,18 +293,18 @@ private struct MetaLine: View {
             .fixedSize()
             .help("Status")
             if let updatedAt = session.updatedAt {
-                Text("·").foregroundStyle(.quaternary)
+                Text("·").foregroundStyle(.themeTertiary)
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     Text(EditorDates.edited(updatedAt, now: context.date))
                 }
             }
             if let folder {
-                Text("·").foregroundStyle(.quaternary)
+                Text("·").foregroundStyle(.themeTertiary)
                 Label(folder, systemImage: "folder").labelStyle(.titleAndIcon)
             }
         }
         .font(.system(size: 12))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.themeSecondary)
         .monospacedDigit()
     }
 }

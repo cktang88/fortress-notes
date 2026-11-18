@@ -49,6 +49,8 @@ struct InspectorView: View {
                     .controlSize(.small)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .themedContent(.sunken)
         .onChange(of: NoteKey(noteId: noteId, revision: revision), initial: true) { _, key in
             let navigation = model.navigation
             inspector.show(noteId: key.noteId, revision: key.revision,
@@ -98,7 +100,7 @@ struct InspectorView: View {
         InspectorSection(title: "Seen before", symbol: "eye") {
             Text("You’ve written something like this")
                 .font(.subheadline)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.themeTertiary)
             ForEach(seenBefore) { item in
                 PassageCard(title: item.note.title, text: item.matchedBlockText, number: nil) {
                     model.open(noteId: item.note.id, blockId: item.matchedBlockId)
@@ -112,11 +114,11 @@ struct InspectorView: View {
             if related.isEmpty, let error = inspector.loadError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.themeTertiary)
             } else if related.isEmpty {
                 Text("Notes on the same subject show up here as you write.")
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.themeTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 VStack(alignment: .leading, spacing: 2) {
@@ -139,7 +141,7 @@ struct InspectorView: View {
             if backlinks.isEmpty {
                 Text("No notes link here yet.")
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.themeTertiary)
             } else {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(backlinks) { link in
@@ -178,10 +180,10 @@ private struct InspectorHeaderLabelStyle: LabelStyle {
         HStack(spacing: 6) {
             configuration.icon
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.themeTertiary)
             configuration.title
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.themeSecondary)
         }
     }
 }
@@ -203,7 +205,7 @@ private struct InspectorRow: View {
                     .lineLimit(1)
                 detailText
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
                     .lineLimit(2)
             }
             .padding(.horizontal, 8)
@@ -212,7 +214,7 @@ private struct InspectorRow: View {
             .contentShape(.rect)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(isHovered ? AnyShapeStyle(.quaternary.opacity(0.7)) : AnyShapeStyle(.clear)))
+                    .fill(isHovered ? AnyShapeStyle(ThemeStyle(.surface)) : AnyShapeStyle(.clear)))
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -263,12 +265,12 @@ struct InfoSection: View {
             } icon: {
                 Image(systemName: provenance.symbol)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
             }
             if let path = provenance.path {
                 Text(path)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
                     .lineLimit(2)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
@@ -289,19 +291,19 @@ struct InfoSection: View {
             if let dates = Self.sourceDates(provenance) {
                 Text(dates)
                     .font(.subheadline)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.themeTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if info.conflicts > 0 {
                 Label("\(info.conflicts) \(info.conflicts == 1 ? "change differs" : "changes differ") from the source",
                       systemImage: "exclamationmark.triangle")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.themeSecondary)
             }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .quaternarySystemFill), in: .rect(cornerRadius: 8, style: .continuous))
+        .background(ThemeStyle(.surface), in: .rect(cornerRadius: 8, style: .continuous))
         .padding(.bottom, 4)
     }
 
@@ -331,11 +333,11 @@ struct InfoSection: View {
         GridRow {
             Text(label)
                 .font(.subheadline)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.themeTertiary)
                 .gridColumnAlignment(.trailing)
             Text(value)
                 .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.themeSecondary)
                 .lineLimit(2)
                 .textSelection(.enabled)
         }

@@ -37,6 +37,8 @@ from . import (
 )
 from .portability import (
     export_document_markdown,
+    UploadedNote,
+    parse_uploaded_batch,
     parse_uploaded_markdown,
     safe_filename,
     import_markdown_if_empty,
@@ -567,20 +569,7 @@ async def import_uploaded_markdown(
         raise HTTPException(404, "folder not found")
     imported: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
-
-    def create_note(name: str, raw: bytes):
-        parsed = parse_uploaded_markdown(name, raw)
-        return documents.create(
-            NoteCreate(
-                title=parsed.title,
-                body=parsed.body,
-                status=parsed.status,
-                folder_id=folder_id,
-            ),
-            created_at=parsed.created_at,
-            source=parsed.provenance,
-        )
-
+    readable: list[tuple[str, UploadedNote]] = []
     for upload in files:
         name = upload.filename or "untitled.md"
         raw = await upload.read(MAX_IMPORT_BYTES + 1)
@@ -588,11 +577,30 @@ async def import_uploaded_markdown(
             errors.append({"name": name, "detail": "file is larger than 5 MB"})
             continue
         try:
-            note = await run_in_threadpool(create_note, name, raw)
+            readable.append((name, parse_uploaded_markdown(name, raw)))
         except ValueError as exc:
             errors.append({"name": name, "detail": str(exc)})
-            continue
-        imported.append({"name": name, "id": note["id"], "title": note["title"]})
+
+    def create_all() -> None:
+        # Read together, so [[wikilinks]] between the files resolve.
+        notes = [note for _, note in readable]
+        parsed = parse_uploaded_batch(_db(), notes, block_store.new_id)
+        for (name, note), (document_id, specs) in zip(readable, parsed):
+            try:
+                created = documents.create(
+                    NoteCreate(title=note.title, body=note.body, status=note.status,
+                               folder_id=folder_id),
+                    created_at=note.created_at,
+                    source=note.provenance,
+                    document_id=document_id,
+                    specs=specs,
+                )
+            except ValueError as exc:
+                errors.append({"name": name, "detail": str(exc)})
+                continue
+            imported.append({"name": name, "id": created["id"], "title": created["title"]})
+
+    await run_in_threadpool(create_all)
     return {"imported": imported, "errors": errors}
 
 
