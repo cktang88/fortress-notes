@@ -28,6 +28,7 @@ struct BackupsView: View {
                         .monospacedDigit()
                         .help(date.map { $0.formatted(.relative(presentation: .named)) } ?? "")
                 }
+                .width(min: 170, ideal: 210)
                 TableColumn("Kind") { backup in
                     Text(BackupKind.label(backup.kind))
                         .foregroundStyle(.secondary)
@@ -47,6 +48,7 @@ struct BackupsView: View {
             } primaryAction: { ids in
                 restoring = model.backups.first { ids.contains($0.id) }
             }
+            .frame(minHeight: 140, maxHeight: .infinity)
             .overlay {
                 if model.backups.isEmpty {
                     ContentUnavailableView(

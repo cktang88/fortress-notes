@@ -55,7 +55,7 @@ import Testing
     @Test func backupsSheet() throws {
         let model = ShellFixtures.model()
         try both("backups", size: CGSize(width: 560, height: 420)) {
-            BackupsView(isSheet: true).environment(model)
+            BackupsView(isSheet: true).environment(model).frame(width: 560, height: 420)
         }
     }
 

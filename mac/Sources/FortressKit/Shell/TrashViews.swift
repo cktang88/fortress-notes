@@ -35,10 +35,10 @@ struct TrashListView: View {
         .onDeleteCommand {
             if let id = model.selectedTrashId { Task { await model.deleteForever(trashedId: id) } }
         }
-        .navigationTitle("Trash")
         .toolbar {
             ToolbarItem {
                 Button("Empty Trash…") { isConfirmingEmpty = true }
+                    .fixedSize()
                     .disabled(model.trash.isEmpty)
                     .help("Permanently delete every note in the Trash")
             }
@@ -94,11 +94,15 @@ struct TrashDetailView: View {
                             .foregroundStyle(.secondary)
                         Text("This note is in the Trash.")
                             .foregroundStyle(.secondary)
-                        Spacer()
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
                         Button("Restore") { Task { await model.restore(trashedId: note.id) } }
-                        Button("Delete Permanently…", role: .destructive) { isConfirmingDelete = true }
+                            .fixedSize()
+                        Button("Delete…", role: .destructive) { isConfirmingDelete = true }
                             .buttonStyle(.plain)
                             .foregroundStyle(.red)
+                            .fixedSize()
+                            .help("Delete Permanently")
                     }
                     .font(.body)
                     .padding(12)

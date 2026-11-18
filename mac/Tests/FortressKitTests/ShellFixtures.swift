@@ -25,8 +25,8 @@ enum ShellFixtures {
 
     static var notes: [NavigationDocument] {
         [
-            note("n1", "Kyoto trip", "We booked a ryokan in Gion for the first three nights, then a small hotel near Kyoto Station for day trips to Nara.", folder: "travel", edited: 0, hours: 1),
-            note("n2", "Reading notes: The Timeless Way of Building", "Patterns are alive when they resolve the forces in a situation. Alexander calls this the quality without a name.", folder: "reading", status: .polished, edited: 0, hours: 3),
+            note("n1", "Kyoto trip", "We booked a ryokan in Gion for the first three nights, then a small hotel near Kyoto Station for day trips to Nara.", folder: "travel", edited: 0, hours: 0.1),
+            note("n2", "Reading notes: The Timeless Way of Building", "Patterns are alive when they resolve the forces in a situation. Alexander calls this the quality without a name.", folder: "reading", status: .polished, edited: 0, hours: 0.3),
             note("n3", "Call the dentist about the cleaning", "Call the dentist about the cleaning", folder: "inbox", edited: 1),
             note("n4", "Q4 planning", "Three bets for the quarter: ship the native app, make search instant, and cut the backlog in half.", folder: "work", status: .polished, edited: 2),
             note("n5", "Packing list", "Passport, charger, rain jacket, the good walking shoes, and a paper map for when the phone dies.", edited: 4),

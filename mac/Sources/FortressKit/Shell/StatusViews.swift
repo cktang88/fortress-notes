@@ -55,7 +55,7 @@ struct ToastCapsule: View {
         .font(.callout)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .frame(maxWidth: 460)
+        .fixedSize()
         .glassEffect(.regular.interactive(), in: .capsule)
     }
 }
@@ -67,7 +67,7 @@ struct OfflineBanner: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "bolt.horizontal.circle")
-            Text("Offline. Changes can't be saved.")
+            Text("Can't reach Fortress")
                 .lineLimit(1)
             Spacer(minLength: 4)
             Button("Retry") { Task { await model.retryConnection() } }

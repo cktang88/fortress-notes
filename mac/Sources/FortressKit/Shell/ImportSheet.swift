@@ -63,6 +63,7 @@ struct ImportSheet: View {
         Text("Each file becomes a note named after the file. Front matter (title, status) is kept.")
             .font(.callout)
             .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
         HStack {
             if isImporting { ProgressView().controlSize(.small) }

@@ -55,7 +55,6 @@ struct NoteListView: View {
             if let id = model.openNoteId { Task { await model.trashNote(id: id) } }
         }
         .focusedValue(\.noteListTrash, model.openNoteId.map { id in TrashAction(id: id) })
-        .navigationTitle(model.scopeTitle)
         .toolbar {
             ToolbarItemGroup {
                 Menu {
