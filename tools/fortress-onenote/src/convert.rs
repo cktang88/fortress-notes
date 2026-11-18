@@ -1153,6 +1153,7 @@ pub fn convert_notebook(
     input_root: &Path,
     assets: &mut AssetStore,
     log: &mut dyn FnMut(&str),
+    extra: &mut Vec<NotebookSource>,
 ) -> Notebook {
     let mut nb = NotebookCtx {
         assets,
@@ -1269,10 +1270,61 @@ pub fn convert_notebook(
                         (None, None, None)
                     }
                 };
+            // Sub-folders with their own TOC that the notebook does not list
+            // as section groups are separate notebooks (e.g. a notebook
+            // folder that also holds other notebooks).
+            let mut foreign: Vec<PathBuf> = Vec::new();
+            if let Some(s) = skel.as_ref().filter(|s| !s.is_empty()) {
+                let mut group_dirs = Vec::new();
+                skel_group_dirs(s, root, &mut group_dirs);
+                input::walk(root, &mut |p, is_dir| {
+                    if !is_dir
+                        || foreign.iter().any(|f| p.starts_with(f))
+                        || group_dirs.iter().any(|g| g == p)
+                    {
+                        return;
+                    }
+                    let has_toc = std::fs::read_dir(p)
+                        .map(|rd| {
+                            rd.filter_map(|e| e.ok())
+                                .any(|e| input::ext_lower(&e.path()) == "onetoc2")
+                        })
+                        .unwrap_or(false);
+                    if has_toc {
+                        foreign.push(p.to_path_buf());
+                    }
+                });
+            }
+            for f in &foreign {
+                let toc = std::fs::read_dir(f)
+                    .ok()
+                    .and_then(|rd| {
+                        let mut v: Vec<PathBuf> = rd
+                            .filter_map(|e| e.ok())
+                            .map(|e| e.path())
+                            .filter(|p| input::ext_lower(p) == "onetoc2")
+                            .collect();
+                        v.sort();
+                        v.into_iter().next()
+                    })
+                    .unwrap_or_else(|| f.join(".onetoc2"));
+                extra.push(NotebookSource::Toc {
+                    toc,
+                    root: f.clone(),
+                    name: f
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    rel: rel_path(f, input_root),
+                });
+            }
             // 2. Parse every section file on disk.
             let mut parsed: HashMap<String, Vec<Parsed>> = HashMap::new();
             let mut no_identity: Vec<Parsed> = Vec::new();
-            for f in input::list_sections(root) {
+            for f in input::list_sections(root)
+                .into_iter()
+                .filter(|f| !foreign.iter().any(|d| f.starts_with(d)))
+            {
                 let frel = rel_path(&f, input_root);
                 let dir = f.parent().unwrap_or(root).to_path_buf();
                 let mut parent = base.clone();
@@ -1321,6 +1373,16 @@ pub fn convert_notebook(
                 children,
                 report: finish_report(nb.report),
             }
+        }
+    }
+}
+
+fn skel_group_dirs(skel: &[Skel], dir: &Path, out: &mut Vec<PathBuf>) {
+    for s in skel {
+        if let Skel::Group { name, children, .. } = s {
+            let d = dir.join(name);
+            skel_group_dirs(children, &d, out);
+            out.push(d);
         }
     }
 }
@@ -1540,6 +1602,71 @@ fn count_groups(entries: &[Entry]) -> usize {
 fn finish_report(mut r: NotebookReport) -> NotebookReport {
     r.counts.sections_failed = r.failed_sections.len();
     r
+}
+
+/// Make every `id` unique within the manifest. Copies of the same notebook,
+/// section or page (same `file_identity` / `link_target_id`) get a
+/// path-derived suffix; the original identity fields are left untouched.
+pub fn dedupe_ids(nbs: &mut [Notebook]) {
+    use std::collections::HashSet;
+    fn uniq(seen: &mut HashSet<String>, id: &mut String, salt: &str) {
+        if seen.insert(id.clone()) {
+            return;
+        }
+        let h = hex::encode(Sha256::digest(salt.as_bytes()));
+        let mut n = 8;
+        loop {
+            let cand = format!("{id}~{}", &h[..n.min(h.len())]);
+            if seen.insert(cand.clone()) {
+                *id = cand;
+                return;
+            }
+            n += 4;
+            if n > h.len() {
+                let cand = format!("{id}~{}", seen.len());
+                seen.insert(cand.clone());
+                *id = cand;
+                return;
+            }
+        }
+    }
+    fn entries(seen: &mut HashSet<String>, pages: &mut HashSet<String>, es: &mut [Entry], salt: &str) {
+        for (i, e) in es.iter_mut().enumerate() {
+            match e {
+                Entry::SectionGroup(g) => {
+                    let s = format!("{salt}/{i}:{}", g.path.join("/"));
+                    uniq(seen, &mut g.id, &s);
+                    entries(seen, pages, &mut g.children, &s);
+                }
+                Entry::Section(sec) => {
+                    let s = format!("{salt}/{i}:{}", sec.path.join("/"));
+                    uniq(seen, &mut sec.id, &s);
+                    let mut remap: Vec<(String, String)> = Vec::new();
+                    for p in sec.pages.iter_mut() {
+                        let old = p.id.clone();
+                        uniq(pages, &mut p.id, &format!("{s}#{}", p.order));
+                        if old != p.id {
+                            remap.push((old, p.id.clone()));
+                        }
+                    }
+                    for p in sec.pages.iter_mut() {
+                        if let Some(pid) = &p.parent_id
+                            && let Some((_, new)) = remap.iter().find(|(o, _)| o == pid)
+                        {
+                            p.parent_id = Some(new.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut pages = HashSet::new();
+    for (i, nb) in nbs.iter_mut().enumerate() {
+        let salt = format!("{i}:{}", nb.source_path);
+        uniq(&mut seen, &mut nb.id, &salt);
+        entries(&mut seen, &mut pages, &mut nb.children, &salt);
+    }
 }
 
 /// Fill in counts that depend on the assembled tree.

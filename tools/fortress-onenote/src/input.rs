@@ -285,7 +285,7 @@ pub fn list_sections(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn walk(dir: &Path, f: &mut dyn FnMut(&Path, bool)) {
+pub fn walk(dir: &Path, f: &mut dyn FnMut(&Path, bool)) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
     entries.sort_by_key(|e| e.file_name());

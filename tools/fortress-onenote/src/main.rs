@@ -146,17 +146,23 @@ pub fn run_conversion(
     let prepared = input::prepare(input, kind, &work, &mut in_report);
     let result = prepared.map(|prepared| {
         let mut notebooks = Vec::new();
-        for src in &prepared.notebooks {
-            let mut nb = convert::convert_notebook(src, &prepared.root, &mut store, log);
+        let mut queue: std::collections::VecDeque<input::NotebookSource> =
+            prepared.notebooks.into_iter().collect();
+        while let Some(src) = queue.pop_front() {
+            let mut extra = Vec::new();
+            let mut nb =
+                convert::convert_notebook(&src, &prepared.root, &mut store, log, &mut extra);
             convert::finalize(&mut nb);
             notebooks.push(nb);
+            queue.extend(extra);
         }
         notebooks
     });
     if kind == input::InputKind::Zip && !keep_extracted {
         let _ = fs::remove_dir_all(&work);
     }
-    let notebooks = result?;
+    let mut notebooks = result?;
+    convert::dedupe_ids(&mut notebooks);
     if notebooks.is_empty() {
         let mut msg = String::from("no OneNote notebooks or sections found in the input");
         if let Some((f, t)) = in_report.export_errors.first() {
