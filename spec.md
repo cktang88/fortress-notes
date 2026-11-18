@@ -193,6 +193,7 @@ merging apply to text blocks only.
 - `search.py` — full-text search + orchestration of embedding search & related notes.
 - `llm.py` — OpenRouter chat completion (`z-ai/glm-5.3-flash`) for note review.
 - `main.py` — FastAPI app, routes, CORS.
+- `onenote_import.py` — OneNote importer: runs `fortress-onenote`, imports its manifest as living documents, import jobs (§7b).
 
 ### API
 
@@ -222,6 +223,9 @@ merging apply to text blocks only.
 | `GET` | `/api/block-documents/{id}/info` | — | note metadata: dates, provenance, counts, conflicts (§7a) |
 | `POST` | `/api/block-documents/{id}/blocks/{block_id}/source-conflict` | `{keep}` | document tree (§7a) |
 | `POST` | `/api/markdown-import/files` | multipart `files[]`, `folder_id?` | `{imported, errors}` |
+| `POST` | `/api/import/onenote` | multipart `file` (+ `folder_id?`) or JSON `{path, folder_id?}` | `202 {job_id, status: "queued"}` (§7b) |
+| `GET` | `/api/import/onenote/{job_id}` | — | import job (§7b) |
+| `GET` | `/api/import/onenote` | `?limit=20` | recent import jobs, newest first |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded}` |
 
 ### Late-interaction search (PyLate)
@@ -434,6 +438,109 @@ text and record the source's version as a conflict; local additions stay after t
 block they followed; local deletions stick; blocks gone from the source are deleted
 unless edited (then marked `source_removed`); structure follows the source; title and
 folder follow the source unless changed locally; trashed notes are skipped.
+
+## 7b. OneNote import (`onenote_import.py`)
+
+Background: `docs/onenote-import.md` (F1–F5). The user exports notebooks from
+OneNote (web *Export notebook* .zip, OneDrive *Download* .zip, `.onepkg`, `.one`);
+the Rust converter `tools/fortress-onenote` turns the export into
+`manifest.json` + `assets/<sha256>.<ext>` (contract:
+`tools/fortress-onenote/SCHEMA.md`, format version 1; any other version is
+refused). Binary lookup: `FORTRESS_ONENOTE_BIN`, else
+`tools/fortress-onenote/target/release/fortress-onenote`, else next to the
+running Python (`./fortress-onenote`, `../Resources/bin/fortress-onenote` in an
+app bundle), else `PATH`. Converter timeout: `FORTRESS_ONENOTE_TIMEOUT_S`
+(default 3600).
+
+**Mapping** (all through `sources.upsert_document_from_source`, source
+`onenote_import`, §7a — re-imports update in place, keep local edits, report
+`unchanged`):
+
+- Notebook › section group › section → folders via `ensure_folder_path`, keyed
+  `notebook:<id>`, `group:<id>`, `section:<id>` (the manifest ids: OneNote file
+  identities, stable across renames/moves), created under `folder_id` if given.
+- Page → note keyed by the page id (GUID; a second copy of the same notebook in
+  one export carries `~hash`). Title (derived titles flagged in
+  `provenance.extra.onenote.title_derived`), `source_path` "Notebook › Section ›
+  Page", `source_url` (pasted-from citation), source created/modified (also the
+  note's `created_at`/`updated_at`), importer `{name: "fortress-onenote-import",
+  version}`, `extra.onenote: {level, order, parent_page_id, section_path, author}`.
+- **Subpages** stay in the section folder in OneNote order (right after their
+  parent); the parent gets a trailing **Subpages** paragraph with a list of
+  `[[id|Title]]` links to its direct subpages. (Folders list before notes in
+  the sidebar, so a folder per parent page would split parent and subpages;
+  `extra.onenote.level/parent_page_id` keep the tree for a later nested view.)
+- **Layout**: the manifest's reading-order rows; a `columns` row → `columns` block
+  with one `column` per OneNote column (`width` = relative fraction), nested as in
+  the manifest; "scattered" bands (> 4 columns) are stacked.
+- Blocks (flat with `indent` → nested children): heading (`level`), paragraph,
+  `list_item` → `list` (`ordered`, `list_format` = OneNote marker), `check_item` →
+  `list` with `checked`/`checked_at`, quote, code, math (`latex` without `\[ \]`,
+  `mathml`), table (column widths ×48 px, `borders`, cell backgrounds, the first
+  plain paragraph of a cell as its inline content, the rest — lists, images,
+  nested tables — as cell `blocks`), image (asset copied, `alt` = OneNote OCR text
+  → searchable, width/height in px, `name`, `attrs.link`/`printout_page`/
+  `original_url` for EMF/XPS originals), file (asset, name, size, mime;
+  `attrs.caption` when the export lacks the data), ink → image of the SVG with
+  `attrs.ink` and `alt` = recognised handwriting, embed → paragraph link. Other
+  note tags → `attrs.onenote_tags` (labels). Unknown block types keep their text
+  and are reported.
+- Marks → runs: bold/italic/underline/strike/superscript/subscript, `color`,
+  `highlight`, links; monospace fonts → `code`; inline equations keep OneNote's
+  linear text; font sizes are dropped.
+- Block source ids: `<page>/<type>:<hash of the block's content>` (the manifest
+  has no paragraph object ids); duplicates get `#n`. An unchanged block matches
+  wherever it moved; a paragraph edited in OneNote becomes a new block (the old
+  one is removed, or kept and marked `source_removed` if edited in Fortress).
+- `onenote:` links → `[[document_id|Title]]` when the target page (by
+  `link_target_id`) is in this export or an earlier import; paragraph-level
+  targets (`object-id`) link to their page (`links.block_links_as_page_links`).
+  Targets created later in the same run are resolved in a second pass (status
+  `linking`), so a re-run resolves everything in one pass and stays `unchanged`.
+  Unresolved links stay as plain text (the URL is kept in the block's
+  `provenance.extra.unresolved_links`) and are listed in the report.
+- Assets are copied once to `NOTES_DIR/assets/<sha256>.<ext>` and registered in
+  `assets` (dedup by hash). Extensions outside an allowlist (html, js, attachment
+  svg, ...) are stored as `.bin` (served as a download); ink `.svg` is served
+  with `Content-Security-Policy: sandbox`.
+- The same page GUID in two different exports is the same note: the later import
+  updates it (and moves it to its folder unless moved locally).
+
+**Jobs**: `POST /api/import/onenote` takes multipart `file` (`.zip`, `.onepkg`,
+`.one`, `.onetoc2`; streamed to `NOTES_DIR/.fortress-imports/<job_id>-upload/`,
+max 2 GB, 413 above, 415 other types) or JSON `{"path": "/local/file/or/folder"}`
+(local server: any readable path; 400 if missing), plus optional `folder_id`
+(404 if unknown), and returns `202 {"job_id", "status": "queued"}`. Jobs run one
+at a time in a background thread; uploads and converter output are deleted
+afterwards, and the final job record is written to
+`NOTES_DIR/.fortress-imports/<job_id>.json` (so `GET` still finds it after a
+restart).
+
+```jsonc
+// GET /api/import/onenote/{job_id}   (GET /api/import/onenote → [job, …] newest first)
+{
+  "job_id": "01J…",
+  "status": "queued|converting|importing|linking|done|failed",
+  "progress": {"pages_total": 120, "pages_done": 37, "current": "Work › Meetings › Standup"},
+  "result": null | {
+    "notebooks": [{
+      "name", "folder_id", "sections",
+      "pages_created", "pages_updated", "pages_unchanged", "pages_skipped",  // skipped: trashed here or failed
+      "images", "files", "tables", "columns_pages",
+      "ink", "math", "check_items", "conflicts",                            // extras
+      "warnings": ["Page title: message", …],
+      "failed_sections": [{"path": "Work › Locked", "reason", "hint"}]
+    }],
+    "links": {"rewritten": 3, "block_links_as_page_links": 1,
+              "unresolved": [{"page": "Work › A › Page", "target": "onenote:…", "title": "…"}]},
+    "errors_txt": "…",             // OneNote web export's errors.txt, if any
+    "input_warnings": [], "skipped_files": [], "pages_total": 120,
+    "duration_ms": 5321
+  },
+  "error": null | "message",
+  "input_name": "Work.zip", "folder_id": null, "created_at": "…", "finished_at": null | "…"
+}
+```
 
 ## 8. Roadmap / potential features
 

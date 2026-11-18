@@ -162,7 +162,8 @@ Why this over the alternatives:
 Paragraph element: `{"kind":"p","style":"h2|p|cite|code|…","align":"left|center|right","indent":1,"list":{"ordered":true,"format":"1.","restart":null}|null,"tags":[{"label":"To Do","shape":"…","checkable":true,"completed":false}],"runs":[{"text":"…","b":1,"i":1,"u":1,"s":1,"sup":1,"sub":1,"font":"Consolas","size":11,"color":"#C00000","highlight":"#FFFF00","link":"https://…","math":0}],"children":[…]}`.
 Table: `{"kind":"table","borders":true,"colWidths":[…],"rows":[[{"bg":"#DEEAF6","children":[…]}]]}`. Image: `{"kind":"image","asset":"…","mime":"image/png","w":…,"h":…,"alt":"…","link":"…","printoutPage":3|null}`. File: `{"kind":"file","asset":"…","name":"Contract.pdf","mime":"application/pdf","status":"ok|missing|invalid"}`. Ink: `{"kind":"ink","svgAsset":"…","bbox":[…],"recognized":"…"}`. Math: run with `"math":1` plus `"mathml":"<math…>"` (port one2html's math renderer, MIT).
 
-### Python side: `backend/app/onenote_import.py` (new) + `POST /api/import/onenote` (upload zip/onepkg; job id; progress via polling) 
+### Python side: `backend/app/onenote_import.py` + `POST /api/import/onenote` (upload zip/onepkg; job id; progress via polling)
+**Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, content-hash block ids since the manifest has no paragraph object ids, two-pass link rewrite) and the job API.
 Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff against mapping table) → apply in one transaction per page (existing block transaction machinery) → second pass link rewrite → report.
 
 **Mapping**

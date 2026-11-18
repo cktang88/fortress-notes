@@ -2,7 +2,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import shutil
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
@@ -22,6 +24,7 @@ from . import (
     documents,
     duplicates,
     llm,
+    onenote_import,
     search,
     sources,
     vision,
@@ -169,6 +172,9 @@ async def secure_uploaded_files(
         response.headers["X-Content-Type-Options"] = "nosniff"
         if request.url.path.endswith(".bin"):
             response.headers["Content-Disposition"] = "attachment"
+        if request.url.path.endswith(".svg"):
+            # Imported ink drawings: never run scripts when opened directly.
+            response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'"
     return response
 
 
@@ -399,6 +405,95 @@ async def import_uploaded_markdown(
             continue
         imported.append({"name": name, "id": note.id, "title": note.title})
     return {"imported": imported, "errors": errors}
+
+
+# --- OneNote import (jobs) ------------------------------------------------------
+
+MAX_ONENOTE_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+_ONENOTE_UPLOAD_SUFFIXES = (".zip", ".onepkg", ".one", ".onetoc2")
+
+
+@app.post("/api/import/onenote", status_code=202)
+async def start_onenote_import(request: Request):
+    """Start importing a OneNote export: multipart ``file`` or JSON ``{"path"}``."""
+
+    content_type = request.headers.get("content-type", "")
+    job_id = onenote_import.jobs.new_id()
+    owned: Path | None = None
+    if content_type.startswith("multipart/form-data"):
+        length = request.headers.get("content-length")
+        if length and length.isdigit() and int(length) > MAX_ONENOTE_UPLOAD_BYTES + 1024 * 1024:
+            raise HTTPException(413, "The file is larger than 2 GB.")
+        async with request.form() as form:
+            upload = form.get("file")
+            folder_id = str(form.get("folder_id") or "") or None
+            if upload is None or isinstance(upload, str):
+                raise HTTPException(400, "Send the OneNote export as the multipart field 'file'.")
+            input_name = assets.safe_filename(upload.filename or "export.zip")
+            suffix = Path(input_name).suffix.lower()
+            if suffix not in _ONENOTE_UPLOAD_SUFFIXES:
+                raise HTTPException(415, "Choose a OneNote export: a .zip, .onepkg or .one file.")
+            _check_import_folder(folder_id)
+            owned = onenote_import.imports_dir(settings.notes_path) / f"{job_id}-upload"
+            # The converter names things after the file (a loose .one's section) and
+            # its folder (that section's notebook): keep the user's file name.
+            (owned / "OneNote").mkdir(parents=True, exist_ok=True)
+            input_path = owned / "OneNote" / input_name
+            size = 0
+            try:
+                with input_path.open("wb") as handle:
+                    while chunk := await upload.read(_UPLOAD_CHUNK):
+                        size += len(chunk)
+                        if size > MAX_ONENOTE_UPLOAD_BYTES:
+                            raise HTTPException(413, "The file is larger than 2 GB.")
+                        await asyncio.to_thread(handle.write, chunk)
+            except BaseException:
+                shutil.rmtree(owned, ignore_errors=True)
+                raise
+    else:
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(400, "Send multipart 'file' or JSON {\"path\": ...}.") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("path"), str) or not payload["path"].strip():
+            raise HTTPException(400, "Send multipart 'file' or JSON {\"path\": ...}.")
+        folder_id = payload.get("folder_id") or None
+        if folder_id is not None and not isinstance(folder_id, str):
+            raise HTTPException(400, "folder_id must be a string")
+        input_path = Path(payload["path"]).expanduser()
+        if not input_path.exists():
+            raise HTTPException(400, "That file or folder does not exist.")
+        _check_import_folder(folder_id)
+        input_name = input_path.name
+    record = onenote_import.jobs.submit(
+        job_id,
+        input_path=input_path,
+        input_name=input_name,
+        owned_input=owned,
+        db_path=settings.block_db_path,
+        notes_path=settings.notes_path,
+        assets_path=settings.assets_path,
+        folder_id=folder_id,
+    )
+    return {"job_id": record["job_id"], "status": record["status"]}
+
+
+def _check_import_folder(folder_id: str | None) -> None:
+    if folder_id is not None and not block_store.folder_exists(settings.block_db_path, folder_id):
+        raise HTTPException(404, "folder not found")
+
+
+@app.get("/api/import/onenote")
+def list_onenote_imports(limit: int = Query(20, ge=1, le=100)):
+    return onenote_import.jobs.list(settings.notes_path, limit)
+
+
+@app.get("/api/import/onenote/{job_id}")
+def get_onenote_import(job_id: str):
+    record = onenote_import.jobs.get(job_id, settings.notes_path)
+    if record is None:
+        raise HTTPException(404, "import job not found")
+    return record
 
 
 def _attachment(filename: str) -> str:
