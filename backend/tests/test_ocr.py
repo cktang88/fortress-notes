@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app import block_store, ocr
+from app import block_store, corpus, ocr
 from app.models import BlockOperation
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -307,7 +307,7 @@ class OcrTextIsSearchableTests(unittest.TestCase):
             block["id"] for block in response.json()["children"] if block["type"] == "image"
         )
         self.client.post("/api/block-documents", json={"title": "Groceries", "body": "Milk and eggs"})
-        self.before = {b: v for b, _d, v, _t in block_store.embedding_documents(self.db)}
+        self.before = {b: v for b, _d, v, _t in corpus.embedding_documents(self.db)}
 
         # Nothing is readable until the queue has run.
         self.assertEqual(self.client.get("/api/unified-search", params={"q": "zeppelin"}).json(), [])
@@ -332,7 +332,7 @@ class OcrTextIsSearchableTests(unittest.TestCase):
     def test_embedding_index_reencodes_only_the_block_that_got_text(self) -> None:
         from app import embeddings
 
-        after = {b: (v, t) for b, _d, v, t in block_store.embedding_documents(self.db)}
+        after = {b: (v, t) for b, _d, v, t in corpus.embedding_documents(self.db)}
         self.assertIn("Friedrichshafen", after[self.image_block][1])
         changed = [b for b, (v, _t) in after.items() if self.before.get(b) != v]
         self.assertEqual(changed, [self.image_block])
@@ -476,7 +476,7 @@ class RealColbertTests(unittest.TestCase):
                 if embeddings._get_model() is None:
                     self.skipTest("ColBERT model could not be loaded")
                 self.assertEqual(embeddings.warm_index(queries=False), 2)
-                docs = [(b, v, t) for b, _d, v, t in block_store.embedding_documents(database)]
+                docs = [(b, v, t) for b, _d, v, t in corpus.embedding_documents(database)]
                 scores = embeddings.score_documents("airship trip boarding", docs)
                 best = max(scores, key=scores.get)
                 self.assertIn("Zeppelin", dict((b, t) for b, _v, t in docs)[best])
