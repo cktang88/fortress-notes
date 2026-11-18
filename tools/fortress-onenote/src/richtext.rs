@@ -1,0 +1,744 @@
+//! Rich text runs -> plain text + mark spans (code-point offsets).
+
+use crate::links::{is_onenote_link, parse_onenote_link};
+use crate::manifest::{Mark, MarkKind, Rich};
+use crate::math;
+use onenote_parser::contents::{MathInlineObject, RichText};
+use onenote_parser::property::common::ColorRef;
+use onenote_parser::property::rich_text::ParagraphStyling;
+use regex::Regex;
+use std::sync::LazyLock;
+
+/// OneNote's default body font.
+pub const DEFAULT_FONT: &str = "Calibri";
+/// OneNote's default body size, points.
+pub const DEFAULT_FONT_SIZE_PT: f32 = 11.0;
+
+const MONOSPACE_FONTS: &[&str] = &[
+    "consolas",
+    "courier",
+    "courier new",
+    "lucida console",
+    "lucida sans typewriter",
+    "menlo",
+    "monaco",
+    "source code pro",
+    "cascadia code",
+    "cascadia mono",
+    "fira code",
+    "fira mono",
+    "jetbrains mono",
+    "sf mono",
+    "dejavu sans mono",
+    "liberation mono",
+    "andale mono",
+    "monospace",
+];
+
+pub fn is_monospace(font: &str) -> bool {
+    let f = font.trim().trim_matches('"').to_ascii_lowercase();
+    MONOSPACE_FONTS.iter().any(|m| f == *m || f.starts_with(m))
+}
+
+pub fn color_hex(c: Option<ColorRef>) -> Option<String> {
+    match c? {
+        ColorRef::Auto => None,
+        ColorRef::Manual { r, g, b } => Some(format!("#{r:02X}{g:02X}{b:02X}")),
+    }
+}
+
+/// Formatting of one text run, extracted from `ParagraphStyling` so the
+/// offset logic can be unit-tested without parser objects.
+#[derive(Debug, Clone, Default)]
+pub struct RunFmt {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub superscript: bool,
+    pub subscript: bool,
+    pub hidden: bool,
+    pub math: bool,
+    pub font: Option<String>,
+    /// Points.
+    pub size_pt: Option<f32>,
+    pub color: Option<String>,
+    pub highlight: Option<String>,
+}
+
+impl RunFmt {
+    pub fn from_styling(st: &ParagraphStyling) -> Self {
+        RunFmt {
+            bold: st.bold(),
+            italic: st.italic(),
+            underline: st.underline(),
+            strikethrough: st.strikethrough(),
+            superscript: st.superscript(),
+            subscript: st.subscript(),
+            hidden: st.hidden(),
+            math: st.math_formatting(),
+            font: st.font().map(str::to_string),
+            size_pt: st.font_size().map(|s| s as f32 / 2.0),
+            color: color_hex(st.font_color()),
+            highlight: color_hex(st.highlight()),
+        }
+    }
+}
+
+/// A stored hyperlink in UTF-16 offsets (as the parser reports them).
+pub struct Link16 {
+    pub target: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Result of converting one paragraph.
+#[derive(Debug, Default)]
+pub struct Converted {
+    pub rich: Rich,
+    /// Every visible non-whitespace character is in a monospace font.
+    pub all_monospace: bool,
+    /// Every visible non-whitespace run is math (display equation).
+    pub all_math: bool,
+    /// Rendered display equation when `all_math`: (raw text, latex, mathml).
+    pub math: Option<(String, Option<String>, Option<String>)>,
+    pub links_web: usize,
+    pub links_onenote: usize,
+    pub math_count: usize,
+    /// Math groups as (first run, end run exclusive, cp start, cp end).
+    math_groups: Vec<(usize, usize, usize, usize)>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Options {
+    /// Suppress font family/size marks (headings, titles).
+    pub suppress_fonts: bool,
+}
+
+/// Convert a parser `RichText` paragraph.
+pub fn convert(rt: &RichText, opts: Options) -> Converted {
+    let indices: Vec<usize> = rt.text_run_indices().iter().map(|i| *i as usize).collect();
+    let mut fmts: Vec<Option<RunFmt>> = rt
+        .text_run_formatting()
+        .iter()
+        .map(|s| Some(RunFmt::from_styling(s)))
+        .collect();
+    if indices.is_empty() && fmts.is_empty() {
+        fmts.push(Some(RunFmt::from_styling(rt.paragraph_style())));
+    }
+    let links: Vec<Link16> = rt
+        .hyperlinks()
+        .iter()
+        .map(|l| Link16 {
+            target: l.target().to_string(),
+            start: l.start() as usize,
+            end: l.end() as usize,
+        })
+        .collect();
+    let mut out = convert_runs(rt.text(), &indices, &fmts, &links, opts);
+
+    // Render math groups.
+    let utf16: Vec<u16> = rt.text().encode_utf16().collect();
+    let bounds = run_bounds(&indices, utf16.len());
+    let objects = rt.math_inline_objects();
+    let mut obj_offset = 0usize;
+    let groups = std::mem::take(&mut out.math_groups);
+    for (first, last, s, e) in groups {
+        let segments: Vec<(String, MathInlineObject)> = (first..last)
+            .enumerate()
+            .map(|(k, ri)| {
+                let (a, b) = bounds[ri];
+                (
+                    String::from_utf16_lossy(&utf16[a..b]),
+                    objects.get(obj_offset + k).copied().unwrap_or_default(),
+                )
+            })
+            .collect();
+        obj_offset += last - first;
+        let rendered = math::render(&segments, out.all_math);
+        if out.all_math && out.math.is_none() {
+            let raw: String = out.rich.text.chars().skip(s).take(e - s).collect();
+            out.math = Some((raw, rendered.latex.clone(), rendered.mathml.clone()));
+        }
+        out.rich.marks.push(Mark {
+            start: s,
+            end: e,
+            kind: MarkKind::Math {
+                latex: rendered.latex,
+                mathml: rendered.mathml,
+            },
+        });
+    }
+    out.rich.marks = merge_marks(std::mem::take(&mut out.rich.marks));
+    out
+}
+
+/// UTF-16 [start, end) of each run. Run k ends at `indices[k]`; the last run
+/// extends to the end of the text.
+fn run_bounds(indices: &[usize], len16: usize) -> Vec<(usize, usize)> {
+    let mut out = Vec::with_capacity(indices.len() + 1);
+    let mut start = 0usize;
+    for end in indices.iter().map(|i| (*i).min(len16)).chain([len16]) {
+        let end = end.max(start);
+        out.push((start, end));
+        start = end;
+    }
+    out
+}
+
+static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\b(?:https?://|www\.)[^\s<>"]+"#).expect("valid url regex")
+});
+
+/// Core conversion: split `text` into runs at UTF-16 `indices`, drop hidden
+/// runs, and emit marks with code-point offsets into the visible text.
+pub fn convert_runs(
+    text: &str,
+    indices: &[usize],
+    fmts: &[Option<RunFmt>],
+    links: &[Link16],
+    opts: Options,
+) -> Converted {
+    let utf16: Vec<u16> = text.encode_utf16().collect();
+    let bounds = run_bounds(indices, utf16.len());
+    let fmt_of = |ri: usize| fmts.get(ri).and_then(|f| f.as_ref());
+
+    // Visible chars (with their run) and a UTF-16 index -> visible code point map.
+    let mut chars: Vec<(char, usize)> = Vec::new();
+    let mut map16 = vec![0usize; utf16.len() + 1];
+    let mut pos16 = 0usize;
+    let mut ri = 0usize;
+    for decoded in char::decode_utf16(utf16.iter().copied()) {
+        let ch = decoded.unwrap_or('\u{FFFD}');
+        let w = ch.len_utf16();
+        while ri + 1 < bounds.len() && pos16 >= bounds[ri].1 {
+            ri += 1;
+        }
+        for k in 0..w {
+            map16[pos16 + k] = chars.len();
+        }
+        if !fmt_of(ri).map(|f| f.hidden).unwrap_or(false) {
+            let ch = match ch {
+                '\u{000B}' | '\r' => '\n',
+                c => c,
+            };
+            chars.push((ch, ri));
+        }
+        pos16 += w;
+    }
+    map16[utf16.len()] = chars.len();
+
+    let mut out = Converted::default();
+    out.rich.text = chars.iter().map(|c| c.0).collect();
+
+    // Visible [start, end) per run.
+    let mut ranges: Vec<Option<(usize, usize)>> = vec![None; bounds.len()];
+    for (i, (_, r)) in chars.iter().enumerate() {
+        ranges[*r] = Some(match ranges[*r] {
+            None => (i, i + 1),
+            Some((s, _)) => (s, i + 1),
+        });
+    }
+
+    let mut marks: Vec<Mark> = Vec::new();
+    let mut any_text = false;
+    let mut all_mono = true;
+    let mut all_math = true;
+    for (ri, range) in ranges.iter().enumerate() {
+        let Some((s, e)) = *range else { continue };
+        let has_text = chars[s..e].iter().any(|c| !c.0.is_whitespace());
+        let Some(f) = fmt_of(ri) else {
+            if has_text {
+                any_text = true;
+                all_mono = false;
+                all_math = false;
+            }
+            continue;
+        };
+        if has_text {
+            any_text = true;
+            if !f.font.as_deref().map(is_monospace).unwrap_or(false) {
+                all_mono = false;
+            }
+            if !f.math {
+                all_math = false;
+            }
+        }
+        if f.math {
+            continue;
+        }
+        let mut push = |kind: MarkKind| {
+            marks.push(Mark {
+                start: s,
+                end: e,
+                kind,
+            })
+        };
+        if f.bold {
+            push(MarkKind::Bold);
+        }
+        if f.italic {
+            push(MarkKind::Italic);
+        }
+        if f.underline {
+            push(MarkKind::Underline);
+        }
+        if f.strikethrough {
+            push(MarkKind::Strikethrough);
+        }
+        if f.superscript {
+            push(MarkKind::Superscript);
+        }
+        if f.subscript {
+            push(MarkKind::Subscript);
+        }
+        if let Some(color) = &f.highlight {
+            push(MarkKind::Highlight {
+                color: color.clone(),
+            });
+        }
+        if let Some(color) = &f.color {
+            push(MarkKind::Color {
+                color: color.clone(),
+            });
+        }
+        if !opts.suppress_fonts {
+            if let Some(font) = &f.font
+                && !font.trim().is_empty()
+                && !font.eq_ignore_ascii_case(DEFAULT_FONT)
+            {
+                push(MarkKind::Font {
+                    family: font.clone(),
+                });
+            }
+            if let Some(pt) = f.size_pt
+                && pt > 0.0
+                && (pt - DEFAULT_FONT_SIZE_PT).abs() > 0.01
+            {
+                push(MarkKind::FontSize { pt });
+            }
+        }
+    }
+    out.all_monospace = any_text && all_mono;
+    out.all_math = any_text && all_math;
+
+    // Math groups: maximal sequences of math-formatted runs.
+    let mut ri = 0usize;
+    while ri < bounds.len() {
+        if !fmt_of(ri).map(|f| f.math).unwrap_or(false) {
+            ri += 1;
+            continue;
+        }
+        let first = ri;
+        while ri < bounds.len() && fmt_of(ri).map(|f| f.math).unwrap_or(false) {
+            ri += 1;
+        }
+        let s = map16[bounds[first].0];
+        let e = map16[bounds[ri - 1].1];
+        if e > s {
+            out.math_count += 1;
+            out.math_groups.push((first, ri, s, e));
+        }
+    }
+
+    // Stored hyperlinks.
+    let mut link_ranges: Vec<(usize, usize)> = Vec::new();
+    for link in links {
+        let s = map16[link.start.min(utf16.len())];
+        let e = map16[link.end.min(utf16.len())];
+        if e <= s {
+            continue;
+        }
+        let href = link.target.trim().to_string();
+        let onenote = parse_onenote_link(&href);
+        if onenote.is_some() || is_onenote_link(&href) {
+            out.links_onenote += 1;
+        } else {
+            out.links_web += 1;
+        }
+        link_ranges.push((s, e));
+        marks.push(Mark {
+            start: s,
+            end: e,
+            kind: MarkKind::Link {
+                href,
+                onenote,
+                auto: false,
+            },
+        });
+    }
+
+    // Bare URLs in the text that are not covered by a stored link.
+    let plain = &out.rich.text;
+    let mut cp_of_byte = vec![0usize; plain.len() + 1];
+    for (n, (b, _)) in plain.char_indices().enumerate() {
+        cp_of_byte[b] = n;
+    }
+    cp_of_byte[plain.len()] = plain.chars().count();
+    for m in URL_RE.find_iter(plain) {
+        let mut url = m.as_str();
+        while let Some(last) = url.chars().last() {
+            if ".,;:!?)]}'>".contains(last) {
+                url = &url[..url.len() - last.len_utf8()];
+            } else {
+                break;
+            }
+        }
+        if url.len() < 8 {
+            continue;
+        }
+        let s = cp_of_byte[m.start()];
+        let e = cp_of_byte[m.start() + url.len()];
+        if link_ranges.iter().any(|(ls, le)| s < *le && e > *ls) {
+            continue;
+        }
+        let href = if url.to_ascii_lowercase().starts_with("www.") {
+            format!("https://{url}")
+        } else {
+            url.to_string()
+        };
+        let onenote = parse_onenote_link(&href);
+        if onenote.is_some() {
+            out.links_onenote += 1;
+        } else {
+            out.links_web += 1;
+        }
+        marks.push(Mark {
+            start: s,
+            end: e,
+            kind: MarkKind::Link {
+                href,
+                onenote,
+                auto: true,
+            },
+        });
+    }
+
+    out.rich.marks = merge_marks(marks);
+    out
+}
+
+/// Merge adjacent/overlapping spans of identical marks and sort them.
+pub fn merge_marks(mut marks: Vec<Mark>) -> Vec<Mark> {
+    marks.sort_by(|a, b| {
+        mark_key(&a.kind)
+            .cmp(&mark_key(&b.kind))
+            .then(a.start.cmp(&b.start))
+            .then(a.end.cmp(&b.end))
+    });
+    let mut out: Vec<Mark> = Vec::with_capacity(marks.len());
+    for m in marks {
+        if m.end <= m.start {
+            continue;
+        }
+        if let Some(last) = out.last_mut()
+            && last.kind == m.kind
+            && m.start <= last.end
+            && !matches!(m.kind, MarkKind::Math { .. })
+        {
+            last.end = last.end.max(m.end);
+            continue;
+        }
+        out.push(m);
+    }
+    out.sort_by(|a, b| {
+        a.start
+            .cmp(&b.start)
+            .then(b.end.cmp(&a.end))
+            .then(mark_key(&a.kind).cmp(&mark_key(&b.kind)))
+    });
+    out
+}
+
+fn mark_key(k: &MarkKind) -> String {
+    match k {
+        MarkKind::Bold => "0bold".into(),
+        MarkKind::Italic => "1italic".into(),
+        MarkKind::Underline => "2underline".into(),
+        MarkKind::Strikethrough => "3strike".into(),
+        MarkKind::Superscript => "4sup".into(),
+        MarkKind::Subscript => "5sub".into(),
+        MarkKind::Highlight { color } => format!("6hl{color}"),
+        MarkKind::Color { color } => format!("7c{color}"),
+        MarkKind::Font { family } => format!("8f{family}"),
+        MarkKind::FontSize { pt } => format!("9s{pt}"),
+        MarkKind::Link { href, .. } => format!("al{href}"),
+        MarkKind::Math { .. } => "bmath".into(),
+    }
+}
+
+static CITATION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)^\s*([^<>\n]{0,40}?)\s*<\s*((?:https?|ftp)://[^\s<>]+)\s*>\s*$")
+        .expect("valid citation regex")
+});
+
+/// Detect OneNote's "Pasted from <url>" / "From <url>" citation line.
+/// Returns the URL if the paragraph is such a line.
+pub fn citation_url(rich: &Rich) -> Option<String> {
+    let text = rich.text.trim();
+    if text.is_empty() || text.len() > 2048 {
+        return None;
+    }
+    if let Some(c) = CITATION_RE.captures(text) {
+        let prefix = c.get(1).map(|m| m.as_str()).unwrap_or("");
+        // Prefix must look like a short label ("Pasted from", "From",
+        // "Eingefügt aus", "Collé à partir de", ...), not a sentence.
+        if prefix.split_whitespace().count() <= 5 {
+            return Some(c[2].to_string());
+        }
+    }
+    // "Pasted from https://..." without brackets but fully linked.
+    let lower = text.to_ascii_lowercase();
+    if lower.starts_with("pasted from ") || lower.starts_with("from ") {
+        let rest = text.split_once(' ').map(|x| x.1).unwrap_or("");
+        let rest = rest.trim_start_matches("from ").trim();
+        if (rest.starts_with("http://") || rest.starts_with("https://"))
+            && !rest.contains(char::is_whitespace)
+        {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn m(start: usize, end: usize, kind: MarkKind) -> Mark {
+        Mark { start, end, kind }
+    }
+
+    #[test]
+    fn merges_adjacent_identical_marks() {
+        let merged = merge_marks(vec![
+            m(0, 3, MarkKind::Bold),
+            m(3, 5, MarkKind::Bold),
+            m(7, 9, MarkKind::Bold),
+            m(
+                0,
+                5,
+                MarkKind::Highlight {
+                    color: "#FFFF00".into(),
+                },
+            ),
+            m(
+                5,
+                6,
+                MarkKind::Highlight {
+                    color: "#00FF00".into(),
+                },
+            ),
+        ]);
+        assert_eq!(
+            merged,
+            vec![
+                m(0, 5, MarkKind::Bold),
+                m(
+                    0,
+                    5,
+                    MarkKind::Highlight {
+                        color: "#FFFF00".into()
+                    }
+                ),
+                m(
+                    5,
+                    6,
+                    MarkKind::Highlight {
+                        color: "#00FF00".into()
+                    }
+                ),
+                m(7, 9, MarkKind::Bold),
+            ]
+        );
+    }
+
+    #[test]
+    fn drops_empty_marks() {
+        assert!(merge_marks(vec![m(3, 3, MarkKind::Italic)]).is_empty());
+    }
+
+    #[test]
+    fn citation_detection() {
+        let r = |t: &str| Rich {
+            text: t.into(),
+            marks: vec![],
+        };
+        assert_eq!(
+            citation_url(&r("Pasted from <https://example.com/a?b=1>")).as_deref(),
+            Some("https://example.com/a?b=1")
+        );
+        assert_eq!(
+            citation_url(&r("From <https://en.wikipedia.org/wiki/Pho> ")).as_deref(),
+            Some("https://en.wikipedia.org/wiki/Pho")
+        );
+        assert_eq!(
+            citation_url(&r("Eingefügt aus <https://example.de/>")).as_deref(),
+            Some("https://example.de/")
+        );
+        assert_eq!(
+            citation_url(&r("Pasted from https://example.com/x")).as_deref(),
+            Some("https://example.com/x")
+        );
+        assert_eq!(
+            citation_url(&r(
+                "I read this whole long sentence about soups somewhere <https://x.y/>"
+            )),
+            None
+        );
+        assert_eq!(citation_url(&r("Just text")), None);
+    }
+
+    fn fmt(f: impl FnOnce(&mut RunFmt)) -> Option<RunFmt> {
+        let mut r = RunFmt::default();
+        f(&mut r);
+        Some(r)
+    }
+
+    #[test]
+    fn offsets_are_code_points_and_hidden_runs_removed() {
+        // "😀 " is 3 UTF-16 units but 2 code points.
+        let marker = "\u{fddf}HYPERLINK \"https://example.com/\"";
+        let text = format!("😀 {marker}link bold");
+        let m16 = marker.encode_utf16().count();
+        // Runs: [0,3) plain, [3,3+m16) hidden marker, [.., +4) link text, rest bold.
+        let indices = vec![3, 3 + m16, 3 + m16 + 4];
+        let fmts = vec![
+            fmt(|_| {}),
+            fmt(|f| f.hidden = true),
+            fmt(|f| f.underline = true),
+            fmt(|f| f.bold = true),
+        ];
+        let links = vec![Link16 {
+            target: "https://example.com/".into(),
+            start: 3 + m16,
+            end: 3 + m16 + 4,
+        }];
+        let c = convert_runs(&text, &indices, &fmts, &links, Options::default());
+        assert_eq!(c.rich.text, "😀 link bold");
+        assert!(c.rich.marks.contains(&Mark {
+            start: 2,
+            end: 6,
+            kind: MarkKind::Underline
+        }));
+        assert!(c.rich.marks.contains(&Mark {
+            start: 6,
+            end: 11,
+            kind: MarkKind::Bold
+        }));
+        assert!(c.rich.marks.contains(&Mark {
+            start: 2,
+            end: 6,
+            kind: MarkKind::Link {
+                href: "https://example.com/".into(),
+                onenote: None,
+                auto: false
+            }
+        }));
+        assert_eq!(c.links_web, 1);
+    }
+
+    #[test]
+    fn single_run_without_indices_and_fonts() {
+        let fmts = vec![fmt(|f| {
+            f.font = Some("Consolas".into());
+            f.size_pt = Some(10.0);
+            f.highlight = Some("#FFFF00".into());
+        })];
+        let c = convert_runs("let x = 1;", &[], &fmts, &[], Options::default());
+        assert!(c.all_monospace);
+        assert_eq!(c.rich.marks.len(), 3);
+        let suppressed = convert_runs(
+            "let x = 1;",
+            &[],
+            &fmts,
+            &[],
+            Options {
+                suppress_fonts: true,
+            },
+        );
+        assert_eq!(suppressed.rich.marks.len(), 1);
+    }
+
+    #[test]
+    fn vertical_tab_becomes_newline_and_bare_urls_link() {
+        let c = convert_runs(
+            "see https://a.example/x.\u{000B}and www.b.example",
+            &[],
+            &[fmt(|_| {})],
+            &[],
+            Options::default(),
+        );
+        assert_eq!(c.rich.text, "see https://a.example/x.\nand www.b.example");
+        let links: Vec<_> = c
+            .rich
+            .marks
+            .iter()
+            .filter_map(|m| match &m.kind {
+                MarkKind::Link { href, auto, .. } => Some((m.start, m.end, href.clone(), *auto)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            links,
+            vec![
+                (4, 23, "https://a.example/x".to_string(), true),
+                (29, 42, "https://www.b.example".to_string(), true)
+            ]
+        );
+    }
+
+    #[test]
+    fn onenote_links_are_flagged() {
+        let target = "onenote:#P&section-id={11111111-2222-3333-4444-555555555555}&page-id={AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}&end";
+        let c = convert_runs(
+            "go here",
+            &[3],
+            &[fmt(|_| {}), fmt(|_| {})],
+            &[Link16 {
+                target: target.into(),
+                start: 3,
+                end: 7,
+            }],
+            Options::default(),
+        );
+        assert_eq!(c.links_onenote, 1);
+        match &c.rich.marks[0].kind {
+            MarkKind::Link { onenote, .. } => assert_eq!(
+                onenote.as_ref().unwrap().page_id.as_deref(),
+                Some("{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}")
+            ),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn math_runs_form_groups() {
+        let c = convert_runs(
+            "x=a+b",
+            &[],
+            &[fmt(|f| f.math = true)],
+            &[],
+            Options::default(),
+        );
+        assert!(c.all_math);
+        assert_eq!(c.math_count, 1);
+        assert_eq!(c.math_groups, vec![(0, 1, 0, 5)]);
+    }
+
+    #[test]
+    fn monospace_fonts() {
+        assert!(is_monospace("Consolas"));
+        assert!(is_monospace("Courier New"));
+        assert!(!is_monospace("Calibri"));
+    }
+
+    #[test]
+    fn color_formatting() {
+        assert_eq!(
+            color_hex(Some(ColorRef::Manual { r: 255, g: 0, b: 16 })).as_deref(),
+            Some("#FF0010")
+        );
+        assert_eq!(color_hex(Some(ColorRef::Auto)), None);
+    }
+}
