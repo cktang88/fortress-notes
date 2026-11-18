@@ -87,6 +87,12 @@ def _get_engine():
                     "Det.model_type": ModelType.SMALL,
                     "Rec.ocr_version": OCRVersion.PPOCRV6,
                     "Rec.model_type": ModelType.SMALL,
+                    # Detect on the image scaled down to ≤1280 px (recognition still
+                    # reads crops at full resolution). rapidocr's default instead
+                    # scales the short side up to 736 px: 2-3x slower on pages and
+                    # screenshots, and no more accurate in our benchmark.
+                    "Det.limit_type": "max",
+                    "Det.limit_side_len": 1280,
                     "EngineConfig.onnxruntime.intra_op_num_threads": threads,
                     "EngineConfig.onnxruntime.inter_op_num_threads": 1,
                 }
