@@ -70,7 +70,7 @@ class IncrementalCorpusTests(unittest.TestCase):
         self.database = Path(self._directory.name) / ".fortress.sqlite3"
         for name in ("a", "b", "c"):
             create_document(
-                self.database, name, name.upper(), "rough", [], f"{name} one\n\n{name} two",
+                self.database, name, name.upper(), "rough", f"{name} one\n\n{name} two",
                 "2025-01-01", "2025-01-01",
             )
 
@@ -125,7 +125,7 @@ class IncrementalCorpusTests(unittest.TestCase):
         for step in range(6):
             _edit(self.database, "abc"[step % 3], f"edit {step}", step % 2)
             create_document(
-                self.database, f"n{step}", f"N{step}", "rough", [], f"new {step}", "2025-01-01", "2025-01-01"
+                self.database, f"n{step}", f"N{step}", "rough", f"new {step}", "2025-01-01", "2025-01-01"
             )
         incremental = list(corpus.snapshot(self.database))
         corpus.reset()

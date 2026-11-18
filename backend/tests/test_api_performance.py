@@ -20,8 +20,7 @@ from app.block_store import (
 
 def _document(database: Path, document_id: str, blocks: int) -> None:
     create_document(
-        database, document_id, document_id, "rough", [],
-        "\n\n".join(f"Paragraph {index} of {document_id}" for index in range(blocks)),
+        database, document_id, document_id, "rough", "\n\n".join(f"Paragraph {index} of {document_id}" for index in range(blocks)),
         "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
     )
 
@@ -273,9 +272,6 @@ class ApiWorkTests(unittest.TestCase):
     def test_async_routes_do_not_run_blocking_work_on_the_event_loop(self) -> None:
         import asyncio
 
-        from app import llm
-        from app.models import BlockReviewResponse
-
         on_loop: list[bool] = []
 
         def running_loop() -> bool:
@@ -286,34 +282,17 @@ class ApiWorkTests(unittest.TestCase):
             return True
 
         real_register = block_store.register_asset
-        real_subtree = block_store.document_subtree
 
         def register(*args, **kwargs):
             on_loop.append(running_loop())
             return real_register(*args, **kwargs)
 
-        def subtree(*args, **kwargs):
-            on_loop.append(running_loop())
-            return real_subtree(*args, **kwargs)
-
-        async def review(kind, block_id, text, content):
-            return BlockReviewResponse(kind=kind, summary="", block_id=block_id)
-
-        with (
-            patch.object(block_store, "register_asset", register),
-            patch.object(block_store, "document_subtree", subtree),
-            patch.object(llm, "review_block", review),
-        ):
+        with patch.object(block_store, "register_asset", register):
             uploaded = self.client.post(
                 "/api/files", files={"file": ("a.pdf", b"%PDF-1.4 data", "application/pdf")}
             )
-            reviewed = self.client.post(
-                f"/api/block-documents/{self.note['id']}/blocks/"
-                f"{self.note['children'][0]['id']}/review"
-            )
         self.assertEqual(uploaded.status_code, 200, uploaded.text)
-        self.assertEqual(reviewed.status_code, 200, reviewed.text)
-        self.assertEqual(on_loop, [False, False])
+        self.assertEqual(on_loop, [False])
 
     def test_uploads_are_streamed_to_disk_with_their_hash(self) -> None:
         import hashlib
@@ -343,7 +322,7 @@ class ApiWorkTests(unittest.TestCase):
             "/api/block-documents",
             json={"title": "Mine", "body": "kyoto temples gardens autumn trip"},
         ).json()
-        url = f"/api/notes/{mine['id']}/related"
+        url = f"/api/block-documents/{mine['id']}/related"
         calls: list[int] = []
 
         def scores(docs, *, query=None, texts=None):
@@ -354,7 +333,6 @@ class ApiWorkTests(unittest.TestCase):
             patch.object(embeddings, "_get_model", lambda wait=False: None),
             patch.object(embeddings._cache, "failed", True),
             patch.object(search.relevance, "related", scores),
-            patch.object(self.documents, "get_note", side_effect=AssertionError("built")),
             patch.object(block_store, "document_tree", side_effect=AssertionError("built")),
         ):
             first = self.client.get(url).json()
@@ -368,7 +346,7 @@ class ApiWorkTests(unittest.TestCase):
                     "text": "unrelated words entirely"}]},
             )
             self.assertEqual(self.client.get(url).json(), [])
-            self.assertEqual(self.client.get("/api/notes/missing/related").status_code, 404)
+            self.assertEqual(self.client.get("/api/block-documents/missing/related").status_code, 404)
         search._related_cache.clear()
 
     def test_concurrent_transactions_on_one_note_conflict_cleanly(self) -> None:

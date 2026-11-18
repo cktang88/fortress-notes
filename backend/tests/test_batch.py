@@ -46,7 +46,7 @@ class BatchApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         return response.json()
 
-    def test_batch_documents_returns_trees_without_marking_opened(self) -> None:
+    def test_batch_documents_returns_trees_with_their_etags(self) -> None:
         first = self._create("First")
         second = self._create("Second")
         response = self.client.post(
@@ -58,24 +58,52 @@ class BatchApiTests(unittest.TestCase):
         self.assertEqual([d["id"] for d in body["documents"]], [first["id"], second["id"]])
         self.assertEqual(body["missing"], ["nope"])
         self.assertEqual(body["documents"][0]["title"], "First")
-        self.assertIsNone(body["documents"][0]["last_opened_at"])
-        # The single read is what marks a note opened.
-        opened = self.client.get(f"/api/block-documents/{first['id']}").json()
-        self.assertIsNotNone(opened["last_opened_at"])
+        # Each body is the single GET's body, under the ETag the GET answers 304 to.
+        single = self.client.get(f"/api/block-documents/{first['id']}")
+        self.assertEqual(body["etags"][first["id"]], single.headers["etag"].replace("-gzip", ""))
+        self.assertEqual(body["documents"][0], single.json())
 
-    def test_batch_documents_skips_known_revisions(self) -> None:
-        first = self._create("First")
-        second = self._create("Second")
+    def test_batch_documents_skips_known_etags(self) -> None:
+        first = self.client.post(
+            "/api/block-documents", json={"title": "First", "body": "First body"}
+        )
+        second = self.client.post(
+            "/api/block-documents", json={"title": "Second", "body": "Second body"}
+        )
         response = self.client.post(
             "/api/batch/block-documents",
             json={
-                "ids": [first["id"], second["id"]],
-                "known": {first["id"]: first["revision"], second["id"]: second["revision"] - 1},
+                "ids": [first.json()["id"], second.json()["id"]],
+                "known": {
+                    first.json()["id"]: first.headers["x-document-etag"],
+                    second.json()["id"]: '"stale"',
+                },
             },
         )
         body = response.json()
-        self.assertEqual(body["unchanged"], [first["id"]])
-        self.assertEqual([d["id"] for d in body["documents"]], [second["id"]])
+        self.assertEqual(body["unchanged"], [first.json()["id"]])
+        self.assertEqual([d["id"] for d in body["documents"]], [second.json()["id"]])
+
+    def test_a_linked_note_rename_makes_the_batch_send_the_note_again(self) -> None:
+        """One validator: a batch \"unchanged\" means exactly what a GET 304 means."""
+
+        target = self._create("Old title")
+        source = self.client.post(
+            "/api/block-documents",
+            json={"title": "A", "body": f"see [[{target['id']}|Old title]]"},
+        )
+        tag = source.headers["x-document-etag"]
+        self.client.patch(f"/api/block-documents/{target['id']}", json={"title": "New title"})
+        body = self.client.post(
+            "/api/batch/block-documents",
+            json={"ids": [source.json()["id"]], "known": {source.json()["id"]: tag}},
+        ).json()
+        self.assertEqual(body["unchanged"], [])
+        self.assertIn("New title", str(body["documents"][0]))
+        single = self.client.get(
+            f"/api/block-documents/{source.json()['id']}", headers={"If-None-Match": tag}
+        )
+        self.assertEqual(single.status_code, 200)
 
     def test_batch_documents_limits_size(self) -> None:
         response = self.client.post("/api/batch/block-documents", json={"ids": ["x"] * 51})

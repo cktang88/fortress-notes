@@ -255,19 +255,6 @@ def parse_comment(source: str) -> dict[str, Any] | None:
         return None
 
 
-def exportable_block_provenance(
-    block_raw: object, document_provenance_value: dict[str, Any]
-) -> dict[str, Any] | None:
-    """What a Markdown export writes for a block: only what the document doesn't say."""
-
-    own = loads(block_raw)
-    if not own:
-        return None
-    if own == {"source": document_provenance_value.get("source", DEFAULT_SOURCE)}:
-        return None
-    return own
-
-
 def front_matter(value: dict[str, Any]) -> dict[str, Any]:
     """Document provenance as YAML front matter (plain types only)."""
 

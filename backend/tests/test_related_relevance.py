@@ -68,10 +68,10 @@ class RelatedRelevanceApiTests(unittest.TestCase):
             ):
                 ids = {}
                 for title, body in notes_to_create:
-                    ids[title] = client.post("/api/notes", json={"title": title, "body": body}).json()["id"]
-                source = client.post("/api/notes", json={"title": "Draft", "body": source_body}).json()
+                    ids[title] = client.post("/api/block-documents", json={"title": title, "body": body}).json()["id"]
+                source = client.post("/api/block-documents", json={"title": "Draft", "body": source_body}).json()
                 block = client.get(f"/api/block-documents/{source['id']}").json()["children"][0]
-                endpoint = f"/api/notes/{source['id']}/related"
+                endpoint = f"/api/block-documents/{source['id']}/related"
                 by_block = client.get(endpoint, params={"block_id": block["id"]}).json()
                 whole = client.get(endpoint).json()
                 names = {value: key for key, value in ids.items()}
@@ -140,12 +140,12 @@ class RelatedRelevanceApiTests(unittest.TestCase):
                     ("Cat", "vet vaccines for the cat next visit in a year"),
                     ("Router", "move the router off the floor or buy a mesh extender"),
                 ]:
-                    ids[title] = client.post("/api/notes", json={"title": title, "body": body}).json()["id"]
+                    ids[title] = client.post("/api/block-documents", json={"title": title, "body": body}).json()["id"]
                 draft = client.post(
-                    "/api/notes", json={"title": "Draft", "body": "fed the sourdough starter with rye flour"}
+                    "/api/block-documents", json={"title": "Draft", "body": "fed the sourdough starter with rye flour"}
                 ).json()["id"]
                 embeddings.warm_index(queries=False)
-                url = f"/api/notes/{draft}/related"
+                url = f"/api/block-documents/{draft}/related"
                 names = {value: key for key, value in ids.items()}
                 self.assertEqual([names[r["note"]["id"]] for r in client.get(url).json()], ["Bread"])
                 full = scored[-1]

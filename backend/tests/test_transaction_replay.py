@@ -13,7 +13,7 @@ class TransactionReplayTests(unittest.TestCase):
     def test_resending_a_saved_transaction_returns_the_note_without_reapplying(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            document = create_block_document(database, "Replay", "rough", [], "First line")
+            document = create_block_document(database, "Replay", "rough", "First line")
             block = document["children"][0]
             operations = [
                 BlockOperation(
@@ -40,7 +40,7 @@ class TransactionReplayTests(unittest.TestCase):
     def test_a_reused_transaction_id_with_different_edits_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            document = create_block_document(database, "Replay", "rough", [], "Line")
+            document = create_block_document(database, "Replay", "rough", "Line")
             block_id = document["children"][0]["id"]
             apply_transaction(
                 database,
