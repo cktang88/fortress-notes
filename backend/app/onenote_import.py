@@ -379,9 +379,8 @@ def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
                 if href:
                     run["link"] = href
             # font_size is dropped; equations with LaTeX were written above.
-        if "code" in run:
-            # Inline code cannot carry other marks in Markdown; keep it plain code.
-            run = {key: value for key, value in run.items() if key in {"text", "code", "link"}}
+        # Monospace runs keep their other marks (colour, highlight, bold...): the Markdown
+        # export writes them as HTML around the code span and reads them back.
         runs.append(run)
     return runs
 
@@ -551,6 +550,8 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
         ctx.count("math")
     elif kind == "table":
         result = _table(block, ctx)
+        if not nested:
+            result = _fit_table(result, 0, ctx)
         ctx.count("tables")
     elif kind == "image":
         result = _image(block, ctx)
@@ -735,6 +736,69 @@ def _table(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
         "column_widths": widths,
         "borders": bool(block.get("borders_visible", True)),
     }
+
+
+# How deep blocks may nest inside table cells (block_types: cell blocks start at 1;
+# children and nested tables' cells each add one).
+MAX_CELL_DEPTH = 8
+
+
+def _fit_table(table: dict[str, Any], depth: int, ctx: _PageContext) -> dict[str, Any]:
+    """``table`` (source form, at ``depth``) with its cells' blocks fitted to MAX_CELL_DEPTH:
+    deeper list levels are lifted to the deepest allowed level and tables that would
+    nest too deeply become one paragraph per row, so no content is refused."""
+
+    rows = []
+    for row in table.get("rows") or []:
+        cells = []
+        for cell in row.get("cells") or []:
+            if isinstance(cell, dict) and cell.get("blocks"):
+                cell = {**cell, "blocks": _fit_blocks(cell["blocks"], depth + 1, ctx)}
+            cells.append(cell)
+        rows.append({**row, "cells": cells})
+    return {**table, "rows": rows}
+
+
+def _fit_blocks(blocks: list[dict[str, Any]], depth: int, ctx: _PageContext) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for block in blocks:
+        block = dict(block)
+        children = block.pop("children", None) or []
+        if block.get("type") == "table":
+            if depth + 1 > MAX_CELL_DEPTH:
+                ctx.warn("a table nested too deeply was imported as text, one paragraph per row")
+                out.extend({"type": "paragraph", "text": " | ".join(_source_text(cell) for cell in row.get("cells") or [])}
+                           for row in block.get("rows") or [])
+            else:
+                out.append(_fit_table(block, depth, ctx))
+            out.extend(_fit_blocks(children, depth, ctx))
+            continue
+        out.append(block)
+        if children:
+            if depth + 1 > MAX_CELL_DEPTH:
+                out.extend(_fit_blocks(children, depth, ctx))  # lifted to this level
+            else:
+                block["children"] = _fit_blocks(children, depth + 1, ctx)
+    return out
+
+
+def _source_text(item: object) -> str:
+    """Plain text of a source-form block or cell (for flattening)."""
+
+    if isinstance(item, str):
+        return item
+    if not isinstance(item, dict):
+        return ""
+    parts = []
+    if isinstance(item.get("inline"), list):
+        parts.append("".join(str(run.get("text") or "") for run in item["inline"] if isinstance(run, dict)))
+    elif isinstance(item.get("text"), str):
+        parts.append(item["text"])
+    for row in item.get("rows") or []:
+        parts.append(" | ".join(_source_text(cell) for cell in (row or {}).get("cells") or []))
+    for child in [*(item.get("blocks") or []), *(item.get("children") or [])]:
+        parts.append(_source_text(child))
+    return " ".join(part for part in parts if part)
 
 
 def _nested_safe(block: dict[str, Any]) -> dict[str, Any]:

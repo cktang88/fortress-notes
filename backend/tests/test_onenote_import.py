@@ -1188,6 +1188,31 @@ class CompareFindingsTests(_Base):
         self.assertEqual([(r["text"], r["styles"].get("backgroundColor"), r["styles"].get("textColor")) for r in runs],
                          [("1,637,", "#FFFF00", "#C00000"), ("892", "#FF0000", "#C00000")])
 
+    def test_deep_nesting_in_cells_is_flattened_not_refused(self) -> None:
+        bullet = {"ordered": False, "style": "bullet", "marker": "•", "restart": None}
+
+        def table(inner_blocks):
+            return {"type": "table", "indent": 0, "row_count": 1, "col_count": 2, "column_widths": [2.0, 2.0],
+                    "borders_visible": True, "rows": [{"cells": [
+                        {"background": None, "blocks": inner_blocks},
+                        {"background": None, "blocks": [{"type": "paragraph", "indent": 0, "text": "side"}]}]}]}
+
+        deep_list = [{"type": "list_item", "indent": n, "text": f"level {n}", "list": bullet} for n in range(14)]
+        nested = [{"type": "paragraph", "indent": 0, "text": "innermost"}]
+        for _ in range(11):
+            nested = [table(nested)]
+        tree = self.import_blocks([
+            table(deep_list),
+            nested[0],
+            *[{"type": "list_item", "indent": n, "text": f"top {n}", "list": bullet} for n in range(20)],
+        ])
+        text = json.dumps(tree, ensure_ascii=False)
+        for n in range(14):
+            self.assertIn(f"level {n}", text)
+        self.assertIn("innermost", text)
+        for n in range(20):
+            self.assertIn(f"top {n}", text)
+
     def test_clean_text(self) -> None:
         self.assertEqual(onenote_import._clean("form\x0cfeed bell\x07 nul\x00 a\r\nb‮RTL"),
                          "form feed bell nul a\nb‮RTL")
@@ -1231,10 +1256,12 @@ class CompareFindingsTests(_Base):
     def test_monospace_runs_become_inline_code(self) -> None:
         tree = self.import_blocks([{
             "type": "paragraph", "indent": 0, "text": "run ls -la now",
-            "marks": [{"start": 4, "end": 10, "type": "font", "family": "Consolas"}],
+            "marks": [{"start": 4, "end": 10, "type": "font", "family": "Consolas"},
+                      {"start": 4, "end": 10, "type": "color", "color": "#C00000"}],
         }])
         runs = tree["children"][0]["content"]["blocknote"]
-        self.assertIn({"type": "text", "text": "ls -la", "styles": {"code": True}}, runs)
+        # The colour is kept too (it used to be stripped from code runs).
+        self.assertIn({"type": "text", "text": "ls -la", "styles": {"code": True, "textColor": "#C00000"}}, runs)
 
     def test_inline_equations_keep_their_latex(self) -> None:
         text = "Pythagoras: 𝑎2+𝑏2=𝑐2 holds"
