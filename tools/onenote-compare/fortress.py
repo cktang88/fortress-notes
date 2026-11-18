@@ -106,66 +106,104 @@ def _external_id(block: dict) -> str:
 
 
 def _runs(block: dict) -> list[dict]:
-    content = block.get("content") or {}
-    runs = content.get("blocknote")
-    if isinstance(runs, list):
-        return runs
-    text = block.get("text") or ""
-    return [{"type": "text", "text": text, "styles": {}}] if text else []
+    """A text block's inline nodes (docs/block-model.md §3)."""
+
+    content = block.get("content")
+    return content if isinstance(content, list) else []
 
 
-def _run_marks(styles: dict) -> frozenset[str]:
-    marks = set()
+def _run_marks(marks: dict) -> frozenset[str]:
+    out = set()
     for name, mark in (("bold", "bold"), ("italic", "italic"), ("underline", "underline"), ("strike", "strike"),
-                       ("superscript", "superscript"), ("subscript", "subscript"), ("code", "code")):
-        if styles.get(name):
-            marks.add(mark)
-    color = norm_color(styles.get("textColor"))
+                       ("sup", "superscript"), ("sub", "subscript"), ("code", "code")):
+        if marks.get(name):
+            out.add(mark)
+    color = norm_color(marks.get("color"))
     if color:
-        marks.add(f"color:{color}")
-    background = norm_color(styles.get("backgroundColor"))
+        out.add(f"color:{color}")
+    background = norm_color(marks.get("highlight"))
     if background:
-        marks.add(f"highlight:{background}")
-    return frozenset(marks)
+        out.add(f"highlight:{background}")
+    return frozenset(out)
 
 
-TEXT_KINDS = {"paragraph", "heading", "list", "quote", "code", "bulletListItem", "numberedListItem", "checkListItem"}
+TEXT_KINDS = {"paragraph", "heading", "bullet_item", "numbered_item", "check_item", "code"}
+LIST_KINDS = {"bullet_item", "numbered_item", "check_item"}
 
 
 def _is_equation(run: dict) -> bool:
     text = run.get("text", "")
-    return bool((run.get("styles") or {}).get("code")) and len(text) > 2 and text.startswith("$") and text.endswith("$")
+    return bool((run.get("marks") or {}).get("code")) and len(text) > 2 and text.startswith("$") and text.endswith("$")
+
+
+def _ordered(block: dict) -> bool:
+    """A numbered item, or a to-do in a numbered list (its OneNote marker has a number placeholder)."""
+
+    attrs = block.get("attrs") or {}
+    if block.get("type") == "numbered_item":
+        return True
+    return block.get("type") == "check_item" and ("%" in str(attrs.get("list_format") or "")
+                                                   or bool(attrs.get("list_style")))
+
+
+def _ref_label(node: dict, resolved: dict) -> str:
+    """The visible label of a docLink / blockRef node (its target's title / text)."""
+
+    if node.get("type") == "docLink":
+        return str(((resolved.get("documents") or {}).get(node.get("id")) or {}).get("title") or "")
+    text = str(((resolved.get("blocks") or {}).get(node.get("id")) or {}).get("text") or "")
+    return text.split("\n", 1)[0]
 
 
 class _TreeWalker:
-    def __init__(self, notes: FortressNotes, model: Model):
+    def __init__(self, notes: FortressNotes, model: Model, resolved: dict | None = None):
         self.notes, self.model = notes, model
+        self.resolved = resolved or {}
         self.readable: list[str] = []
         self.table_depth = 0
         self.container = -1
+
+    def plain(self, runs: list[dict]) -> str:
+        parts = []
+        for run in runs or []:
+            if run.get("type") == "link":
+                parts.append("".join(x.get("text", "") for x in run.get("content") or []))
+            elif run.get("type") in {"docLink", "blockRef"}:
+                parts.append(_ref_label(run, self.resolved))
+            elif not _is_equation(run):
+                parts.append(run.get("text", ""))
+        return "".join(parts)
 
     def runs_text(self, runs: list[dict], record: bool = True) -> str:
         """Tokenise a block's runs together (a word may span runs); returns its plain text."""
 
         pieces: list[tuple[str, frozenset[str]]] = []
         for run in runs or []:
-            if run.get("type") == "link":
+            kind = run.get("type")
+            if kind == "link":
                 inner = run.get("content") or []
                 text = "".join(r.get("text", "") for r in inner)
                 if record:
                     self.model.links.append((norm_text(text), str(run.get("href") or "")))
-                pieces += [(r.get("text", ""), _run_marks(r.get("styles") or {})) for r in inner]
+                pieces += [(r.get("text", ""), _run_marks(r.get("marks") or {})) for r in inner]
+                continue
+            if kind in {"docLink", "blockRef"}:
+                label = _ref_label(run, self.resolved)
+                if record:
+                    href = f"[[{run.get('id')}]]" if kind == "docLink" else f"(({run.get('id')}))"
+                    self.model.links.append((norm_text(label), href))
+                pieces.append((label, frozenset()))
                 continue
             text = run.get("text", "")
             if text.startswith(_GENERATED_LABELS):
                 self.model.notes.append(f"generated label skipped: {text[:60]}")
                 continue
-            styles = run.get("styles") or {}
-            if styles.get("code") and len(text) > 2 and text.startswith("$") and text.endswith("$"):
+            marks = run.get("marks") or {}
+            if _is_equation(run):
                 self.model.math.append(text.strip("$"))  # inline equation (LaTeX)
                 pieces.append((" ", frozenset()))
                 continue
-            pieces.append((text, _run_marks(styles)))
+            pieces.append((text, _run_marks(marks)))
         self.model.tokens.extend(tokens_from_pieces(pieces, self.container))
         text = "".join(t for t, _ in pieces)
         self.readable.append(text)
@@ -188,14 +226,15 @@ class _TreeWalker:
         if attrs.get("onenote_tags"):
             # One entry per tagged block (whatever the number of labels), as on the reference side.
             label = str(attrs["onenote_tags"][0])
-            text = "" if kind not in TEXT_KINDS else norm_text("".join(
-                r.get("text", "") if r.get("type") != "link" else "".join(x.get("text", "") for x in r.get("content") or [])
-                for r in _runs(block) if not _is_equation(r)))
+            if kind in TEXT_KINDS:
+                text = norm_text(self.plain(_runs(block)))
+            elif kind == "quote":
+                text = norm_text(self.plain(_runs((block.get("children") or [{}])[0])))
+            else:
+                text = ""
             self.model.tags.append((label, text))
-        content = block.get("content") or {}
         child_depth = list_depth
-        if kind in {"paragraph", "heading", "list", "quote", "code", "bulletListItem", "numberedListItem",
-                    "checkListItem"}:
+        if kind in TEXT_KINDS:
             if kind == "code":
                 text = block.get("text") or ""
                 self.add_words(text, frozenset({"code"}))
@@ -205,19 +244,21 @@ class _TreeWalker:
                 text = self.runs_text(_runs(block))
             if kind == "heading":
                 self.model.headings.append((int(attrs.get("level") or 1), text))
-            if kind == "list":
-                if "checked" in attrs:
+            if kind in LIST_KINDS:
+                if kind == "check_item":
                     self.model.checks.append((text, bool(attrs.get("checked"))))
-                if "checked" not in attrs or attrs.get("ordered") or attrs.get("list_format"):
+                if kind != "check_item" or attrs.get("list_format"):
                     # (a to-do that is also in a numbered / bulleted list counts as a list item too)
-                    fmt = str(attrs.get("list_style") or "decimal") if attrs.get("ordered") else "bullet"
-                    self.model.list_items.append((text, bool(attrs.get("ordered")), list_depth, fmt))
+                    ordered = _ordered(block)
+                    fmt = str(attrs.get("list_style") or "decimal") if ordered else "bullet"
+                    self.model.list_items.append((text, ordered, list_depth, fmt))
                 child_depth = list_depth + 1
-            align = attrs.get("align") or attrs.get("textAlignment")
+            align = attrs.get("text_alignment")
             if align in {"center", "right"}:
                 self.model.aligned.append((align, text))
         elif kind == "table":
             self.table(block)
+            return
         elif kind == "image":
             path = self.notes.media_path(attrs.get("url"))
             entry = {"sha": sha256_file(path), "alt": norm_text(str(attrs.get("alt") or "")),
@@ -230,10 +271,11 @@ class _TreeWalker:
         elif kind == "file":
             path = self.notes.media_path(attrs.get("url"))
             self.model.files.append({"sha": sha256_file(path), "name": str(attrs.get("name") or ""),
-                                     "size": attrs.get("size")})
+                                     "size": attrs.get("size"), "caption": str(attrs.get("caption") or "")})
         elif kind == "math":
-            self.model.math.append(norm_text(str(content.get("latex") or block.get("text") or "")))
-        elif kind in {"columns", "column"}:
+            payload = block.get("payload") or {}
+            self.model.math.append(norm_text(str(payload.get("latex") or block.get("text") or "")))
+        elif kind in {"columns", "column", "quote", "callout"}:
             pass
         else:
             text = block.get("text") or ""
@@ -242,42 +284,31 @@ class _TreeWalker:
         self.blocks(block.get("children") or [], child_depth)
 
     def table(self, block: dict) -> None:
-        table = (block.get("content") or {}).get("blocknote") or {}
-        rows = table.get("rows") or []
-        entry = {"rows": len(rows), "cols": max((len(r.get("cells") or []) for r in rows), default=0),
+        rows = [row for row in block.get("children") or [] if row.get("type") == "table_row"]
+        entry = {"rows": len(rows), "cols": max((len(r.get("children") or []) for r in rows), default=0),
                  "cells": [], "bg": [], "depth": self.table_depth}
         self.model.tables.append(entry)
         self.table_depth += 1
         for row in rows:
             texts, colors = [], []
-            for cell in row.get("cells") or []:
-                if isinstance(cell, str):
-                    cell = {"content": [{"type": "text", "text": cell, "styles": {}}]}
+            for cell in row.get("children") or []:
+                cell_attrs = cell.get("attrs") or {}
                 start = len(self.model.tokens)
-                self.runs_text(cell.get("content") or [])
-                self.nested(cell.get("blocks") or [])
+                self.blocks(cell.get("children") or [])
                 texts.append(" ".join(t.word for t in self.model.tokens[start:]))
-                align = (cell.get("props") or {}).get("textAlignment")
+                align = cell_attrs.get("align")
                 if align in {"center", "right"}:
-                    first = " ".join(words("".join(r.get("text", "") if r.get("type") != "link" else
-                                                   "".join(x.get("text", "") for x in r.get("content") or [])
-                                                   for r in cell.get("content") or [])))
-                    self.model.aligned.append((align, first))
-                colors.append(norm_color((cell.get("props") or {}).get("backgroundColor")))
+                    first = (cell.get("children") or [{}])[0]
+                    self.model.aligned.append((align, " ".join(words(self.plain(_runs(first))))))
+                colors.append(norm_color(cell_attrs.get("background")))
             entry["cells"].append(texts)
             entry["bg"].append(colors)
         self.table_depth -= 1
 
-    def nested(self, blocks: list[dict], list_depth: int = 0) -> None:
-        """In-cell blocks (``{"type", "attrs", "content", "children"}``)."""
-
-        for block in blocks or []:
-            self.block(block, list_depth)
-
 
 def tree_model(notes: FortressNotes, tree: dict) -> Model:
     model = Model(title=norm_text(tree.get("title") or ""))
-    walker = _TreeWalker(notes, model)
+    walker = _TreeWalker(notes, model, tree.get("resolved_links") or {})
     for index, block in enumerate(tree.get("children") or []):
         _containers(block, model, walker, [index])
     model.text = norm_text(" ".join(walker.readable))
@@ -361,29 +392,29 @@ def _esc(text: str) -> str:
     return html.escape(text, quote=True)
 
 
-def runs_html(runs: list[dict]) -> str:
+def runs_html(runs: list[dict], resolved: dict | None = None) -> str:
     out = []
     for run in runs or []:
-        if run.get("type") == "link":
-            href = str(run.get("href") or "")
-            inner = runs_html(run.get("content") or [])
-            if href.startswith("[[") or href.startswith("(("):
-                out.append(f'<a class="wiki" title="{_esc(href)}">{inner}</a>')
-            else:
-                out.append(f'<a href="{_esc(href)}">{inner}</a>')
+        kind = run.get("type")
+        if kind == "link":
+            out.append(f'<a href="{_esc(str(run.get("href") or ""))}">{runs_html(run.get("content") or [])}</a>')
+            continue
+        if kind in {"docLink", "blockRef"}:
+            label = _ref_label(run, resolved or {}) or str(run.get("id"))
+            out.append(f'<a class="wiki" title="{_esc(str(run.get("id")))}">{_esc(label)}</a>')
             continue
         text = _esc(run.get("text", "")).replace("\n", "<br>")
-        styles = run.get("styles") or {}
+        marks = run.get("marks") or {}
         css = []
-        if styles.get("textColor"):
-            css.append(f"color:{styles['textColor']}")
-        if styles.get("backgroundColor"):
-            css.append(f"background-color:{styles['backgroundColor']}")
+        if marks.get("color"):
+            css.append(f"color:{marks['color']}")
+        if marks.get("highlight"):
+            css.append(f"background-color:{marks['highlight']}")
         if css:
             text = f'<span style="{";".join(css)}">{text}</span>'
         for name, tag in (("code", "code"), ("bold", "strong"), ("italic", "em"), ("underline", "u"),
-                          ("strike", "s"), ("superscript", "sup"), ("subscript", "sub")):
-            if styles.get(name):
+                          ("strike", "s"), ("sup", "sup"), ("sub", "sub")):
+            if marks.get(name):
                 text = f"<{tag}>{text}</{tag}>"
         out.append(text)
     return "".join(out)
@@ -393,13 +424,18 @@ class HtmlRenderer:
     def __init__(self, notes: FortressNotes, media_prefix: str):
         self.notes = notes
         self.media_prefix = media_prefix  # file:// URL of the assets folder
+        self.resolved: dict = {}
 
     def media(self, url: str | None) -> str:
         if url and url.startswith("/media/"):
             return self.media_prefix + url[len("/media/"):]
         return url or ""
 
+    def runs(self, block: dict) -> str:
+        return runs_html(_runs(block), self.resolved)
+
     def document(self, tree: dict) -> str:
+        self.resolved = tree.get("resolved_links") or {}
         body = self.blocks(tree.get("children") or [])
         return (f"<!doctype html><html><head><meta charset='utf-8'><title>{_esc(tree.get('title') or '')}</title>"
                 f"<style>{STYLE}</style></head><body><h1 class='doc-title'>{_esc(tree.get('title') or '')}</h1>"
@@ -411,15 +447,17 @@ class HtmlRenderer:
         blocks = blocks or []
         while index < len(blocks):
             block = blocks[index]
-            if block.get("type") == "list":
+            if block.get("type") in LIST_KINDS:
                 group = []
-                ordered = bool((block.get("attrs") or {}).get("ordered"))
-                while index < len(blocks) and blocks[index].get("type") == "list" and \
-                        bool((blocks[index].get("attrs") or {}).get("ordered")) == ordered:
+                ordered = _ordered(block)
+                while index < len(blocks) and blocks[index].get("type") in LIST_KINDS and \
+                        _ordered(blocks[index]) == ordered:
                     group.append(blocks[index])
                     index += 1
                 tag = "ol" if ordered else "ul"
-                out.append(f"<{tag}>" + "".join(self.list_item(item) for item in group) + f"</{tag}>")
+                start = (group[0].get("attrs") or {}).get("list_start")
+                start_attr = f' start="{start}"' if ordered and isinstance(start, int) else ""
+                out.append(f"<{tag}{start_attr}>" + "".join(self.list_item(item) for item in group) + f"</{tag}>")
                 continue
             out.append(self.block(block))
             index += 1
@@ -430,9 +468,9 @@ class HtmlRenderer:
 
     def list_item(self, block: dict) -> str:
         attrs = block.get("attrs") or {}
-        inner = self.tags(attrs) + runs_html(_runs(block))
+        inner = self.tags(attrs) + self.runs(block)
         children = self.blocks(block.get("children") or [])
-        if "checked" in attrs:
+        if block.get("type") == "check_item":
             box = f'<input type="checkbox" disabled {"checked" if attrs.get("checked") else ""}>'
             return f'<li class="check">{box}{inner}{children}</li>'
         return f"<li>{inner}{children}</li>"
@@ -440,22 +478,22 @@ class HtmlRenderer:
     def block(self, block: dict) -> str:
         kind = block.get("type")
         attrs = block.get("attrs") or {}
-        content = block.get("content") or {}
+        payload = block.get("payload") or {}
         children = self.blocks(block.get("children") or [])
         children_html = f'<div class="children">{children}</div>' if children else ""
-        align = attrs.get("textAlignment") or attrs.get("align")
+        align = attrs.get("text_alignment")
         style = f' style="text-align:{align}"' if align in {"center", "right"} else ""
         if kind == "heading":
             level = min(max(int(attrs.get("level") or 1), 1), 6)
-            return f"<h{level}{style}>{self.tags(attrs)}{runs_html(_runs(block))}</h{level}>{children_html}"
-        if kind in {"paragraph", "bulletListItem", "numberedListItem", "checkListItem"}:
-            return f'<p class="blk"{style}>{self.tags(attrs)}{runs_html(_runs(block))}</p>{children_html}'
-        if kind == "quote":
-            return f"<blockquote>{runs_html(_runs(block))}{children}</blockquote>"
+            return f"<h{level}{style}>{self.tags(attrs)}{self.runs(block)}</h{level}>{children_html}"
+        if kind == "paragraph":
+            return f'<p class="blk"{style}>{self.tags(attrs)}{self.runs(block)}</p>{children_html}'
+        if kind in {"quote", "callout"}:
+            return f"<blockquote>{self.tags(attrs)}{children}</blockquote>"
         if kind == "code":
             return f"<pre><code>{_esc(block.get('text') or '')}</code></pre>{children_html}"
         if kind == "table":
-            return self.table(attrs, content.get("blocknote") or {}) + children_html
+            return self.table(block)
         if kind == "image":
             alt = attrs.get("alt") or ""
             width = f' width="{attrs["width"]}"' if attrs.get("width") else ""
@@ -464,14 +502,14 @@ class HtmlRenderer:
                     f"{cap}</div>{children_html}")
         if kind == "file":
             size = f" ({attrs['size']} bytes)" if attrs.get("size") else ""
+            caption = f' <span class="cap">{_esc(str(attrs["caption"]))}</span>' if attrs.get("caption") else ""
             return (f'<div><a class="f-file" href="{_esc(self.media(attrs.get("url")))}">&#128206; '
-                    f'{_esc(str(attrs.get("name") or "file"))}{size}</a></div>{children_html}')
+                    f'{_esc(str(attrs.get("name") or "file"))}{size}</a>{caption}</div>{children_html}')
         if kind == "math":
-            mathml = content.get("mathml")
-            latex = content.get("latex") or ""
+            mathml = payload.get("mathml")
             if mathml:
                 return f'<div class="f-math">{mathml}</div>{children_html}'
-            return f'<div class="f-math"><code>{_esc(latex)}</code></div>{children_html}'
+            return f'<div class="f-math"><code>{_esc(str(payload.get("latex") or ""))}</code></div>{children_html}'
         if kind == "columns":
             cols = []
             for column in block.get("children") or []:
@@ -480,20 +518,24 @@ class HtmlRenderer:
             return f'<div class="f-columns">{"".join(cols)}</div>'
         return f'<p class="blk">{_esc(block.get("text") or "")}</p>{children_html}'
 
-    def table(self, attrs: dict, table: dict) -> str:
-        widths = table.get("columnWidths") or []
+    def table(self, block: dict) -> str:
+        attrs = block.get("attrs") or {}
+        widths = attrs.get("column_widths") or []
         cols = "".join(f'<col style="width:{w}px">' if w else "<col>" for w in widths)
         rows = []
-        for row in table.get("rows") or []:
+        for row in block.get("children") or []:
             cells = []
-            for cell in row.get("cells") or []:
-                if isinstance(cell, str):
-                    cell = {"content": [{"type": "text", "text": cell, "styles": {}}]}
-                props = cell.get("props") or {}
-                css = f' style="background-color:{props["backgroundColor"]}"' if props.get("backgroundColor") else ""
-                cells.append(f"<td{css}>{runs_html(cell.get('content') or [])}{self.blocks(cell.get('blocks') or [])}</td>")
+            for cell in row.get("children") or []:
+                cell_attrs = cell.get("attrs") or {}
+                css = []
+                if cell_attrs.get("background"):
+                    css.append(f"background-color:{cell_attrs['background']}")
+                if cell_attrs.get("align") in {"center", "right"}:
+                    css.append(f"text-align:{cell_attrs['align']}")
+                style = f' style="{";".join(css)}"' if css else ""
+                cells.append(f"<td{style}>{self.blocks(cell.get('children') or [])}</td>")
             rows.append("<tr>" + "".join(cells) + "</tr>")
-        border = "" if attrs.get("borders", True) else " noborders"
+        border = "" if attrs.get("borders") else " noborders"
         return f'<table class="f-table{border}"><colgroup>{cols}</colgroup>{"".join(rows)}</table>'
 
 
@@ -502,10 +544,19 @@ class HtmlRenderer:
 _MARKER_RE = re.compile(r"<!--\s*(/?)fortress:(columns|column)\s*(\{.*?\})?\s*-->", re.DOTALL)
 
 
-def markdown_html(markdown: str, title: str, media_prefix: str) -> str:
+_WIKI_RE = re.compile(r"\[\[([A-Za-z0-9_-]{1,128})\]\]|\(\(([A-Za-z0-9_-]{1,128})\)\)")
+
+
+def markdown_html(markdown: str, title: str, media_prefix: str, resolved: dict | None = None) -> str:
     from markdown_it import MarkdownIt  # noqa: PLC0415
 
-    body = markdown
+    # Note links ``[[id]]`` / block references ``((id))`` read as their target's title /
+    # text in a wiki-aware viewer (Obsidian-style); show them that way.
+    def label(match: re.Match) -> str:
+        node = {"type": "docLink", "id": match.group(1)} if match.group(1) else {"type": "blockRef", "id": match.group(2)}
+        return _ref_label(node, resolved or {}) or match.group(0)
+
+    body = _WIKI_RE.sub(label, markdown)
     if body.startswith("---\n"):
         end = body.find("\n---\n", 4)
         if end != -1:
@@ -625,9 +676,9 @@ def tree_summary(tree: dict) -> dict:
             kind = block.get("type")
             if kind == "code":
                 found["code"] += 1
-            inner = depth + 1 if kind == "list" else depth
+            inner = depth + 1 if kind in LIST_KINDS else depth
             found["list_depth"] = max(found["list_depth"], inner)
-            visit(block.get("children") or [], inner if kind == "list" else 0)
+            visit(block.get("children") or [], inner if kind in LIST_KINDS else 0)
 
     visit(tree.get("children") or [], 0)
     return found

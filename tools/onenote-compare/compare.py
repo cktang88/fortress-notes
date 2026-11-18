@@ -303,7 +303,8 @@ def process_unit(unit: Path, out: Path, args, renderer: Renderer) -> dict:
                 (page_dir / "note.md").write_text(markdown, encoding="utf-8")
                 renderer_html = fortress.HtmlRenderer(notes, media_prefix)
                 (page_dir / "tree.html").write_text(renderer_html.document(tree), encoding="utf-8")
-                (page_dir / "md.html").write_text(fortress.markdown_html(markdown, tree.get("title") or "", media_prefix),
+                (page_dir / "md.html").write_text(fortress.markdown_html(markdown, tree.get("title") or "", media_prefix,
+                                                                         tree.get("resolved_links")),
                                                   encoding="utf-8")
                 our_model = fortress.tree_model(notes, tree)
                 export = fortress.export_summary((page_dir / "md.html").read_text(encoding="utf-8"))

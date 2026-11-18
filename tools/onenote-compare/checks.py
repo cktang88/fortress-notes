@@ -55,8 +55,13 @@ def check_text(ref: Model, ours: Model):
     return _result("text", not missing and not extra, summary, details, applicable=bool(total or ours.tokens))
 
 
+# Explicit black text is OneNote's default colour (the converter may leave it out).
+_DEFAULT_MARKS = frozenset({"color:#000000"})
+
+
 def _mark_counter(model: Model) -> Counter:
-    return Counter((mark, token.word) for token in model.tokens for mark in token.marks)
+    return Counter((mark, token.word) for token in model.tokens for mark in token.marks
+                   if mark not in _DEFAULT_MARKS)
 
 
 def check_marks(ref: Model, ours: Model):
@@ -139,8 +144,8 @@ def check_links(ref: Model, ours: Model, imported_pages: set[str]):
             continue
         if scheme is None and re.match(r"^www\.[^\s/]+", href):
             href = "http://" + href  # OneNote opens scheme-less www. links as web links (so does the importer)
-        normalized = href.rstrip("/")
-        hit = next((h for h in candidates if h.rstrip("/") == normalized), None)
+        normalized = href.strip().rstrip("/")  # the importer trims a stored href's spaces
+        hit = next((h for h in candidates if h.strip().rstrip("/") == normalized), None)
         if hit is not None:
             candidates.remove(hit)
         else:
@@ -194,6 +199,8 @@ def check_images(ref: Model, ours: Model):
         hit = _image_match(image, ours_pool)
         if hit is None and image["sha"] is None:
             continue  # no data in the file either (Fortress shows "Image missing from the OneNote export")
+        if hit is None and any(f["sha"] == image["sha"] for f in ours.files):
+            continue  # bytes that are not a picture: kept as an attachment (see check_files)
         if hit is None:
             details.append(f"missing image {image['name']} ({image['size']} bytes, sha {str(image['sha'])[:12]})")
             continue
@@ -230,7 +237,8 @@ def check_files(ref: Model, ours: Model):
         pool.remove(hit)
         if item["size"] is not None and hit["size"] not in (None, item["size"]):
             details.append(f"{item['name']}: size {item['size']} vs {hit['size']}")
-    details += [f"extra attachment {o['name']} ({o['size']} bytes)" for o in pool]
+    image_shas = {image["sha"] for image in ref.images if image["sha"]}
+    details += [f"extra attachment {o['name']} ({o['size']} bytes)" for o in pool if o["sha"] not in image_shas]
     return _result("files", not details, f"{len(ref.files)} vs {len(ours.files)}", details,
                    applicable=bool(ref.files or ours.files))
 
@@ -274,8 +282,10 @@ def check_tags(ref: Model, ours: Model):
 
 
 def check_align(ref: Model, ours: Model):
-    return _multiset_check("align", [(a, " ".join(words(t))[:60]) for a, t in ref.aligned],
-                           [(a, " ".join(words(t))[:60]) for a, t in ours.aligned], lambda i: f"{i[0]}: {i[1]!r}")
+    # (an empty centred line is a blank line: nothing to align)
+    return _multiset_check("align", [(a, " ".join(words(t))[:60]) for a, t in ref.aligned if words(t)],
+                           [(a, " ".join(words(t))[:60]) for a, t in ours.aligned if words(t)],
+                           lambda i: f"{i[0]}: {i[1]!r}")
 
 
 # --- layout ------------------------------------------------------------------------------------
