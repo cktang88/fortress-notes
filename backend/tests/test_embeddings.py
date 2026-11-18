@@ -181,7 +181,15 @@ class BlockEmbeddingTests(unittest.TestCase):
                 got = embeddings.score_documents(query, docs)
                 want = brute(query)
                 top = sorted(want, key=want.get, reverse=True)[:20]
-                self.assertEqual(sorted(got, key=got.get, reverse=True)[:20], top)
+                got_top = sorted(got, key=got.get, reverse=True)[:20]
+                # Many paragraphs hold every query word: their scores tie exactly in
+                # real arithmetic, and float rounding (which differs between BLAS
+                # builds: Accelerate on macOS, OpenBLAS/MKL on Linux) orders them.
+                # Same ranking means the same score at every rank, and only paragraphs
+                # tied with the one the brute force puts there.
+                for rank, (block_id, expected) in enumerate(zip(got_top, top)):
+                    self.assertAlmostEqual(got[block_id], want[expected], places=3, msg=f"rank {rank}")
+                    self.assertAlmostEqual(want[block_id], want[expected], places=3, msg=f"rank {rank}")
                 for block_id in top:
                     self.assertAlmostEqual(got[block_id], want[block_id], places=3)
                 if len(query.split()) <= embeddings.LONG_QUERY_TOKENS:

@@ -5,6 +5,7 @@ on:
     paths:
       - "backend/**"
       - ".github/workflows/backend.yml"
+  workflow_dispatch:
 
 jobs:
   test:
@@ -23,3 +24,55 @@ jobs:
           HF_HUB_OFFLINE: "1"
           OPENROUTER_API_KEY: ""
         run: uv run --frozen python -m unittest discover -s tests
+
+  # Apple Silicon, with the real ColBERT model: EMBEDDINGS_DEVICE=auto picks the MLX
+  # GPU encoder here (app/colbert_mlx.py), which Linux never runs. Besides the whole
+  # suite (where the real-model tests stop skipping: test_colbert_mlx, test_ocr's
+  # RealColbertTests), tests/test_real_model.py runs encode, index, related, unified
+  # search and Ask's prefetch on the CPU and on auto, checks the device chosen and
+  # the rankings, and breaks the real MLX encoder to see the backend fall back.
+  # The LLM stays a fake (no key).
+  test-macos:
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      COLBERT_MODEL: lightonai/Agent-ModernColBERT
+      HF_HOME: ${{ github.workspace }}/.hf
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install
+        working-directory: backend
+        run: uv sync --frozen --python 3.13
+      - name: Model cache
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: .hf/hub/models--lightonai--Agent-ModernColBERT
+          key: hf-model-lightonai--Agent-ModernColBERT-v1
+      - name: Download the model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        working-directory: backend
+        run: uv run --frozen python -c "from huggingface_hub import snapshot_download; print(snapshot_download('$COLBERT_MODEL'))"
+      - name: Unit tests (real model)
+        working-directory: backend
+        env:
+          HF_HUB_OFFLINE: "1"
+          OPENROUTER_API_KEY: ""
+          FORTRESS_REAL_MODEL: "1"
+          FORTRESS_REAL_COLBERT: "1"
+          FORTRESS_EXPECT_EMBEDDINGS_DEVICE: mlx
+        run: |
+          set -o pipefail
+          uv run --frozen python -m unittest discover -s tests -v 2>&1 | tee "$RUNNER_TEMP/tests.log"
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '```'
+            grep -E "^REALMODEL|skipped|^Ran |^OK|^FAILED" "$RUNNER_TEMP/tests.log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

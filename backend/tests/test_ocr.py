@@ -637,7 +637,9 @@ class RealColbertTests(unittest.TestCase):
             with use_settings(settings), patch.object(
                 embeddings, "_cache", embeddings._Cache()
             ):
-                if embeddings._get_model() is None:
+                # Loads it (``_get_model()`` alone never does: it only returns a loaded
+                # model, so this test used to skip every time).
+                if embeddings.load_model() is None:
                     self.skipTest("ColBERT model could not be loaded")
                 self.assertEqual(embeddings.warm_index(queries=False), 2)
                 docs = [(b, v, t) for b, _d, v, t in corpus.embedding_documents(database)]
