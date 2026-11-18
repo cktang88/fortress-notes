@@ -450,7 +450,7 @@ extension AppModel {
               Self.canMoveFolder(id, into: parentId, items: navigation.items) else { return }
         let previous = folder.parentId
         do {
-            try await api.move(documents: [], folders: [(id: id, parentId: parentId)])
+            try await api.moveFolder(id: id, parentId: parentId)
             registerUndo("Move Folder") { await $0.moveFolder(id: id, toParent: previous) } redo: {
                 await $0.moveFolder(id: id, toParent: parentId)
             }

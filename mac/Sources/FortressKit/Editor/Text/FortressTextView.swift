@@ -212,13 +212,19 @@ final class FortressTextView: NSTextView {
         [BlockEditorController.blocksPasteboardType] + super.readablePasteboardTypes
     }
 
+    /// Copy puts the note's own blocks, Markdown, and the text system's rich and plain
+    /// text on the pasteboard, so a copy pastes well into Mail, Notes, Slack and VS Code.
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [BlockEditorController.blocksPasteboardType] + super.writablePasteboardTypes
+        [BlockEditorController.blocksPasteboardType, BlockEditorController.markdownPasteboardType]
+            + super.writablePasteboardTypes
     }
 
     override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         if type == BlockEditorController.blocksPasteboardType {
             return controller?.writeBlocks(to: pboard) ?? false
+        }
+        if type == BlockEditorController.markdownPasteboardType {
+            return controller?.writeMarkdown(to: pboard) ?? false
         }
         return super.writeSelection(to: pboard, type: type)
     }

@@ -1735,6 +1735,16 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         return pasteboard.setData(data, forType: Self.blocksPasteboardType)
     }
 
+    /// The selection as Markdown (alongside rich text, plain text and the blocks).
+    func writeMarkdown(to pasteboard: NSPasteboard) -> Bool {
+        let selection = textView.selectedRange()
+        guard selection.length > 0 else { return false }
+        let (blocks, _) = DocumentText.blocks(from: storage.attributedSubstring(from: selection))
+        return pasteboard.setString(MarkdownCopy.markdown(blocks), forType: Self.markdownPasteboardType)
+    }
+
+    static let markdownPasteboardType = NSPasteboard.PasteboardType(MarkdownCopy.typeIdentifier)
+
     /// Pastes blocks copied from a note, keeping kinds and marks (with new ids).
     func pasteBlocks(from pasteboard: NSPasteboard) -> Bool {
         guard let data = pasteboard.data(forType: Self.blocksPasteboardType),
