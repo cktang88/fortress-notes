@@ -10,15 +10,16 @@ import Testing
     /// a picture keeps its one view, drawn by AppKit (a hosting view would re-render its
     /// SwiftUI on each move), and it stays on screen.
     @Test func typingNextToAPictureKeepsItsView() throws {
-        let editor = PerfEditor(document: LongNote.document(blocks: 200))
+        let editor = PerfEditor(document: LongNote.document())
         editor.open()
         editor.controller.finishLoading()
-        let image = editor.range(ofBlock: "i0")
+        let image = editor.range(ofBlock: "i50")
         let attachment = try #require(editor.controller.storage.attribute(.attachment, at: image.location, effectiveRange: nil) as? BlockAttachment)
-        let after = NSRange(location: NSMaxRange(editor.controller.storage.nsString.paragraphRange(at: image.location)) + 3, length: 0)
+        let after = NSRange(location: NSMaxRange(editor.controller.storage.nsString.paragraphRange(at: image.location)) + 5, length: 0)
         editor.controller.textView.setSelectedRange(after)
         editor.controller.scrollRangeToVisibleForTests(after)
         editor.layoutViewport()
+        editor.type("x")
         let view = attachment.view
         #expect(view is ImageAttachmentView)
         #expect(view.isDescendant(of: editor.controller.textView), "the picture is on screen")

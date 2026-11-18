@@ -71,6 +71,17 @@ struct LoadingExperiments {
                                                   all.reduce(0) { $0 + $1.ms }, slowest))
             }
             BlockEditorController.appendsInChunks = false
+            for variant in ["baseFirst", "baseFirst+noSpelling", "noSpelling"] {
+                let editor = PerfEditor(document: LongNote.document())
+                if variant.contains("noSpelling") { editor.controller.textView.isContinuousSpellCheckingEnabled = false }
+                editor.open()
+                var base = 0.0
+                if variant.hasPrefix("baseFirst") { base = milliseconds { _ = editor.session.base } }
+                let all = turns(editor)
+                let slowest = all.enumerated().sorted { $0.element.ms > $1.element.ms }.prefix(4)
+                    .map { String(format: "#%d %.1f (pending %d)", $0.offset, $0.element.ms, $0.element.pending) }.joined(separator: ", ")
+                print(String(format: "EXP round %d turn0 %@ base %.1f first %.1f slowest %@", round, variant, base, all.first?.ms ?? 0, slowest))
+            }
             do {
                 let editor = PerfEditor(document: LongNote.document())
                 editor.open()
