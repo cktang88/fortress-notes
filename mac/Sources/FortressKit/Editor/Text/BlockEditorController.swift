@@ -169,12 +169,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     /// The height of a column's text at `width` (embedded editors).
     func contentHeight(forWidth width: CGFloat) -> CGFloat {
-        if abs(textView.frame.width - width) > 0.5 {
-            textView.setFrameSize(NSSize(width: width, height: max(textView.frame.height, 20)))
-        }
-        guard let manager = textView.textLayoutManager else { return 26 * theme.scale }
-        manager.ensureLayout(for: manager.documentRange)
-        return ceil(max(26 * theme.scale, manager.usageBoundsForTextContainer.height))
+        ceil(max(26 * theme.scale, textView.fittingTextHeight(width: width)))
     }
 
     func focusEnd() {

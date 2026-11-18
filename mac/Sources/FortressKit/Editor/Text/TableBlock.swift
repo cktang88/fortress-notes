@@ -172,11 +172,12 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     }
 
     private func textHeight(_ view: CellTextView, width: CGFloat) -> CGFloat {
-        if abs(view.frame.width - width) > 0.5 { view.setFrameSize(NSSize(width: width, height: max(view.frame.height, 10))) }
         let lineHeight = view.cellTheme.lineHeight(for: .paragraph)
-        guard let manager = view.textLayoutManager, (view.textStorage?.length ?? 0) > 0 else { return lineHeight }
-        manager.ensureLayout(for: manager.documentRange)
-        return max(lineHeight, manager.usageBoundsForTextContainer.height)
+        guard (view.textStorage?.length ?? 0) > 0 else {
+            if abs(view.frame.width - width) > 0.5 { view.setFrameSize(NSSize(width: width, height: lineHeight)) }
+            return lineHeight
+        }
+        return max(lineHeight, view.fittingTextHeight(width: width))
     }
 
     /// The cell's rectangle (spans counted from the cells before it in the row).
@@ -718,5 +719,29 @@ struct NestedCellBlocks: View {
         if type == "numberedListItem" || (type == "list" && attrs?["ordered"]?.boolValue == true) { return "–" }
         if type == "bulletListItem" || type == "list" { return "•" }
         return nil
+    }
+}
+
+extension NSTextView {
+    /// The height of all the text laid out at `width` (TextKit 2). Measured from the
+    /// layout fragments: `usageBoundsForTextContainer` only grows, so it can't be used
+    /// after the width changed.
+    func fittingTextHeight(width: CGFloat) -> CGFloat {
+        if abs(frame.width - width) > 0.5 {
+            setFrameSize(NSSize(width: width, height: max(frame.height, 10)))
+        }
+        guard let manager = textLayoutManager, let container = manager.textContainer else { return 0 }
+        let inset = textContainerInset
+        let containerWidth = max(1, width - 2 * inset.width)
+        if abs(container.size.width - containerWidth) > 0.5 {
+            container.size = NSSize(width: containerWidth, height: CGFloat.greatestFiniteMagnitude)
+            manager.invalidateLayout(for: manager.documentRange)
+        }
+        var bottom: CGFloat = 0
+        manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: [.ensuresLayout]) { fragment in
+            bottom = max(bottom, fragment.layoutFragmentFrame.maxY)
+            return true
+        }
+        return ceil(bottom)
     }
 }
