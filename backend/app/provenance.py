@@ -156,7 +156,7 @@ def normalize(value: object, *, trusted: bool = False) -> dict[str, Any]:
 def loads(raw: object) -> dict[str, Any]:
     """Stored provenance JSON (or NULL) as a dict; damaged values read as empty."""
 
-    if not raw:
+    if not raw or raw == "{}":
         return {}
     try:
         value = json.loads(str(raw))

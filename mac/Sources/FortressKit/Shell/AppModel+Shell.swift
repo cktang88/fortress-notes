@@ -46,6 +46,11 @@ extension AppModel {
     /// isn't running and Settings allow it.
     public func connect() async {
         applyBackendAddress()
+        backend.onUnexpectedExit = { [weak self] in
+            guard let self else { return }
+            self.isConnected = false
+            self.startReconnecting()
+        }
         await refreshNavigation()
         if isConnected {
             hasLoadedNavigation = true
@@ -66,28 +71,92 @@ extension AppModel {
             || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
 
-    /// Points the API client at the address in Settings.
+    /// Points the API client at the address in Settings (keeping the session; caches
+    /// belong to an address, so a new address starts with empty ones).
     public func applyBackendAddress() {
-        if api.baseURL != backend.baseURL { api = APIClient(baseURL: backend.baseURL) }
+        if api.baseURL != backend.baseURL { api = APIClient(baseURL: backend.baseURL, session: api.session) }
     }
 
-    /// Starts the local backend and waits (up to a minute; the first launch loads models)
-    /// for it to answer.
+    /// Starts the local backend and waits for it to answer: as long as the process is
+    /// alive, up to three minutes (the first launch loads models), checking often at
+    /// first and then less often.
     public func startBackend() async {
         applyBackendAddress()
         guard backend.start() else { return }
-        for _ in 0..<120 {
-            try? await Task.sleep(for: .milliseconds(500))
-            if case .failed = backend.state { return }
+        let started = ContinuousClock.now
+        var delay = Duration.milliseconds(250)
+        while ContinuousClock.now - started < .seconds(180) {
+            try? await Task.sleep(for: delay)
+            delay = min(delay * 2, .seconds(2))
+            if case .failed = backend.state {
+                await backendFailedToStart()
+                return
+            }
             if (try? await api.health()) != nil {
                 backend.markReachable()
-                await refreshNavigation()
-                hasLoadedNavigation = isConnected
-                notice = nil
+                await backendAnswered()
                 return
             }
         }
-        backend.markUnreachable("The backend didn't answer within a minute. See the log for details.")
+        backend.markUnreachable("The backend didn't answer within three minutes. See the log for details.")
+    }
+
+    private func backendAnswered() async {
+        isConnected = true
+        await refreshNavigation()
+        hasLoadedNavigation = isConnected
+        notice = nil
+        if scope == .trash { await refreshTrash() }
+    }
+
+    /// The started process exited. When it couldn't bind its port, another server may be
+    /// there: if it's a Fortress backend, use it; otherwise say what's in the way.
+    private func backendFailedToStart() async {
+        guard backend.logSaysPortInUse() else { return }
+        if (try? await api.health()) != nil {
+            backend.adoptRunningServer()
+            await backendAnswered()
+        } else {
+            backend.markPortInUse()
+        }
+    }
+
+    // MARK: Reconnecting
+
+    /// The backend went away (a request couldn't connect): poll it with backoff until it
+    /// answers, restarting it if this app started it and it crashed, then reload. Edits
+    /// waiting to save keep retrying on their own (EditorSession) and go through once
+    /// it's back.
+    public func startReconnecting() {
+        guard reconnectTask == nil, connectsOnAppear else { return }
+        reconnectTask = Task { [weak self] in
+            var delay = self?.reconnectDelays.first ?? .seconds(1)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: delay)
+                guard let self, !Task.isCancelled else { return }
+                if (try? await self.api.health()) != nil {
+                    self.reconnectTask = nil
+                    await self.backendAnswered()
+                    return
+                }
+                if self.shouldRestartBackend {
+                    self.backendRestarts += 1
+                    self.reconnectTask = nil
+                    await self.startBackend()
+                    if !self.isConnected { self.startReconnecting() }
+                    return
+                }
+                delay = min(delay * 2, self.reconnectDelays.max)
+            }
+        }
+    }
+
+    public var isReconnecting: Bool { reconnectTask != nil }
+
+    /// A backend this app started stopped by itself: start it again (a few times).
+    private var shouldRestartBackend: Bool {
+        backend.exitedUnexpectedly && backend.startsAutomatically && backend.canStart
+            && backendRestarts < 3 && !Self.isRunningTests
     }
 
     /// Tries the backend again (after it was started by hand, or the address changed).
@@ -149,30 +218,26 @@ extension AppModel {
         editorFocusRequest += 1
     }
 
-    /// Lets the editor keep the sidebar and list current while a note is edited.
+    /// Lets the editor keep the sidebar and list current while a note is edited: the
+    /// save's answer patches the tree (no reload), and the note moves to the top of Recent.
     public func noteDidChange(_ document: BlockDocument) {
         let snippet = document.children.first?.text
-        func patch(_ note: inout NavigationDocument) {
-            guard note.id == document.id else { return }
-            note.title = document.title
-            note.status = document.status
-            note.updatedAt = document.updatedAt
-            if let snippet { note.snippet = snippet }
-        }
-        func patch(_ nodes: inout [NavigationNode]) {
-            for index in nodes.indices {
-                switch nodes[index] {
-                case .document(var note):
-                    patch(&note)
-                    nodes[index] = .document(note)
-                case .folder(var folder):
-                    patch(&folder.children)
-                    nodes[index] = .folder(folder)
-                }
+        let edited = Timestamp.date(document.updatedAt)
+        func patch(_ navigation: inout NavigationResponse, onlyIfNewer: Bool) {
+            var changed: NavigationDocument?
+            NavigationEdits.updateDocument(document.id, in: &navigation.items) { note in
+                // Over a tree fetched later, an older answer never replaces a newer one.
+                if onlyIfNewer, let edited, let current = Timestamp.date(note.updatedAt), current > edited { return }
+                note.title = document.title
+                note.status = document.status
+                note.updatedAt = document.updatedAt
+                if let snippet { note.snippet = snippet }
+                changed = note
             }
+            guard let changed else { return }
+            NavigationEdits.touchRecent(changed, in: &navigation.recent, limit: Self.recentLimit)
         }
-        patch(&navigation.items)
-        for index in navigation.recent.indices { patch(&navigation.recent[index]) }
+        patchNavigation({ patch(&$0, onlyIfNewer: false) }, replay: { patch(&$0, onlyIfNewer: true) })
     }
 
     // MARK: Notes
@@ -185,7 +250,15 @@ extension AppModel {
             let document = try await api.createDocument(folderId: folder)
             if let folder { scope = .folder(id: folder) } else if scope != .all && scope != .recent { scope = .all }
             selectedTrashId = nil
-            await refreshNavigation()
+            // The answer is the whole note: add it to the tree without reloading it.
+            patchNavigation { navigation in
+                let note = NavigationDocument(
+                    id: document.id, title: document.title, status: document.status, updatedAt: document.updatedAt,
+                    createdAt: document.createdAt, snippet: document.children.first?.text ?? "", folderId: folder,
+                    position: 0)
+                NavigationEdits.insertDocument(note, in: &navigation.items)
+                NavigationEdits.touchRecent(note, in: &navigation.recent, limit: Self.recentLimit)
+            }
             open(noteId: document.id)
             requestEditorFocus()
         } catch {
@@ -210,7 +283,10 @@ extension AppModel {
             }
             let title = visible.first { $0.id == id }.map { NoteListing.displayTitle($0.title) }
             show(Toast(message: title.map { "“\($0)” moved to Trash" } ?? "Moved to Trash", action: .restore(documentId: id)))
-            await refreshNavigation()
+            patchNavigation { navigation in
+                NavigationEdits.removeDocument(id, from: &navigation.items)
+                navigation.recent.removeAll { $0.id == id }
+            }
         } catch {
             report(error)
         }
@@ -219,9 +295,18 @@ extension AppModel {
     public func moveNote(id: String, toFolder folderId: String?) async {
         do {
             try await api.moveDocument(id: id, folderId: folderId)
-            await refreshNavigation()
+            // The server stamps a moved note as edited now.
+            let stamp = Timestamp.serverString()
+            patchNavigation { navigation in
+                guard var note = NavigationEdits.removeDocument(id, from: &navigation.items) else { return }
+                note.folderId = folderId
+                note.updatedAt = max(note.updatedAt, stamp)
+                NavigationEdits.insertDocument(note, in: &navigation.items)
+                NavigationEdits.touchRecent(note, in: &navigation.recent, limit: Self.recentLimit)
+            }
         } catch {
             report(error)
+            await refreshNavigation()
         }
     }
 
@@ -231,7 +316,11 @@ extension AppModel {
     public func newFolder(in parentId: String? = nil) async {
         do {
             let folder = try await api.createFolder(name: uniqueFolderName(in: parentId), parentId: parentId)
-            await refreshNavigation()
+            patchNavigation { navigation in
+                NavigationEdits.insertFolder(
+                    NavigationFolder(id: folder.id, parentId: folder.parentId, name: folder.name, position: folder.position, children: []),
+                    in: &navigation.items)
+            }
             scope = .folder(id: folder.id)
             renamingFolderId = folder.id
         } catch {
@@ -261,8 +350,10 @@ extension AppModel {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, NoteListing.folder(id: id, in: navigation.items)?.name != trimmed else { return }
         do {
-            _ = try await api.renameFolder(id: id, name: trimmed)
-            await refreshNavigation()
+            let renamed = try await api.renameFolder(id: id, name: trimmed)
+            patchNavigation { navigation in
+                NavigationEdits.updateFolder(id, in: &navigation.items) { $0.name = renamed.name }
+            }
         } catch {
             report(error)
         }
@@ -272,17 +363,27 @@ extension AppModel {
     public func deleteFolder(id: String) async {
         guard let folder = NoteListing.folder(id: id, in: navigation.items) else { return }
         do {
+            // One request for all the moves (was one per child).
+            var documents: [(id: String, folderId: String?)] = []
+            var folders: [(id: String, parentId: String?)] = []
             for child in folder.children {
                 switch child {
-                case .document(let note): try await api.moveDocument(id: note.id, folderId: folder.parentId)
-                case .folder(let sub): try await api.moveFolder(id: sub.id, parentId: folder.parentId)
+                case .document(let note): documents.append((note.id, folder.parentId))
+                case .folder(let sub): folders.append((sub.id, folder.parentId))
                 }
             }
+            try await api.move(documents: documents, folders: folders)
             try await api.deleteFolder(id: id)
             if case .folder(let selected) = scope, NoteListing.isFolder(selected, inside: id, items: navigation.items) {
                 scope = folder.parentId.map { .folder(id: $0) } ?? .all
             }
-            await refreshNavigation()
+            let stamp = Timestamp.serverString()
+            patchNavigation { navigation in
+                // Its notes move up (stamped as edited now, as the server does).
+                for note in NavigationEdits.dissolveFolder(id, stamp: stamp, in: &navigation.items) {
+                    NavigationEdits.touchRecent(note, in: &navigation.recent, limit: Self.recentLimit)
+                }
+            }
         } catch {
             report(error)
             await refreshNavigation()

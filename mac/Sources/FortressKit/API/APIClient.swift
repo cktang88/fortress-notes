@@ -5,17 +5,47 @@ public struct APIError: LocalizedError, Sendable {
     public var status: Int
     public var message: String
     public var errorDescription: String? { message }
+
+    public init(status: Int, message: String) {
+        self.status = status
+        self.message = message
+    }
+
+    /// From an error response: its `detail` when it has one, else a calm sentence.
+    public init(status: Int, body: Data?) {
+        self.status = status
+        if let body, let detail = try? JSONDecoder().decode([String: JSONValue].self, from: body)["detail"]?.stringValue {
+            message = detail
+        } else if (500..<600).contains(status) {
+            message = "Fortress's server had a problem (\(status)). Try again in a moment."
+        } else {
+            let text = HTTPURLResponse.localizedString(forStatusCode: status)
+            message = text.prefix(1).uppercased() + text.dropFirst()
+        }
+    }
+
+    /// A reply that isn't the JSON expected (status 0: no HTTP error).
+    public static let malformed = APIError(status: 0, message: "Fortress's server sent a reply the app couldn't read.")
 }
 
 /// Talks to the Fortress Notes backend (FastAPI, by default on localhost:8000).
+///
+/// Copies share one `APIStore`: concurrent identical GETs make one request, documents are
+/// cached (and kept current from every mutation's answer), and ETags are honoured.
 public struct APIClient: Sendable {
     public var baseURL: URL
     /// Internal so feature-area extensions (e.g. Finding) send through the same session.
     let session: URLSession
+    /// In-flight requests, caches and counters, shared by every copy of this client.
+    public let store: APIStore
 
-    public init(baseURL: URL = URL(string: "http://127.0.0.1:8000")!, session: URLSession = .shared) {
+    public init(
+        baseURL: URL = URL(string: "http://127.0.0.1:8000")!, session: URLSession = APIClient.sharedSession,
+        store: APIStore = APIStore()
+    ) {
         self.baseURL = baseURL
         self.session = session
+        self.store = store
     }
 
     // MARK: Navigation and folders
@@ -38,24 +68,67 @@ public struct APIClient: Sendable {
 
     // MARK: Documents
 
+    /// The note, from memory when it was loaded (or saved) in the last few seconds,
+    /// otherwise from the server (revalidated with its ETag when it has one). Concurrent
+    /// reads of one note (the editor and the inspector) share one request.
     public func document(id: String) async throws -> BlockDocument {
-        try await get("api/block-documents/\(id)")
+        if let cached = store.freshDocument(id) { return cached }
+        do {
+            return try await store.coalesced("GET document \(id) @\(store.epoch)") { [self] in
+                // A read that finished between the check above and here filled the cache.
+                if let cached = store.freshDocument(id) { return cached }
+                return try await fetchDocument(id: id)
+            }
+        } catch is PrefetchMiss {
+            return try await fetchDocument(id: id)
+        }
+    }
+
+    /// The note from the server, never from memory (e.g. after a conflict).
+    public func reloadDocument(id: String) async throws -> BlockDocument {
+        store.invalidateDocument(id)
+        return try await fetchDocument(id: id)
+    }
+
+    func fetchDocument(id: String) async throws -> BlockDocument {
+        let token = store.documentToken(id)
+        var request = try makeRequest("GET", "api/block-documents/\(id)", kind: .document)
+        let cached = store.cachedDocument(id)
+        if let etag = cached?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        let (data, response) = try await load(request)
+        if response.statusCode == 304, let cached {
+            store.refresh(id)
+            store.count { $0.notModified += 1 }
+            return cached.document
+        }
+        do {
+            try check(response, body: data)
+        } catch let error as APIError where error.status == 404 {
+            store.invalidateDocument(id)
+            throw error
+        }
+        let document = try Self.decode(BlockDocument.self, from: data)
+        store.store(document, etag: response.value(forHTTPHeaderField: "ETag"), token: token)
+        return document
     }
 
     public func createDocument(title: String = "", folderId: String? = nil) async throws -> BlockDocument {
-        try await send(
+        let document: BlockDocument = try await send(
             "POST", "api/block-documents",
             body: ["title": .string(title), "folder_id": folderId.map(JSONValue.string) ?? .null])
+        store.store(document)
+        return document
     }
 
     public func updateDocument(id: String, title: String? = nil, status: NoteStatus? = nil) async throws -> BlockDocument {
         var body: [String: JSONValue] = [:]
         if let title { body["title"] = .string(title) }
         if let status { body["status"] = .string(status.rawValue) }
-        return try await send("PATCH", "api/block-documents/\(id)", body: body)
+        return try await documentMutation(id) { try await send("PATCH", "api/block-documents/\(id)", body: body) }
     }
 
     public func trashDocument(id: String) async throws {
+        defer { store.invalidateDocument(id) }
         try await sendNoContent("DELETE", "api/block-documents/\(id)")
     }
 
@@ -67,15 +140,36 @@ public struct APIClient: Sendable {
 
     /// Applies block edits; the server answers with the updated document.
     public func apply(_ transaction: BlockTransaction, to documentId: String) async throws -> BlockDocument {
-        try await send("POST", "api/block-documents/\(documentId)/transactions", encodable: transaction)
+        try await documentMutation(documentId) {
+            try await send("POST", "api/block-documents/\(documentId)/transactions", encodable: transaction)
+        }
     }
 
     public func undo(documentId: String, revision: Int) async throws -> BlockDocument {
-        try await send("POST", "api/block-documents/\(documentId)/undo", body: ["base_revision": .number(Double(revision))])
+        try await documentMutation(documentId) {
+            try await send("POST", "api/block-documents/\(documentId)/undo", body: ["base_revision": .number(Double(revision))])
+        }
     }
 
     public func redo(documentId: String, revision: Int) async throws -> BlockDocument {
-        try await send("POST", "api/block-documents/\(documentId)/redo", body: ["base_revision": .number(Double(revision))])
+        try await documentMutation(documentId) {
+            try await send("POST", "api/block-documents/\(documentId)/redo", body: ["base_revision": .number(Double(revision))])
+        }
+    }
+
+    /// Runs a change to one note: its answer becomes the cached copy; a rejection (409
+    /// conflict, 404 gone) drops the cached copy so the next read asks the server.
+    private func documentMutation(
+        _ id: String, _ operation: () async throws -> BlockDocument
+    ) async throws -> BlockDocument {
+        do {
+            let document = try await operation()
+            store.store(document)
+            return document
+        } catch let error as APIError where error.status != 422 {
+            store.invalidateDocument(id)
+            throw error
+        }
     }
 
     public func backlinks(documentId: String) async throws -> [Backlink] {
@@ -83,17 +177,17 @@ public struct APIClient: Sendable {
     }
 
     public func similar(documentId: String) async throws -> [SimilarDocument] {
-        try await get("api/block-documents/\(documentId)/similar")
+        try await get("api/block-documents/\(documentId)/similar", kind: .search)
     }
 
     public func related(documentId: String, blockId: String? = nil, count: Int = 5) async throws -> [RelatedResult] {
         var query = ["k": "\(count)"]
         if let blockId { query["block_id"] = blockId }
-        return try await get("api/notes/\(documentId)/related", query: query)
+        return try await get("api/notes/\(documentId)/related", query: query, kind: .search)
     }
 
     public func linkTargets(query: String, limit: Int = 20) async throws -> [BlockLinkTarget] {
-        try await get("api/block-link-targets", query: ["q": query, "limit": "\(limit)"])
+        try await get("api/block-link-targets", query: ["q": query, "limit": "\(limit)"], kind: .search)
     }
 
     public func markdownURL(documentId: String) -> URL {
@@ -103,7 +197,7 @@ public struct APIClient: Sendable {
     // MARK: Finding
 
     public func search(_ query: String, limit: Int = 30) async throws -> [SearchMatch] {
-        try await get("api/unified-search", query: ["q": query, "limit": "\(limit)"])
+        try await get("api/unified-search", query: ["q": query, "limit": "\(limit)"], kind: .search)
     }
 
     /// Streams an answer: checked sentences as they complete, extra searches, then `done`.
@@ -111,10 +205,12 @@ public struct APIClient: Sendable {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    var request = try makeRequest("POST", "api/ask", body: try JSONEncoder().encode(["question": question]))
+                    var request = try makeRequest(
+                        "POST", "api/ask", body: try JSONEncoder().encode(["question": question]), kind: .stream)
                     request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
+                    store.count { $0.requests += 1 }
                     let (bytes, response) = try await session.bytes(for: request)
-                    try await check(response, body: nil)
+                    if let http = response as? HTTPURLResponse { try check(http, body: nil) }
                     for try await line in bytes.lines where !line.isEmpty {
                         if let event = try Self.askEvent(from: Data(line.utf8)) {
                             continuation.yield(event)
@@ -156,10 +252,12 @@ public struct APIClient: Sendable {
     }
 
     public func restore(documentId: String) async throws {
+        store.invalidateDocument(documentId)
         let _: JSONValue = try await send("POST", "api/trash/\(documentId)/restore", body: [:])
     }
 
     public func deleteForever(documentId: String) async throws {
+        store.invalidateDocument(documentId)
         try await sendNoContent("DELETE", "api/trash/\(documentId)")
     }
 
@@ -176,23 +274,30 @@ public struct APIClient: Sendable {
     }
 
     public func restoreBackup(name: String) async throws {
+        defer { store.invalidateAllDocuments() }
         let _: JSONValue = try await send("POST", "api/backups/\(name)/restore", body: [:])
     }
 
     public func health() async throws -> JSONValue {
-        try await get("api/health")
+        try await get("api/health", kind: .probe)
     }
 
     // MARK: Plumbing
 
-    private func makeRequest(_ method: String, _ path: String, query: [String: String] = [:], body: Data? = nil) throws -> URLRequest {
+    func makeRequest(
+        _ method: String, _ path: String, query: [String: String] = [:], body: Data? = nil, kind: RequestKind? = nil
+    ) throws -> URLRequest {
         var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty {
             components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         }
         var request = URLRequest(url: components.url!)
         request.httpMethod = method
-        request.timeoutInterval = 30
+        let kind = kind ?? (method == "GET" ? .metadata : .mutation)
+        request.timeoutInterval = kind.timeout
+        // The client keeps its own caches; nothing (least of all a mutation) is answered
+        // from URLCache.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         if let body {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -200,8 +305,30 @@ public struct APIClient: Sendable {
         return request
     }
 
-    private func get<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T {
-        try await perform(try makeRequest("GET", path, query: query))
+    private func get<T: Decodable & Sendable>(
+        _ path: String, query: [String: String] = [:], kind: RequestKind = .metadata
+    ) async throws -> T {
+        let request = try makeRequest("GET", path, query: query, kind: kind)
+        let key = "GET \(request.url!.absoluteString) \(T.self) @\(store.epoch)"
+        return try await store.coalesced(key) { [self] in try await performGET(request) }
+    }
+
+    /// A GET that sends the stored ETag and answers a 304 from the stored body.
+    private func performGET<T: Decodable>(_ request: URLRequest) async throws -> T {
+        var request = request
+        let key = request.url!.absoluteString
+        let stored = store.validated(key)
+        if let stored { request.setValue(stored.etag, forHTTPHeaderField: "If-None-Match") }
+        let (data, response) = try await load(request)
+        if response.statusCode == 304, let stored {
+            store.count { $0.notModified += 1 }
+            return try Self.decode(T.self, from: stored.body)
+        }
+        try check(response, body: data)
+        if let etag = response.value(forHTTPHeaderField: "ETag") {
+            store.keepValidated(key, etag: etag, body: data)
+        }
+        return try Self.decode(T.self, from: data)
     }
 
     private func send<T: Decodable>(_ method: String, _ path: String, body: [String: JSONValue]) async throws -> T {
@@ -213,22 +340,49 @@ public struct APIClient: Sendable {
     }
 
     private func sendNoContent(_ method: String, _ path: String) async throws {
-        let (data, response) = try await session.data(for: try makeRequest(method, path))
-        try await check(response, body: data)
+        try await asMutation {
+            let (data, response) = try await load(try makeRequest(method, path))
+            try check(response, body: data)
+        }
     }
 
     private func perform<T: Decodable>(_ request: URLRequest) async throws -> T {
-        let (data, response) = try await session.data(for: request)
-        try await check(response, body: data)
-        return try JSONDecoder().decode(T.self, from: data)
+        try await asMutation(request.httpMethod != "GET") {
+            let (data, response) = try await load(request)
+            try check(response, body: data)
+            return try Self.decode(T.self, from: data)
+        }
     }
 
-    private func check(_ response: URLResponse, body: Data?) async throws {
-        guard let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) else { return }
-        var message = HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
-        if let body, let detail = try? JSONDecoder().decode([String: JSONValue].self, from: body)["detail"]?.stringValue {
-            message = detail
+    /// Runs a change so no GET started before it is shared with a reader after it.
+    func asMutation<T>(_ isMutation: Bool = true, _ operation: () async throws -> T) async throws -> T {
+        if isMutation { store.mutationStarted() }
+        defer { if isMutation { store.mutationStarted() } }
+        return try await operation()
+    }
+
+    /// Sends a request through the session, counting it.
+    func load(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        store.count { $0.requests += 1 }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        return (data, http)
+    }
+
+    /// Decodes a body, reporting a malformed one as a calm, readable error.
+    static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw APIError.malformed
         }
-        throw APIError(status: http.statusCode, message: message)
+    }
+
+    func check(_ response: HTTPURLResponse, body: Data?) throws {
+        guard !(200..<300).contains(response.statusCode) else { return }
+        throw APIError(status: response.statusCode, body: body)
     }
 }
+
+/// A prefetch that didn't bring the note a reader joined it for.
+struct PrefetchMiss: Error {}
