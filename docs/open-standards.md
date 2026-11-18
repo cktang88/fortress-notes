@@ -120,7 +120,7 @@ would fix that (below).
 
 | Format | Today | Closest standard | Decision |
 |---|---|---|---|
-| Whole-workspace export | none (a stated non-goal), but the notes folder *is* the export | a Markdown folder / Obsidian vault; zip of it; HTML site | **later**: "Export folder…" = copy of the vault with `assets/` (and `/media` URLs rewritten), optional zip |
+| Whole-workspace export | none (a stated non-goal), but the notes folder *is* the export | a Markdown folder / Obsidian vault; zip of it; HTML site | **later**: "Export folder…" = copy of the vault with `assets/` (and `/media` URLs rewritten); no zip export (product decision) |
 | Backups | SQLite snapshots (`.fortress-backups/*.sqlite3`) | SQLite file (the most portable database format there is) | **keep**; the vault is the human-readable copy |
 | OneNote import | `.onepkg`, `.one`, `.onetoc2`, zip | (proprietary; MS-ONESTORE is documented) | **keep**: reading OneNote's own files is the open move |
 | OneNote manifest (`tools/fortress-onenote/SCHEMA.md`) | versioned JSON between converter and backend | none needed (internal contract, not user-facing) | **keep**; it already follows standards inside (ISO 8601 `Z` times, `#RRGGBB`, code-point offsets, sha256 asset names) |
@@ -147,7 +147,7 @@ would fix that (below).
 
 | Move | Value | Effort |
 |---|---|---|
-| **Export folder / zip** (vault copy with `assets/`, `/media` → relative paths; Pandoc-ready) | real backup + migration path out | S: ½–1 day (the vault writer already renders everything; copy + rewrite + a zip endpoint and menu item) |
+| **Export folder** (vault copy with `assets/`, `/media` → relative paths; Pandoc-ready; no zip — product decision) | real backup + migration path out | S: ½–1 day (the vault writer already renders everything; copy + rewrite + a menu item) |
 | **Copy Obsidian attachments on import** (folder import: copy `![[x.png]]` targets into `assets/`, register them, OCR them) | Obsidian vaults import with their pictures | S–M: 1 day |
 | **Evernote ENEX import** (XML; ENML → HTML → blocks; base64 resources → assets; `created`/`updated`/`source-url`/`tag`) | the most common legacy notes export | M: 2–3 days (ENML is XHTML; the HTML-to-blocks reader exists) |
 | **OpenAPI document**: check in `openapi.json`, document the transaction model in it, turn `/api/block-schema` into JSON Schema | other tools and clients can use the API | S: ½ day for the dump + CI check; M: 2 days to make `block-schema` JSON Schema |
