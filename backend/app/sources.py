@@ -677,6 +677,20 @@ def _update(
 _WORD_RE = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*", re.UNICODE)
 
 
+_DOCUMENT_LINK_RE = re.compile(r"\[\[[A-Za-z0-9_-]+(?:\|([^\]]+))?\]\]")
+_BLOCK_LINK_RE = re.compile(r"\(\(\s*[A-Za-z0-9_-]+(?:\s+[\"']([^\"']*)[\"'])?\s*\)\)")
+
+
+def _readable(text: str) -> str:
+    """Block text as a reader sees it: links count as their labels, not their IDs."""
+
+    if "[[" in text:
+        text = _DOCUMENT_LINK_RE.sub(lambda match: match.group(1) or "", text)
+    if "((" in text:
+        text = _BLOCK_LINK_RE.sub(lambda match: match.group(1) or "", text)
+    return text
+
+
 def document_info(path: Path, document_id: str) -> dict[str, Any]:
     """Everything an info panel shows about one note, in a fixed number of queries."""
 
@@ -750,7 +764,7 @@ def document_info(path: Path, document_id: str) -> dict[str, Any]:
     removed_in_source: list[str] = []
     for block in blocks:
         text = block["text"]
-        words += len(_WORD_RE.findall(text))
+        words += len(_WORD_RE.findall(_readable(text)))
         characters += len(text)
         value = _provenance.effective_block_provenance(block["provenance_json"], document_provenance)
         by_source[value["source"]] = by_source.get(value["source"], 0) + 1

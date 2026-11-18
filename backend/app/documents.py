@@ -217,6 +217,25 @@ def move_into(source_id: str, target_id: str) -> int:
     return moved
 
 
+# --- Living documents --------------------------------------------------------
+
+
+def upsert_from_source(**kwargs):
+    """Create or update the note for one source page, then refresh its mirror.
+
+    Takes the keyword arguments of ``sources.upsert_document_from_source``
+    (``source``, ``external_id``, ``title``, ``blocks``, ``folder_path``, ...).
+    """
+
+    from . import sources
+
+    db_path, _ = _paths()
+    result = sources.upsert_document_from_source(db_path, **kwargs)
+    if result.status in {"created", "updated"}:
+        write_mirror(result.document_id)
+    return result
+
+
 # --- Mirrors -----------------------------------------------------------------
 
 
