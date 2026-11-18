@@ -39,6 +39,7 @@ We take 0.18: most true relations survive and off-topic suggestions become rare.
 from __future__ import annotations
 
 import statistics
+from functools import lru_cache
 
 from . import block_query, embeddings
 
@@ -145,9 +146,11 @@ def relevant_keyword_scores(query: str, docs: list[tuple[str, str, str]]) -> dic
     return scores
 
 
-def _distinctive(text: str) -> set[str]:
-    return {
+@lru_cache(maxsize=1 << 16)
+def _distinctive(text: str) -> frozenset[str]:
+    # Cached: the keyword fallback tokenized every paragraph on every request.
+    return frozenset({
         word
         for word in block_query.query_tokens(text)
         if word not in _STOPWORDS and not word.isdigit() and (len(word) >= 3 or not word.isascii())
-    }
+    })

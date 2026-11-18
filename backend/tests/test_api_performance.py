@@ -191,7 +191,7 @@ class ApiWorkTests(unittest.TestCase):
 
         from fastapi.testclient import TestClient
 
-        from app import assets, documents, images, main
+        from app import assets, documents, images, main, search
 
         self.main = main
         self.documents = documents
@@ -215,6 +215,7 @@ class ApiWorkTests(unittest.TestCase):
             patch.object(documents, "get_settings", lambda: settings),
             patch.object(assets, "get_settings", lambda: settings),
             patch.object(images, "get_settings", lambda: settings),
+            patch.object(search, "get_settings", lambda: settings),
             patch.object(images, "extract_and_store", lambda _path: None),
         ):
             item.start()
@@ -330,6 +331,45 @@ class ApiWorkTests(unittest.TestCase):
         self.assertEqual(row["content_hash"], hashlib.sha256(data).hexdigest())
         self.assertEqual(row["mime_type"], "audio/mpeg")
 
+
+    def test_related_does_not_build_the_note_and_follows_edits(self) -> None:
+        from app import embeddings, search
+
+        other = self.client.post(
+            "/api/block-documents",
+            json={"title": "Other", "body": "kyoto temples gardens autumn\n\nnothing"},
+        ).json()
+        mine = self.client.post(
+            "/api/block-documents",
+            json={"title": "Mine", "body": "kyoto temples gardens autumn trip"},
+        ).json()
+        url = f"/api/notes/{mine['id']}/related"
+        calls: list[int] = []
+
+        def scores(texts, docs):
+            calls.append(1)
+            return {bid: 1.0 for bid, _version, text in docs if "kyoto" in text}
+
+        with (
+            patch.object(embeddings, "_get_model", lambda: None),
+            patch.object(embeddings._cache, "failed", True),
+            patch.object(search.relevance, "related_note_scores", scores),
+            patch.object(self.documents, "get_note", side_effect=AssertionError("built")),
+            patch.object(block_store, "document_tree", side_effect=AssertionError("built")),
+        ):
+            first = self.client.get(url).json()
+            self.assertEqual([hit["note"]["id"] for hit in first], [other["id"]])
+            self.assertEqual(self.client.get(url).json(), first)
+            self.assertEqual(len(calls), 1)  # the second answer came from the cache
+            self.client.post(
+                f"/api/block-documents/{other['id']}/transactions",
+                json={"base_revision": other["revision"], "operations": [{
+                    "operation": "update", "block_id": other["children"][0]["id"],
+                    "text": "unrelated words entirely"}]},
+            )
+            self.assertEqual(self.client.get(url).json(), [])
+            self.assertEqual(self.client.get("/api/notes/missing/related").status_code, 404)
+        search._related_cache.clear()
 
 if __name__ == "__main__":
     unittest.main()

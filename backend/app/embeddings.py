@@ -32,6 +32,7 @@ import time
 from collections import OrderedDict
 from contextlib import closing
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from . import block_query
@@ -261,6 +262,21 @@ def _get_model():
 
 def available() -> bool:
     return _get_model() is not None
+
+
+def scoring_state(corpus) -> object | None:
+    """A token that stays equal while scores against ``corpus`` cannot change.
+
+    None while they may (the model is loading, or paragraphs are still being
+    encoded): results are then not worth caching.
+    """
+
+    settings = get_settings()
+    if not getattr(settings, "embeddings_enabled", True) or _cache.failed:
+        return ("keywords",)
+    if _cache.loaded and _cache.synced_corpus is corpus:
+        return ("model", len(_cache.index))
+    return None
 
 
 def _tensor(embedding):
@@ -493,9 +509,11 @@ def _add(model, docs: list[tuple[str, str, str]]) -> None:
 
 # ---- keyword fallback ---------------------------------------------------------
 
-def _tokens(text: str) -> set[str]:
+@lru_cache(maxsize=1 << 16)
+def _tokens(text: str) -> frozenset[str]:
     # Same words as the full-text search: any script, case and accents ignored.
-    return set(block_query.query_tokens(text))
+    # Cached: without the model every search tokenized every paragraph again.
+    return frozenset(block_query.query_tokens(text))
 
 
 def _keyword_score(q: set[str], text: str) -> float:

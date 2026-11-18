@@ -1112,6 +1112,30 @@ def mark_opened(path: Path, document_id: str, *, wait: bool = True) -> bool:
     return True
 
 
+def document_title(path: Path, document_id: str) -> str | None:
+    """A live document's title (None if missing or trashed)."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        row = connection.execute(
+            "SELECT title FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
+        ).fetchone()
+    return None if row is None else str(row["title"])
+
+
+def block_text(path: Path, document_id: str, block_id: str) -> str | None:
+    """One block's stored text (None if the block is not in that live document)."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        row = connection.execute(
+            """SELECT blocks.text FROM blocks JOIN documents ON documents.id = blocks.document_id
+                WHERE blocks.id = ? AND blocks.document_id = ? AND documents.deleted_at IS NULL""",
+            (block_id, document_id),
+        ).fetchone()
+    return None if row is None else str(row["text"])
+
+
 def document_exists(path: Path, document_id: str) -> bool:
     initialize(path)
     with connection_scope(path) as connection:

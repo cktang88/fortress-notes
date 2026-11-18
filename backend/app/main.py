@@ -1218,7 +1218,7 @@ def search_notes(q: str, mode: str = Query("text", pattern="^(text|embedding)$")
 
 @app.get("/api/notes/{note_id}/related", response_model=list[RelatedResult])
 def related(note_id: str, k: int = Query(5, ge=1, le=50), block_id: str | None = None):
-    if documents.get_note(note_id) is None:
+    if not block_store.document_exists(settings.block_db_path, note_id):
         raise HTTPException(404, "Note not found")
     try:
         return search.related_notes(note_id, k, block_id)
