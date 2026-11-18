@@ -8,6 +8,11 @@ tools/onenote-compare/run.sh <export.zip | notebook folder | Section.one | Noteb
 tools/onenote-compare/run.sh --each <folder> -o REPORT_DIR   # every .one/.onepkg/.zip in it, separately
 ```
 
+Large corpora: `--shots failing --sample 25` takes screenshots/PDFs only of pages
+with a failing check (and every 25th page), `--prune` deletes each input's
+converted files and temporary notes once its pages are checked, and `--skip TEXT`
+leaves out inputs whose path contains TEXT.
+
 Open `REPORT_DIR/index.html` (pass rate per check, one row per page, links to a
 detail page per page with the diffs and a side-by-side image). `results.json`
 holds the same data.
@@ -55,6 +60,7 @@ For each input:
    | tags | note tags other than to-do boxes |
    | align | centred / right-aligned paragraphs |
    | layout | outlines side by side in OneNote must be columns (left to right) in Fortress; an outline above another in the same area must come first |
+   | export | the Markdown export rendered by a CommonMark viewer: no word missing, no code block that is not code, list nesting kept |
 4. **Side by side.** `side.png` per page: one2html | block tree | Markdown export.
 
 ## Requirements
@@ -80,6 +86,9 @@ For each input:
   (`attrs.original_url`). Images match on either hash.
 * **Alt text.** Fortress also keeps OneNote's OCR text where one2html shows no
   alt; only a reference alt that differs counts as a failure.
+* **Non-web links.** Only http(s)/mailto/tel/ftp/… links stay clickable;
+  `file:`, UNC paths, `javascript:`, `ms-word:` and over-long URLs are kept as
+  text (target in the block's provenance, `dropped_links`) and reported as info.
 * **Broken stored links.** Where OneNote's stored hyperlink is cut short but the
   visible text is a full URL, the converter links the full URL (one2html links
   the stored one).

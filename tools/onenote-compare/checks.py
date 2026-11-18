@@ -105,6 +105,8 @@ def check_checks(ref: Model, ours: Model):
                            lambda i: f"[{'x' if i[1] else ' '}] {i[0][:80]!r}")
 
 
+# Mirrors backend/app/onenote_import.py _SAFE_LINK_SCHEMES.
+WEB_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps", "sftp", "news", "sms", "geo"})
 _PAGE_ID_RE = re.compile(r"page-id=(\{[0-9A-Fa-f-]{36}\})")
 
 
@@ -126,6 +128,12 @@ def check_links(ref: Model, ours: Model, imported_pages: set[str]):
                 details.append(f"onenote link not rewritten although its page was imported: {text!r} -> {href[:120]}")
             else:
                 info.append(f"onenote link to a page outside this export (kept as text): {text!r}")
+            continue
+        scheme = re.match(r"^\s*([A-Za-z][A-Za-z0-9+.-]*):", href)
+        if scheme is None or scheme.group(1).lower() not in WEB_SCHEMES:
+            # The importer keeps only web/mail links clickable (file:, UNC, javascript:, ms-word: ...
+            # stay text; the target is in the block's provenance).
+            info.append(f"non-web link kept as text by design: {text[:60]!r} -> {href[:80]}")
             continue
         normalized = href.rstrip("/")
         hit = next((h for h in candidates if h.rstrip("/") == normalized), None)
