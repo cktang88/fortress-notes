@@ -92,13 +92,28 @@ FORTRESS_ONENOTE_SAMPLES=/path/to/samples cargo test --release -- --nocapture
 The test checks every manifest invariant (mark ranges, unique ids, layout
 covers every item, asset hashes).
 
+`tests/corpus.rs` holds regression tests for the findings of an adversarial
+corpus run (third-party writers, password-protected and OneNote 2007
+sections, `.onepkg` edge cases, fuzzed crash repros). Those files are not
+committed either; the tests run when `FORTRESS_ONENOTE_CORPUS` points at the
+corpus folder:
+
+```sh
+FORTRESS_ONENOTE_CORPUS=/path/to/onenote-corpus cargo test --release --test corpus
+```
+
+Synthetic versions of the package, crash and failure-reason checks
+(`tests/cli.rs`) and unit tests run in CI without any sample files.
+
 ## Licences
 
 - This tool's code: part of Fortress Notes.
-- [`onenote_parser`](https://github.com/msiemens/onenote.rs) — MPL-2.0, used
-  unmodified as a crate dependency (statically linked). Its source is
-  available at the link above; do not modify or vendor its files without
-  publishing the changes under MPL-2.0.
+- [`onenote_parser`](https://github.com/msiemens/onenote.rs) 2.1.0 — MPL-2.0,
+  vendored with fixes in `vendor/onenote_parser/` (statically linked). The
+  modified files stay under MPL-2.0 and are published in this repository;
+  every change is listed in `vendor/PATCHES.md`.
+- [`cab`](https://github.com/mdsteele/rust-cab) 0.6.0 — MIT, vendored with
+  hardening fixes in `vendor/cab/` (see `vendor/PATCHES.md`); reads `.onepkg`.
 - `src/math/` is adapted from [one2html](https://github.com/msiemens/one2html)
   (MIT, © 2020 Markus Siemens) — see `LICENSES/one2html-MIT.txt`.
 - Other dependencies are permissive (MIT / Apache-2.0 / BSD / Zlib /
