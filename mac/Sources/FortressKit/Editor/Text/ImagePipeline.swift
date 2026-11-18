@@ -20,8 +20,12 @@ final class ImageSlot {
 final class ImagePipeline {
     static let shared = ImagePipeline()
 
-    /// Longest side in pixels: the widest an image is shown (the measure, ~720 pt) at 2×.
-    nonisolated static let maxPixelSize: CGFloat = 1600
+    /// Longest side in pixels: the widest an image is shown (the measure, ~720 pt) at the
+    /// screen's scale (1440 px on Retina, 720 at 1x), never more than 1600.
+    static var maxPixelSize: CGFloat {
+        let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        return min(1600, 720 * scale)
+    }
 
     private let cache = NSCache<NSURL, NSImage>()
     private var loading: [URL: Task<Decoded?, Never>] = [:]
@@ -47,7 +51,8 @@ final class ImagePipeline {
         if let existing = loading[url] {
             task = existing
         } else {
-            task = Task.detached(priority: .utility) { await Self.load(url, session: session) }
+            let maxPixelSize = Self.maxPixelSize
+            task = Task.detached(priority: .utility) { await Self.load(url, session: session, maxPixelSize: maxPixelSize) }
             loading[url] = task
         }
         guard let decoded = await task.value else {
@@ -64,7 +69,7 @@ final class ImagePipeline {
     func removeAll() { cache.removeAllObjects() }
 
     /// Fetch and decode, off the main actor.
-    nonisolated static func load(_ url: URL, session: URLSession) async -> Decoded? {
+    nonisolated static func load(_ url: URL, session: URLSession, maxPixelSize: CGFloat) async -> Decoded? {
         let data: Data
         do {
             if url.isFileURL {

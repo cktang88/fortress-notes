@@ -245,6 +245,46 @@ struct EditorTheme: Sendable {
         return attributes
     }
 
+    /// What decides a run's presentation: the theme, the block's kind, depth and check
+    /// state, and the marks. Fonts, paragraph styles and colours are made once per
+    /// combination instead of once per run (opening a long note restyles ~10,000 runs).
+    private struct StyleKey: Hashable {
+        var kind: BlockKind
+        var depth: Int
+        var checked: Bool
+        var marks: InlineMarks
+        var baseSize: CGFloat
+        var isCompact: Bool
+        var alignment: Int
+        var emphasized: Bool
+        var textColorName: String?
+    }
+
+    private final class StyleCache: @unchecked Sendable {
+        let lock = NSLock()
+        var attributes: [StyleKey: [NSAttributedString.Key: Any]] = [:]
+    }
+
+    private static let styleCache = StyleCache()
+
+    func cachedAttributes(info: BlockInfo, marks: InlineMarks) -> [NSAttributedString.Key: Any] {
+        let key = StyleKey(kind: info.kind, depth: info.depth, checked: info.checked, marks: marks, baseSize: baseSize,
+                           isCompact: isCompact, alignment: alignment.rawValue, emphasized: emphasized, textColorName: textColorName)
+        let cache = Self.styleCache
+        cache.lock.lock()
+        if let found = cache.attributes[key] {
+            cache.lock.unlock()
+            return found
+        }
+        cache.lock.unlock()
+        let made = attributes(info: info, marks: marks, paragraphStyle: paragraphStyle(for: info))
+        cache.lock.lock()
+        if cache.attributes.count > 4096 { cache.attributes.removeAll() }
+        cache.attributes[key] = made
+        cache.lock.unlock()
+        return made
+    }
+
     static let presentationKeys: [NSAttributedString.Key] = [
         .font, .paragraphStyle, .foregroundColor, .backgroundColor, .underlineStyle,
         .strikethroughStyle, .strikethroughColor, .link, .toolTip, .baselineOffset, .fnStyled,
@@ -267,14 +307,13 @@ struct EditorTheme: Sendable {
 
     private func restyleParagraph(_ storage: NSMutableAttributedString, _ paragraph: NSRange) {
         let info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
-        let style = paragraphStyle(for: info)
         storage.enumerateAttributes(in: paragraph, options: []) { attributes, run, _ in
             var marks = (attributes[.fnMarks] as? MarksBox)?.marks ?? InlineMarks()
             let foreign = attributes[.fnStyled] == nil
             if foreign && attributes[.fnMarks] == nil {
                 marks = Self.marks(fromForeign: attributes)
             }
-            var updated = self.attributes(info: info, marks: marks, paragraphStyle: style)
+            var updated = self.cachedAttributes(info: info, marks: marks)
             updated[.fnBlock] = info
             if !marks.isPlain { updated[.fnMarks] = MarksBox(marks) }
             if let node = attributes[.fnNode] { updated[.fnNode] = node }

@@ -350,7 +350,8 @@ private func paragraph(_ id: String, _ text: String, kind: BlockKind = .paragrap
         pasted.append(NSAttributedString(string: "bold", attributes: [.font: NSFont.boldSystemFont(ofSize: 12)]))
         pasted.append(NSAttributedString(string: "\r\nnext ", attributes: [.font: NSFont.systemFont(ofSize: 12)]))
         pasted.append(NSAttributedString(string: "link", attributes: [.font: NSFont.systemFont(ofSize: 12), .link: URL(string: "https://example.com")!]))
-        controller.textView.insertText(pasted, replacementRange: NSRange(location: 0, length: 0))
+        // What NSTextView's paste does with rich text: the pasted attributes go in as they are.
+        controller.replace(NSRange(location: 0, length: 0), with: pasted)
         let blocks = controller.currentBlocks()
         #expect(blocks.map(\.plainText) == ["Plain bold", "next link"])
         #expect(blocks[0].runs.contains { $0.text == "bold" && $0.marks.bold })

@@ -189,6 +189,19 @@ final class PerfEditor {
 
     func range(ofBlock id: String) -> NSRange { controller.range(ofBlock: id)! }
 
+    /// The kinds of the blocks in the viewport (for timing reports).
+    var viewportKinds: String {
+        guard let manager = controller.textView.textLayoutManager, let contentManager = manager.textContentManager,
+              let viewport = manager.textViewportLayoutController.viewportRange else { return "?" }
+        let start = contentManager.offset(from: contentManager.documentRange.location, to: viewport.location)
+        let end = contentManager.offset(from: contentManager.documentRange.location, to: viewport.endLocation)
+        var kinds: [String] = []
+        controller.storage.enumerateAttribute(.fnBlock, in: NSRange(location: start, length: max(0, end - start)), options: []) { value, _, _ in
+            if let kind = (value as? BlockInfo)?.kind.rawValue, kinds.last != kind { kinds.append(kind) }
+        }
+        return kinds.joined(separator: ",")
+    }
+
     /// A plain paragraph about halfway down the note.
     var middleParagraph: String {
         let blocks = session.initialBlocks
@@ -222,6 +235,21 @@ final class PerfEditor {
             editor.open()
         }
         PerfLog.record("open.flatten", flattenTime)
+        // Where opening spends its time.
+        let parts = PerfEditor(document: document)
+        let context = parts.controller.context
+        var text = NSMutableAttributedString()
+        PerfLog.record("open.part.build", milliseconds { text = DocumentText.build(blocks, theme: EditorTheme(), context: context) })
+        PerfLog.record("open.part.storage", milliseconds { parts.controller.storage.setAttributedString(text) })
+        PerfLog.record("open.part.layout", milliseconds { parts.layoutViewport() })
+        let paragraphsOnly = blocks.filter { $0.kind.hasInlineText }
+        PerfLog.record("open.part.buildTextOnly(\(paragraphsOnly.count))", milliseconds { _ = DocumentText.build(paragraphsOnly, theme: EditorTheme(), context: context) })
+        let tableNodes = document.children.filter { $0.type == "table" }
+        PerfLog.record("open.part.flattenTables(\(tableNodes.count))", milliseconds { _ = BlockCodec.flatten(tableNodes) })
+        let textNodes = document.children.filter { $0.type != "table" && $0.type != "columns" }
+        PerfLog.record("open.part.flattenText(\(textNodes.count))", milliseconds { _ = BlockCodec.flatten(textNodes) })
+        let columnBlocks = blocks.filter { $0.kind == .columns }
+        PerfLog.record("open.part.buildColumns(\(columnBlocks.count))", milliseconds { _ = DocumentText.build(columnBlocks, theme: EditorTheme(), context: context) })
         PerfLog.record("open.total(2000 blocks, 100 images, 20 tables 50x8, 10 columns, 3x50k)", open, budget: 150)
         PerfLog.record("open.memory", footprintMB() - before, unit: "MB")
         let paragraphs = blocks.count
@@ -274,6 +302,24 @@ final class PerfEditor {
         PerfLog.record("keystroke.return", newline, budget: 8)
     }
 
+    @Test func richBlockLayout() throws {
+        let document = LongNote.document()
+        let editor = PerfEditor(document: document)
+        editor.open()
+        func live(_ id: String) -> (any LiveBlock)? {
+            (editor.controller.storage.attribute(.attachment, at: editor.range(ofBlock: id).location, effectiveRange: nil) as? BlockAttachment)?.live
+        }
+        let table = try #require(live("t3"))
+        PerfLog.record("layout.table50x8.first", milliseconds { _ = table.height(forWidth: 650) })
+        let columns = try #require(live("k3"))
+        PerfLog.record("layout.columns.first", milliseconds { _ = columns.height(forWidth: 650) })
+        let long = editor.range(ofBlock: "l1")
+        PerfLog.record("layout.long50k.scrollTo", milliseconds {
+            editor.controller.scrollRangeToVisibleForTests(NSRange(location: long.location, length: 0))
+            editor.layoutViewport()
+        })
+    }
+
     @Test func keystrokeInATableCell() throws {
         let editor = PerfEditor(document: LongNote.document())
         editor.open()
@@ -302,6 +348,11 @@ final class PerfEditor {
         // What a debounced flush does before sending.
         let diff = milliseconds { operations = editor.session.pendingOperationsForTests() }
         PerfLog.record("save.diff(one edited block of 2000)", diff, budget: 8)
+        editor.type("w")
+        var read: [EditorBlock] = []
+        PerfLog.record("save.diff.part.currentBlocks", milliseconds { read = editor.controller.currentBlocks() })
+        PerfLog.record("save.diff.part.syncedTree", milliseconds { _ = SyncedTree(read, reusing: editor.session.base) })
+        PerfLog.record("save.diff.part.operations", milliseconds { _ = BlockDiff.operations(from: editor.session.base, to: read) })
         #expect(operations.count == 1)
         #expect(operations.first?.blockId == middleId)
 
@@ -371,9 +422,15 @@ final class PerfEditor {
         let height = editor.controller.textView.frame.height
         var times: [Double] = []
         var y: CGFloat = 0
+        var slow: [(Double, String)] = []
         while y < min(height, 60_000) {
             y += 700
-            times.append(milliseconds { editor.scroll(to: y) })
+            let time = milliseconds { editor.scroll(to: y) }
+            times.append(time)
+            if time > 50 { slow.append((time, editor.viewportKinds)) }
+        }
+        for (time, kinds) in slow.sorted(by: { $0.0 > $1.0 }).prefix(5) {
+            PerfLog.record("scroll.slowStep[\(kinds)]", time)
         }
         let sorted = times.sorted()
         PerfLog.record("scroll.step.median", sorted[sorted.count / 2], budget: 16)
