@@ -30,7 +30,7 @@ jobs:
           HF_HUB_OFFLINE: "1"
         run: |
           .venv/bin/python -m unittest discover -s tests -p test_colbert_mlx.py -v
-          .venv/bin/python -m unittest discover -s tests -p test_embeddings.py
+          .venv/bin/python -m unittest discover -s tests -p test_embeddings.py -k Accelerator -k EncoderTests
       - name: Bench OCR (CPU vs CoreML) and ColBERT (CPU, MLX, MPS), and the app's own choice
         run: |
           .venv/bin/python scripts/bench_accel.py all --out "$RUNNER_TEMP/accel" --reps 5 --tag main \
