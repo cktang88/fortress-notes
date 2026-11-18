@@ -371,5 +371,24 @@ class ApiWorkTests(unittest.TestCase):
             self.assertEqual(self.client.get("/api/notes/missing/related").status_code, 404)
         search._related_cache.clear()
 
+    def test_concurrent_transactions_on_one_note_conflict_cleanly(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        revision = self.note["revision"]
+        block = self.note["children"][0]["id"]
+
+        def write(number: int) -> int:
+            return self.client.post(
+                f"/api/block-documents/{self.note['id']}/transactions",
+                json={"base_revision": revision, "operations": [{
+                    "operation": "update", "block_id": block, "text": f"writer {number}"}]},
+            ).status_code
+
+        with ThreadPoolExecutor(8) as pool:
+            statuses = sorted(pool.map(write, range(8)))
+        self.assertEqual(statuses, [200] + [409] * 7)
+        tree = self.client.get(f"/api/block-documents/{self.note['id']}").json()
+        self.assertEqual(tree["revision"], revision + 1)
+
 if __name__ == "__main__":
     unittest.main()

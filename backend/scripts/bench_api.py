@@ -367,7 +367,7 @@ def mixed(client_factory, base: str, docs: list[str], writer_doc: str, seconds: 
             "writes": {"n": len(writes), **_stats(writes)}, "errors": errors[:5]}
 
 
-def typing(client, base: str, document_id: str, count: int) -> dict:
+def typing(client, base: str, document_id: str, count: int, query: str = "") -> dict:
     tree = client.get(f"{base}/api/block-documents/{document_id}").json()
     block = next(node for node in tree["children"] if node["type"] == "paragraph")
     revision = tree["revision"]
@@ -377,7 +377,7 @@ def typing(client, base: str, document_id: str, count: int) -> dict:
         text = f"typed {number} " + "x" * number
         started = time.perf_counter()
         response = client.post(
-            f"{base}/api/block-documents/{document_id}/transactions",
+            f"{base}/api/block-documents/{document_id}/transactions{query}",
             json={"base_revision": revision, "operations": [{
                 "operation": "update", "block_id": block["id"], "text": text,
                 "content": {"blocknote": [{"type": "text", "text": text, "styles": {}}]}}]},
@@ -452,6 +452,12 @@ def run(directory: Path, kind: str, rounds: int) -> dict:
             results["backup_created"] = backup.status_code
             results["typing (normal note)"] = typing(client, base, sample[0], 40)
             results["typing (largest note)"] = typing(client, base, largest, 40)
+            meta = client.post(f"{base}/api/block-documents/{largest}/transactions?response=meta",
+                               json={"base_revision": 0, "operations": [{"operation": "delete",
+                                                                         "block_id": "x"}]})
+            if meta.status_code != 422:  # the option exists (409: stale revision)
+                results["typing (largest, ?response=meta)"] = typing(
+                    client, base, largest, 40, "?response=meta")
             results["mixed (4 readers + 1 writer, 5 s)"] = mixed(
                 lambda: httpx.Client(timeout=60), base, sample[1:], sample[0], 5.0
             )
@@ -475,7 +481,10 @@ def print_table(results: dict) -> None:
         reval_text = f"{reval['status']} p50 {reval['p50_ms']} ms" if reval else "-"
         print(f"{row['name']:28} {row['p50_ms']:8} {row['p95_ms']:8} {row['bytes']:9} "
               f"{row['gzip_bytes']:8}  {reval_text}")
-    for key in ("typing (normal note)", "typing (largest note)"):
+    for key in ("typing (normal note)", "typing (largest note)",
+                "typing (largest, ?response=meta)"):
+        if key not in results:
+            continue
         row = results[key]
         print(f"{key:28} {row['p50_ms']:8} {row['p95_ms']:8} {row['bytes']:9}")
     row = results["mixed (4 readers + 1 writer, 5 s)"]
