@@ -98,7 +98,47 @@ final class FortressTextView: NSTextView {
 
     override func paste(_ sender: Any?) {
         if let controller, controller.pasteFiles(from: .general) { return }
+        let before = controller?.blockIds() ?? []
+        let start = selectedRange().location
         super.paste(sender)
+        controller?.markPasted(from: start, to: selectedRange().location, existing: before,
+                               sourceURL: Self.sourceURL(in: .general))
+    }
+
+    /// The page web content was copied from, when the browser says.
+    static func sourceURL(in pasteboard: NSPasteboard) -> String? {
+        if let url = pasteboard.string(forType: NSPasteboard.PasteboardType("org.chromium.source-url")), !url.isEmpty {
+            return url
+        }
+        if let data = pasteboard.data(forType: NSPasteboard.PasteboardType("com.apple.webarchive")),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let main = plist["WebMainResource"] as? [String: Any], let url = main["WebResourceURL"] as? String,
+           url.hasPrefix("http") {
+            return url
+        }
+        return nil
+    }
+
+    // MARK: Hover (block info in the left margin)
+
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        controller?.hover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        controller?.hover(at: nil)
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {

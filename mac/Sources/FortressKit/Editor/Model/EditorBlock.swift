@@ -139,12 +139,19 @@ public struct BlockOrigin: Hashable, Sendable {
     public var updatedAt: String
     /// Children of an embed (they are not flattened into the text).
     public var children: [BlockNode]
+    /// Where the block came from (spec §7a). Read-only here: never sent on update.
+    public var provenance: JSONValue?
+    /// Note revision that last changed the block.
+    public var revision: Int?
 
     public init(
         type: String, attrs: [String: JSONValue] = [:], userAttrs: [String: JSONValue] = [:],
         content: JSONValue = .object([:]), text: String = "", kind: BlockKind, native: Bool,
-        createdAt: String = "", updatedAt: String = "", children: [BlockNode] = []
+        createdAt: String = "", updatedAt: String = "", children: [BlockNode] = [],
+        provenance: JSONValue? = nil, revision: Int? = nil
     ) {
+        self.provenance = provenance
+        self.revision = revision
         self.type = type
         self.attrs = attrs
         self.userAttrs = userAttrs
@@ -168,12 +175,15 @@ public struct EditorBlock: Hashable, Sendable {
     public var language: String?
     public var runs: [InlineRun]
     public var origin: BlockOrigin?
+    /// Provenance to record when this block is first saved (e.g. pasted from a web page).
+    public var newProvenance: JSONValue?
 
     public init(
         id: String = EditorBlock.newId(), kind: BlockKind = .paragraph, depth: Int = 0,
         checked: Bool = false, language: String? = nil, runs: [InlineRun] = [],
-        origin: BlockOrigin? = nil
+        origin: BlockOrigin? = nil, newProvenance: JSONValue? = nil
     ) {
+        self.newProvenance = newProvenance
         self.id = id
         self.kind = kind
         self.depth = depth

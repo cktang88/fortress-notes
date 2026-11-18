@@ -57,12 +57,14 @@ enum DocumentText {
             location = NSMaxRange(paragraph)
             var info = text.blockInfo(at: paragraph.location) ?? BlockInfo()
             if seen.contains(info.id) || text.blockInfo(at: paragraph.location) == nil {
-                info = BlockInfo(kind: info.kind, depth: info.depth, checked: info.checked, language: info.language, origin: info.origin)
+                info = BlockInfo(kind: info.kind, depth: info.depth, checked: info.checked, language: info.language,
+                                 origin: info.origin, newProvenance: info.newProvenance)
                 renamed.append((paragraph, info))
             }
             seen.insert(info.id)
             var block = EditorBlock(id: info.id, kind: info.kind, depth: info.depth, checked: info.checked,
-                                    language: info.language, origin: info.origin?.origin)
+                                    language: info.language, origin: info.origin?.origin,
+                                    newProvenance: info.newProvenance)
             var content = paragraph
             if content.length > 0, string.character(at: NSMaxRange(content) - 1) == 0x0A { content.length -= 1 }
             if info.kind.hasInlineText {

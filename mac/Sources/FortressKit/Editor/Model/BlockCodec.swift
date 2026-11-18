@@ -14,14 +14,46 @@ public enum BlockCodec {
 
     /// Flattens a block tree into paragraphs. Children of editable blocks become deeper
     /// paragraphs; an embed keeps its subtree to itself.
-    public static func flatten(_ nodes: [BlockNode], depth: Int = 0) -> [EditorBlock] {
+    public static func flatten(_ nodes: [BlockNode], depth: Int = 0, resolved: ResolvedLinks? = nil) -> [EditorBlock] {
         var output: [EditorBlock] = []
         for node in nodes {
-            let block = decode(node, depth: depth)
+            var block = decode(node, depth: depth)
+            if let resolved, !resolved.documents.isEmpty { block.runs = currentLinkTitles(block.runs, resolved) }
             output.append(block)
             if block.kind != .embed {
-                output.append(contentsOf: flatten(node.children, depth: depth + 1))
+                output.append(contentsOf: flatten(node.children, depth: depth + 1, resolved: resolved))
             }
+        }
+        return output
+    }
+
+    /// Note links read with the linked note's current title (living links). The stored
+    /// text changes only if the block is edited.
+    public static func currentLinkTitles(_ runs: [InlineRun], _ resolved: ResolvedLinks) -> [InlineRun] {
+        var output: [InlineRun] = []
+        var index = 0
+        while index < runs.count {
+            let run = runs[index]
+            guard run.node == nil, let href = run.marks.link, let target = InlineMarkdown.documentLinkTarget(href),
+                  let title = resolved.documents[target.id]?.title, !title.isEmpty else {
+                output.append(run)
+                index += 1
+                continue
+            }
+            var end = index
+            var text = ""
+            while end < runs.count, runs[end].node == nil, runs[end].marks.link == href {
+                text += runs[end].text
+                end += 1
+            }
+            if text == title {
+                output.append(contentsOf: runs[index..<end])
+            } else {
+                var marks = run.marks
+                marks.link = InlineMarkdown.documentLinkHref(id: target.id, title: title)
+                output.append(InlineRun(title, marks))
+            }
+            index = end
         }
         return output
     }
@@ -32,7 +64,8 @@ public enum BlockCodec {
         var origin = BlockOrigin(
             type: node.type, attrs: node.attrs, userAttrs: node.userAttrs, content: node.content,
             text: node.text, kind: .paragraph, native: native != nil,
-            createdAt: node.createdAt, updatedAt: node.updatedAt)
+            createdAt: node.createdAt, updatedAt: node.updatedAt,
+            provenance: node.provenance, revision: node.revision)
         var block = EditorBlock(id: node.id, kind: .paragraph, depth: depth)
 
         func inline(stripping pattern: String? = nil) -> [InlineRun] {

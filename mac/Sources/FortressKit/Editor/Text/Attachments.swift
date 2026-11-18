@@ -20,6 +20,12 @@ final class AttachmentContext {
         self.baseURL = baseURL
     }
 
+    /// Block references show the text the server resolved for them (living links).
+    func adoptResolvedLinks(_ links: ResolvedLinks?) {
+        guard let links else { return }
+        for (id, block) in links.blocks { referenceText[id] = block.text }
+    }
+
     func url(for string: String) -> URL? {
         if string.hasPrefix("/") { return URL(string: string, relativeTo: baseURL)?.absoluteURL }
         return URL(string: string)

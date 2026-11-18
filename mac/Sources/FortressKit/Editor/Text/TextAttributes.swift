@@ -23,9 +23,13 @@ final class BlockInfo: NSObject, @unchecked Sendable {
     let checked: Bool
     let language: String?
     let origin: OriginBox?
+    /// Provenance to record when the block is first saved (pasted web content).
+    let newProvenance: JSONValue?
 
     init(id: String = EditorBlock.newId(), kind: BlockKind = .paragraph, depth: Int = 0,
-         checked: Bool = false, language: String? = nil, origin: OriginBox? = nil) {
+         checked: Bool = false, language: String? = nil, origin: OriginBox? = nil,
+         newProvenance: JSONValue? = nil) {
+        self.newProvenance = newProvenance
         self.id = id
         self.kind = kind
         self.depth = depth
@@ -36,12 +40,19 @@ final class BlockInfo: NSObject, @unchecked Sendable {
 
     convenience init(_ block: EditorBlock) {
         self.init(id: block.id, kind: block.kind, depth: block.depth, checked: block.checked,
-                  language: block.language, origin: block.origin.map(OriginBox.init))
+                  language: block.language, origin: block.origin.map(OriginBox.init),
+                  newProvenance: block.newProvenance)
     }
 
     func with(id: String? = nil, kind: BlockKind? = nil, depth: Int? = nil, checked: Bool? = nil) -> BlockInfo {
         BlockInfo(id: id ?? self.id, kind: kind ?? self.kind, depth: depth ?? self.depth,
-                  checked: checked ?? self.checked, language: language, origin: origin)
+                  checked: checked ?? self.checked, language: language, origin: origin,
+                  newProvenance: newProvenance)
+    }
+
+    func with(newProvenance: JSONValue?) -> BlockInfo {
+        BlockInfo(id: id, kind: kind, depth: depth, checked: checked, language: language, origin: origin,
+                  newProvenance: newProvenance)
     }
 
     /// A fresh block following this one (Return): new id, no server history.
@@ -53,6 +64,7 @@ final class BlockInfo: NSObject, @unchecked Sendable {
         guard let other = object as? BlockInfo else { return false }
         return id == other.id && kind == other.kind && depth == other.depth
             && checked == other.checked && language == other.language && origin === other.origin
+            && newProvenance == other.newProvenance
     }
 
     override var hash: Int { id.hashValue }

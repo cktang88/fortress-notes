@@ -30,6 +30,8 @@ public final class EditorSession {
 
     /// Supplies the editor's current blocks (set by the text view controller).
     @ObservationIgnored var currentBlocks: (() -> [EditorBlock]?)?
+    /// Told about the note after each save, so the list, titles and Recent stay current.
+    @ObservationIgnored public var onDocumentChange: ((BlockDocument) -> Void)?
     /// Replaces the editor's text (load, load latest).
     @ObservationIgnored var showBlocks: (([EditorBlock]) -> Void)?
 
@@ -86,7 +88,7 @@ public final class EditorSession {
         title = document.title
         status = document.status
         updatedAt = Timestamp.date(document.updatedAt)
-        let blocks = BlockCodec.flatten(document.children)
+        let blocks = BlockCodec.flatten(document.children, resolved: document.resolvedLinks)
         if replaceText, let showBlocks {
             showBlocks(blocks)
             // The baseline is what the editor reads back, so an untouched note never saves.
@@ -98,7 +100,7 @@ public final class EditorSession {
 
     /// The blocks to show when the editor appears.
     var initialBlocks: [EditorBlock] {
-        document.map { BlockCodec.flatten($0.children) } ?? []
+        document.map { BlockCodec.flatten($0.children, resolved: $0.resolvedLinks) } ?? []
     }
 
     func resetBase(to blocks: [EditorBlock]) {
@@ -163,6 +165,7 @@ public final class EditorSession {
                 titleAuto = true
                 title = document.title
             }
+            onDocumentChange?(document)
             saveState = dirty ? .saving : .saved
             if dirty { scheduleFlush(after: .milliseconds(50)) }
         } catch let error as APIError where (400..<500).contains(error.status) && error.status != 408 && error.status != 429 {
@@ -203,6 +206,7 @@ public final class EditorSession {
             self.document?.titleAuto = updated.titleAuto
             titleAuto = updated.titleAuto ?? false
             if chosen.isEmpty || titleAuto { title = updated.title }
+            onDocumentChange?(updated)
         } catch {
             saveState = .offline
         }
@@ -222,6 +226,8 @@ public final class EditorSession {
         do {
             let updated = try await api.updateDocument(id: documentId, status: newStatus)
             status = updated.status
+            self.document?.status = updated.status
+            onDocumentChange?(updated)
         } catch {
             status = previous
         }

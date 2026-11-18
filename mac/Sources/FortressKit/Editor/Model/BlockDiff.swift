@@ -62,6 +62,8 @@ public enum BlockDiff {
     /// Operations from `base` to `target`, and the tree the server will then hold.
     public static func operations(from base: SyncedTree, to target: [EditorBlock]) -> (operations: [BlockOperation], result: SyncedTree) {
         let result = SyncedTree(target)
+        var newProvenance: [String: JSONValue] = [:]
+        for block in target { if let provenance = block.newProvenance { newProvenance[block.id] = provenance } }
         var children = base.children
         var parent = base.parent
         if children[nil] == nil { children[nil] = [] }
@@ -111,7 +113,8 @@ public enum BlockDiff {
                 parent.updateValue(targetParent, forKey: id)
                 operations.append(BlockOperation(
                     operation: .insert, blockId: id, parentId: targetParent, position: position,
-                    type: fields.type, attrs: fields.attrs, content: fields.content, text: fields.text))
+                    type: fields.type, attrs: fields.attrs, content: fields.content, text: fields.text,
+                    provenance: newProvenance[id]))
             }
         }
 

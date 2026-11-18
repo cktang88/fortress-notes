@@ -36,6 +36,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     private var lastReplacement: String?
     private var focusedBlockId: String?
     private lazy var completion = LinkCompletion(controller: self)
+    private lazy var blockHover = BlockHover(controller: self)
 
     init(baseURL: URL) {
         textView = FortressTextView.make()
@@ -118,6 +119,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         textView.setSelectedRange(NSRange(location: range.location, length: 0))
         scrollToCenter(range)
         flash(range)
+    }
+
+    /// Takes keyboard focus, keeping the caret where it was.
+    func focusCaret() {
+        textView.window?.makeFirstResponder(textView)
+        textView.scrollRangeToVisible(textView.selectedRange())
     }
 
     func focusStart() {
@@ -660,8 +667,16 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard info.kind == .paragraph || info.kind == .bullet, caret > paragraph.location else { return }
         let prefix = string.substring(with: NSRange(location: paragraph.location, length: caret - paragraph.location))
         guard let kind = Self.shortcutKind(prefix, current: info.kind) else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.textView.hasMarkedText() else { return }
+        // A run loop pass later (not a GCD hop, which can't run while the main queue is
+        // busy), so the transform is its own undo group.
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            MainActor.assumeIsolated { self?.applyMarkdownShortcut(paragraph: paragraph, prefix: prefix, info: info, kind: kind) }
+        }
+    }
+
+    private func applyMarkdownShortcut(paragraph: NSRange, prefix: String, info: BlockInfo, kind: (kind: BlockKind, checked: Bool)) {
+        do {
+            guard !self.textView.hasMarkedText() else { return }
             let now = self.paragraph(at: paragraph.location)
             guard now.location == paragraph.location, NSMaxRange(now) >= paragraph.location + prefix.utf16.count,
                   self.string.substring(with: NSRange(location: now.location, length: prefix.utf16.count)) == prefix
@@ -961,6 +976,52 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let paragraph = paragraph(at: offset)
         updateBlocks([paragraph]) { $0.with(checked: !$0.checked) }
         return true
+    }
+
+    // MARK: Block info and provenance
+
+    func hover(at point: NSPoint?) { blockHover.hover(at: point) }
+
+    /// The paragraph under a point (text view coordinates) and its line area.
+    func blockFrame(at point: CGPoint) -> (NSRange, CGRect)? {
+        guard let manager = textView.textLayoutManager, let contentManager = manager.textContentManager else { return nil }
+        let origin = textView.textContainerOrigin
+        let local = CGPoint(x: max(0, point.x - origin.x), y: point.y - origin.y)
+        guard let fragment = manager.textLayoutFragment(for: local) else { return nil }
+        let offset = contentManager.offset(from: contentManager.documentRange.location, to: fragment.rangeInElement.location)
+        guard offset < string.length else { return nil }
+        var frame = fragment.layoutFragmentFrame
+        if let first = fragment.textLineFragments.first {
+            frame = CGRect(x: frame.minX, y: frame.minY + first.typographicBounds.minY, width: frame.width, height: first.typographicBounds.height)
+        }
+        let info = storage.blockInfo(at: offset)
+        let indent = info.map { theme.textIndent(kind: $0.kind, depth: $0.depth) - ($0.kind.isList ? theme.markerWidth : 0) } ?? 0
+        frame = frame.offsetBy(dx: origin.x + indent, dy: origin.y)
+        return (paragraph(at: offset), frame)
+    }
+
+    func blockIds() -> Set<String> {
+        var ids = Set<String>()
+        var location = 0
+        while location < string.length {
+            let paragraph = paragraph(at: location)
+            if let id = storage.blockInfo(at: paragraph.location)?.id { ids.insert(id) }
+            location = NSMaxRange(paragraph)
+        }
+        return ids
+    }
+
+    /// Blocks a paste created remember where they came from (a web page's address).
+    func markPasted(from start: Int, to end: Int, existing: Set<String>, sourceURL: String?) {
+        guard let sourceURL, end > start else { return }
+        let provenance: JSONValue = .object(["source": .string("paste"), "source_url": .string(sourceURL)])
+        _ = currentBlocks()  // settle duplicate ids first
+        isNormalizing = true
+        defer { isNormalizing = false }
+        for paragraph in paragraphs(in: NSRange(location: start, length: end - start)) {
+            guard let info = storage.blockInfo(at: paragraph.location), !existing.contains(info.id) else { continue }
+            storage.addAttribute(.fnBlock, value: info.with(newProvenance: provenance), range: paragraph)
+        }
     }
 
     // MARK: Pasting and dropping files

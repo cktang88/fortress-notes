@@ -124,8 +124,14 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
     public var createdAt: String
     public var updatedAt: String
     public var children: [BlockNode]
+    /// Where the block came from (spec §7a); the note's, with `"inherited": true`, when
+    /// it has none of its own.
+    public var provenance: JSONValue? = nil
+    /// The note revision that last changed this block (nil: unchanged since creation).
+    public var revision: Int? = nil
 
     enum CodingKeys: String, CodingKey {
+        case provenance, revision
         case id
         case documentId = "document_id"
         case parentId = "parent_id"
@@ -152,8 +158,15 @@ public struct BlockDocument: Codable, Hashable, Identifiable, Sendable {
     public var createdAt: String
     public var updatedAt: String
     public var children: [BlockNode]
+    public var provenance: JSONValue? = nil
+    public var lastOpenedAt: String? = nil
+    /// Current titles of linked notes and text of referenced blocks (living links).
+    public var resolvedLinks: ResolvedLinks? = nil
 
     enum CodingKeys: String, CodingKey {
+        case provenance
+        case lastOpenedAt = "last_opened_at"
+        case resolvedLinks = "resolved_links"
         case id
         case revision
         case titleAuto = "title_auto"
@@ -165,6 +178,42 @@ public struct BlockDocument: Codable, Hashable, Identifiable, Sendable {
         case updatedAt = "updated_at"
         case children
     }
+}
+
+/// `resolved_links` of a document payload.
+public struct ResolvedLinks: Codable, Hashable, Sendable {
+    public struct DocumentTarget: Codable, Hashable, Sendable {
+        public var title: String
+    }
+
+    public struct BlockTarget: Codable, Hashable, Sendable {
+        public var documentId: String?
+        public var documentTitle: String?
+        public var type: String?
+        public var text: String
+
+        enum CodingKeys: String, CodingKey {
+            case documentId = "document_id"
+            case documentTitle = "document_title"
+            case type, text
+        }
+    }
+
+    public var documents: [String: DocumentTarget]
+    public var blocks: [String: BlockTarget]
+
+    public init(documents: [String: DocumentTarget] = [:], blocks: [String: BlockTarget] = [:]) {
+        self.documents = documents
+        self.blocks = blocks
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        documents = (try? container.decode([String: DocumentTarget].self, forKey: .documents)) ?? [:]
+        blocks = (try? container.decode([String: BlockTarget].self, forKey: .blocks)) ?? [:]
+    }
+
+    enum CodingKeys: String, CodingKey { case documents, blocks }
 }
 
 public enum BlockOperationKind: String, Codable, Sendable {
@@ -183,12 +232,16 @@ public struct BlockOperation: Codable, Hashable, Sendable {
     public var content: JSONValue?
     public var text: String?
     public var expectedUpdatedAt: String?
+    /// Only sent to set it (an insert's source); omitted, the server keeps what it has.
+    public var provenance: JSONValue?
 
     public init(
         operation: BlockOperationKind, blockId: String? = nil, parentId: String? = nil,
         position: Int? = nil, type: String? = nil, attrs: [String: JSONValue]? = nil,
-        content: JSONValue? = nil, text: String? = nil, expectedUpdatedAt: String? = nil
+        content: JSONValue? = nil, text: String? = nil, expectedUpdatedAt: String? = nil,
+        provenance: JSONValue? = nil
     ) {
+        self.provenance = provenance
         self.operation = operation
         self.blockId = blockId
         self.parentId = parentId
@@ -210,6 +263,7 @@ public struct BlockOperation: Codable, Hashable, Sendable {
         case content
         case text
         case expectedUpdatedAt = "expected_updated_at"
+        case provenance
     }
 }
 

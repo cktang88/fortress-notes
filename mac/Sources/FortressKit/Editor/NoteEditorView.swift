@@ -25,7 +25,8 @@ struct NoteEditorView: View {
         ZStack(alignment: .top) {
             Color(nsColor: .textBackgroundColor)
             if let session, session.document != nil {
-                BlockTextEditor(session: session, model: model, focusBlockId: focusBlockId)
+                BlockTextEditor(session: session, model: model, focusBlockId: focusBlockId,
+                                focusRequest: model.editorFocusRequest)
                 SaveBanner(session: session)
             } else if let error = session?.loadError {
                 ContentUnavailableView {
@@ -100,10 +101,12 @@ struct BlockTextEditor: NSViewRepresentable {
     let session: EditorSession
     let model: AppModel
     let focusBlockId: String?
+    var focusRequest = 0
 
     final class Coordinator {
         let controller: BlockEditorController
         var focusedRequest: String?
+        var focusRequest = 0
         init(controller: BlockEditorController) { self.controller = controller }
     }
 
@@ -124,10 +127,16 @@ struct BlockTextEditor: NSViewRepresentable {
         header.sizingOptions = []
         controller.textView.header = header
 
+        context.coordinator.focusRequest = focusRequest
+        controller.context.adoptResolvedLinks(session.document?.resolvedLinks)
         controller.load(session.initialBlocks)
         session.resetBase(to: controller.currentBlocks())
         session.currentBlocks = { controller.currentBlocks() }
-        session.showBlocks = { controller.load($0) }
+        session.showBlocks = { blocks in
+            controller.context.adoptResolvedLinks(session.document?.resolvedLinks)
+            controller.load(blocks)
+        }
+        session.onDocumentChange = { document in model.noteDidChange(document) }
         controller.onChange = {
             session.textDidChange()
             session.updateAutoTitle(from: controller.leadingTexts())
@@ -157,6 +166,11 @@ struct BlockTextEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        if focusRequest != context.coordinator.focusRequest {
+            context.coordinator.focusRequest = focusRequest
+            let controller = context.coordinator.controller
+            DispatchQueue.main.async { controller.focusCaret() }
+        }
         if let focusBlockId, focusBlockId != context.coordinator.focusedRequest {
             context.coordinator.focusedRequest = focusBlockId
             let controller = context.coordinator.controller
