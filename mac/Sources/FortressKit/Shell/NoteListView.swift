@@ -40,7 +40,7 @@ struct NoteListView: View {
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
-        .background(Color(nsColor: .textBackgroundColor))
+        .themedContent(.sunken)
         .animation(.smooth(duration: 0.2), value: notes.map(\.id))
         .task(id: model.openNoteId) {
             // Load the notes above and below the open one, so ↑/↓ open instantly. A new
@@ -111,7 +111,7 @@ struct NoteRow: View {
                 .lineLimit(1)
             Text(preview.isEmpty ? "No additional text" : preview)
                 .font(.callout)
-                .foregroundStyle(preview.isEmpty ? .tertiary : .secondary)
+                .foregroundStyle(preview.isEmpty ? .themeTertiary : .themeSecondary)
                 .lineLimit(2, reservesSpace: true)
             HStack(spacing: 4) {
                 if let date = Timestamp.date(note.updatedAt) {
@@ -133,7 +133,7 @@ struct NoteRow: View {
                 }
             }
             .font(.subheadline)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.themeTertiary)
             .padding(.top, 2)
         }
         .padding(.vertical, 6)
