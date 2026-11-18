@@ -217,7 +217,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         syncTypingAttributes()
         if !pendingBlocks.isEmpty {
             let generation = loadGeneration
-            Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+            Self.nextStep { [weak self] in self?.appendPendingBlocks(generation: generation) }
         }
         // Touching `layoutManager` or inserting an NSTextTable anywhere silently switches
         // the view to TextKit 1 (and every later open to the slow path): catch it in debug.
@@ -305,6 +305,18 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     private var loading: Loading?
     // EXPERIMENT (profiling): the old chunked appends, for same-process A/B.
     nonisolated(unsafe) static var appendsInChunks = false
+    nonisolated(unsafe) static var chainsWithTimer = false
+    nonisolated(unsafe) static var chunksBuilt = 0
+
+    /// EXPERIMENT: the next step of loading (a block on the run loop, or a timer).
+    private static func nextStep(_ body: @escaping @MainActor () -> Void) {
+        if chainsWithTimer {
+            let timer = Timer(timeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { body() } }
+            RunLoop.main.add(timer, forMode: .common)
+        } else {
+            later(body)
+        }
+    }
 
     /// Builds the next chunk of a loading note (about a screen's worth of work per run
     /// loop turn, so typing and scrolling go on meanwhile); when all is built, shows it.
@@ -324,15 +336,15 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             if Self.appendsInChunks, state.built < pendingBlocks.count, !textView.hasMarkedText() {
                 // EXPERIMENT: the old way (each chunk into the text as it is built).
                 showLoaded()
-                Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+                Self.nextStep { [weak self] in self?.appendPendingBlocks(generation: generation) }
                 return
             }
         }
         if state.built < pendingBlocks.count {
-            Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+            Self.nextStep { [weak self] in self?.appendPendingBlocks(generation: generation) }
         } else if textView.hasMarkedText() {
             // Not while an input method is composing.
-            Self.later { [weak self] in self?.appendPendingBlocks(generation: generation) }
+            Self.nextStep { [weak self] in self?.appendPendingBlocks(generation: generation) }
         } else {
             showLoaded()
         }
@@ -344,6 +356,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         defer { Signposts.end("Append blocks", interval) }
         let blocks = Array(pendingBlocks[state.built..<(state.built + count)])
         let chunk = DocumentText.build(blocks, theme: theme, context: context)
+        Self.chunksBuilt += 1
         state.cache = cachedBlocks(blocks, in: chunk, adding: state.cache)
         if state.read != nil, let added = readBlocks(in: chunk, cache: state.cache) {
             state.read?.append(contentsOf: added)

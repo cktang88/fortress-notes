@@ -24,8 +24,11 @@ import Testing
         #expect(view is ImageAttachmentView)
         #expect(view.isDescendant(of: editor.controller.textView), "the picture is on screen")
         for key in ["a", "b", " ", "c"] { editor.type(key) }
+        editor.controller.scrollRangeToVisibleForTests(image)
+        editor.layoutViewport()
         #expect(attachment.view === view)
-        #expect(view.isDescendant(of: editor.controller.textView))
+        #expect(view.isDescendant(of: editor.controller.textView),
+                "the picture's one view is what TextKit shows (viewport: \(editor.viewportKinds))")
         // No picture is hosted in SwiftUI.
         func hosted(_ view: NSView) -> Int {
             view.subviews.reduce(view is NSHostingView<BlockEmbedView> ? 1 : 0) { $0 + hosted($1) }
