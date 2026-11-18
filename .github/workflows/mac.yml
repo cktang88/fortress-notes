@@ -22,6 +22,7 @@ jobs:
       # timing-sensitive tests running beside it flaky, and its numbers noisy.
       - name: Editor performance
         run: |
+          set -o pipefail
           SNAPSHOT_DIR="$PWD/snapshots" swift test --filter EditorPerformanceTests 2>&1 | tee "$RUNNER_TEMP/perf.log"
           grep "^PERF" "$RUNNER_TEMP/perf.log" | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
       - name: Upload snapshots
