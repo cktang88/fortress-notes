@@ -168,10 +168,17 @@ enum PaletteCatalog {
         // (with the offsets to bold) for those.
         let query = FuzzyMatch.Query(trimmed)
         var best = TopScores(capacity: maxMatches)
-        index.entries.withUnsafeBufferPointer { entries in
-            for offset in entries.indices {
-                if let score = FuzzyMatch.score(query, in: entries[offset].folded) {
-                    best.insert(score: score, offset: offset)
+        FuzzyMatch.scoring(query) { score in
+            index.cells.withUnsafeBufferPointer { cells in
+                index.bounds.withUnsafeBufferPointer { bounds in
+                    index.masks.withUnsafeBufferPointer { masks in
+                        for offset in masks.indices {
+                            let title = UnsafeBufferPointer(rebasing: cells[bounds[offset]..<bounds[offset + 1]])
+                            if let value = score(title, masks[offset]) {
+                                best.insert(score: value, offset: offset)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -257,11 +264,27 @@ struct PaletteIndex: Sendable {
     let notes: [PaletteNote]
     let recent: [PaletteNote]
     let entries: [Entry]
+    /// Every title's cells end to end; title i is `cells[bounds[i]..<bounds[i + 1]]`.
+    /// One flat buffer, so ranking touches no per-title array (no retain/release).
+    let cells: [UInt32]
+    let bounds: [Int]
+    let masks: [UInt64]
 
     init(notes: [PaletteNote], recent: [PaletteNote]) {
         self.notes = notes
         self.recent = recent
         entries = notes.map { Entry(note: $0, folded: FoldedText($0.title.isEmpty ? "Untitled" : $0.title)) }
+        var cells: [UInt32] = []
+        var bounds: [Int] = [0]
+        cells.reserveCapacity(entries.reduce(0) { $0 + $1.folded.count })
+        bounds.reserveCapacity(entries.count + 1)
+        for entry in entries {
+            cells += entry.folded.cells
+            bounds.append(cells.count)
+        }
+        self.cells = cells
+        self.bounds = bounds
+        masks = entries.map(\.folded.mask)
     }
 
     init(navigation: NavigationResponse) {

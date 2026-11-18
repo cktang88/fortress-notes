@@ -15,23 +15,31 @@ struct FoldedText: Sendable, Equatable {
     let units: [UInt32]
     /// Whether each character is a letter or a number (a word character).
     let isWord: [Bool]
+    /// `units` with `wordFlag` set on word characters: what matching scans (one buffer).
+    let cells: [UInt32]
     /// Bits for the codes that occur (see `bit(_:)`).
     let mask: UInt64
+
+    static let wordFlag: UInt32 = 1 << 31
 
     init(_ text: String) {
         var units: [UInt32] = []
         var isWord: [Bool] = []
+        var cells: [UInt32] = []
         units.reserveCapacity(text.utf8.count)
+        cells.reserveCapacity(text.utf8.count)
         isWord.reserveCapacity(text.utf8.count)
         var mask: UInt64 = 0
         for character in text {
             let folded = Self.fold(character)
             units.append(folded.unit)
             isWord.append(folded.isWord)
+            cells.append(folded.isWord ? folded.unit | Self.wordFlag : folded.unit)
             mask |= Self.bit(folded.unit)
         }
         self.units = units
         self.isWord = isWord
+        self.cells = cells
         self.mask = mask
     }
 
@@ -126,38 +134,59 @@ enum FuzzyMatch {
 
     /// The match with the offsets to bold.
     static func match(_ query: Query, in hay: FoldedText) -> Result? {
-        evaluate(query, hay, collect: true)
-    }
-
-    /// Only the score: no allocation, for ranking thousands of titles per keystroke.
-    static func score(_ query: Query, in hay: FoldedText) -> Int? {
-        evaluate(query, hay, collect: false)?.score
-    }
-
-    private static func evaluate(_ query: Query, _ hay: FoldedText, collect: Bool) -> Result? {
         guard !query.isEmpty else { return Result(score: 1, indices: []) }
         guard !hay.isEmpty, query.mask & ~hay.mask == 0 else { return nil }
-        return hay.units.withUnsafeBufferPointer { units in
-            hay.isWord.withUnsafeBufferPointer { isWord in
-                evaluate(query, units, isWord, collect: collect)
+        return withBuffers(query) { needle, letters in
+            hay.cells.withUnsafeBufferPointer { cells in
+                evaluate(query, needle, letters, cells, collect: true)
             }
         }
     }
 
+    /// Scores many candidates for one query: buffers are set up once, nothing is
+    /// allocated or retained per candidate. `body` gets a scoring function to call with
+    /// each candidate's cells (see `FoldedText.cells`) and mask.
+    static func scoring<R>(_ query: Query, _ body: ((UnsafeBufferPointer<UInt32>, UInt64) -> Int?) -> R) -> R {
+        withBuffers(query) { needle, letters in
+            body { cells, mask in
+                if query.isEmpty { return 1 }
+                guard !cells.isEmpty, query.mask & ~mask == 0 else { return nil }
+                return evaluate(query, needle, letters, cells, collect: false)?.score
+            }
+        }
+    }
+
+    /// Only the score.
+    static func score(_ query: Query, in hay: FoldedText) -> Int? {
+        scoring(query) { score in hay.cells.withUnsafeBufferPointer { score($0, hay.mask) } }
+    }
+
+    private static func withBuffers<R>(
+        _ query: Query, _ body: (UnsafeBufferPointer<UInt32>, UnsafeBufferPointer<UInt32>) -> R
+    ) -> R {
+        query.needle.withUnsafeBufferPointer { needle in
+            query.letters.withUnsafeBufferPointer { letters in body(needle, letters) }
+        }
+    }
+
+    private static let unitMask: UInt32 = FoldedText.wordFlag - 1
+
     private static func evaluate(
-        _ query: Query, _ hay: UnsafeBufferPointer<UInt32>, _ isWord: UnsafeBufferPointer<Bool>, collect: Bool
+        _ query: Query, _ needle: UnsafeBufferPointer<UInt32>, _ letters: UnsafeBufferPointer<UInt32>,
+        _ hay: UnsafeBufferPointer<UInt32>, collect: Bool
     ) -> Result? {
         let count = hay.count
-        @inline(__always) func atWordStart(_ index: Int) -> Bool { index == 0 || !isWord[index - 1] }
+        let unitMask = Self.unitMask
+        let wordFlag = FoldedText.wordFlag
 
-        if let start = query.needle.withUnsafeBufferPointer({ find($0, in: hay, isWord: isWord, wordStartOnly: false) }) {
-            let length = query.needle.count
+        if let start = find(needle, in: hay, wordStartOnly: false) {
+            let length = needle.count
             let base: Int
             if start == 0 && length == count {
                 base = 10_000  // Exact.
             } else if start == 0 {
                 base = 9_000  // Prefix.
-            } else if atWordStart(start) {
+            } else if hay[start - 1] & wordFlag == 0 {
                 base = 8_000  // Starts a word.
             } else {
                 base = 7_000  // Somewhere inside.
@@ -172,7 +201,7 @@ enum FuzzyMatch {
             var indices: [Int] = []
             var found = true
             for word in query.words {
-                guard let start = word.withUnsafeBufferPointer({ find($0, in: hay, isWord: isWord, wordStartOnly: true) }) else {
+                guard let start = word.withUnsafeBufferPointer({ find($0, in: hay, wordStartOnly: true) }) else {
                     found = false
                     break
                 }
@@ -187,18 +216,17 @@ enum FuzzyMatch {
         var indices: [Int] = []
         var first = -1
         var last = -1
-        var matched = 0
         var wordStarts = 0
         var position = 0
-        for letter in query.letters {
+        for letter in letters {
             // Prefer the next occurrence at a word start, else the next occurrence.
             var found = -1
             var firstPlain = -1
             var index = position
             while index < count {
-                if hay[index] == letter {
+                if hay[index] & unitMask == letter {
                     if firstPlain < 0 { firstPlain = index }
-                    if atWordStart(index) { found = index; break }
+                    if index == 0 || hay[index - 1] & wordFlag == 0 { found = index; break }
                 }
                 index += 1
             }
@@ -206,11 +234,11 @@ enum FuzzyMatch {
             guard hit >= 0 else { return nil }
             if first < 0 { first = hit }
             last = hit
-            matched += 1
-            if atWordStart(hit) { wordStarts += 1 }
+            if hit == 0 || hay[hit - 1] & wordFlag == 0 { wordStarts += 1 }
             if collect { indices.append(hit) }
             position = hit + 1
         }
+        let matched = letters.count
         let span = matched == 0 ? 1 : last - first + 1
         let gaps = span - matched
         let score = 3_000 + wordStarts * 150 - gaps * 25 - max(first, 0) * 5 - min(count, 400)
@@ -218,18 +246,19 @@ enum FuzzyMatch {
     }
 
     private static func find(
-        _ needle: UnsafeBufferPointer<UInt32>, in hay: UnsafeBufferPointer<UInt32>, isWord: UnsafeBufferPointer<Bool>,
-        wordStartOnly: Bool
+        _ needle: UnsafeBufferPointer<UInt32>, in hay: UnsafeBufferPointer<UInt32>, wordStartOnly: Bool
     ) -> Int? {
         let length = needle.count
         guard length > 0, length <= hay.count else { return nil }
+        let unitMask = Self.unitMask
+        let wordFlag = FoldedText.wordFlag
         let head = needle[0]
         var start = 0
         let lastStart = hay.count - length
         while start <= lastStart {
-            if hay[start] == head, !wordStartOnly || start == 0 || !isWord[start - 1] {
+            if hay[start] & unitMask == head, !wordStartOnly || start == 0 || hay[start - 1] & wordFlag == 0 {
                 var offset = 1
-                while offset < length && hay[start + offset] == needle[offset] { offset += 1 }
+                while offset < length && hay[start + offset] & unitMask == needle[offset] { offset += 1 }
                 if offset == length { return start }
             }
             start += 1

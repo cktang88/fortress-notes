@@ -3,8 +3,9 @@ import Testing
 
 @testable import FortressKit
 
+extension FindingPerf {
 @MainActor
-@Suite(.serialized) struct PalettePerfTests {
+@Suite struct PalettePerfTests {
     static let queries = ["k", "ky", "kyo", "kyot", "kyoto", "kyoto ", "kyoto t", "kyoto tr", "trip kyo", "zq", "旅", "cafe"]
 
     /// The old per-keystroke path: walk the tree, fold every title, rank, sort everything.
@@ -45,6 +46,12 @@ import Testing
         #expect(cache.indexBuilds == 1)
         #expect(worst < 5)
     }
+}
+}
+
+@MainActor
+@Suite struct PaletteIndexTests {
+    static let queries = FindingPerf.PalettePerfTests.queries
 
     /// Hovering or moving the selection re-renders the palette: nothing is ranked again,
     /// and a save (dates change, titles don't) doesn't rebuild the index.

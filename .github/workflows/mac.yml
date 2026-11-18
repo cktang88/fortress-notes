@@ -18,6 +18,10 @@ jobs:
         run: swift build
       - name: Test and render snapshots
         run: SNAPSHOT_DIR="$PWD/snapshots" swift test
+      # Finding's timing and request-count measurements, alone on the machine
+      # (prints "PERF <name>: <value>" lines; see Tests/FortressKitTests/FindingPerfTests.swift).
+      - name: Finding performance
+        run: FINDING_PERF=1 swift test --filter FindingPerf
       - name: Upload snapshots
         if: always()
         uses: actions/upload-artifact@v4

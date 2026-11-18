@@ -168,15 +168,14 @@ import Testing
     static let note = FindingFixtures.kyoto
 
     @Test func noteLoadsInParallelAndIsCachedPerRevision() async {
-        let stub = InspectorRequestTests.stub(latency: 0.2)
+        let stub = FindingPerf.InspectorRequestTests.stub(latency: 1.5)
         let inspector = InspectorModel(seenDebounce: .milliseconds(50), infoDebounce: .milliseconds(50))
-        let start = ContinuousClock.now
         inspector.show(noteId: Self.note, revision: "r1", fallback: NoteInfo(), api: stub.api)
-        await eventually { stub.log.finished.count >= 3 && !inspector.related.isEmpty }
-        let elapsed = ContinuousClock.now - start
-        perf("inspector.noteLoad(3 requests, 200 ms each)", Double(elapsed.components.attoseconds) / 1e15 + Double(elapsed.components.seconds) * 1000)
-        #expect(elapsed < .milliseconds(550))  // In parallel: about one latency, not three.
+        // In parallel: all three are on the wire before the first (1.5 s) answer.
+        await eventually { stub.started.count == 3 }
         #expect(stub.started.count == 3)
+        #expect(stub.log.finished.isEmpty)
+        await eventually { stub.log.finished.count >= 3 && !inspector.related.isEmpty }
 
         // Open another note, and come back before its answers arrive.
         inspector.show(noteId: "other", revision: "x", fallback: NoteInfo(), api: stub.api)
@@ -199,35 +198,36 @@ import Testing
     }
 
     @Test func seenBeforeDebouncesCancelsAndCachesPerBlockText() async {
-        let stub = InspectorRequestTests.stub(latency: 0.05)
+        let stub = FindingPerf.InspectorRequestTests.stub(latency: 0.05)
         let inspector = InspectorModel(seenDebounce: .milliseconds(150))
         inspector.show(noteId: Self.note, revision: "r1", fallback: NoteInfo(), api: stub.api)
         await eventually { !inspector.related.isEmpty }
-        let seen = { InspectorRequestTests.seenRequests(stub) }
+        let seen = { FindingPerf.InspectorRequestTests.seenRequests(stub) }
 
-        for index in 0..<20 {  // The caret sweeps through 20 blocks, 20 ms each.
+        for index in 0..<20 {  // The caret sweeps through 20 blocks (faster than the debounce).
             inspector.focus(blockId: "b\(index)", version: 1, api: stub.api)
-            try? await Task.sleep(for: .milliseconds(20))
+            await Task.yield()
         }
         await eventually { !inspector.seenBefore.isEmpty }
         #expect(seen() == 1)
         #expect(inspector.seenBefore.first?.note.id == "b19-n0")
 
         inspector.focus(blockId: "b3", version: 1, api: stub.api)
-        try? await Task.sleep(for: .milliseconds(300))
+        await eventually { inspector.seenBefore.first?.note.id == "b3-n0" }
         inspector.focus(blockId: "b19", version: 1, api: stub.api)  // Cached: shown at once.
         #expect(inspector.seenBefore.first?.note.id == "b19-n0")
         try? await Task.sleep(for: .milliseconds(300))
         #expect(seen() == 2)
 
         inspector.focus(blockId: "b19", version: 2, api: stub.api)  // Its text was saved again.
+        await eventually { seen() == 3 }
         try? await Task.sleep(for: .milliseconds(300))
         #expect(seen() == 3)
     }
 
     /// Caret moves cost the main thread almost nothing, even with requests in flight.
     @Test func caretMovesDoNotBlockTyping() async {
-        let stub = InspectorRequestTests.stub(latency: 0.3)
+        let stub = FindingPerf.InspectorRequestTests.stub(latency: 0.3)
         let inspector = InspectorModel()
         inspector.show(noteId: Self.note, revision: "r1", fallback: NoteInfo(), api: stub.api)
         let ms = bestMilliseconds(repeats: 1) {
