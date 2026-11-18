@@ -220,7 +220,8 @@ SELECT assets.content_hash, assets.file_path, assets.mime_type,
        ) AND NOT EXISTS (
            SELECT 1 FROM block_assets JOIN blocks ON blocks.id = block_assets.block_id
             WHERE block_assets.content_hash = assets.content_hash
-              AND trim(COALESCE(json_extract(blocks.attrs_json, '$.alt'), '')) = ''
+              AND trim(COALESCE(CASE WHEN json_valid(blocks.attrs_json)
+                                     THEN json_extract(blocks.attrs_json, '$.alt') END, '')) = ''
        ) AS has_alt
   FROM assets
   LEFT JOIN ocr_results
