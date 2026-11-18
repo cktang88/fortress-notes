@@ -246,6 +246,14 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
             if abs(view.frame.width - width) > 0.5 { view.setFrameSize(NSSize(width: width, height: lineHeight)) }
             return lineHeight
         }
+        // Plain text (no inline attachments) is measured from the string: laying out each
+        // cell's text view to measure it made the first layout of a 50 × 8 table take a
+        // second. Lines have a fixed height (min = max), so both ways agree.
+        if let storage = view.textStorage, !storage.containsAttachments(in: NSRange(location: 0, length: storage.length)) {
+            let bounds = storage.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                                              options: [.usesLineFragmentOrigin, .usesFontLeading])
+            return max(lineHeight, ceil(bounds.height))
+        }
         return max(lineHeight, view.fittingTextHeight(width: width))
     }
 

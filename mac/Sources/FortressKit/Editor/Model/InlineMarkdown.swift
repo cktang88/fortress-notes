@@ -52,9 +52,19 @@ public enum InlineMarkdown {
         ])
     }
 
+    /// Whether `byte` occurs twice in a row (a fast UTF-8 scan, no bridging).
+    static func hasPair(_ text: String, _ byte: UInt8) -> Bool {
+        var previous: UInt8 = 0
+        for current in text.utf8 {
+            if current == byte && previous == byte { return true }
+            previous = current
+        }
+        return false
+    }
+
     /// Plain text with `[[…]]` and `((…))` turned into links (old notes stored them as text).
     static func linkifyReferences(_ text: String, _ marks: InlineMarks) -> [InlineRun] {
-        guard text.contains("[[") || text.contains("((") else { return [InlineRun(text, marks)] }
+        guard hasPair(text, 0x5B) || hasPair(text, 0x28) else { return [InlineRun(text, marks)] }
         var output: [InlineRun] = []
         let ns = text as NSString
         var last = 0

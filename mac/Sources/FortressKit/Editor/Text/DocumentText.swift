@@ -5,40 +5,54 @@ import AppKit
 /// carry its `BlockInfo`). Soft line breaks inside a block are U+2028.
 @MainActor
 enum DocumentText {
+    /// The note's text, styled as it is built (one pass, with attributes shared per
+    /// style): building plain and restyling afterwards re-split every run a second time.
     static func build(_ blocks: [EditorBlock], theme: EditorTheme, context: AttachmentContext) -> NSMutableAttributedString {
         let output = NSMutableAttributedString()
+        output.beginEditing()
         for block in blocks.isEmpty ? [EditorBlock()] : blocks {
-            output.append(paragraph(block, context: context))
+            output.append(paragraph(block, context: context, theme: theme))
         }
-        theme.restyle(output, range: NSRange(location: 0, length: output.length))
+        output.endEditing()
         return output
     }
 
-    /// One block's paragraph, terminator included (unstyled).
-    static func paragraph(_ block: EditorBlock, context: AttachmentContext) -> NSAttributedString {
+    /// One block's paragraph, terminator included (styled when given a theme; otherwise
+    /// the editor styles it when it goes into the text).
+    static func paragraph(_ block: EditorBlock, context: AttachmentContext, theme: EditorTheme? = nil) -> NSAttributedString {
         let info = BlockInfo(block)
         let output = NSMutableAttributedString()
         if block.kind.hasInlineText {
-            output.append(inline(block.runs, info: info, context: context))
+            output.append(inline(block.runs, info: info, context: context, theme: theme))
         } else {
             let attachment = BlockAttachment(info: info, context: context, block: block)
-            output.append(NSAttributedString(string: objectReplacement, attributes: [.attachment: attachment, .fnBlock: info]))
+            var attributes = base(info: info, marks: InlineMarks(), theme: theme)
+            attributes[.attachment] = attachment
+            output.append(NSAttributedString(string: objectReplacement, attributes: attributes))
         }
-        output.append(NSAttributedString(string: "\n", attributes: [.fnBlock: info]))
+        output.append(NSAttributedString(string: "\n", attributes: base(info: info, marks: InlineMarks(), theme: theme)))
         return output
     }
 
-    static func inline(_ runs: [InlineRun], info: BlockInfo, context: AttachmentContext) -> NSAttributedString {
+    /// What `EditorTheme.restyle` would give a run: presentation, block and marks.
+    private static func base(info: BlockInfo, marks: InlineMarks, theme: EditorTheme?) -> [NSAttributedString.Key: Any] {
+        var attributes = theme?.cachedAttributes(info: info, marks: marks) ?? [:]
+        attributes[.fnBlock] = info
+        if !marks.isPlain { attributes[.fnMarks] = MarksBox(marks) }
+        return attributes
+    }
+
+    static func inline(_ runs: [InlineRun], info: BlockInfo, context: AttachmentContext, theme: EditorTheme? = nil) -> NSAttributedString {
         let output = NSMutableAttributedString()
         for run in runs {
-            var attributes: [NSAttributedString.Key: Any] = [.fnBlock: info]
             if let node = run.node {
+                var attributes = base(info: info, marks: InlineMarks(), theme: theme)
                 attributes[.fnNode] = NodeBox(node)
                 attributes[.attachment] = InlineNodeAttachment(node: node, context: context)
                 output.append(NSAttributedString(string: objectReplacement, attributes: attributes))
                 continue
             }
-            if !run.marks.isPlain { attributes[.fnMarks] = MarksBox(run.marks) }
+            let attributes = base(info: info, marks: run.marks, theme: theme)
             // A paragraph separator inside a block's text would split it in the editor.
             var text = run.text
             if text.utf16.contains(where: { $0 == 0x0D || $0 == 0x0A || $0 == 0x2029 }) {

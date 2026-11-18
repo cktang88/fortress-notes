@@ -310,6 +310,10 @@ final class PerfEditor {
             (editor.controller.storage.attribute(.attachment, at: editor.range(ofBlock: id).location, effectiveRange: nil) as? BlockAttachment)?.live
         }
         let table = try #require(live("t3"))
+        if let grid = live("t4") as? TableBlockController {
+            PerfLog.record("layout.table50x8.buildCells", milliseconds { _ = grid.cells })
+            PerfLog.record("layout.table50x8.measure", milliseconds { _ = grid.height(forWidth: 650) })
+        }
         PerfLog.record("layout.table50x8.first", milliseconds { _ = table.height(forWidth: 650) })
         let columns = try #require(live("k3"))
         PerfLog.record("layout.columns.first", milliseconds { _ = columns.height(forWidth: 650) })

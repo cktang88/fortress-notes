@@ -158,7 +158,7 @@ public struct TableContent: Hashable, Sendable {
         }
         return BlockCodec.normalized(runs.map { run in
             var run = run
-            if run.node == nil { run.text = run.text.replacingOccurrences(of: "\n", with: softBreak) }
+            if run.node == nil { run.text = BlockCodec.softBreaks(run.text) }
             return run
         })
     }

@@ -72,7 +72,8 @@ private func document(revision: Int, _ nodes: [BlockNode]) -> BlockDocument {
 }
 
 private func sent(_ index: Int) throws -> FortressKit.BlockTransaction {
-    try JSONDecoder().decode(FortressKit.BlockTransaction.self, from: SaveStub.bodies[index])
+    guard SaveStub.bodies.indices.contains(index) else { throw URLError(.zeroByteResource) }
+    return try JSONDecoder().decode(FortressKit.BlockTransaction.self, from: SaveStub.bodies[index])
 }
 
 private func pendingDirectory() -> URL {
@@ -124,7 +125,9 @@ private func pendingDirectory() -> URL {
         }
         blocks[1].runs = [InlineRun("Two!")]
         session.textDidChange()
-        try await Task.sleep(for: .milliseconds(300))
+        // The debounce fires once (the main actor may be busy with other suites: wait for it).
+        for _ in 0..<200 where SaveStub.bodies.isEmpty || session.hasUnsavedChanges { try await Task.sleep(for: .milliseconds(25)) }
+        try await Task.sleep(for: .milliseconds(100))
         #expect(SaveStub.bodies.count == 1)
         let transaction = try sent(0)
         #expect(transaction.operations.count == 2)

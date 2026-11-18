@@ -182,7 +182,7 @@ public enum BlockCodec {
         if block.kind.holdsOwnChildren { origin.children = node.children }
         block.runs = normalized(block.runs.map { run in
             var run = run
-            if run.node == nil { run.text = run.text.replacingOccurrences(of: "\n", with: softBreak) }
+            if run.node == nil { run.text = Self.softBreaks(run.text) }
             return run
         })
         origin.kind = block.kind
@@ -341,7 +341,7 @@ public enum BlockCodec {
                 output.append(node)
                 continue
             }
-            let text = run.text.replacingOccurrences(of: softBreak, with: "\n")
+            let text = Self.hardBreaks(run.text)
             let item: JSONValue = .object([
                 "type": .string("text"), "text": .string(text),
                 "styles": code ? .object([:]) : styles(run.marks),
@@ -372,6 +372,17 @@ public enum BlockCodec {
         return .object(styles)
     }
 
+    /// "\n" → U+2028, without a Foundation round trip when there is none (most runs:
+    /// decoding a long note did this bridging copy for every run).
+    static func softBreaks(_ text: String) -> String {
+        text.utf8.contains(0x0A) ? text.replacingOccurrences(of: "\n", with: softBreak) : text
+    }
+
+    /// U+2028 → "\n" (U+2028 is E2 80 A8 in UTF-8).
+    static func hardBreaks(_ text: String) -> String {
+        text.utf8.contains(0xE2) ? text.replacingOccurrences(of: softBreak, with: "\n") : text
+    }
+
     /// Merges neighbouring runs with the same marks and drops empty ones.
     public static func normalized(_ runs: [InlineRun]) -> [InlineRun] {
         var output: [InlineRun] = []
@@ -389,7 +400,7 @@ public enum BlockCodec {
     public static func plainText(_ runs: [InlineRun]) -> String {
         runs.map { run in
             if let node = run.node { return inlineText(node) }
-            return run.text.replacingOccurrences(of: softBreak, with: "\n")
+            return Self.hardBreaks(run.text)
         }.joined()
     }
 
