@@ -213,6 +213,7 @@ struct QuickCaptureView: View {
                     TextEditor(text: $state.text)
                         .textEditorStyle(.plain)
                         .scrollContentBackground(.hidden)
+                        .scrollIndicators(.never)
                         .focused($isFocused)
                         .disabled(state.phase == .saving)
                 }
@@ -255,9 +256,11 @@ struct QuickCaptureView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            hint("Save", key: "↩")
-            hint("Save & Open", key: "⌘↩")
-            hint("Close", key: "esc")
+            if case .saved = state.phase {} else {
+                hint("Save", key: "↩")
+                hint("Save & Open", key: "⌘↩")
+                hint("Close", key: "esc")
+            }
         }
         .font(.subheadline)
         .animation(.smooth(duration: 0.2), value: state.phase)

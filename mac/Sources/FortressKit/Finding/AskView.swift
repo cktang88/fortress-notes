@@ -185,9 +185,7 @@ struct AskTurnView: View {
             .lineSpacing(9)
             .foregroundStyle(.primary)
             .textRenderer(MarkRenderer())
-            .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-            .tint(.accentColor)
     }
 
     private func chip(number: Int, citation: AskCitation) -> Text {
@@ -285,6 +283,12 @@ struct AskTrace: View {
 
     var body: some View {
         let state = turn.state
+        if state.isStreaming || !state.steps.isEmpty || (state.elapsedMs ?? 0) >= 100 {
+            content(state)
+        }
+    }
+
+    private func content(_ state: AskState) -> some View {
         HStack(spacing: 7) {
             if state.isStreaming {
                 PulsingDot()
@@ -311,7 +315,7 @@ struct AskTrace: View {
             if trace.isEmpty { parts.append(state.sentences.isEmpty ? "Reading your notes" : "Writing") }
             parts.append(Self.seconds(now.timeIntervalSince(turn.started)))
         } else {
-            if trace.isEmpty { parts.append("Read your notes") }
+            if trace.isEmpty { parts.append("Answered") }
             if let ms = state.elapsedMs { parts.append(Self.seconds(Double(ms) / 1000)) }
         }
         return parts.joined(separator: " · ")

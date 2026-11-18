@@ -14,7 +14,7 @@ struct CommandPaletteView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let rowHeight: CGFloat = 36
-    static let visibleRows = 8
+    static let visibleRows = 9
 
     var body: some View {
         @Bindable var model = model
@@ -86,7 +86,7 @@ struct CommandPaletteView: View {
         let headerCount = sections.filter { $0.title != nil }.count
         let height = min(
             CGFloat(items.count) * Self.rowHeight + CGFloat(headerCount) * 26 + 12,
-            CGFloat(Self.visibleRows) * Self.rowHeight + 40)
+            CGFloat(Self.visibleRows) * Self.rowHeight + 2 * 26 + 12)
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -111,6 +111,7 @@ struct CommandPaletteView: View {
             }
             .frame(height: height)
             .scrollBounceBehavior(.basedOnSize)
+            .scrollIndicators(.automatic)
             .onChange(of: selectedID) { _, id in
                 if let id { proxy.scrollTo(id) }
             }
@@ -119,8 +120,6 @@ struct CommandPaletteView: View {
 
     private func footer(selected: PaletteItem?) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: "command")
-                .foregroundStyle(.tertiary)
             Spacer()
             if let selected {
                 hint(Self.verb(for: selected.action), key: "↩")

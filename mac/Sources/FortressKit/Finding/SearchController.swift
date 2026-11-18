@@ -48,6 +48,7 @@ final class SearchController {
     func update(query raw: String, fetch: @escaping Fetch) {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard query != self.query || resultsQuery == nil else { return }
+        let previous = self.query
         self.query = query
         generation += 1
         task?.cancel()
@@ -60,12 +61,11 @@ final class SearchController {
             return
         }
         let current = generation
-        let debounce = self.debounce
+        // The first query (results shown again, or the first letter typed) goes out at once.
+        let debounce = resultsQuery == nil && previous.isEmpty ? .zero : self.debounce
         task = Task { [weak self] in
-            if debounce > .zero {
-                try? await Task.sleep(for: debounce)
-                if Task.isCancelled { return }
-            }
+            if debounce > .zero { try? await Task.sleep(for: debounce) }
+            if Task.isCancelled { return }
             self?.isSearching = true
             let outcome: Result<[SearchMatch], Error>
             do { outcome = .success(try await fetch(query)) } catch { outcome = .failure(error) }

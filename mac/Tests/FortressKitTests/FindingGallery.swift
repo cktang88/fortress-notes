@@ -185,10 +185,45 @@ struct DesktopBackdrop: View {
     }
 }
 
+/// Like `snapshot(_:named:)`, but lets the window run longer first, so views that load
+/// from the (fake) backend and stream answers have settled.
+@MainActor
+func settledSnapshot<V: View>(
+    _ view: V, named name: String, size: CGSize, appearance: NSAppearance.Name, seconds: Double = 3
+) throws {
+    guard let directory = ProcessInfo.processInfo.environment["SNAPSHOT_DIR"] else { return }
+    try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    app.appearance = NSAppearance(named: appearance)
+    let window = NSWindow(
+        contentRect: CGRect(origin: CGPoint(x: 80, y: 80), size: size),
+        styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+        backing: .buffered, defer: false)
+    window.appearance = NSAppearance(named: appearance)
+    window.titlebarAppearsTransparent = true
+    window.isReleasedWhenClosed = false
+    window.contentView = NSHostingView(rootView: view)
+    window.setContentSize(size)
+    window.makeKeyAndOrderFront(nil)
+    window.orderFrontRegardless()
+    app.activate()
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+
+    let url = URL(fileURLWithPath: directory).appendingPathComponent("\(name).png")
+    let capture = Process()
+    capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), url.path]
+    try capture.run()
+    capture.waitUntilExit()
+    window.close()
+}
+
 extension GallerySnapshotTests {
     private func both<V: View>(_ name: String, size: CGSize = CGSize(width: 1000, height: 660), _ make: () -> V) throws {
-        try snapshot(make(), named: "\(name)-light", size: size)
-        try snapshot(make(), named: "\(name)-dark", size: size, appearance: .darkAqua)
+        try settledSnapshot(make(), named: "\(name)-light", size: size, appearance: .aqua)
+        try settledSnapshot(make(), named: "\(name)-dark", size: size, appearance: .darkAqua)
     }
 
     @Test func findingSearchResults() throws {

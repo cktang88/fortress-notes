@@ -121,13 +121,22 @@ import Testing
         try? await Task.sleep(for: .milliseconds(milliseconds))
     }
 
+    /// Waits (up to 10 s: snapshot tests may hold the main thread meanwhile) for a condition.
+    private func wait(until condition: () -> Bool) async {
+        let deadline = Date.now.addingTimeInterval(10)
+        while !condition(), Date.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     @Test func debouncesTyping() async {
         let calls = Calls()
         let controller = SearchController(debounce: .milliseconds(80))
         for query in ["r", "ry", "ryo", "ryok"] {
             controller.update(query: query) { query in await calls.add(query); return [] }
         }
-        await settle()
+        await wait { controller.resultsQuery == "ryok" }
+        await settle(100)
         #expect(await calls.queries == ["ryok"])
     }
 
@@ -141,7 +150,8 @@ import Testing
         }
         await settle(20)
         controller.update(query: "ryokan") { _ in [second] }
-        await settle()
+        await wait { controller.resultsQuery == "ryokan" }
+        await settle(250)
         #expect(controller.results == [second])
         #expect(controller.resultsQuery == "ryokan")
         #expect(!controller.isStale)
@@ -150,7 +160,7 @@ import Testing
     @Test func enterNeverOpensStaleResults() async {
         let controller = SearchController(debounce: .milliseconds(40))
         controller.update(query: "kyo") { _ in [searchMatch("a", document: "old-doc")] }
-        await settle()
+        await wait { controller.resultsQuery == "kyo" }
         #expect(controller.selection == .result("a"))
 
         controller.update(query: "kyoto") { _ in
@@ -161,14 +171,14 @@ import Testing
         let performed = Performed()
         controller.activate { performed.actions.append($0) }
         #expect(performed.actions.isEmpty)  // Waits instead of opening "kyo"'s result.
-        await settle()
+        await wait { !performed.actions.isEmpty }
         #expect(performed.actions == [.open(documentId: "new-doc", blockId: "b")])
     }
 
     @Test func askRowAndMovement() async {
         let controller = SearchController(debounce: .zero)
         controller.update(query: "  ryokan ") { _ in [searchMatch("a"), searchMatch("b")] }
-        await settle(50)
+        await wait { controller.resultsQuery == "ryokan" }
         #expect(controller.rows == [.ask, .result("a"), .result("b")])
         controller.move(by: 1)
         controller.move(by: 5)
@@ -183,7 +193,7 @@ import Testing
     @Test func clearingTheQueryClearsResults() async {
         let controller = SearchController(debounce: .zero)
         controller.update(query: "ryokan") { _ in [searchMatch("a")] }
-        await settle(50)
+        await wait { controller.resultsQuery == "ryokan" }
         controller.update(query: "") { _ in [searchMatch("x")] }
         #expect(controller.results.isEmpty)
         #expect(controller.selection == .ask)
