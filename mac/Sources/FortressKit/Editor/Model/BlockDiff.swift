@@ -205,11 +205,7 @@ public enum BlockDiff {
     /// Whether `update` may change a block's type from `old` to `new` (the server's
     /// change groups); otherwise the block is deleted and inserted again.
     static func canChangeType(from old: String, to new: String) -> Bool {
-        if old == new { return true }
-        let text: Set<String> = ["paragraph", "heading", "bullet_item", "numbered_item", "check_item", "code"]
-        if text.contains(old) && text.contains(new) { return true }
-        let containers: Set<String> = ["quote", "callout"]
-        return containers.contains(old) && containers.contains(new)
+        BlockSchema.bundled.canChangeType(from: old, to: new)
     }
 
     /// The attrs patch from `old` to `new`: changed and new keys, removed ones as null.

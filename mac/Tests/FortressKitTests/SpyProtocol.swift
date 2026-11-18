@@ -144,7 +144,7 @@ extension BlockNode {
     }
 }
 
-extension BlockOperation {
+extension FortressKit.BlockOperation {
     /// The plain text of the inline content an insert or update sends.
     var plainText: String? { content.map { BlockCodec.plainText(BlockCodec.runs(fromContent: $0)) } }
 }

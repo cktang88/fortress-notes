@@ -30,7 +30,7 @@ private func decode<T: Decodable>(_ type: T.Type, _ name: String) throws -> T {
     #expect(document.children.first?.order != nil)
     // Free-form keys must round-trip untouched (no snake/camel conversion); unset
     // fields are left out, and a null in an attrs patch deletes that key.
-    let encoded = String(decoding: try JSONEncoder().encode(BlockOperation(
+    let encoded = String(decoding: try JSONEncoder().encode(FortressKit.BlockOperation(
         operation: .update, blockId: "b", attrs: ["onenote_tags": .string("x"), "level": .null])), as: UTF8.self)
     #expect(encoded.contains("\"onenote_tags\""))
     #expect(encoded.contains("\"block_id\""))

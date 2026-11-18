@@ -116,7 +116,7 @@ private func specTable() throws -> TableContent { try #require(TableContent(node
         let (operations, _) = BlockDiff.operations(from: SyncedTree(blocks), to: edited)
         // The table's widths, a cell in each old row, the new row with its cells, and the
         // one new cell with text gets a paragraph.
-        #expect(operations.first == BlockOperation(operation: .update, blockId: "t1", attrs: ["column_widths": .array([.number(200), .null, .null])]))
+        #expect(operations.first == BlockOp(operation: .update, blockId: "t1", attrs: ["column_widths": .array([.number(200), .null, .null])]))
         let inserts = operations.filter { $0.operation == .insert }
         #expect(inserts.filter { $0.type == "table_row" }.count == 1)
         #expect(inserts.filter { $0.type == "table_cell" }.count == 5)
@@ -146,7 +146,7 @@ private func specTable() throws -> TableContent { try #require(TableContent(node
         var edited = blocks
         _ = edited[0].table?.removeRow(at: 1)
         let (operations, _) = BlockDiff.operations(from: SyncedTree(blocks), to: edited)
-        #expect(operations == [BlockOperation(operation: .delete, blockId: "r1")])
+        #expect(operations == [BlockOp(operation: .delete, blockId: "r1")])
     }
 
     @Test func headerRowFollowsInsertsAbove() throws {
