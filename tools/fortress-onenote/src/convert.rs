@@ -140,15 +140,19 @@ impl PageCtx<'_, '_> {
                 };
                 *self.nb.report.tags_by_label.entry(key).or_default() += 1;
                 self.nb.report.counts.tags += 1;
+                // Only a check box can be completed: OneNote (and other
+                // writers) also store a "completed" status and time on
+                // stars, flags and other non-checkable tags.
+                let completed = checkable && nt.item_status().completed();
                 Tag {
                     label,
                     shape,
                     checkable,
-                    completed: nt.item_status().completed(),
+                    completed,
                     completed_at: nt
                         .completed_at()
                         .map(time::UtcDateTime::from)
-                        .filter(|t| nt.item_status().completed() && t.year() > 1980)
+                        .filter(|t| completed && t.year() > 1980)
                         .map(iso),
                     highlight_color: def.and_then(|d| color_hex(d.highlight_color())),
                     text_color: def.and_then(|d| color_hex(d.text_color())),
@@ -384,15 +388,29 @@ impl PageCtx<'_, '_> {
         let original = img.image_filename().map(assets::display_name);
         let mut asset = None;
         let mut original_asset = None;
+        // Image bytes that are not any picture format we know (damaged or
+        // foreign data) are kept as `.bin` and reported as invalid.
+        let mut unrecognized = false;
+        let mut write_failed = false;
         if let Some(mut r) = img.read() {
             let mut hint = img.extension().and_then(assets::sanitize_ext);
             // Printout pages of XPS documents are stored as XPS (a zip).
             if img.displayed_page_number().is_some() {
                 hint = Some("xps".into());
             }
-            match self.nb.assets.put_reader(&mut r, hint.as_deref(), false) {
+            let mut head = Vec::with_capacity(64);
+            let _ = std::io::Read::read_to_end(&mut std::io::Read::take(&mut r, 64), &mut head);
+            if !head.is_empty() && assets::sniff(&head).is_none() {
+                unrecognized = true;
+                hint = Some("bin".into());
+            }
+            let mut data = std::io::Read::chain(&head[..], r);
+            match self.nb.assets.put_reader(&mut data, hint.as_deref(), false) {
                 Ok(a) => asset = a,
-                Err(e) => self.warn(format!("image could not be written: {e:#}")),
+                Err(e) => {
+                    write_failed = true;
+                    self.warn(format!("image could not be written: {e:#}"))
+                }
             }
         }
         // Fall back to the browser-compatible picture if the primary is
@@ -415,8 +433,19 @@ impl PageCtx<'_, '_> {
                 asset = Some(a);
             }
         }
-        if asset.is_none() {
-            self.missing("image", original.clone(), status_str(status));
+        // One status for the block and the report: `empty` for zero bytes,
+        // `invalid` for data that is not a picture (unless OneNote's
+        // fallback picture could be used instead).
+        let data_status = match (status, &asset) {
+            (FileDataStatus::Available, None) if write_failed => "missing",
+            (FileDataStatus::Available, None) => "empty",
+            (FileDataStatus::Available, Some(_)) if unrecognized && original_asset.is_none() => {
+                "invalid"
+            }
+            (s, _) => status_str(s),
+        };
+        if data_status != "available" {
+            self.missing("image", original.clone(), data_status);
         }
         let page_no = img.displayed_page_number();
         let is_printout = page_no.is_some()
@@ -464,7 +493,7 @@ impl PageCtx<'_, '_> {
         out.push(Block::Image {
             common,
             asset,
-            data_status: status_str(status).into(),
+            data_status: data_status.into(),
             alt_text: alt,
             width: img.picture_width().or(img.layout_max_width()).map(round2),
             height: img.picture_height().or(img.layout_max_height()).map(round2),
@@ -484,6 +513,7 @@ impl PageCtx<'_, '_> {
         let ext = assets::ext_of_name(f.filename());
         let status = f.data_status();
         let mut asset = None;
+        let mut write_failed = false;
         if status == FileDataStatus::Available {
             match self.nb.assets.put_reader(
                 &mut f.read(),
@@ -491,19 +521,23 @@ impl PageCtx<'_, '_> {
                 true,
             ) {
                 Ok(a) => asset = a,
-                Err(e) => self.warn(format!(
-                    "attachment {filename:?} could not be written: {e:#}"
-                )),
+                Err(e) => {
+                    write_failed = true;
+                    self.warn(format!(
+                        "attachment {filename:?} could not be written: {e:#}"
+                    ))
+                }
             }
         }
+        // One status for the block and the report (`empty`: zero bytes).
+        let data_status = match (status, &asset) {
+            (FileDataStatus::Available, None) if write_failed => "missing",
+            (FileDataStatus::Available, None) => "empty",
+            (s, _) => status_str(s),
+        };
         if asset.is_none() {
             self.nb.report.counts.attachments_missing += 1;
-            let st = if status == FileDataStatus::Available {
-                "empty"
-            } else {
-                status_str(status)
-            };
-            self.missing("attachment", Some(filename.clone()), st);
+            self.missing("attachment", Some(filename.clone()), data_status);
         }
         let icon_asset = f.icon().and_then(|p| {
             if p.data_status() != FileDataStatus::Available {
@@ -539,7 +573,7 @@ impl PageCtx<'_, '_> {
             extension: ext,
             mime,
             size: f.size(),
-            data_status: status_str(status).into(),
+            data_status: data_status.into(),
             media_kind: media_kind.into(),
             icon_asset,
         }
@@ -601,19 +635,11 @@ fn round2(v: f32) -> f32 {
 fn list_info(l: &List) -> ListInfo {
     let fmt = l.list_format();
     let font = l.list_font().or(l.font()).unwrap_or("");
-    if fmt.first() == Some(&'\u{FFFD}') {
-        let style = match fmt.get(1).copied().unwrap_or('\0') {
-            '\u{1}' => "upper_roman",
-            '\u{2}' => "lower_roman",
-            '\u{3}' => "upper_alpha",
-            '\u{4}' => "lower_alpha",
-            _ => "decimal",
-        };
-        let suffix: String = fmt.iter().skip(2).filter(|c| !c.is_control()).collect();
+    if let Some((style, marker)) = number_pattern(fmt) {
         ListInfo {
             ordered: true,
             style: style.into(),
-            marker: format!("%{suffix}"),
+            marker,
             restart: l.list_restart(),
         }
     } else {
@@ -635,6 +661,34 @@ fn list_info(l: &List) -> ListInfo {
             restart: None,
         }
     }
+}
+
+/// A numbered-list format: literal text with number placeholders, each a
+/// U+FFFD followed by one number-format code (Word's NFC values: 0 decimal,
+/// 1/2 upper/lower roman, 3/4 upper/lower letter, others such as the
+/// Chinese counting formats are rendered as decimal). Placeholders may sit
+/// anywhere (`(%)`, `Step %:`). Returns the style of the first placeholder
+/// and the pattern with `%` for every placeholder, or `None` for a bullet.
+fn number_pattern(fmt: &[char]) -> Option<(&'static str, String)> {
+    let mut style = None;
+    let mut marker = String::new();
+    let mut it = fmt.iter().copied();
+    while let Some(c) = it.next() {
+        if c == '\u{FFFD}' {
+            let code = it.next().map(u32::from).unwrap_or(0);
+            style.get_or_insert(match code {
+                1 => "upper_roman",
+                2 => "lower_roman",
+                3 => "upper_alpha",
+                4 => "lower_alpha",
+                _ => "decimal",
+            });
+            marker.push('%');
+        } else if !c.is_control() {
+            marker.push(c);
+        }
+    }
+    style.map(|s| (s, marker))
 }
 
 /// Merge consecutive code paragraphs at the same indent into one block.
@@ -803,7 +857,14 @@ fn convert_page(
     let id = page.link_target_id().to_string();
     let raw_title = page
         .title_text()
-        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .map(|t| {
+            t.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .map(richtext::clean_char)
+                .collect::<String>()
+        })
         .filter(|t| !t.is_empty());
     let mut ctx = PageCtx {
         nb,
@@ -1104,39 +1165,146 @@ fn convert_section(
 
 // ---- failures -------------------------------------------------------------------
 
+/// What the first bytes of a section file say about it.
+#[derive(Debug, PartialEq, Eq)]
+enum FileSniff {
+    /// Zero bytes.
+    Empty,
+    /// Not a OneNote revision store (another file renamed to `.one`, or
+    /// something too short to be one).
+    NotOneNote,
+    /// A OneNote 2007 section (revision store format version 0x1B), which
+    /// the parser does not support.
+    OneNote2007,
+    /// Looks like a OneNote 2010+ section, or could not be read.
+    Other,
+}
+
+/// `guidFileType` of a `.one` section ([MS-ONESTORE] 2.3.1), as stored.
+const GUID_ONE: [u8; 16] = [
+    0xe4, 0x52, 0x5c, 0x7b, 0x8c, 0xd8, 0xa7, 0x4d, 0xae, 0xb1, 0x53, 0x78, 0xd0, 0x29, 0x96, 0xd3,
+];
+/// `guidFileType` of a `.onetoc2` table of contents.
+const GUID_ONETOC2: [u8; 16] = [
+    0xa1, 0x2f, 0xff, 0x43, 0xd9, 0xef, 0x76, 0x4c, 0x9e, 0xe2, 0x10, 0xea, 0x57, 0x22, 0x76, 0x5f,
+];
+/// `guidFileFormat` of a desktop revision store.
+const GUID_FILE_FORMAT: [u8; 16] = [
+    0x3f, 0xdd, 0x9a, 0x10, 0x1b, 0x91, 0xf5, 0x49, 0xa5, 0xd0, 0x17, 0x91, 0xed, 0xc8, 0xae, 0xd8,
+];
+
+fn sniff_file(file: &Path) -> FileSniff {
+    use std::io::Read;
+    let mut head = [0u8; 0x48];
+    let n = match std::fs::File::open(file) {
+        Ok(mut f) => {
+            let mut n = 0;
+            while n < head.len() {
+                match f.read(&mut head[n..]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(k) => n += k,
+                }
+            }
+            n
+        }
+        Err(_) => return FileSniff::Other,
+    };
+    sniff_bytes(&head[..n])
+}
+
+fn sniff_bytes(head: &[u8]) -> FileSniff {
+    if head.is_empty() {
+        return FileSniff::Empty;
+    }
+    if head.len() < 16 || (head[..16] != GUID_ONE && head[..16] != GUID_ONETOC2) {
+        return FileSniff::NotOneNote;
+    }
+    // ffvLastCodeThatWroteToThisFile .. ffvNewestCodeThatHasReadThisFile:
+    // 0x2A for OneNote 2010+ sections, 0x1B for OneNote 2007 sections (and
+    // for every table of contents).
+    if head[..16] == GUID_ONE
+        && head.len() >= 0x44
+        && head[0x30..0x40] == GUID_FILE_FORMAT
+        && head[0x40..0x44] == [0x1b, 0, 0, 0]
+    {
+        return FileSniff::OneNote2007;
+    }
+    FileSniff::Other
+}
+
+/// Human readable reason and hint for a section that could not be read,
+/// from the parser error and the file itself.
 pub fn classify_failure(err: &str, file: Option<&Path>) -> (String, String) {
-    let size = file
-        .and_then(|f| std::fs::metadata(f).ok())
-        .map(|m| m.len());
+    let sniff = file.map(sniff_file).unwrap_or(FileSniff::Other);
     let e = err.to_ascii_lowercase();
-    if size == Some(0) {
-        return (
-            "The section file is empty (it was not downloaded or synced).".into(),
-            "Open the notebook in OneNote, let it finish syncing, then export again.".into(),
+    let r = |reason: &str, hint: &str| (reason.to_string(), hint.to_string());
+    if sniff == FileSniff::Empty {
+        return r(
+            "The section file is empty (it was not downloaded or synced).",
+            "Open the notebook in OneNote, let it finish syncing, then export again.",
+        );
+    }
+    if sniff == FileSniff::NotOneNote {
+        return r(
+            "The file is not a OneNote section (its contents are in another format).",
+            "Nothing to do unless this file should contain notes; if it should, export the notebook again.",
+        );
+    }
+    if sniff == FileSniff::OneNote2007 {
+        return r(
+            "The section is in the OneNote 2007 format, which cannot be read.",
+            "Open the notebook in OneNote 2010 or later and convert it (File > Info > Settings > Properties > Convert to 2010), then export again.",
+        );
+    }
+    // onenote_parser (vendor/PATCHES.md, P5) reports encryption explicitly.
+    if e.contains("password-protected") {
+        return r(
+            "The section is password-protected.",
+            "In OneNote, unlock the section and remove its password (Review > Password), then export again.",
         );
     }
     if e.contains("encrypt") || e.contains("password") || e.contains("odcs") {
-        return (
-            "The section looks password-protected (encrypted) or damaged.".into(),
-            "In OneNote, unlock the section and remove its password (Review > Password), then export again.".into(),
+        return r(
+            "The section looks password-protected (encrypted) or damaged.",
+            "In OneNote, unlock the section and remove its password (Review > Password), then export again.",
         );
     }
     if e.contains("not a section file") || e.contains("notasection") {
-        return (
-            "The file is not a OneNote section.".into(),
-            "Nothing to do unless this file should contain notes.".into(),
+        return r(
+            "The file is not a OneNote section.",
+            "Nothing to do unless this file should contain notes.",
         );
     }
     if e.contains("rights") || e.contains("irm") {
-        return (
-            "The section is rights-protected (IRM) and cannot be read.".into(),
-            "Remove the protection in OneNote for Windows and export again.".into(),
+        return r(
+            "The section is rights-protected (IRM) and cannot be read.",
+            "Remove the protection in OneNote for Windows and export again.",
         );
     }
-    (
-        "The section could not be read (unsupported or damaged file).".into(),
-        "Open it in OneNote; if it opens, move its pages into a new section and export again."
-            .into(),
+    if e.contains("unexpected end of file") {
+        return r(
+            "The section file is incomplete: it ends before all of its data (truncated download or damaged file).",
+            "Open the notebook in OneNote, let it finish syncing, then export again; if the section opens in OneNote, move its pages into a new section first.",
+        );
+    }
+    if e.contains("undeclared revision")
+        || e.contains("invalid uuid")
+        || e.contains("malformed onestore")
+    {
+        return r(
+            "The section is damaged: its internal structure is inconsistent.",
+            "Open it in OneNote; if it opens, move its pages into a new section and export again.",
+        );
+    }
+    if e.contains("parser crashed") {
+        return r(
+            "The section is damaged: its data is inconsistent and could not be read.",
+            "Open it in OneNote; if it opens, move its pages into a new section and export again.",
+        );
+    }
+    r(
+        "The section could not be read (unsupported or damaged file).",
+        "Open it in OneNote; if it opens, move its pages into a new section and export again.",
     )
 }
 
@@ -1747,8 +1915,8 @@ fn place(skel: &[Skel], parsed: &mut HashMap<PathBuf, Parsed>, parent: &[String]
             Skel::Group {
                 identity,
                 name,
-                dir,
                 children,
+                ..
             } => {
                 let mut path = parent.to_vec();
                 path.push(name.clone());
@@ -1761,7 +1929,6 @@ fn place(skel: &[Skel], parsed: &mut HashMap<PathBuf, Parsed>, parent: &[String]
                     children: place(children, parsed, &path),
                     path,
                 }));
-                let _ = dir;
             }
         }
     }
@@ -1908,11 +2075,60 @@ mod tests {
     }
 
     #[test]
+    fn sniffs_onenote_2007_and_foreign_files() {
+        let mut h = GUID_ONE.to_vec();
+        h.extend([0u8; 0x20]);
+        h.extend(GUID_FILE_FORMAT);
+        h.extend([0x1b, 0, 0, 0]);
+        assert_eq!(sniff_bytes(&h), FileSniff::OneNote2007);
+        h[0x40] = 0x2a;
+        assert_eq!(sniff_bytes(&h), FileSniff::Other);
+        // Tables of contents always carry 0x1B.
+        h[..16].copy_from_slice(&GUID_ONETOC2);
+        h[0x40] = 0x1b;
+        assert_eq!(sniff_bytes(&h), FileSniff::Other);
+        assert_eq!(sniff_bytes(b"ABABABPADDING!"), FileSniff::NotOneNote);
+        assert_eq!(
+            sniff_bytes(b"<html><body>not a section</body>"),
+            FileSniff::NotOneNote
+        );
+        assert_eq!(sniff_bytes(b""), FileSniff::Empty);
+    }
+
+    #[test]
+    fn number_patterns_with_text_around_the_number() {
+        let p = |s: &str| number_pattern(&s.chars().collect::<Vec<_>>());
+        assert_eq!(p("\u{FFFD}\u{0}."), Some(("decimal", "%.".into())));
+        assert_eq!(p("(\u{FFFD}\u{2})"), Some(("lower_roman", "(%)".into())));
+        assert_eq!(
+            p("Step \u{FFFD}\u{3}:"),
+            Some(("upper_alpha", "Step %:".into()))
+        );
+        assert_eq!(p("[\u{FFFD}\u{0}]"), Some(("decimal", "[%]".into())));
+        // Chinese counting (NFC 39) falls back to decimal; the code char is
+        // never part of the marker.
+        assert_eq!(p("§\u{FFFD}'"), Some(("decimal", "§%".into())));
+        assert_eq!(p("-\u{FFFD}#-"), Some(("decimal", "-%-".into())));
+        assert_eq!(
+            p("\u{FFFD}\u{0}.\u{FFFD}!"),
+            Some(("decimal", "%.%".into()))
+        );
+        assert_eq!(p("\u{FFFD}"), Some(("decimal", "%".into())));
+        assert_eq!(p("•"), None);
+        assert_eq!(p(""), None);
+    }
+
+    #[test]
     fn failure_classification() {
         let (r, _) = classify_failure("object may be encrypted or corrupt ('odcs' is 0x2)", None);
         assert!(r.contains("password"));
         let (r, _) = classify_failure("weird", None);
         assert!(r.contains("could not be read"));
+        let (r, h) = classify_failure("The section is password-protected (encrypted)", None);
+        assert_eq!(r, "The section is password-protected.");
+        assert!(h.contains("remove its password"));
+        let (r, _) = classify_failure("Unexpected end of file", None);
+        assert!(r.contains("incomplete"));
     }
 
     #[test]

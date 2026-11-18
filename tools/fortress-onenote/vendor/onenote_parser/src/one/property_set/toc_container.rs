@@ -23,7 +23,7 @@ pub(crate) struct Data {
     pub(crate) color: Option<Color>,
 }
 
-pub(crate) fn parse(object: &Object) -> Result<Data> {
+pub(crate) fn parse(object: &Object, fallback_filename_allowed: bool) -> Result<Data> {
     assert_property_set(object, PropertySetId::TocContainer)?;
 
     // PATCH(fortress-onenote, P8): tables of contents written by other
@@ -37,7 +37,7 @@ pub(crate) fn parse(object: &Object) -> Result<Data> {
     };
     let filename = match simple::parse_string(PropertyType::FolderChildFilename, object)? {
         Some(name) => Some(name),
-        None if children.is_empty() => fallback_filename(object),
+        None if children.is_empty() && fallback_filename_allowed => fallback_filename(object),
         None => None,
     }
     .map(|s| s.replace("^M", "+"))

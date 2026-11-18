@@ -91,7 +91,7 @@ pub(crate) fn parse_toc(
         .content_root()
         .ok_or_else(|| ErrorKind::MalformedOneNoteData("notebook has no content root".into()))?;
 
-    let entry = parse_toc_entry(content_id, space)?;
+    let entry = parse_toc_entry(content_id, space, true)?;
     let toc = ordered_toc_entries(entry.entries);
 
     Ok((toc, entry.color))
@@ -111,12 +111,19 @@ fn ordered_toc_entries(entries: Vec<(u32, String)>) -> Vec<String> {
     latest.into_iter().map(|(_, (_, name))| name).collect()
 }
 
-fn parse_toc_entry(content_id: ExGuid, space: &(impl ObjectSpace + ?Sized)) -> Result<TocEntry> {
+fn parse_toc_entry(
+    content_id: ExGuid,
+    space: &(impl ObjectSpace + ?Sized),
+    is_root: bool,
+) -> Result<TocEntry> {
     let content = space.get_object(content_id).ok_or_else(|| {
         ErrorKind::MalformedOneNoteData("notebook content root is missing".into())
     })?;
 
-    let toc = toc_container::parse(content)?;
+    // PATCH(fortress-onenote, P8): the root container is never itself an
+    // entry by the fallback file name (an empty section group would list
+    // its own name).
+    let toc = toc_container::parse(content, !is_root)?;
 
     if let Some(name) = toc.filename {
         // PATCH(fortress-onenote, P8): entries without an ordering id keep
@@ -131,7 +138,7 @@ fn parse_toc_entry(content_id: ExGuid, space: &(impl ObjectSpace + ?Sized)) -> R
         let children = toc
             .children
             .into_iter()
-            .map(|content_id| parse_toc_entry(content_id, space))
+            .map(|content_id| parse_toc_entry(content_id, space, false))
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flat_map(|entry| entry.entries)
