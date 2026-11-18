@@ -21,7 +21,12 @@ import Testing
     /// inspector each call `document(id:)`), and fast re-renders fetched it again.
     @Test func concurrentReadsOfOneNoteShareOneRequest() async throws {
         SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 0.05) }
-        let api = SpyProtocol.client()
+        // A long max age: on a busy CI machine (other suites hold the main thread while
+        // they render) this test has taken over 30 s, the default, and the last read
+        // then revalidated, which is right but not what this test is about.
+        var options = APIStore.Options()
+        options.documentMaxAge = 3600
+        let api = SpyProtocol.client(options: options)
         async let a = api.document(id: "d1")
         async let b = api.document(id: "d1")
         async let c = api.document(id: "d1")
