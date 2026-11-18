@@ -101,6 +101,7 @@ MAX_TAG_LABEL = 100
 # C0/C1 control characters other than tab and newline (OneNote files can carry them;
 # they are invisible there and break Markdown/terminals here).
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff]")
+_SPACE_CONTROL_RE = re.compile(r"[\x0c\x1c-\x1f\x85]")
 _LINK_JUNK_RE = re.compile(r"[\x00-\x20\x7f-\x9f]")
 _SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]{0,31}):")
 _WWW_RE = re.compile(r"^www\.[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+([/?#]\S*)?$", re.IGNORECASE)
@@ -109,7 +110,9 @@ _WWW_RE = re.compile(r"^www\.[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+([/?#]\S*)?$", re.IG
 def _clean(text: str) -> str:
     """``text`` without control characters (tab and newline kept; CR becomes newline)."""
 
-    return _CONTROL_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Separators (form feed, file/group/record/unit separators, NEL) read as spaces.
+    return _CONTROL_RE.sub("", _SPACE_CONTROL_RE.sub(" ", text))
 
 
 def _clean_manifest(value: Any) -> Any:

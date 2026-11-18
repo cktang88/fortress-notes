@@ -558,6 +558,9 @@ def make_notes(root: Path | None = None) -> FortressNotes:
 # --- Markdown export, as rendered ---------------------------------------------------------------
 
 
+_INLINE = {"a", "b", "i", "u", "s", "em", "strong", "code", "sup", "sub", "span", "mark", "del", "small"}
+
+
 def export_summary(md_html: str) -> dict:
     """What a Markdown viewer shows of the export: visible words (no comments, no
     title, no inline ``$LaTeX$`` / display math), code blocks and list nesting."""
@@ -588,7 +591,8 @@ def export_summary(md_html: str) -> dict:
             self.stack.append(tag)
             depth = sum(1 for t in self.stack if t in {"ul", "ol"})
             self.max_list_depth = max(self.max_list_depth, depth)
-            self.pieces.append(" ")
+            if tag not in _INLINE:
+                self.pieces.append(" ")
 
         def handle_endtag(self, tag):
             if not self.stack:
@@ -596,7 +600,8 @@ def export_summary(md_html: str) -> dict:
             top = self.stack.pop()
             if top.startswith("skip:"):
                 self.skip -= 1
-            self.pieces.append(" ")
+            if top not in _INLINE:
+                self.pieces.append(" ")
 
         def handle_data(self, data):
             if not self.skip:

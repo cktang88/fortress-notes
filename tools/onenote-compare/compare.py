@@ -174,9 +174,17 @@ class Renderer:
             page.wait_for_timeout(50)
             result = page.evaluate(BOXES_JS) if boxes else None
             if png is not None:
-                page.screenshot(path=str(png), full_page=True)
+                try:
+                    page.screenshot(path=str(png), full_page=True)
+                except Exception:  # noqa: BLE001 - very tall/wide pages exceed Chromium's capture limit
+                    size = page.evaluate("() => [document.documentElement.scrollWidth, document.documentElement.scrollHeight]")
+                    page.screenshot(path=str(png), clip={"x": 0, "y": 0, "width": min(size[0], 4000),
+                                                         "height": min(size[1], 12000)}, full_page=True)
             if pdf is not None:
-                page.pdf(path=str(pdf), print_background=True, width="1100px")
+                try:
+                    page.pdf(path=str(pdf), print_background=True, width="1100px")
+                except Exception as exc:  # noqa: BLE001
+                    log(f"pdf failed for {html_path}: {exc}")
             return result
         finally:
             page.close()

@@ -1188,6 +1188,10 @@ class CompareFindingsTests(_Base):
         self.assertEqual([(r["text"], r["styles"].get("backgroundColor"), r["styles"].get("textColor")) for r in runs],
                          [("1,637,", "#FFFF00", "#C00000"), ("892", "#FF0000", "#C00000")])
 
+    def test_clean_text(self) -> None:
+        self.assertEqual(onenote_import._clean("form\x0cfeed bell\x07 nul\x00 a\r\nb‮RTL"),
+                         "form feed bell nul a\nb‮RTL")
+
     def test_safe_link(self) -> None:
         self.assertEqual(onenote_import.safe_link("www.google.com"), "http://www.google.com")
         self.assertEqual(onenote_import.safe_link("https://a.example/x?y=1"), "https://a.example/x?y=1")
