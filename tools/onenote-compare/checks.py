@@ -89,10 +89,14 @@ def check_headings(ref: Model, ours: Model):
 def check_lists(ref: Model, ours: Model):
     return _multiset_check(
         "lists",
-        [(" ".join(words(t)), o, d) for t, o, d, _ in ref.list_items],
-        [(" ".join(words(t)), o, d) for t, o, d, _ in ours.list_items],
-        lambda i: f"{'ordered' if i[1] else 'bullet'} depth {i[2]}: {i[0][:80]!r}",
+        [(" ".join(words(t)), o, d, _CSS_LIST_STYLES.get(s, s) if o else "bullet") for t, o, d, s in ref.list_items],
+        [(" ".join(words(t)), o, d, s if o else "bullet") for t, o, d, s in ours.list_items],
+        lambda i: f"{i[3] if i[1] else 'bullet'} depth {i[2]}: {i[0][:80]!r}",
     )
+
+
+_CSS_LIST_STYLES = {"lower-latin": "lower_alpha", "upper-latin": "upper_alpha", "lower-alpha": "lower_alpha",
+                    "upper-alpha": "upper_alpha", "lower-roman": "lower_roman", "upper-roman": "upper_roman"}
 
 
 def check_checks(ref: Model, ours: Model):

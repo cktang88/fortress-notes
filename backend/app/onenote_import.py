@@ -91,6 +91,7 @@ _COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _MONOSPACE = ("consolas", "courier", "courier new", "lucida console", "menlo", "monaco",
               "source code pro", "cascadia", "fira code", "fira mono", "jetbrains mono",
               "sf mono", "dejavu sans mono", "andale mono", "monospace")
+_NUMBER_STYLES = frozenset({"upper_roman", "lower_roman", "upper_alpha", "lower_alpha"})
 _BAD_LINK_SCHEMES = ("javascript:", "vbscript:", "data:")
 # Image types the local OCR reads (images.extract_and_store).
 _OCR_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
@@ -409,6 +410,11 @@ def _text_block(block: dict[str, Any], ctx: _PageContext) -> tuple[dict[str, Any
         result.update(type="list", ordered=bool(info.get("ordered")))
         if info.get("marker"):
             result["list_format"] = str(info["marker"])
+        if info.get("ordered") and info.get("style") in _NUMBER_STYLES:
+            # a. b. c. / i. ii. iii. numbering (the marker alone does not say which).
+            result.setdefault("attrs", {})["list_style"] = info["style"]
+        if isinstance(info.get("restart"), int) and not isinstance(info["restart"], bool):
+            result.setdefault("attrs", {})["list_start"] = info["restart"]
     elif kind == "check_item":
         info = block.get("list") or {}
         result.update(type="list", ordered=bool(info.get("ordered")), checked=bool(block.get("checked")))
@@ -420,7 +426,7 @@ def _text_block(block: dict[str, Any], ctx: _PageContext) -> tuple[dict[str, Any
         result["type"] = "paragraph"
     if block.get("align") in {"center", "right"}:
         # BlockNote's paragraph prop (what the web editor reads and writes).
-        result["attrs"] = {"textAlignment": block["align"]}
+        result.setdefault("attrs", {})["textAlignment"] = block["align"]
     ctx.count("text_blocks")
     return result, block_links
 

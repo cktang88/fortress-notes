@@ -193,7 +193,7 @@ class _TreeWalker:
                 if "checked" in attrs:
                     self.model.checks.append((text, bool(attrs.get("checked"))))
                 else:
-                    fmt = str(attrs.get("list_style") or attrs.get("list_format") or "")
+                    fmt = str(attrs.get("list_style") or "decimal") if attrs.get("ordered") else "bullet"
                     self.model.list_items.append((text, bool(attrs.get("ordered")), list_depth, fmt))
                 child_depth = list_depth + 1
             for tag in attrs.get("onenote_tags") or []:
@@ -428,7 +428,7 @@ class HtmlRenderer:
         content = block.get("content") or {}
         children = self.blocks(block.get("children") or [])
         children_html = f'<div class="children">{children}</div>' if children else ""
-        align = attrs.get("align")
+        align = attrs.get("textAlignment") or attrs.get("align")
         style = f' style="text-align:{align}"' if align in {"center", "right"} else ""
         if kind == "heading":
             level = min(max(int(attrs.get("level") or 1), 1), 6)

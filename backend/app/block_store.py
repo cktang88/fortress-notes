@@ -1817,7 +1817,8 @@ def _replace_references(
 
 
 def render_markdown(
-    nodes: list[dict], depth: int = 0, document_provenance: dict | None = None
+    nodes: list[dict], depth: int = 0, document_provenance: dict | None = None,
+    *, indent: int | None = None,
 ) -> str:
     """Render a block tree as portable Markdown (block IDs are not included).
 
@@ -1825,16 +1826,25 @@ def render_markdown(
     document's gets it on a ``<!-- fortress:block {...} -->`` line right before it,
     which Markdown import reads back. A ``columns`` layout is written as its
     columns one after another between ``<!-- fortress:columns -->`` markers.
+
+    A list item's children are indented to its content column (2 for ``- ``, 3
+    for ``1. ``, ...), so they stay inside the item. Markdown cannot indent other
+    blocks: children of a paragraph or heading are written at its own indent (4
+    more spaces would turn them into a code block).
     """
 
+    spaces = 2 * depth if indent is None else indent
     fragments: list[str] = []
     number = 0
     for node in nodes:
         # Each item is written as "1. "; number consecutive ordered items, since a
         # provenance comment between items starts a new list in Markdown viewers.
         number = number + 1 if _is_ordered_item(node) else 0
-        fragments.extend(_render_node(node, depth, document_provenance, number))
+        fragments.extend(_render_node(node, spaces, document_provenance, number))
     return "\n\n".join(fragments)
+
+
+_LIST_MARKER_RE = re.compile(r"^(?:[-*+]|\d{1,9}[.)])[ \t]")
 
 
 def _is_ordered_item(node: dict) -> bool:
@@ -1851,7 +1861,7 @@ def _number_item(source: str, number: int) -> str:
 
 
 def _render_node(
-    node: dict, depth: int, document_provenance: dict | None, number: int = 0
+    node: dict, indent: int, document_provenance: dict | None, number: int = 0
 ) -> list[str]:
     def placed(source: str, block: dict) -> str:
         if source and document_provenance is not None:
@@ -1859,8 +1869,8 @@ def _render_node(
             if isinstance(own, dict) and own and not own.get("inherited"):
                 if own != {"source": document_provenance.get("source", "manual")}:
                     source = f"{_provenance.comment(own)}\n{source}"
-        if depth and source:
-            prefix = "  " * depth
+        if indent and source:
+            prefix = " " * indent
             source = "\n".join(
                 f"{prefix}{line}" if line else line for line in source.split("\n")
             )
@@ -1871,24 +1881,27 @@ def _render_node(
         fragments = [placed(_types.marker("columns", node.get("attrs") or {}), node)]
         for child in children:
             if child["type"] != "column":
-                fragments.extend(_render_node(child, depth, document_provenance))
+                fragments.extend(_render_node(child, indent, document_provenance))
                 continue
             fragments.append(placed(_types.marker("column", child.get("attrs") or {}), child))
             number = 0
             for grandchild in child.get("children", []):
                 number = number + 1 if _is_ordered_item(grandchild) else 0
-                fragments.extend(_render_node(grandchild, depth, document_provenance, number))
+                fragments.extend(_render_node(grandchild, indent, document_provenance, number))
         fragments.append(placed("<!-- /fortress:columns -->", {}))
         return fragments
     source = _number_item(_node_markdown(node), number)
     if node["type"] == "divider" and not source:
         source = "---"
+    marker = _LIST_MARKER_RE.match(source)
+    child_indent = indent + (len(marker.group(0)) if marker else 0)
     fragments = []
     source = placed(source, node)
     if source:
         fragments.append(source)
     if children:
-        rendered_children = render_markdown(children, depth + 1, document_provenance)
+        rendered_children = render_markdown(children, document_provenance=document_provenance,
+                                            indent=child_indent)
         if rendered_children:
             fragments.append(rendered_children)
     return fragments

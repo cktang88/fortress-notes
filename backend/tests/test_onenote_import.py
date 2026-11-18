@@ -1096,6 +1096,35 @@ class CompareFindingsTests(_Base):
         self.assertIn("2. Step 2", markdown)
         self.assertIn("3. Step 3", markdown)
 
+    def test_markdown_export_keeps_nesting_and_never_makes_code_blocks(self) -> None:
+        from markdown_it import MarkdownIt
+
+        info = {"ordered": True, "style": "decimal", "marker": "%.", "restart": None}
+        tree = self.import_blocks([
+            {"type": "paragraph", "indent": 0, "text": "Intro"},
+            {"type": "paragraph", "indent": 1, "text": "Indented once"},
+            {"type": "paragraph", "indent": 2, "text": "Indented twice"},
+            {"type": "list_item", "indent": 0, "text": "Outer", "list": info},
+            {"type": "list_item", "indent": 1, "text": "Inner", "list": info},
+            {"type": "list_item", "indent": 2, "text": "Innermost", "list": info},
+        ])
+        html = MarkdownIt("commonmark", {"html": True}).render(export_document_markdown(self.db, tree["id"]))
+        # Indented OneNote paragraphs used to be written 4+ spaces deep: a code block
+        # showing the provenance comments.
+        self.assertNotIn("<pre>", html)
+        self.assertNotIn("&lt;!-- fortress:block", html)
+        self.assertIn("<p>Indented twice</p>", html)
+        # Children of "1. " items need 3 spaces, or they fall out of the item.
+        self.assertRegex(html, r"(?s)<ol>\s*<li>.*Outer.*<ol>\s*<li>.*Inner.*<ol>\s*<li>.*Innermost")
+
+    def test_list_numbering_style_and_start_are_kept(self) -> None:
+        tree = self.import_blocks([
+            {"type": "list_item", "indent": 0, "text": "Roman",
+             "list": {"ordered": True, "style": "lower_roman", "marker": "%.", "restart": 3}},
+        ])
+        attrs = tree["children"][0]["attrs"]
+        self.assertEqual((attrs.get("list_style"), attrs.get("list_start")), ("lower_roman", 3))
+
     def test_monospace_runs_become_inline_code(self) -> None:
         tree = self.import_blocks([{
             "type": "paragraph", "indent": 0, "text": "run ls -la now",
