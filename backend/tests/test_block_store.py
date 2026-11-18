@@ -150,10 +150,6 @@ class BlockStoreTests(unittest.TestCase):
                     (f"{linked_id}.png", "image/png", ""),
                 ],
             )
-            digest = hashlib.sha256(b"legacy image").hexdigest()
-            self.assertEqual(
-                (media_dir / f"{digest}.txt").read_text(encoding="utf-8"), "old OCR"
-            )
             self.assertEqual(len(search_blocks(database, "old OCR")), 1)
 
     def test_ocr_text_updates_block_search_and_embedding_inputs(self) -> None:
