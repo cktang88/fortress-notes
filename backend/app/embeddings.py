@@ -58,9 +58,9 @@ _log = logging.getLogger("fortress")
 INLINE_ENCODE_LIMIT = 8
 # Paragraphs per model batch and per commit while indexing in the background.
 ENCODE_BATCH = 16
-# Background batches hold about this much text (~500 tokens), so a search queued
+# Background batches hold about this much text (~250 tokens), so a search queued
 # behind one waits a few tens of milliseconds, not seconds.
-BACKGROUND_BATCH_CHARS = 2000
+BACKGROUND_BATCH_CHARS = 1000
 INDEX_CHUNK = 64
 QUERY_CACHE_SIZE = 256
 # Query encodings of paragraph texts (focused related, whole-note queries) and of
