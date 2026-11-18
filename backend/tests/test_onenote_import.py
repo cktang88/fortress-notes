@@ -503,12 +503,18 @@ class ImportManifestTests(_Base):
 
 
 class ConverterTests(unittest.TestCase):
+    # The binary comes from the active settings (FORTRESS_ONENOTE_BIN is read once, when
+    # they are made): patching the environment alone did nothing once any earlier test
+    # had made the process's settings, so these ran against whatever was cached.
+    def _settings(self, directory: str, binary: str):
+        return use_settings(make_settings(Path(directory), onenote_bin=binary))
+
     def test_missing_binary_gives_a_clear_error(self) -> None:
-        with patch.dict(os.environ, {"FORTRESS_ONENOTE_BIN": "/nonexistent/fortress-onenote"}):
+        with tempfile.TemporaryDirectory() as directory, self._settings(
+            directory, "/nonexistent/fortress-onenote"
+        ):
             self.assertIsNone(onenote_import.converter_path())
-            with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(
-                onenote_import.OneNoteImportError, "FORTRESS_ONENOTE_BIN"
-            ):
+            with self.assertRaisesRegex(onenote_import.OneNoteImportError, "was not found"):
                 onenote_import.run_converter(Path(directory) / "in.zip", Path(directory) / "out")
 
     def test_failing_converter_reports_its_message(self) -> None:
@@ -516,7 +522,7 @@ class ConverterTests(unittest.TestCase):
             script = Path(directory) / "fake-converter"
             script.write_text("#!/bin/sh\necho 'nothing convertible: zip holds only errors.txt' >&2\nexit 1\n")
             script.chmod(0o755)
-            with patch.dict(os.environ, {"FORTRESS_ONENOTE_BIN": str(script)}), self.assertRaisesRegex(
+            with self._settings(directory, str(script)), self.assertRaisesRegex(
                 onenote_import.OneNoteImportError, "only errors.txt"
             ):
                 onenote_import.run_converter(Path(directory) / "in.zip", Path(directory) / "out")

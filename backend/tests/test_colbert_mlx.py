@@ -4,14 +4,20 @@ on a Mac, or on Linux with ``mlx[cpu]``; skipped otherwise, e.g. in CI)."""
 import unittest
 
 
+def _model_name() -> str:
+    # The default model, not get_settings(): that would make (and cache) the process's
+    # settings from backend/.env for every later test, and create its notes folder.
+    from app.config import Settings
+
+    return Settings.model_fields["colbert_model"].default
+
+
 def _reference():
     try:
         import mlx.core  # noqa: F401
         from pylate import models
 
-        from app.config import get_settings
-
-        model = models.ColBERT(model_name_or_path=get_settings().colbert_model, device="cpu")
+        model = models.ColBERT(model_name_or_path=_model_name(), device="cpu")
     except Exception as error:  # noqa: BLE001 - no mlx, no cached model, offline
         raise unittest.SkipTest(f"MLX or the ColBERT model unavailable: {error}")
     model.eval()
@@ -23,10 +29,8 @@ class MlxColBERTTests(unittest.TestCase):
         import torch
 
         from app import colbert_mlx
-        from app.config import get_settings
-
         reference = _reference()
-        encoder = colbert_mlx.load(reference, get_settings().colbert_model, "float32")
+        encoder = colbert_mlx.load(reference, _model_name(), "float32")
         # A long paragraph (local attention windows) batched with short ones (padding
         # far from any real token), and queries.
         documents = [
