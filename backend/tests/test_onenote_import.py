@@ -1080,7 +1080,7 @@ class CompareFindingsTests(_Base):
         page = _pages(self.manifest)[guid]
         page["items"] = [_outline("i0", blocks)]
         page["layout"] = [{"kind": "item", "item": "i0"}]
-        self.run_import(self.manifest)
+        self.last_result = self.run_import(self.manifest)
         return self.tree(guid)
 
     def test_markdown_export_numbers_ordered_list_items(self) -> None:
@@ -1241,6 +1241,26 @@ class CompareFindingsTests(_Base):
         self.assertIn("Image missing", tree["children"][3]["text"])
         for path in self.settings.assets_path.iterdir():
             self.assertRegex(path.name, r"^[0-9a-f]{64}\.[a-z0-9]+$")
+
+    def test_unusable_image_data_and_equations_without_latex(self) -> None:
+        bin_name = "b" * 64 + ".bin"
+        self.manifest["assets"][bin_name] = {**PNG_INFO, "path": f"assets/{bin_name}", "mime": "application/octet-stream"}
+        (self.export / "assets").mkdir(parents=True, exist_ok=True)
+        (self.export / "assets" / bin_name).write_bytes(b"garbage bytes")
+        tree = self.import_blocks([
+            {"type": "image", "indent": 0, "asset": bin_name, "data_status": "available", "alt_text": "chart",
+             "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
+             "is_background": False, "original_name": "chart.png", "original_asset": None},
+            {"type": "math", "indent": 0, "text": "x=−b±b2−4ac2a", "latex": None, "mathml": None},
+        ])
+        attachment, math = tree["children"]
+        self.assertEqual(attachment["type"], "file")
+        self.assertTrue(attachment["attrs"]["url"].endswith(".bin"))
+        self.assertIn("chart", attachment["attrs"]["caption"])
+        self.assertEqual(math["type"], "math")
+        warnings = " ".join(w for nb in self.last_result["notebooks"] for w in nb["warnings"])
+        self.assertIn("not a picture", warnings)
+        self.assertIn("no LaTeX", warnings)
 
     def test_clean_text(self) -> None:
         self.assertEqual(onenote_import._clean("form\x0cfeed bell\x07 nul\x00 a\r\nb‮RTL"),

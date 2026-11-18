@@ -150,6 +150,9 @@ def safe_link(href: object) -> str | None:
     return href
 # Image types the local OCR reads (images.extract_and_store).
 _OCR_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
+# Images shown as images; any other image asset (.bin, ...) is kept as a file.
+_IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif",
+                               "emf", "wmf", "svg"})
 # Pages whose imported text covers less of the manifest's text are reported.
 COVERAGE_THRESHOLD = 0.98
 # Extensions served as themselves from /media; anything else is stored as .bin.
@@ -303,7 +306,8 @@ class _PageContext:
     rewritten: int = 0
     block_level_links: int = 0  # paragraph links that could only point at their page
     block_references: int = 0  # paragraph links that became block references
-    ocr_assets: list[str] = field(default_factory=list)  # image asset names without text
+    ocr_assets: list[str] = field(default_factory=list)
+    warned: set[str] = field(default_factory=set)  # image asset names without text
     dropped_links: list[str] = field(default_factory=list)  # unsafe/unsupported targets kept as text
 
     def count(self, key: str, amount: int = 1) -> None:
@@ -311,6 +315,11 @@ class _PageContext:
 
     def warn(self, message: str) -> None:
         self.importer.warn(f"{self.page_label}: {message}")
+
+    def warn_once(self, message: str) -> None:
+        if message not in self.warned:
+            self.warned.add(message)
+            self.warn(message)
 
 
 def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
@@ -543,7 +552,15 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
         result = {"type": "code", "text": str(block.get("text") or "")}
     elif kind == "math":
         latex = block.get("latex")
-        latex = _strip_math_delimiters(latex) if isinstance(latex, str) and latex.strip() else str(block.get("text") or "")
+        if isinstance(latex, str) and latex.strip():
+            latex = _strip_math_delimiters(latex)
+        else:
+            latex = str(block.get("text") or "")
+            if not (isinstance(block.get("mathml"), str) and block["mathml"]):
+                # Third-party writers store equations without LaTeX/MathML: only the
+                # flattened text is left (x=−b±b2−4ac2a), so say the structure is lost.
+                ctx.warn_once("an equation had no LaTeX or MathML; its plain text was kept "
+                              "(fractions, powers and roots may read flattened)")
         result = {"type": "math", "latex": latex}
         if isinstance(block.get("mathml"), str) and block["mathml"]:
             result["mathml"] = block["mathml"]
@@ -825,6 +842,13 @@ def _image(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
         ctx.count("images_missing")
         label = f"Image missing from the OneNote export{f' ({name})' if name else ''}"
         return {"type": "paragraph", "inline": [{"text": label, "i": 1}] + ([{"text": f"\n{alt}"}] if alt else [])}
+    if url.rsplit(".", 1)[-1].lower() not in _IMAGE_EXTENSIONS:
+        # The bytes are not a picture (damaged data, or a format browsers cannot show):
+        # keep them as a downloadable file instead of a broken image.
+        ctx.warn_once("image data that is not a picture was kept as a file attachment")
+        result = {"type": "file", "url": url, "name": _file_name(name or "image.bin"),
+                  "attrs": {"caption": "Image data that cannot be shown" + (f": {alt}" if alt else "")}}
+        return result
     result: dict[str, Any] = {"type": "image", "url": url}
     if alt:
         result["alt"] = alt
