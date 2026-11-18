@@ -1,6 +1,6 @@
 """Everyday workspace actions over the canonical SQLite store.
 
-Trash keeps deleted documents recoverable until someone empties it. Saved searches are small named queries the sidebar can re-run in one click.
+Trash keeps deleted documents recoverable until someone empties it.
 """
 
 from __future__ import annotations
@@ -93,8 +93,3 @@ def empty_trash(path: Path) -> list[str]:
         ]
         write.purge(ids)
     return ids
-
-
-# --- Saved searches ----------------------------------------------------------
-
-
