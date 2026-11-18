@@ -46,12 +46,13 @@ enum DocumentText {
         let output = NSMutableAttributedString()
         for run in runs {
             if let node = run.node {
+                // An inline node shows its label as text (a note's current title, a
+                // referenced block's text); all of it reads back as the one node.
                 var attributes = base(info: info, marks: InlineMarks(), theme: theme)
                 attributes[.fnNode] = NodeBox(node)
-                attributes[.attachment] = InlineNodeAttachment(node: node, context: context)
                 // A note link opens its note when clicked (see `clickedOnLink`).
                 if let id = NoteLinks.documentTarget(node), let url = NoteLinks.documentURL(id: id) { attributes[.link] = url }
-                output.append(NSAttributedString(string: objectReplacement, attributes: attributes))
+                output.append(NSAttributedString(string: label(of: node, context: context), attributes: attributes))
                 continue
             }
             let attributes = base(info: info, marks: run.marks, theme: theme)
@@ -106,12 +107,31 @@ enum DocumentText {
         return block
     }
 
+    /// The text an inline node shows. Never empty: the label is what carries the node.
+    @MainActor static func label(of node: JSONValue, context: AttachmentContext) -> String {
+        var label: String
+        if let id = NoteLinks.documentTarget(node) {
+            label = context.documentTitles[id] ?? ""
+            if label.isEmpty { label = "Untitled" }
+        } else if let id = NoteLinks.blockTarget(node) {
+            label = context.referenceLabel(blockId: id, fallback: "block")
+        } else {
+            label = BlockCodec.inlineText(node)
+            if label.isEmpty { label = node["type"]?.stringValue ?? "•" }
+        }
+        label = label.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+        if label.count > 80 { label = String(label.prefix(79)) + "…" }
+        return label.isEmpty ? "•" : label
+    }
+
     static func runs(in text: NSAttributedString, range: NSRange) -> [InlineRun] {
         var runs: [InlineRun] = []
         let string = text.string as NSString
+        // A node's label may be split (text typed into it): the node is read once.
+        var seen = Set<ObjectIdentifier>()
         text.enumerateAttributes(in: range, options: []) { attributes, run, _ in
             if let node = attributes[.fnNode] as? NodeBox {
-                for _ in 0..<run.length { runs.append(.atomic(node.node)) }
+                if seen.insert(ObjectIdentifier(node)).inserted { runs.append(.atomic(node.node)) }
                 return
             }
             var piece = string.substring(with: run)
