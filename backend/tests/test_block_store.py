@@ -1152,9 +1152,12 @@ class BlockStoreTests(unittest.TestCase):
 
             mirror_document(database, root, "one")
 
-            mirrored = note_path.read_text(encoding="utf-8")
+            # The format-1 mirror "one.md" becomes "One.md" (named after the title).
+            self.assertFalse((root / "one.md").exists() and not (root / "one.md").samefile(root / "One.md"))
+            mirrored = (root / "One.md").read_text(encoding="utf-8")
             self.assertIn("custom: keep", mirrored)
-            self.assertIn(f'Updated <!-- fortress:block {{"id":"{block_id}"}} -->', mirrored)
+            self.assertNotIn("tags:", mirrored)
+            self.assertIn("\nUpdated\n", mirrored)
             self.assertNotIn("Original", mirrored)
 
 

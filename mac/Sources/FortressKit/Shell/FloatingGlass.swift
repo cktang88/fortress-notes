@@ -14,14 +14,14 @@ struct FloatingGlass<S: Shape>: ViewModifier {
     func body(content: Content) -> some View {
         if reduceTransparency {
             content
-                .background(Color(nsColor: .windowBackgroundColor), in: shape)
-                .overlay(shape.stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                .background(ThemeStyle(.surface), in: shape)
+                .overlay(shape.stroke(ThemeStyle(.border), lineWidth: 1))
         } else {
             content
                 .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
                 .overlay {
                     if contrast == .increased {
-                        shape.stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                        shape.stroke(ThemeStyle(.border), lineWidth: 1)
                     }
                 }
         }

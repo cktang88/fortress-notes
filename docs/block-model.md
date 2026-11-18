@@ -266,43 +266,72 @@ source version (a later, different one is reported again).
 ## 7. Markdown
 
 Markdown is an interchange format, rendered from the canonical blocks; it is
-never stored. Every block carries its id in a Fortress comment, so an export
-(or mirror file) imported again keeps block ids (and with them links and
-backlinks). The mirror is written from the database and never read back into it.
+never stored. It is CommonMark + GFM + Obsidian Flavored Markdown, chosen per
+[open-standards.md](open-standards.md): the vault mirror and exports read well in
+Obsidian, GitHub, VS Code or Pandoc, and import of our own Markdown restores the
+model (ids of referenced blocks, links, references, provenance, attributes). The
+mirror is written from the database and never read back into it.
 
-- Text blocks: a trailing inline comment, `## Plans <!-- fortress:block {"id":"01J…"} -->`.
-- Other blocks: a comment on the line before, `<!-- fortress:block {"id":"01J…"} -->`.
-- The comment also carries what Markdown can't say: the block's `provenance`
-  when it differs from the note's, extension `attrs`, and the `type` when
-  Markdown can't express it (`callout` is a quote with `"type":"callout"`).
-- Lists: `- `, `1. `, `- [ ] `/`- [x] `; children indented under their item.
-- `quote`: `> ` before each line of its children. `code`: a fence longer than any
-  backtick run inside. `divider`: `---`. `math`: `$$ … $$`.
-- Marks: `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``; underline, sup, sub,
-  colour and highlight as `<u>`, `<sup>`, `<sub>`, `<span style="color:…">`,
-  `<mark style="background:…">`. Links `[text](href)`; note links
-  `[[<document id>]]`; block references `((<block id>))`.
+Writing (`render_markdown`, with `RenderLinks` naming notes and blocks):
+
+- Text: `#` headings; `- `, `1. `, `- [ ] `/`- [x] ` lists, children indented
+  under their item by its bullet's width (a task's `[ ] ` doesn't count); `code`
+  as a fence longer than any backtick run inside; `divider` as `---`; `math` as
+  `$$ … $$`; `html` as itself.
+- `quote`: `> ` before each line of its children. `callout`: an Obsidian callout,
+  `> [!type]` (attrs `callout_type`, default `note`; `callout_fold` `+`/`-`; with
+  `callout_title` its first paragraph is the title on the marker line).
+- Marks: `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, `==highlight==` (the
+  default `yellow`); underline, sup, sub, colour and other highlight colours as
+  `<u>`, `<sup>`, `<sub>`, `<span style="color:…">`, `<mark style="background:…">`.
+  If the Markdown form would not read back as the same nodes, every mark is
+  written as an HTML tag. Text is escaped so it never becomes Markdown or Obsidian
+  syntax (`==`, `%%`, `^id`, `[[`, `((`, ...).
+- Links `[text](href)`. Note links are wikilinks by the target's vault file
+  name: `[[Title]]`, `[[Folder/Title]]` when the name isn't unique,
+  `[[Name|Title]]` when it differs from the title; an unknown target `[[<id>]]`.
+  Block references: `[[Note#^<block id>|first line]]` (`[[#^id]]` within the
+  note), a heading `[[Note#Heading text]]`.
+- Block ids: written only for blocks something refers to (`RenderLinks.anchors`;
+  all blocks when no `RenderLinks` is given). Obsidian's `^id` at the end of a
+  text block's line, or on its own line after a quote, callout, table, code,
+  math, divider or HTML block; a heading's id (Obsidian links headings by text)
+  and ids Obsidian can't hold (`_`) go in the comment.
+- The comment, `<!-- fortress:block {...} -->` (trailing on a text block's line,
+  otherwise on the line before the block), carries only what no syntax can say:
+  `provenance` when it differs from the note's, extension `attrs` (and image
+  `name`, file `size`/`caption`, callout `icon`/`color`), `indent` for a block
+  nested under a paragraph or heading (its children follow it, `"indent": 1`,
+  `2`, ...), and `id` as above. A block with nothing to say has no comment.
 - Tables: a GFM table when the table has one header row, every cell holds one
-  paragraph (or nothing) and there are no spans, colours or widths; otherwise an
-  HTML `<table>` whose rows, cells and cell blocks carry their comment's JSON
-  in a `data-block` attribute. The GFM form lists row and cell ids in its
-  comment (`"rows"`).
-- Columns: `<!-- fortress:columns {…} -->`, `<!-- fortress:column {…} -->` …
-  `<!-- /fortress:columns -->` around the column contents.
-- Images: `<img src="…" alt="…" width="…">`; files: a comment with the file's
-  attrs followed by a `[name](url)` link line.
+  paragraph (or nothing) and there are no spans, colours or widths, and nothing
+  inside is referred to (per-cell paragraph provenance goes in the table's
+  comment as `"rows"`); otherwise an HTML `<table>` whose rows, cells and cell
+  blocks carry their metadata in a `data-block` attribute.
+- Columns (no Markdown dialect has them): the contents in order between
+  `<!-- fortress:columns -->`, `<!-- fortress:column {…} -->` …
+  `<!-- /fortress:columns -->`.
+- Images: `![alt|width(xheight)](url "caption")` (Obsidian's size syntax);
+  files: `[name](url)`, or `![name](url)` for PDF, audio and video. In the vault,
+  `/media/<name>` is written as a path relative to the note (`assets/<name>`,
+  `../assets/<name>`).
 - An empty paragraph (no content, no children) is written as nothing: Markdown
   has no empty paragraph, and a blank line is just spacing.
-- A list item's children are indented by its bullet's width (`- `, `1. `); a
-  task's `[ ] ` is part of the item's text and doesn't count.
 
 Reading Markdown (import, uploads, capture, new notes created with a body,
-importer sources) produces canonical blocks directly. Only `<table>`, `<img>`
-and Fortress `div[data-type]` HTML is read structurally; any other HTML block
-becomes an `html` block. An id from a comment is reused when
-it isn't already taken by another block in the workspace; otherwise a new id is
-made. Comments written by older versions (`<!-- fortress:block {provenance} -->`,
-`<!-- fortress:file {...} -->`) are still read.
+importer sources) produces canonical blocks directly (`parse_markdown`, with
+`ParseLinks` resolving names). It reads everything above and what Obsidian writes:
+wikilinks by file name, path, title or alias, `[[Note#Heading]]`,
+`[[Note#^id]]`, embeds `![[file.png|300]]` / `![[file.pdf]]`, callouts,
+`==highlight==`, block ids (Obsidian's short ids become new workspace-unique ids,
+consistently for every reference in the import), and Markdown links/images to
+`assets/<name>` (read as `/media/<name>`). An unresolved wikilink stays text.
+Only `<table>`, `<img>` and Fortress `div[data-type]` HTML is read structurally;
+any other HTML block becomes an `html` block. An id is reused when it isn't
+already taken by another block in the workspace; otherwise a new id is made.
+Older Fortress forms are still read: ids in comments on every block,
+`[[<id>|Title]]`, `((<id>))`, `"type":"callout"` and `"parent"` in comments,
+`<!-- fortress:file {...} -->`, `<img src="/media/…">`.
 
 ## 8. Order keys
 

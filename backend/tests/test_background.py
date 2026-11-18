@@ -25,7 +25,14 @@ class _Workspace(unittest.TestCase):
         self.enterContext(use_settings(self.settings))
 
     def mirror(self, document_id: str) -> Path:
-        return self.notes / f"{document_id}.md"
+        """The note's mirror (where it was last written, once it is gone)."""
+
+        known = self.__dict__.setdefault("_mirrors", {})
+        # (read from disk: a test may write with a writer of its own)
+        path = documents.MirrorWriter().path(self.notes, document_id)
+        if path is not None:
+            known[document_id] = path
+        return known.get(document_id, self.notes / f"{document_id}.md")
 
 
 class MirrorTests(_Workspace):
@@ -224,7 +231,7 @@ class RestoreTests(_Workspace):
         stash = self.notes / ".fortress-backups" / (
             "mirrors-before-" + Path(response.json()["safety_backup"]).stem
         )
-        self.assertTrue((stash / f"{later['id']}.md").exists())  # moved aside, not lost
+        self.assertTrue((stash / "Later.md").exists())  # moved aside, not lost
 
 
 class SettingsTests(unittest.TestCase):

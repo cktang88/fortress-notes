@@ -1,24 +1,36 @@
-"""Markdown in and out of canonical blocks (docs/block-model.md §7).
+"""Markdown in and out of canonical blocks (docs/block-model.md §7, docs/open-standards.md).
 
 Markdown is never stored: :func:`render_markdown` writes it from canonical
-blocks (exports, the mirror files, the notes API), and :func:`parse_markdown`
-reads it straight into canonical :class:`BlockSpec` trees (imports, capture, the
-notes API). Every block carries its id (and whatever Markdown can't say) in a
-``<!-- fortress:block {...} -->`` comment, so text written here and read back
-keeps its block ids.
+blocks (exports, the vault mirror), and :func:`parse_markdown` reads it straight
+into canonical :class:`BlockSpec` trees (imports, capture, importer sources).
+
+What is written is CommonMark + GFM + Obsidian Flavored Markdown: wikilinks for
+note links (``[[Note]]``), ``[[Note#^id]]`` / ``[[Note#Heading]]`` for block
+references, ``^id`` block identifiers on the blocks something refers to,
+``> [!type]`` callouts, ``==highlight==``, ``$$`` math, task lists, GFM tables.
+Only what no standard can say (provenance, extension attributes, nesting under
+a paragraph, column layouts) goes in an invisible ``<!-- fortress:block {...} -->``
+comment. Reading accepts all of that, plain Obsidian notes, and every older
+Fortress form.
 """
 
 from __future__ import annotations
 
 import json
+import mimetypes
+import posixpath
 import re
+from collections.abc import Callable, Collection
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from html import escape as _html_escape
 from html.parser import HTMLParser
 from typing import Any
 
 from markdown_it import MarkdownIt
+from markdown_it.rules_inline.state_inline import Delimiter, StateInline
 from markdown_it.token import Token
+from ulid import ULID
 
 from . import block_schema as schema
 from . import provenance as _provenance
@@ -38,6 +50,8 @@ class BlockSpec:
     provenance: dict[str, Any] | None = None
     # Parsing only: the id of the block a Markdown comment says this one belongs under.
     parent_ref: str | None = field(default=None, repr=False, compare=False)
+    # Parsing only: how deep a comment says this block is nested under the text block before it.
+    indent: int = field(default=0, repr=False, compare=False)
 
     def block(self) -> schema.Block:
         return schema.Block(self.type, self.attrs, self.content, self.payload)
@@ -144,7 +158,171 @@ def parse_comment(source: str) -> dict[str, Any] | None:
     for key in ("type", "parent"):
         if isinstance(value.get(key), str):
             meta[key] = value[key]
+    indent = value.get("indent")
+    if isinstance(indent, int) and not isinstance(indent, bool) and 0 < indent <= 64:
+        meta["indent"] = indent
     return meta
+
+
+# --- Ids, wikilinks and stored files ---------------------------------------------------------
+
+# Ids Fortress makes (ULID) or clients send (UUID): kept as they are when read back.
+_OWN_ID_RE = re.compile(
+    r"^(?:[0-7][0-9A-HJKMNP-TV-Z]{25}"
+    r"|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
+# What Obsidian accepts as a block identifier (``^id``): letters, digits and dashes.
+_ANCHOR_RE = re.compile(r"^[A-Za-z0-9-]{1,128}$")
+_LOOSE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+# A stored file is /media/<name> in the model and <notes>/assets/<name> on disk.
+MEDIA_PREFIX = "/media/"
+_ASSET_NAME_RE = re.compile(r"^(?:[0-7][0-9A-HJKMNP-TV-Z]{25}|[0-9a-f]{64})\.[A-Za-z0-9]{1,10}$")
+_ASSET_PATH_RE = re.compile(r"^(?:\./)?(?:\.\./)*assets/([A-Za-z0-9_-]+\.[A-Za-z0-9]{1,10})$")
+IMAGE_EXTENSIONS = frozenset(
+    {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "heic", "heif", "tif", "tiff", "ico"}
+)
+# Files Obsidian shows in place when embedded with ``![...](...)``.
+_EMBED_EXTENSIONS = frozenset(
+    {"pdf", "mp3", "wav", "ogg", "m4a", "flac", "webm", "mp4", "mov", "ogv", "mkv"}
+)
+
+
+def new_block_id() -> str:
+    return str(ULID())
+
+
+def media_url(url: str) -> str:
+    """The model's URL (``/media/<name>``) for a vault-relative path to a stored file."""
+
+    match = _ASSET_PATH_RE.match(url)
+    if match:
+        return MEDIA_PREFIX + match.group(1)
+    if _ASSET_NAME_RE.match(url):
+        return MEDIA_PREFIX + url
+    return url
+
+
+def _extension(url: str) -> str:
+    base = url.split("?", 1)[0].split("#", 1)[0].rsplit("/", 1)[-1]
+    return base.rsplit(".", 1)[-1].lower() if "." in base else ""
+
+
+def heading_fragment(text: str) -> str:
+    """A heading's name in ``[[Note#Heading]]`` (Obsidian leaves these characters out)."""
+
+    return " ".join(re.sub(r"[#^|:\[\]%]", " ", text.split("\n", 1)[0]).split())
+
+
+def heading_key(text: str) -> str:
+    return heading_fragment(text).casefold()
+
+
+def _wikilink_label(text: object) -> str:
+    label = " ".join(re.sub(r"[\[\]|]", " ", str(text).split("\n", 1)[0]).split())
+    if len(label) > 80:
+        label = label[:79].rstrip() + "…"
+    return label
+
+
+class ParseLinks:
+    """How the wikilinks and ``^ids`` of one parse map to Fortress ids.
+
+    Without context (capture, one uploaded file) a link whose target is itself
+    an id is a note link, ``^ids`` Fortress made are kept, and any other ``^id``
+    (Obsidian makes short ones, unique only within their note) gets a new block
+    id, the same for every mention in this parse. ``vault.ImportLinks`` resolves
+    note names and headings across a whole import.
+    """
+
+    def __init__(self, document_id: str | None = None) -> None:
+        self.document_id = document_id
+        self._carets: dict[tuple[str | None, str], str] = {}
+
+    def note(self, name: str) -> str | None:
+        """The id of the note a wikilink names (None: unknown)."""
+
+        return name if _LOOSE_ID_RE.match(name) else None
+
+    def block(self, document_id: str | None, caret: str) -> str:
+        """The block id for ``^caret`` in a note (None: the note being read)."""
+
+        if _OWN_ID_RE.match(caret) or "_" in caret:
+            return caret
+        key = (document_id or self.document_id, caret)
+        if key not in self._carets:
+            self._carets[key] = new_block_id()
+        return self._carets[key]
+
+    def heading(self, document_id: str | None, text: str) -> str | None:
+        """The block id of the heading ``[[Note#text]]`` names (None: unknown)."""
+
+        return None
+
+    def own_heading(self, text: str, block_id: str | None) -> str | None:
+        """The id for a heading of the note being read (``block_id``: its own, if written)."""
+
+        return block_id
+
+
+class _CheckLinks(ParseLinks):
+    """Reads back what the renderer just wrote, to check it: every wikilink is a link."""
+
+    def note(self, name: str) -> str | None:
+        return name or "note"
+
+    def block(self, document_id: str | None, caret: str) -> str:
+        return caret if _LOOSE_ID_RE.match(caret) else "block"
+
+    def heading(self, document_id: str | None, text: str) -> str | None:
+        return "heading"
+
+
+@dataclass
+class RenderLinks:
+    """What rendering needs beyond the blocks themselves (the vault mirror, exports).
+
+    ``anchors``: ids of the blocks to identify (``^id``; something refers to
+    them); None identifies every block. ``notes``: note id -> (wikilink target,
+    title), None when unknown. ``blocks``: block id -> ``{"document_id", "type",
+    "text"}``. ``media_prefix`` replaces ``/media/`` in file URLs (``../assets/``).
+    """
+
+    document_id: str | None = None
+    anchors: Collection[str] | None = None
+    notes: Callable[[str], tuple[str, str] | None] | None = None
+    blocks: Callable[[str], dict[str, Any] | None] | None = None
+    media_prefix: str | None = None
+
+    def media(self, url: str) -> str:
+        if self.media_prefix is not None and url.startswith(MEDIA_PREFIX):
+            return self.media_prefix + url[len(MEDIA_PREFIX):]
+        return url
+
+    def ref(self, node: dict[str, Any], table: bool = False) -> str:
+        pipe = "\\|" if table else "|"
+        if node["type"] == "docLink":
+            found = self.notes(node["id"]) if self.notes else None
+            if not found:
+                return f"[[{node['id']}]]"
+            target, title = found
+            label = _wikilink_label(title)
+            return f"[[{target}]]" if not label or label == target else f"[[{target}{pipe}{label}]]"
+        info = self.blocks(node["id"]) if self.blocks else None
+        if not info:
+            return f"[[#^{node['id']}]]"
+        target = ""
+        document_id = info.get("document_id")
+        if document_id and document_id != self.document_id:
+            found = self.notes(document_id) if self.notes else None
+            target = found[0] if found else str(document_id)
+        text = str(info.get("text") or "")
+        fragment = heading_fragment(text) if info.get("type") == "heading" else ""
+        fragment = f"#{fragment}" if fragment else f"#^{node['id']}"
+        label = _wikilink_label(text)
+        return f"[[{target}{fragment}{pipe}{label}]]" if label else f"[[{target}{fragment}]]"
+
+
+_DEFAULT_LINKS = RenderLinks()
 
 
 # --- Inline content to Markdown ---------------------------------------------------------------
@@ -156,14 +334,24 @@ _HTML_MARKS = {
     "bold": ("<strong>", "</strong>"), "italic": ("<em>", "</em>"), "strike": ("<s>", "</s>"),
     "underline": ("<u>", "</u>"), "sup": ("<sup>", "</sup>"), "sub": ("<sub>", "</sub>"),
 }
+# ``==text==`` (Obsidian) is a highlight in this colour; others are <mark style>.
+DEFAULT_HIGHLIGHT = "yellow"
 _ENTITY_RE = re.compile(r"&#?[A-Za-z0-9]+;")
 _ORDERED_START_RE = re.compile(r"\d{1,9}(?=[.)])")
+
+
+def _delimited(name: str, value: Any) -> bool:
+    """Whether a mark is written with Markdown delimiters (not an HTML tag)."""
+
+    return name in _MD_MARKS or (name == "highlight" and value == DEFAULT_HIGHLIGHT)
 
 
 def _mark_tags(name: str, value: Any, html: bool) -> tuple[str, str]:
     if name == "color":
         return f'<span style="color:{value}">', "</span>"
     if name == "highlight":
+        if not html and value == DEFAULT_HIGHLIGHT:
+            return "==", "=="
         return f'<mark style="background:{value}">', "</mark>"
     if not html and name in _MD_MARKS:
         return _MD_MARKS[name]
@@ -175,6 +363,7 @@ def _escape_markdown(text: str, at_line_start: bool, table: bool) -> str:
     index, length = 0, len(text)
     while index < length:
         char = text[index]
+        following = text[index + 1:index + 2]
         if at_line_start and char not in " \t":
             at_line_start = False
             digits = _ORDERED_START_RE.match(text, index)
@@ -184,7 +373,7 @@ def _escape_markdown(text: str, at_line_start: bool, table: bool) -> str:
                 out.append(text[index:end] + "\\" + text[end])
                 index = end + 1
                 continue
-            if char in "#>-+=" or (char == "$" and text[index + 1:index + 2] == "$"):
+            if char in "#>-+=" or (char == "$" and following == "$"):
                 out.append("\\" + char)
                 index += 1
                 continue
@@ -193,8 +382,14 @@ def _escape_markdown(text: str, at_line_start: bool, table: bool) -> str:
             at_line_start = True
         elif char in "\\`*_~<[]":
             out.append("\\" + char)
-        elif char == "(" and text[index + 1:index + 2] == "(":
+        elif char == "(" and following == "(":
             out.append("\\(")
+        elif char in "=%" and following == char:
+            # ==highlight== and %%comments%% (Obsidian)
+            out.append("\\" + char)
+        elif char == "^" and (index == 0 or text[index - 1] in " \t\n"):
+            # " ^word" at the end of a line is an Obsidian block id
+            out.append("\\^")
         elif char == "|" and table:
             out.append("\\|")
         elif char == "&" and _ENTITY_RE.match(text, index):
@@ -218,7 +413,7 @@ def _split_whitespace(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for node in nodes:
         marks = node.get("marks") or {}
-        if node["type"] != "text" or not any(marks.get(m) for m in _MD_MARKS):
+        if node["type"] != "text" or not any(_delimited(m, v) for m, v in marks.items()):
             result.append(node)
             continue
         text = node["text"]
@@ -226,7 +421,7 @@ def _split_whitespace(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not core:
             result.append(node)
             continue
-        plain = {k: v for k, v in marks.items() if k not in _MD_MARKS and k != "code"}
+        plain = {k: v for k, v in marks.items() if not _delimited(k, v) and k != "code"}
         lead = text[: len(text) - len(text.lstrip(" "))]
         trail = text[len(text.rstrip(" ")):]
         if lead:
@@ -237,11 +432,8 @@ def _split_whitespace(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return schema.merge_inline(result)
 
 
-def _ref_text(node: dict[str, Any]) -> str:
-    return f"[[{node['id']}]]" if node["type"] == "docLink" else f"(({node['id']}))"
-
-
-def _render_inline(nodes: list[dict[str, Any]], *, html: bool, newline: str, table: bool) -> str:
+def _render_inline(nodes: list[dict[str, Any]], *, html: bool, newline: str, table: bool,
+                   links: RenderLinks) -> str:
     """Inline nodes as Markdown (``html``: every mark as an HTML tag) or as pure HTML."""
 
     out: list[str] = []
@@ -275,13 +467,14 @@ def _render_inline(nodes: list[dict[str, Any]], *, html: bool, newline: str, tab
             kind = node["type"]
             if kind in ("docLink", "blockRef"):
                 close_to(0)
-                out.append(_ref_text(node))
+                out.append(links.ref(node, table))
                 state["line_start"] = False
                 continue
             if kind == "link":
                 close_to(0)
+                href = links.media(node["href"])
                 if html:
-                    out.append(f'<a href="{_attr(node["href"])}">')
+                    out.append(f'<a href="{_attr(href)}">')
                     emit(node["content"])
                     close_to(0)
                     out.append("</a>")
@@ -289,7 +482,7 @@ def _render_inline(nodes: list[dict[str, Any]], *, html: bool, newline: str, tab
                     out.append("[")
                     emit(node["content"])
                     close_to(0)
-                    out.append("](" + _link_destination(node["href"]) + ")")
+                    out.append("](" + _link_destination(href) + ")")
                 state["line_start"] = False
                 continue
             marks = node.get("marks") or {}
@@ -318,41 +511,48 @@ def _link_destination(href: str) -> str:
 
 
 def _comparable(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    flat = [
-        {**node, "href": _INLINE_MD.normalizeLink(node["href"])} if node["type"] == "link" else node
-        for node in nodes
-    ]
+    flat = []
+    for node in nodes:
+        if node["type"] == "link":
+            flat.append({**node, "href": _INLINE_MD.normalizeLink(media_url(node["href"]))})
+        elif node["type"] in ("docLink", "blockRef"):
+            flat.append({"type": "ref"})
+        else:
+            flat.append(node)
     return schema.merge_inline(flat)
 
 
 def inline_to_markdown(nodes: list[dict[str, Any]], *, newline: str = "\\\n",
-                       table: bool = False) -> str:
-    """Markdown for inline nodes: native marks where CommonMark has them, HTML otherwise.
+                       table: bool = False, links: RenderLinks | None = None) -> str:
+    """Markdown for inline nodes: native syntax where CommonMark/GFM/Obsidian have it, HTML otherwise.
 
     If the native form would not read back as the same nodes (emphasis next to
     punctuation, ...), every mark is written as an HTML tag instead.
     """
 
+    links = links or _DEFAULT_LINKS
     nodes = _split_whitespace(nodes)
     check_newline = "<br>" if table else "\\\n"
-    native = _render_inline(nodes, html=False, newline=check_newline, table=table)
-    parsed, images = inline_from_markdown(native)
+    native = _render_inline(nodes, html=False, newline=check_newline, table=table, links=links)
+    parsed, images = inline_from_markdown(native, links=_CheckLinks())
     if not images and _comparable(parsed) == _comparable(nodes):
         if newline == check_newline:
             return native
-        return _render_inline(nodes, html=False, newline=newline, table=table)
+        return _render_inline(nodes, html=False, newline=newline, table=table, links=links)
     # Marks as HTML tags, text still Markdown-escaped.
-    return _render_markdown_html_marks(nodes, newline="<br>" if table else newline, table=table)
+    return _render_markdown_html_marks(nodes, newline="<br>" if table else newline, table=table,
+                                       links=links)
 
 
-def _render_markdown_html_marks(nodes: list[dict[str, Any]], *, newline: str, table: bool) -> str:
+def _render_markdown_html_marks(nodes: list[dict[str, Any]], *, newline: str, table: bool,
+                                links: RenderLinks) -> str:
     out: list[str] = []
     for node in nodes:
         if node["type"] in ("docLink", "blockRef"):
-            out.append(_ref_text(node))
+            out.append(links.ref(node, table))
         elif node["type"] == "link":
-            inner = _render_markdown_html_marks(node["content"], newline=newline, table=table)
-            out.append(f"[{inner}]({_link_destination(node['href'])})")
+            inner = _render_markdown_html_marks(node["content"], newline=newline, table=table, links=links)
+            out.append(f"[{inner}]({_link_destination(links.media(node['href']))})")
         else:
             marks = node.get("marks") or {}
             body = _escape_markdown(node["text"], False, table).replace("\n", newline)
@@ -366,52 +566,146 @@ def _render_markdown_html_marks(nodes: list[dict[str, Any]], *, newline: str, ta
     return "".join(out)
 
 
-def inline_to_html(nodes: list[dict[str, Any]]) -> str:
+def inline_to_html(nodes: list[dict[str, Any]], links: RenderLinks | None = None) -> str:
     """HTML for inline nodes (inside HTML tables)."""
 
-    return _render_inline(nodes, html=True, newline="<br>", table=False)
+    return _render_inline(nodes, html=True, newline="<br>", table=False, links=links or _DEFAULT_LINKS)
 
 
 # --- Markdown/HTML to inline content ------------------------------------------------------------
 
-_REF_RE = re.compile(
-    r"\[\[([A-Za-z0-9_-]{1,128})(?:\|[^\]\n]*)?\]\]"
-    r"|\(\(\s*([A-Za-z0-9_-]{1,128})(?:\s+(?:\"[^\"\n]*\"|'[^'\n]*'))?\s*\)\)"
+# [[target#fragment|label]] and ![[embed]] (Obsidian); ((id)) from older Fortress versions.
+_WIKILINK_RE = re.compile(r"(!?)\[\[([^\[\]|\n]*)(?:\|([^\[\]\n]*))?\]\]")
+_LEGACY_REF_RE = re.compile(
+    r"\(\(\s*([A-Za-z0-9_-]{1,128})(?:\s+(?:\"[^\"\n]*\"|'[^'\n]*'))?\s*\)\)"
 )
+_SIZE_RE = re.compile(r"^\s*(\d{1,5})(?:\s*x\s*(\d{1,5}))?\s*$")
+
+
+def _resolve_wikilink(links: ParseLinks, embed: bool, target: str, label: str | None) -> dict | None:
+    """What a wikilink reads as (None: it stays text)."""
+
+    name, _, fragment = target.partition("#")
+    name, fragment = name.strip(), fragment.strip()
+    base = name.rsplit("/", 1)[-1]
+    if embed and "." in base and not base.lower().endswith(".md"):
+        attrs: dict[str, Any] = {"url": media_url(name)}
+        size = _SIZE_RE.match(label or "")
+        if size:
+            attrs["width"] = int(size.group(1))
+            if size.group(2):
+                attrs["height"] = int(size.group(2))
+        elif label:
+            attrs["alt"] = label
+        return {"kind": "image", "attrs": attrs}
+    if base.lower().endswith(".md"):
+        name = name[:-3]
+    document_id = links.note(name) if name else links.document_id
+    if fragment:
+        last = fragment.split("#")[-1].strip()
+        if last.startswith("^"):
+            caret = last[1:].strip()
+            if _LOOSE_ID_RE.match(caret) and (
+                document_id is not None or not name or _OWN_ID_RE.match(caret)
+            ):
+                return {"kind": "blockRef", "id": links.block(document_id, caret)}
+        elif last and (document_id is not None or not name):
+            heading_id = links.heading(document_id, last)
+            if heading_id:
+                return {"kind": "blockRef", "id": heading_id}
+    if name and document_id is not None:
+        return {"kind": "docLink", "id": document_id}
+    return None
+
+
+def _link_children(tokens: list[Token], links: ParseLinks) -> list[Token]:
+    """Wikilinks in runs of unescaped text become ``fortress_ref`` tokens."""
+
+    result: list[Token] = []
+    run: list[Token] = []
+
+    def flush() -> None:
+        source = "".join(token.content for token in run)
+        if "[[" not in source and "((" not in source:
+            result.extend(run)
+            run.clear()
+            return
+        escaped: set[int] = set()
+        offset = 0
+        for token in run:
+            if token.type == "text_special":
+                escaped.update(range(offset, offset + len(token.content)))
+            offset += len(token.content)
+        pieces: list[tuple[int, int, dict]] = []
+        for match in _WIKILINK_RE.finditer(source):
+            opening = match.start() + len(match.group(1))
+            if escaped & {opening, opening + 1, match.end() - 2, match.end() - 1}:
+                continue
+            embed = bool(match.group(1)) and match.start() not in escaped
+            meta = _resolve_wikilink(links, embed, match.group(2), match.group(3))
+            if meta is not None:
+                pieces.append((match.start() if embed else opening, match.end(), meta))
+        for match in _LEGACY_REF_RE.finditer(source):
+            if escaped & {match.start(), match.start() + 1}:
+                continue
+            if any(start < match.end() and match.start() < end for start, end, _ in pieces):
+                continue
+            pieces.append((match.start(), match.end(), {"kind": "blockRef", "id": match.group(1)}))
+        if not pieces:
+            result.extend(run)
+            run.clear()
+            return
+        last = 0
+        for start, end, meta in sorted(pieces, key=lambda piece: piece[0]):
+            if start < last:
+                continue
+            if start > last:
+                piece = Token("text", "", 0)
+                piece.content = source[last:start]
+                result.append(piece)
+            ref = Token("fortress_ref", "", 0)
+            ref.meta = meta
+            result.append(ref)
+            last = end
+        if last < len(source):
+            piece = Token("text", "", 0)
+            piece.content = source[last:]
+            result.append(piece)
+        run.clear()
+
+    for token in tokens:
+        if token.type in ("text", "text_special"):
+            run.append(token)
+            continue
+        flush()
+        result.append(token)
+    flush()
+    return result
 
 
 def _ref_tokens(state) -> None:
-    """Core rule: ``[[id]]`` and ``((id))`` in unescaped text become reference tokens."""
+    """Core rule: wikilinks (and older ``((id))`` references) become reference tokens."""
 
+    links = state.env.get("links") if isinstance(state.env, dict) else None
+    if links is None:
+        links = ParseLinks()
+        if isinstance(state.env, dict):
+            state.env["links"] = links
     for block_token in state.tokens:
-        if block_token.type != "inline" or not block_token.children:
-            continue
-        children: list[Token] = []
-        for token in block_token.children:
-            if token.type != "text" or ("[[" not in token.content and "((" not in token.content):
-                children.append(token)
-                continue
-            last = 0
-            for match in _REF_RE.finditer(token.content):
-                if match.start() > last:
-                    piece = Token("text", "", 0)
-                    piece.content = token.content[last:match.start()]
-                    children.append(piece)
-                ref = Token("fortress_ref", "", 0)
-                ref.meta = {"kind": "docLink" if match.group(1) else "blockRef",
-                            "id": match.group(1) or match.group(2)}
-                children.append(ref)
-                last = match.end()
-            if last < len(token.content):
-                piece = Token("text", "", 0)
-                piece.content = token.content[last:]
-                children.append(piece)
-        block_token.children = children
+        if block_token.type == "inline" and block_token.children:
+            block_token.children = _link_children(block_token.children, links)
 
 
 def _render_ref(self, tokens, index, options, env) -> str:
     meta = tokens[index].meta
-    return f'<fortress-ref data-kind="{meta["kind"]}" data-id="{meta["id"]}"></fortress-ref>'
+    if meta["kind"] == "image":
+        attrs = meta["attrs"]
+        parts = [f'<img src="{_attr(attrs["url"])}"']
+        for key in ("alt", "width", "height"):
+            if attrs.get(key) is not None:
+                parts.append(f'{key}="{_attr(attrs[key])}"')
+        return " ".join(parts) + ">"
+    return f'<fortress-ref data-kind="{meta["kind"]}" data-id="{_attr(meta["id"])}"></fortress-ref>'
 
 
 def _render_softbreak(self, tokens, index, options, env) -> str:
@@ -420,8 +714,64 @@ def _render_softbreak(self, tokens, index, options, env) -> str:
     return "<br>"
 
 
+def _mark_tokenize(state: StateInline, silent: bool) -> bool:
+    """``==highlight==`` (Obsidian; the delimiter rule GFM uses for ``~~``)."""
+
+    start = state.pos
+    if silent or state.src[start] != "=":
+        return False
+    scanned = state.scanDelims(start, True)
+    length = scanned.length
+    if length < 2:
+        return False
+    if length % 2:
+        token = state.push("text", "", 0)
+        token.content = "="
+        length -= 1
+    for _ in range(length // 2):
+        token = state.push("text", "", 0)
+        token.content = "=="
+        state.delimiters.append(Delimiter(
+            marker=0x3D, length=0, token=len(state.tokens) - 1, end=-1,
+            open=scanned.can_open, close=scanned.can_close,
+        ))
+    state.pos += scanned.length
+    return True
+
+
+def _mark_pairs(state: StateInline, delimiters: list[Delimiter]) -> None:
+    lone: list[int] = []
+    for opener in delimiters:
+        if opener.marker != 0x3D or opener.end == -1:
+            continue
+        closer = delimiters[opener.end]
+        for index, kind, nesting in ((opener.token, "mark_open", 1), (closer.token, "mark_close", -1)):
+            token = state.tokens[index]
+            token.type, token.tag, token.nesting, token.markup, token.content = kind, "mark", nesting, "==", ""
+        before = state.tokens[closer.token - 1]
+        if before.type == "text" and before.content == "=":
+            lone.append(closer.token - 1)
+    while lone:
+        index = lone.pop()
+        end = index + 1
+        while end < len(state.tokens) and state.tokens[end].type == "mark_close":
+            end += 1
+        end -= 1
+        if index != end:
+            state.tokens[index], state.tokens[end] = state.tokens[end], state.tokens[index]
+
+
+def _mark_post_process(state: StateInline) -> None:
+    _mark_pairs(state, state.delimiters)
+    for meta in state.tokens_meta:
+        if meta and "delimiters" in meta:
+            _mark_pairs(state, meta["delimiters"])
+
+
 def _markdown(*plugins: str) -> MarkdownIt:
     md = MarkdownIt("commonmark").enable(list(plugins)) if plugins else MarkdownIt("commonmark")
+    md.inline.ruler.before("emphasis", "fortress_mark", _mark_tokenize)
+    md.inline.ruler2.before("emphasis", "fortress_mark", _mark_post_process)
     md.core.ruler.before("text_join", "fortress_refs", _ref_tokens)
     md.add_render_rule("fortress_ref", _render_ref)
     md.add_render_rule("softbreak", _render_softbreak)
@@ -432,14 +782,15 @@ _INLINE_MD = _markdown("strikethrough")
 _BLOCK_MD = _markdown("table", "strikethrough")
 
 
-def inline_from_markdown(markdown: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def inline_from_markdown(markdown: str, links: ParseLinks | None = None
+                         ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """``(inline nodes, image attrs)`` for one block's inline Markdown.
 
     Images can't be inline content: they are returned separately (the caller
     makes them image blocks after the text).
     """
 
-    tokens = _INLINE_MD.parseInline(markdown)
+    tokens = _INLINE_MD.parseInline(markdown, {"links": links or ParseLinks()})
     return _nodes_from_inline_token(tokens[0] if tokens else None)
 
 
@@ -584,7 +935,7 @@ def _nodes_from_html(
                 if kind in ("docLink", "blockRef") and item.attrs.get("data-id"):
                     target.append({"type": kind, "id": item.attrs["data-id"]})
             elif tag == "a" and not in_link:
-                href = item.attrs.get("href", "").strip()
+                href = media_url(item.attrs.get("href", "").strip())
                 inner: list[dict[str, Any]] = []
                 walk(item.children, marks, inner, True)
                 inner = schema.merge_inline(inner)
@@ -598,6 +949,8 @@ def _nodes_from_html(
 
     walk(elements, {}, nodes, False)
     nodes = schema.merge_inline(nodes)
+    if collapse:
+        nodes = _wikilinks_in_text(nodes)
     # Paragraph edges carry no spaces in Markdown or HTML; an image lifted out
     # of the text must not leave one behind either.
     if (collapse or images) and nodes:
@@ -607,6 +960,30 @@ def _nodes_from_html(
             nodes[-1] = {**nodes[-1], "text": nodes[-1]["text"].rstrip(" ")}
         nodes = schema.merge_inline(nodes)
     return nodes, images
+
+
+def _wikilinks_in_text(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Wikilinks written as text inside HTML (table cells) become links."""
+
+    links = _PARSE_LINKS.get() or ParseLinks()
+    result: list[dict[str, Any]] = []
+    for node in nodes:
+        marks = node.get("marks") or {}
+        if node["type"] != "text" or marks.get("code") or "[[" not in node["text"]:
+            result.append(node)
+            continue
+        text, last = node["text"], 0
+        for match in _WIKILINK_RE.finditer(text):
+            meta = _resolve_wikilink(links, False, match.group(2), match.group(3))
+            if meta is None or match.group(1):
+                continue
+            if match.start() > last:
+                result.append(text_node(text[last:match.start()], marks))
+            result.append({"type": meta["kind"], "id": meta["id"]})
+            last = match.end()
+        if last < len(text):
+            result.append(text_node(text[last:], marks))
+    return schema.merge_inline(result)
 
 
 def _attr(value: object) -> str:
@@ -629,11 +1006,434 @@ def _number(value: str | None) -> int | float | None:
 
 # --- Images --------------------------------------------------------------------------------------
 
-_IMAGE_NATIVE = ("url", "alt", "caption", "width", "height", "name")
+
+def image_attrs_from_element(element: _Element) -> dict[str, Any]:
+    attrs: dict[str, Any] = {}
+    legacy = _parse_json(element.attrs.get("data-attrs"))
+    if legacy:
+        attrs.update(legacy)
+    if "previewWidth" in attrs:
+        attrs.setdefault("width", attrs.pop("previewWidth"))
+    attrs["url"] = media_url(element.attrs.get("src", ""))
+    for html_name, key in (("alt", "alt"), ("title", "caption"), ("data-name", "name")):
+        if element.attrs.get(html_name):
+            attrs[key] = element.attrs[html_name]
+    # Obsidian's ![alt|300](...) / ![alt|300x200](...) sizes
+    alt, bar, size = str(attrs.get("alt") or "").rpartition("|")
+    sized = _SIZE_RE.match(size) if bar else None
+    if sized:
+        if alt:
+            attrs["alt"] = alt
+        else:
+            attrs.pop("alt", None)
+        attrs["width"] = int(sized.group(1))
+        if sized.group(2):
+            attrs["height"] = int(sized.group(2))
+    for key in ("width", "height"):
+        number = _number(element.attrs.get(key))
+        if number is not None:
+            attrs[key] = number
+    return attrs
 
 
-def image_html(attrs: dict[str, Any], meta: dict[str, Any] | None = None) -> str:
-    parts = [f'<img src="{_attr(attrs.get("url") or "")}"']
+# --- Rendering --------------------------------------------------------------------------------------
+
+# Attributes the Markdown syntax of a type already says (the rest go in its comment).
+_NATIVE_ATTRS = {
+    "heading": {"level"}, "check_item": {"checked"}, "code": {"language"},
+    "callout": {"callout_type", "callout_fold", "callout_title"},
+}
+_LIST_TYPES = ("bullet_item", "numbered_item", "check_item")
+_CALLOUT_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,39}$")
+
+
+def _ordinal(node: dict[str, Any], previous: int) -> int:
+    """A numbered item's number: its ``list_start`` extension attribute (an imported
+    list restarting at n, e.g. OneNote), else one more than the item before."""
+
+    start = (node.get("attrs") or {}).get("list_start")
+    if isinstance(start, int) and not isinstance(start, bool) and 0 <= start < 10**9:
+        return start
+    return previous + 1
+
+
+_INLINE_COMMENT_TYPES = frozenset({"paragraph", "heading", *_LIST_TYPES})
+
+
+def _whole(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 \
+        and float(value).is_integer()
+
+
+def _basename(url: str) -> str:
+    return posixpath.basename(url.split("?", 1)[0].split("#", 1)[0])
+
+
+def _image_extra(attrs: dict[str, Any]) -> dict[str, Any]:
+    """An image's attributes ``![alt|WxH](url "caption")`` can't say."""
+
+    extra = {k: v for k, v in attrs.items() if k not in ("url", "alt", "caption", "width", "height")}
+    for key in ("alt", "caption"):
+        if "\n" in str(attrs.get(key) or ""):
+            extra[key] = attrs[key]
+    if attrs.get("width") is not None and not _whole(attrs["width"]):
+        extra["width"] = attrs["width"]
+    if attrs.get("height") is not None and not (_whole(attrs["height"]) and _whole(attrs.get("width"))):
+        extra["height"] = attrs["height"]
+    return extra
+
+
+def _file_extra(attrs: dict[str, Any]) -> dict[str, Any]:
+    """A file's attributes ``[name](url)`` can't say."""
+
+    extra = {k: v for k, v in attrs.items() if k not in ("url", "name")}
+    if extra.get("mime") and mimetypes.guess_type(_basename(str(attrs.get("url") or "")))[0] == extra["mime"]:
+        del extra["mime"]
+    return extra
+
+
+class _Renderer:
+    def __init__(self, document_provenance: dict[str, Any] | None, include_ids: bool,
+                 links: RenderLinks | None):
+        self.document_source = (document_provenance or {}).get("source", _provenance.DEFAULT_SOURCE)
+        self.include_ids = include_ids
+        self.links = links or _DEFAULT_LINKS
+
+    def anchor(self, node: dict[str, Any]) -> str | None:
+        """The block's id when it must be written (something refers to it)."""
+
+        block_id = node.get("id")
+        if not self.include_ids or not block_id:
+            return None
+        anchors = self.links.anchors
+        return block_id if anchors is None or block_id in anchors else None
+
+    def extra_attrs(self, node: dict[str, Any]) -> dict[str, Any]:
+        attrs = node.get("attrs") or {}
+        if node["type"] == "image":
+            return _image_extra(attrs)
+        if node["type"] == "file":
+            return _file_extra(attrs)
+        native = _NATIVE_ATTRS.get(node["type"], set())
+        return {k: v for k, v in attrs.items() if k not in native}
+
+    def meta(self, node: dict[str, Any], *, indent: int = 0, skip_attrs: bool = False) -> dict[str, Any]:
+        """What only a comment can say: provenance, extension attributes, nesting."""
+
+        meta: dict[str, Any] = {}
+        own = node.get("provenance")
+        if isinstance(own, dict) and own and not own.get("inherited"):
+            if own != {"source": self.document_source}:
+                meta["provenance"] = {k: v for k, v in own.items() if k != "inherited"}
+        if not skip_attrs:
+            extra = self.extra_attrs(node)
+            if extra:
+                meta["attrs"] = extra
+        if indent:
+            meta["indent"] = indent
+        return meta
+
+    def html_meta(self, node: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        """``meta`` plus the id when it must be written (inside HTML, as ``data-block``)."""
+
+        meta = self.meta(node, **kwargs)
+        anchor = self.anchor(node)
+        if anchor:
+            meta["id"] = anchor
+        return meta
+
+    def blocks(self, nodes: list[dict[str, Any]], indent: int = 0) -> list[str]:
+        fragments: list[str] = []
+        ordinal = 0
+        previous: str | None = None
+        for node in nodes:
+            kind = node["type"]
+            if kind == "paragraph" and not node.get("content") and not node.get("children") \
+                    and not (self.links.anchors is not None and self.anchor(node)):
+                # Markdown has no empty paragraph: a blank line is just spacing
+                # (kept only when something refers to it).
+                continue
+            ordinal = _ordinal(node, ordinal) if kind == "numbered_item" else 0
+            rendered = [part for part in self.block(node, ordinal, indent) if part]
+            if kind in _LIST_TYPES and previous == kind and fragments and rendered:
+                # Items of one list stay together (a tight list).
+                fragments[-1] += "\n" + rendered.pop(0)
+            fragments.extend(rendered)
+            previous = kind
+        return fragments
+
+    def block(self, node: dict[str, Any], ordinal: int, indent: int) -> list[str]:
+        kind = node["type"]
+        children = node.get("children") or []
+        anchor = self.anchor(node)
+        if kind == "columns":
+            # No Markdown dialect has columns: the contents follow one another,
+            # between invisible markers.
+            fragments = [marker("columns", self.html_meta(node, indent=indent))]
+            for column in children:
+                fragments.append(marker("column", self.html_meta(column)))
+                fragments.extend(self.blocks(column.get("children") or []))
+            fragments.append("<!-- /fortress:columns -->")
+            return fragments
+        if kind == "table":
+            return [self.table(node, indent, anchor)]
+        if kind in _INLINE_COMMENT_TYPES:
+            meta = self.meta(node, indent=indent)
+            caret = None
+            if anchor:
+                if kind != "heading" and node.get("content") and _ANCHOR_RE.match(anchor):
+                    caret = anchor
+                else:
+                    meta["id"] = anchor
+            text = self.text_block(node, ordinal, meta, caret)
+            if kind in _LIST_TYPES:
+                # Children align with the item's text after the bullet; a task's
+                # "[ ] " is part of that text, so it does not count.
+                indent_text = " " * len(
+                    self.list_marker(node, ordinal).removesuffix("[ ] ").removesuffix("[x] ")
+                )
+                body = "\n\n".join(self.blocks(children))
+                if body:
+                    gap = "\n" if children[0]["type"] in _LIST_TYPES else "\n\n"
+                    text += gap + _indent(body, indent_text)
+                return [text]
+            # Markdown can't nest under a paragraph: children follow, one level deeper.
+            return [text, *self.blocks(children, indent + 1)]
+        meta = self.meta(node, indent=indent)
+        caret = anchor if anchor and _ANCHOR_RE.match(anchor) else None
+        if anchor and not caret:
+            meta["id"] = anchor
+        inline_caret = False
+        if kind == "code":
+            source = self.code(node)
+        elif kind in ("quote", "callout"):
+            source = self.quote(node)
+        elif kind == "divider":
+            source = "---"
+        elif kind == "image":
+            source, inline_caret = self.image(node), True
+        elif kind == "file":
+            source = self.file(node)
+            if source is None:  # nothing to link to: the comment says it all
+                meta = {**meta, "type": "file", "attrs": node.get("attrs") or {}}
+                source = ""
+            inline_caret = bool(source)
+        elif kind == "math":
+            latex = str((node.get("payload") or {}).get("latex", ""))
+            body = "\n".join(line for line in latex.split("\n") if line.strip())
+            source = f"$$\n{body}\n$$"
+        elif kind == "html":
+            source = str((node.get("payload") or {}).get("html", "")).strip() or "<div></div>"
+        else:  # pragma: no cover - every flow type is handled above
+            source = ""
+        if caret and inline_caret:
+            source += f" ^{caret}"
+        elif caret:
+            # Obsidian: the id of a structured block goes on its own line after it.
+            source += f"\n\n^{caret}"
+        if not meta:
+            return [source]
+        return [f"{comment(meta)}\n{source}" if source else comment(meta)]
+
+    def list_marker(self, node: dict[str, Any], ordinal: int) -> str:
+        if node["type"] == "numbered_item":
+            return f"{ordinal}. "
+        if node["type"] == "check_item":
+            return "- [x] " if (node.get("attrs") or {}).get("checked") else "- [ ] "
+        return "- "
+
+    def inline(self, nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+        return inline_to_markdown(nodes, links=self.links, **kwargs)
+
+    def text_block(self, node: dict[str, Any], ordinal: int, meta: dict[str, Any],
+                   caret: str | None) -> str:
+        kind = node["type"]
+        nodes = node.get("content") or []
+        tail = f" {comment(meta)}" if meta else ""
+        if caret:
+            tail += f" ^{caret}"
+        if kind == "heading":
+            level = (node.get("attrs") or {}).get("level", 1)
+            body = self.inline(nodes, newline="<br>")
+            return "#" * level + " " + body + tail
+        if kind in _LIST_TYPES:
+            prefix = self.list_marker(node, ordinal)
+            body = self.inline(nodes, newline="\\\n" + " " * len(prefix))
+            if not body and not tail:
+                return prefix.rstrip()
+            return prefix + body + tail
+        body = self.inline(nodes)
+        if not body:
+            # An empty paragraph is written only to keep what its comment says.
+            return comment({**meta, "type": "paragraph"})
+        return body + tail
+
+    def code(self, node: dict[str, Any]) -> str:
+        code = schema.inline_text(node.get("content"))
+        longest = max((len(m) for m in re.findall(r"`{3,}", code)), default=2)
+        fence = "`" * (longest + 1)
+        language = (node.get("attrs") or {}).get("language") or ""
+        return f"{fence}{language}\n{code}\n{fence}"
+
+    def quote(self, node: dict[str, Any]) -> str:
+        """A quote, or an Obsidian callout (``> [!type]`` and an optional title)."""
+
+        attrs = node.get("attrs") or {}
+        children = node.get("children") or []
+        lines: list[str] = []
+        if node["type"] == "callout":
+            kind = str(attrs.get("callout_type") or "note")
+            head = "[!" + (kind if _CALLOUT_TYPE_RE.match(kind) else "note") + "]"
+            if attrs.get("callout_fold") in ("+", "-"):
+                head += attrs["callout_fold"]
+            first = children[0] if children else None
+            if (attrs.get("callout_title") and first and first["type"] == "paragraph"
+                    and not first.get("children") and not self.meta(first) and not self.anchor(first)
+                    and "\n" not in schema.inline_text(first.get("content"))):
+                title = self.inline(first.get("content") or [], newline="<br>")
+                if title:
+                    head += " " + title
+                    children = children[1:]
+            lines.append(head)
+        body = "\n\n".join(self.blocks(children))
+        if body:
+            lines.extend(body.split("\n"))
+        return "\n".join(f"> {line}" if line else ">" for line in lines or [""])
+
+    def image(self, node: dict[str, Any]) -> str:
+        """``![alt|WxH](url "caption")``: CommonMark, with Obsidian's size after a bar."""
+
+        attrs = node.get("attrs") or {}
+        alt = str(attrs.get("alt") or "")
+        alt = "" if "\n" in alt else _escape_markdown(alt, False, False)
+        width, height = attrs.get("width"), attrs.get("height")
+        if _whole(width):
+            alt += f"|{int(width)}" + (f"x{int(height)}" if _whole(height) else "")
+        caption = str(attrs.get("caption") or "")
+        title = ""
+        if caption and "\n" not in caption:
+            title = ' "' + caption.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        url = self.links.media(str(attrs.get("url") or ""))
+        return f"![{alt}]({_link_destination(url) or '<>'}{title})"
+
+    def file(self, node: dict[str, Any]) -> str | None:
+        """``[name](url)``, or ``![name](url)`` for what Obsidian shows in place (PDF, audio, video)."""
+
+        attrs = node.get("attrs") or {}
+        url = self.links.media(str(attrs.get("url") or ""))
+        if not url:
+            return None
+        name = str(attrs.get("name") or _basename(url) or "file").replace("\n", " ")
+        bang = "!" if _extension(url) in _EMBED_EXTENSIONS else ""
+        return f"{bang}[{_escape_markdown(name, False, False)}]({_link_destination(url)})"
+
+    def table(self, node: dict[str, Any], indent: int, anchor: str | None) -> str:
+        gfm = self.gfm_table(node)
+        if gfm is None:
+            return table_html(node, self, indent)
+        meta = self.meta(node, indent=indent, skip_attrs=True)
+        lines, rows_meta = gfm
+        if rows_meta:
+            meta["rows"] = rows_meta
+        caret = anchor if anchor and _ANCHOR_RE.match(anchor) else None
+        if anchor and not caret:
+            meta["id"] = anchor
+        out = (comment(meta) + "\n" if meta else "") + lines
+        return out + (f"\n\n^{caret}" if caret else "")
+
+    def gfm_table(self, node: dict[str, Any]) -> tuple[str, list | None] | None:
+        """A GFM table and the comment's per-cell metadata, if the table fits one.
+
+        It fits with one header row, cells of at most one paragraph, no spans,
+        colours or widths, and no block inside that something refers to.
+        """
+
+        attrs = node.get("attrs") or {}
+        rows = node.get("children") or []
+        if not rows or attrs.get("header_rows") != 1 or attrs.get("header_cols"):
+            return None
+        if any(key not in ("header_rows", "borders") for key in attrs) or attrs.get("borders") is False:
+            return None
+        width = len(rows[0].get("children") or [])
+        if not width or any(len(row.get("children") or []) != width for row in rows):
+            return None
+        aligns: list[str | None] = []
+        rows_meta: list[dict[str, Any]] = []
+        any_meta = False
+        for number, row in enumerate(rows):
+            if row.get("attrs") or self.html_meta(row, skip_attrs=True):
+                return None
+            cells_meta = []
+            for column, cell in enumerate(row["children"]):
+                cell_attrs = cell.get("attrs") or {}
+                if cell_attrs.keys() - {"align"} or cell_attrs.get("align") == "justify":
+                    return None
+                if self.html_meta(cell, skip_attrs=True):
+                    return None
+                if number == 0:
+                    aligns.append(cell_attrs.get("align"))
+                elif cell_attrs.get("align") != aligns[column]:
+                    return None
+                inner = cell.get("children") or []
+                if len(inner) > 1:
+                    return None
+                cell_meta: dict[str, Any] = {}
+                if inner:
+                    paragraph = inner[0]
+                    if paragraph["type"] != "paragraph" or paragraph.get("children"):
+                        return None
+                    if self.anchor(paragraph):
+                        return None
+                    block_meta = self.meta(paragraph)
+                    if block_meta.keys() - {"provenance"}:
+                        return None
+                    if block_meta:
+                        cell_meta["block"] = block_meta
+                        any_meta = True
+                cells_meta.append(cell_meta)
+            rows_meta.append({"cells": cells_meta})
+        lines = []
+        for number, row in enumerate(rows):
+            cells = []
+            for cell in row["children"]:
+                inner = cell.get("children") or []
+                content = inner[0].get("content") or [] if inner else []
+                cells.append(self.inline(content, newline="<br>", table=True))
+            lines.append("| " + " | ".join(cells) + " |")
+            if number == 0:
+                separators = [{"center": ":---:", "right": "---:", "left": ":---"}.get(a or "", "---")
+                              for a in aligns]
+                lines.append("| " + " | ".join(separators) + " |")
+        return "\n".join(lines), rows_meta if any_meta else None
+
+
+def _indent(text: str, prefix: str) -> str:
+    return "\n".join(prefix + line if line else line for line in text.split("\n"))
+
+
+def render_markdown(nodes: list[dict[str, Any]], *, document_provenance: dict | None = None,
+                    include_ids: bool = True, links: RenderLinks | None = None) -> str:
+    """A block tree (``document_tree`` nodes) as Markdown.
+
+    With ``include_ids`` the id of every block in ``links.anchors`` (all blocks
+    when ``links`` or its anchors are None) is written: ``^id`` where Obsidian
+    has a place for it, else in the block's comment. Provenance that differs
+    from ``document_provenance`` and attributes the syntax can't say are always
+    written. ``links`` names linked notes and blocks and places stored files.
+    """
+
+    return "\n\n".join(
+        fragment for fragment in _Renderer(document_provenance, include_ids, links).blocks(nodes) if fragment
+    )
+
+
+# --- HTML blocks (tables) ---------------------------------------------------------------------------
+
+
+def image_html(attrs: dict[str, Any], meta: dict[str, Any] | None = None,
+               links: RenderLinks | None = None) -> str:
+    url = (links or _DEFAULT_LINKS).media(str(attrs.get("url") or ""))
+    parts = [f'<img src="{_attr(url)}"']
     if attrs.get("alt"):
         parts.append(f'alt="{_attr(attrs["alt"])}"')
     if attrs.get("caption"):
@@ -648,280 +1448,13 @@ def image_html(attrs: dict[str, Any], meta: dict[str, Any] | None = None) -> str
     return " ".join(parts) + ">"
 
 
-def image_attrs_from_element(element: _Element) -> dict[str, Any]:
-    attrs: dict[str, Any] = {}
-    legacy = _parse_json(element.attrs.get("data-attrs"))
-    if legacy:
-        attrs.update(legacy)
-    if "previewWidth" in attrs:
-        attrs.setdefault("width", attrs.pop("previewWidth"))
-    attrs["url"] = element.attrs.get("src", "")
-    for html_name, key in (("alt", "alt"), ("title", "caption"), ("data-name", "name")):
-        if element.attrs.get(html_name):
-            attrs[key] = element.attrs[html_name]
-    for key in ("width", "height"):
-        number = _number(element.attrs.get(key))
-        if number is not None:
-            attrs[key] = number
-    return attrs
-
-
-# --- Rendering --------------------------------------------------------------------------------------
-
-# Attributes the Markdown syntax of a type already says (the rest go in its comment).
-_NATIVE_ATTRS = {
-    "heading": {"level"}, "check_item": {"checked"}, "code": {"language"},
-    "image": set(_IMAGE_NATIVE),
-}
-_LIST_TYPES = ("bullet_item", "numbered_item", "check_item")
-
-
-def _ordinal(node: dict[str, Any], previous: int) -> int:
-    """A numbered item's number: its ``list_start`` extension attribute (an imported
-    list restarting at n, e.g. OneNote), else one more than the item before."""
-
-    start = (node.get("attrs") or {}).get("list_start")
-    if isinstance(start, int) and not isinstance(start, bool) and 0 <= start < 10**9:
-        return start
-    return previous + 1
-_INLINE_COMMENT_TYPES = frozenset({"paragraph", "heading", *_LIST_TYPES})
-
-
-class _Renderer:
-    def __init__(self, document_provenance: dict[str, Any] | None, include_ids: bool):
-        self.document_source = (document_provenance or {}).get("source", _provenance.DEFAULT_SOURCE)
-        self.include_ids = include_ids
-
-    def meta(self, node: dict[str, Any], *, parent: str | None = None,
-             skip_attrs: bool = False) -> dict[str, Any]:
-        meta: dict[str, Any] = {}
-        if self.include_ids and node.get("id"):
-            meta["id"] = node["id"]
-        own = node.get("provenance")
-        if isinstance(own, dict) and own and not own.get("inherited"):
-            if own != {"source": self.document_source}:
-                meta["provenance"] = {k: v for k, v in own.items() if k != "inherited"}
-        if not skip_attrs:
-            native = _NATIVE_ATTRS.get(node["type"], set())
-            extra = {k: v for k, v in (node.get("attrs") or {}).items() if k not in native}
-            if extra:
-                meta["attrs"] = extra
-        if parent and self.include_ids:
-            meta["parent"] = parent
-        return meta
-
-    def blocks(self, nodes: list[dict[str, Any]], parent: str | None = None) -> list[str]:
-        fragments: list[str] = []
-        ordinal = 0
-        previous: str | None = None
-        for node in nodes:
-            kind = node["type"]
-            if kind == "paragraph" and not node.get("content") and not node.get("children"):
-                # Markdown has no empty paragraph: a blank line is just spacing.
-                continue
-            ordinal = _ordinal(node, ordinal) if kind == "numbered_item" else 0
-            rendered = [part for part in self.block(node, ordinal, parent) if part]
-            if kind in _LIST_TYPES and previous == kind and fragments and rendered:
-                # Items of one list stay together (a tight list).
-                fragments[-1] += "\n" + rendered.pop(0)
-            fragments.extend(rendered)
-            previous = kind
-        return fragments
-
-    def block(self, node: dict[str, Any], ordinal: int, parent: str | None) -> list[str]:
-        kind = node["type"]
-        children = node.get("children") or []
-        if kind == "columns":
-            fragments = [marker("columns", self.meta(node, parent=parent))]
-            for column in children:
-                fragments.append(marker("column", self.meta(column)))
-                fragments.extend(self.blocks(column.get("children") or []))
-            fragments.append("<!-- /fortress:columns -->")
-            return fragments
-        if kind in _INLINE_COMMENT_TYPES:
-            meta = self.meta(node, parent=parent)
-            text = self.text_block(node, ordinal, meta)
-            if kind in _LIST_TYPES:
-                # Children align with the item's text after the bullet; a task's
-                # "[ ] " is part of that text, so it does not count.
-                indent = " " * len(self.list_marker(node, ordinal).removesuffix("[ ] ").removesuffix("[x] "))
-                body = "\n\n".join(self.blocks(children))
-                if body:
-                    gap = "\n" if children[0]["type"] in _LIST_TYPES else "\n\n"
-                    text += gap + _indent(body, indent)
-                return [text]
-            # Markdown can't nest under a paragraph: children follow, naming their parent.
-            return [text, *self.blocks(children, parent=node.get("id"))]
-        meta = self.meta(node, parent=parent, skip_attrs=kind in ("table", "table_row", "table_cell"))
-        if kind == "code":
-            source = self.code(node)
-        elif kind in ("quote", "callout"):
-            if kind == "callout":
-                meta["type"] = "callout"
-            body = "\n\n".join(self.blocks(children))
-            source = "\n".join(f"> {line}" if line else ">" for line in (body or "").split("\n"))
-        elif kind == "divider":
-            source = "---"
-        elif kind == "image":
-            return [image_html(node.get("attrs") or {}, meta or None)]
-        elif kind == "file":
-            meta["type"] = "file"
-            meta["attrs"] = node.get("attrs") or {}
-            source = file_link(node.get("attrs") or {})
-        elif kind == "math":
-            latex = str((node.get("payload") or {}).get("latex", ""))
-            body = "\n".join(line for line in latex.split("\n") if line.strip())
-            source = f"$$\n{body}\n$$"
-        elif kind == "html":
-            source = str((node.get("payload") or {}).get("html", "")).strip() or "<div></div>"
-        elif kind == "table":
-            return [self.table(node, meta)]
-        else:  # pragma: no cover - every flow type is handled above
-            source = ""
-        return [f"{comment(meta)}\n{source}" if meta else source]
-
-    def list_marker(self, node: dict[str, Any], ordinal: int) -> str:
-        if node["type"] == "numbered_item":
-            return f"{ordinal}. "
-        if node["type"] == "check_item":
-            return "- [x] " if (node.get("attrs") or {}).get("checked") else "- [ ] "
-        return "- "
-
-    def text_block(self, node: dict[str, Any], ordinal: int, meta: dict[str, Any]) -> str:
-        kind = node["type"]
-        nodes = node.get("content") or []
-        tail = f" {comment(meta)}" if meta else ""
-        if kind == "heading":
-            level = (node.get("attrs") or {}).get("level", 1)
-            body = inline_to_markdown(nodes, newline="<br>")
-            return "#" * level + " " + body + tail
-        if kind in _LIST_TYPES:
-            prefix = self.list_marker(node, ordinal)
-            body = inline_to_markdown(nodes, newline="\\\n" + " " * len(prefix))
-            if not body and not tail:
-                return prefix.rstrip()
-            return prefix + body + tail
-        body = inline_to_markdown(nodes)
-        if not body:
-            # An empty paragraph is written only to keep its id.
-            return comment(meta) if meta else ""
-        return body + tail
-
-    def code(self, node: dict[str, Any]) -> str:
-        code = schema.inline_text(node.get("content"))
-        longest = max((len(m) for m in re.findall(r"`{3,}", code)), default=2)
-        fence = "`" * (longest + 1)
-        language = (node.get("attrs") or {}).get("language") or ""
-        return f"{fence}{language}\n{code}\n{fence}"
-
-    def table(self, node: dict[str, Any], meta: dict[str, Any]) -> str:
-        gfm = self.gfm_table(node, meta)
-        if gfm is not None:
-            return gfm
-        return table_html(node, self)
-
-    def gfm_table(self, node: dict[str, Any], meta: dict[str, Any]) -> str | None:
-        attrs = node.get("attrs") or {}
-        rows = node.get("children") or []
-        if not rows or attrs.get("header_rows") != 1 or attrs.get("header_cols"):
-            return None
-        if any(key not in ("header_rows", "borders") for key in attrs) or attrs.get("borders") is False:
-            return None
-        width = len(rows[0].get("children") or [])
-        if not width or any(len(row.get("children") or []) != width for row in rows):
-            return None
-        aligns: list[str | None] = []
-        row_meta: list[dict[str, Any]] = []
-        for number, row in enumerate(rows):
-            if row.get("attrs") or self.meta(row, skip_attrs=True).keys() - {"id"}:
-                return None
-            cells_meta = []
-            for column, cell in enumerate(row["children"]):
-                cell_attrs = cell.get("attrs") or {}
-                if cell_attrs.keys() - {"align"} or cell_attrs.get("align") == "justify":
-                    return None
-                if self.meta(cell, skip_attrs=True).keys() - {"id"}:
-                    return None
-                if number == 0:
-                    aligns.append(cell_attrs.get("align"))
-                elif cell_attrs.get("align") != aligns[column]:
-                    return None
-                inner = cell.get("children") or []
-                if len(inner) > 1:
-                    return None
-                block_meta = None
-                if inner:
-                    paragraph = inner[0]
-                    if paragraph["type"] != "paragraph" or paragraph.get("children"):
-                        return None
-                    block_meta = self.meta(paragraph)
-                    if block_meta.keys() - {"id", "provenance"}:
-                        return None
-                cells_meta.append({"id": cell.get("id"), "block": block_meta})
-            row_meta.append({"id": row.get("id"), "cells": cells_meta})
-        lines = []
-        for number, row in enumerate(rows):
-            cells = []
-            for cell in row["children"]:
-                inner = cell.get("children") or []
-                content = inner[0].get("content") or [] if inner else []
-                cells.append(inline_to_markdown(content, newline="<br>", table=True))
-            lines.append("| " + " | ".join(cells) + " |")
-            if number == 0:
-                separators = [{"center": ":---:", "right": "---:", "left": ":---"}.get(a or "", "---")
-                              for a in aligns]
-                lines.append("| " + " | ".join(separators) + " |")
-        if self.include_ids:
-            meta = {**meta, "rows": row_meta}
-        return (comment(meta) + "\n" if meta else "") + "\n".join(lines)
-
-
-def _indent(text: str, prefix: str) -> str:
-    return "\n".join(prefix + line if line else line for line in text.split("\n"))
-
-
-def file_link(attrs: dict[str, Any]) -> str:
-    name = str(attrs.get("name") or attrs.get("url") or "file")
-    url = attrs.get("url") or ""
-    label = _escape_markdown(name, True, False)
-    link = f"[{label}]({_link_destination(url)})" if url else label
-    if isinstance(attrs.get("size"), (int, float)):
-        link += f" ({_human_size(attrs['size'])})"
-    return link
-
-
-def _human_size(size: float) -> str:
-    for unit in ("bytes", "KB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{int(size)} {unit}" if unit == "bytes" else f"{size:.1f} {unit}"
-        size /= 1024
-    return ""  # pragma: no cover
-
-
-def render_markdown(nodes: list[dict[str, Any]], *, document_provenance: dict | None = None,
-                    include_ids: bool = True) -> str:
-    """A block tree (``document_tree`` nodes) as Markdown.
-
-    With ``include_ids`` every block's id is written in its fortress comment;
-    provenance that differs from ``document_provenance`` and attributes the
-    Markdown syntax can't say are always written.
-    """
-
-    return "\n\n".join(
-        fragment for fragment in _Renderer(document_provenance, include_ids).blocks(nodes) if fragment
-    )
-
-
-# --- HTML blocks (tables) ---------------------------------------------------------------------------
-
-
-def table_html(node: dict[str, Any], renderer: _Renderer) -> str:
+def table_html(node: dict[str, Any], renderer: _Renderer, indent: int = 0) -> str:
     """A table as HTML: rows, cells and cell blocks carry their metadata in data-block."""
 
     attrs = node.get("attrs") or {}
     header_rows = attrs.get("header_rows") or 0
     header_cols = attrs.get("header_cols") or 0
-    lines = [f"<table{_block_attr(renderer, node, attrs)}>"]
+    lines = [f"<table{_block_attr(renderer, node, attrs, indent)}>"]
     widths = attrs.get("column_widths") or []
     if any(width is not None for width in widths):
         cols = "".join(
@@ -945,12 +1478,14 @@ def table_html(node: dict[str, Any], renderer: _Renderer) -> str:
 _TABLE_NATIVE = {
     "table": {"column_widths", "header_rows", "header_cols"},
     "table_cell": {"colspan", "rowspan", "background", "color", "align"},
+    "image": {"url", "alt", "caption", "width", "height", "name"},
+    "heading": {"level"}, "check_item": {"checked"}, "code": {"language"},
 }
 
 
-def _block_attr(renderer: _Renderer, node: dict[str, Any], attrs: dict[str, Any]) -> str:
-    meta = renderer.meta(node, skip_attrs=True)
-    native = _TABLE_NATIVE.get(node["type"], _NATIVE_ATTRS.get(node["type"], set()))
+def _block_attr(renderer: _Renderer, node: dict[str, Any], attrs: dict[str, Any], indent: int = 0) -> str:
+    meta = renderer.html_meta(node, skip_attrs=True, indent=indent)
+    native = _TABLE_NATIVE.get(node["type"], set())
     extra = {k: v for k, v in attrs.items() if k not in native}
     if extra:
         meta["attrs"] = extra
@@ -997,7 +1532,7 @@ def _list_item_html(node: dict[str, Any], renderer: _Renderer) -> str:
     checked = ""
     if node["type"] == "check_item":
         checked = f' data-checked="{"true" if attrs.get("checked") else "false"}"'
-    inner = inline_to_html(node.get("content") or [])
+    inner = inline_to_html(node.get("content") or [], renderer.links)
     children = node.get("children") or []
     return (f"<li{checked}{_block_attr(renderer, node, attrs)}>{inner}"
             f"{blocks_html(children, renderer) if children else ''}</li>")
@@ -1010,9 +1545,10 @@ def _block_html(node: dict[str, Any], renderer: _Renderer) -> str:
     children = node.get("children") or []
     tail = f'<div data-children="">{blocks_html(children, renderer)}</div>' if children else ""
     content = node.get("content") or []
+    links = renderer.links
     if kind == "heading":
         level = attrs.get("level", 1)
-        return f"<h{level}{data}>{inline_to_html(content)}</h{level}>{tail}"
+        return f"<h{level}{data}>{inline_to_html(content, links)}</h{level}>{tail}"
     if kind in ("quote", "callout"):
         callout = ' data-type="callout"' if kind == "callout" else ""
         return f"<blockquote{callout}{data}>{blocks_html(children, renderer)}</blockquote>"
@@ -1026,31 +1562,51 @@ def _block_html(node: dict[str, Any], renderer: _Renderer) -> str:
     if kind == "table":
         return table_html(node, renderer).replace("\n", "")
     if kind == "image":
-        return image_html(attrs, renderer.meta(node, skip_attrs=False) or None)
+        meta = renderer.html_meta(node, skip_attrs=True)
+        extra = {k: v for k, v in attrs.items() if k not in _TABLE_NATIVE["image"]}
+        if extra:
+            meta["attrs"] = extra
+        return image_html(attrs, meta or None, links)
     if kind == "file":
-        meta = {**renderer.meta(node, skip_attrs=True), "attrs": attrs}
+        meta = {**renderer.html_meta(node, skip_attrs=True), "attrs": attrs}
         name = _html_escape(str(attrs.get("name") or attrs.get("url") or "file"), quote=False)
         return (f'<div data-type="file" data-block="{_json_attr(meta)}">'
-                f'<a href="{_attr(attrs.get("url", ""))}">{name}</a></div>')
+                f'<a href="{_attr(links.media(str(attrs.get("url", ""))))}">{name}</a></div>')
     if kind == "math":
         latex = _html_escape(str((node.get("payload") or {}).get("latex", "")), quote=False)
         return f'<div data-type="math"{data}>{latex.replace(chr(10), "&#10;")}</div>'
     if kind == "html":
         raw = str((node.get("payload") or {}).get("html", ""))
         return f'<div data-type="html" data-html="{_attr(raw)}"{data}></div>'
-    return f"<p{data}>{inline_to_html(content)}</p>{tail}"
+    return f"<p{data}>{inline_to_html(content, links)}</p>{tail}"
 
 
 # --- Parsing ---------------------------------------------------------------------------------------
 
 
-def parse_markdown(body: str) -> list[BlockSpec]:
-    """Canonical blocks for a Markdown body (ids and metadata from fortress comments)."""
+def parse_markdown(body: str, links: ParseLinks | None = None) -> list[BlockSpec]:
+    """Canonical blocks for a Markdown body.
 
+    Ids come from ``^id`` block identifiers and fortress comments; ``links``
+    says which notes, blocks and headings wikilinks name (by default only links
+    whose target is an id resolve).
+    """
+
+    links = links or ParseLinks()
     body = body.replace("\r\n", "\n").replace("\r", "\n")
-    tokens = _BLOCK_MD.parse(body)
-    blocks, _ = _Parser(tokens).sequence(0)
+    token = _PARSE_LINKS.set(links)
+    try:
+        tokens = _BLOCK_MD.parse(body, {"links": links})
+        blocks, _ = _Parser(tokens, links).sequence(0)
+    finally:
+        _PARSE_LINKS.reset(token)
     return legalize(blocks)
+
+
+# The links of the parse in progress, for wikilinks inside HTML (tables).
+_PARSE_LINKS: ContextVar[ParseLinks | None] = ContextVar("fortress_parse_links", default=None)
+_CARET_RE = re.compile(r"(?:^|[ \t])\^([A-Za-z0-9_-]{1,128})$")
+_CALLOUT_RE = re.compile(r"^\[!([A-Za-z][A-Za-z0-9_-]{0,39})\]([+-]?)[ \t]*")
 
 
 def _apply_meta(block: BlockSpec, meta: dict[str, Any] | None) -> BlockSpec:
@@ -1075,6 +1631,8 @@ def _apply_meta(block: BlockSpec, meta: dict[str, Any] | None) -> BlockSpec:
             pass
     if isinstance(meta.get("parent"), str):
         block.parent_ref = meta["parent"]
+    if isinstance(meta.get("indent"), int):
+        block.indent = meta["indent"]
     return block
 
 
@@ -1085,8 +1643,9 @@ class _Marker:
 
 
 class _Parser:
-    def __init__(self, tokens: list[Token]):
+    def __init__(self, tokens: list[Token], links: ParseLinks):
         self.tokens = tokens
+        self.links = links
 
     def sequence(self, index: int, stop: str | None = None) -> tuple[list[BlockSpec], int]:
         """Blocks from ``tokens[index:]`` up to the ``stop`` closing token."""
@@ -1106,7 +1665,12 @@ class _Parser:
                 if meta is not None:
                     if pending and pending.get("type") == "file":
                         items.append(self.file(pending))
-                    pending = meta
+                    pending = None
+                    if meta.get("type") == "paragraph":
+                        # An empty paragraph, kept for what its comment says.
+                        items.append(_apply_meta(spec("paragraph"), {**meta, "type": None}))
+                    else:
+                        pending = meta
                     continue
                 found = _MARKER_RE.match(token.content.strip())
                 if found:
@@ -1127,16 +1691,24 @@ class _Parser:
                     items.append(self.file(pending))
                     pending = None
                     continue
+                caret = re.fullmatch(r"\^([A-Za-z0-9_-]{1,128})", inline.content.strip())
+                if caret and not pending:
+                    # Obsidian: a structured block's id on its own line after it.
+                    previous = next((item for item in reversed(items) if isinstance(item, BlockSpec)), None)
+                    if previous is not None and items[-1] is previous:
+                        previous.id = self.links.block(None, caret.group(1))
+                        continue
                 produced = self.paragraph(inline)
             elif token.type == "heading_open":
                 inline = tokens[index + 1]
                 index += 3
                 nodes, images, meta = self.inline(inline)
-                produced = [_apply_meta(spec("heading", {"level": int(token.tag[1:])}, nodes), meta)]
-                produced += [spec("image", image) for image in images]
+                heading = _apply_meta(spec("heading", {"level": int(token.tag[1:])}, nodes), meta)
+                heading.id = self.links.own_heading(schema.inline_text(nodes), heading.id)
+                produced = [heading, *self.media(images)]
             elif token.type == "blockquote_open":
                 children, index = self.sequence(index + 1, "blockquote_close")
-                produced = [spec("quote", children=children)]
+                produced = [_callout(children) or spec("quote", children=children)]
             elif token.type in ("fence", "code_block"):
                 index += 1
                 code = token.content[:-1] if token.content.endswith("\n") else token.content
@@ -1176,8 +1748,20 @@ class _Parser:
 
         children = list(token.children or [])
         meta = None
+        caret = None
         while children and children[-1].type == "text" and not children[-1].content.strip():
             children.pop()
+        # (checked against the source too: an escaped "\^" is text)
+        if children and children[-1].type == "text" and _CARET_RE.search(token.content.rstrip()):
+            found = _CARET_RE.search(children[-1].content)
+            if found and (found.start() > 0 or len(children) > 1):
+                # Obsidian's block id: " ^id" at the end of the block's last line.
+                caret = self.links.block(None, found.group(1))
+                children[-1] = _copy_token(children[-1], children[-1].content[:found.start()].rstrip())
+                if not children[-1].content:
+                    children.pop()
+                while children and children[-1].type in ("softbreak", "hardbreak"):
+                    children.pop()
         if children and children[-1].type == "html_inline":
             meta = parse_comment(children[-1].content)
             if meta is not None:
@@ -1186,6 +1770,8 @@ class _Parser:
                     children.pop()
                 if children and children[-1].type == "text":
                     children[-1] = _copy_token(children[-1], children[-1].content.rstrip())
+        if caret:
+            meta = {**(meta or {}), "id": caret}
         stripped = Token("inline", "", 0)
         stripped.children = children
         nodes, images = _nodes_from_inline_token(stripped)
@@ -1197,16 +1783,33 @@ class _Parser:
             return [spec("math", payload={"latex": latex})]
         nodes, images, meta = self.inline(token)
         blocks: list[BlockSpec] = []
+        if not images and len(nodes) == 1 and nodes[0]["type"] == "link" \
+                and nodes[0]["href"].startswith(MEDIA_PREFIX):
+            # A paragraph that is only a link to a stored file is that file.
+            name = schema.inline_text(nodes[0]["content"])
+            return [_apply_meta(_file_spec({"url": nodes[0]["href"], "name": name}), meta)]
         if nodes or not images:
             blocks.append(_apply_meta(spec("paragraph", content=nodes), meta))
             meta = None
+        blocks.extend(self.media(images))
+        if meta:
+            _apply_meta(blocks[0], meta)
+        return blocks
+
+    def media(self, images: list[dict[str, Any]]) -> list[BlockSpec]:
+        """Image blocks, or file blocks for embeds of what isn't a picture (PDF, audio, ...)."""
+
+        blocks = []
         for image in images:
+            url = str(image.get("url", ""))
+            extension = _extension(url)
+            if extension and extension not in IMAGE_EXTENSIONS:
+                blocks.append(_file_spec({"url": url, "name": image.get("alt") or _basename(url)}))
+                continue
             try:
                 blocks.append(spec("image", image))
             except BlockShapeError:
-                blocks.append(spec("image", {"url": str(image.get("url", ""))}))
-        if meta:
-            _apply_meta(blocks[0], meta)
+                blocks.append(spec("image", {"url": url}))
         return blocks
 
     def list(self, index: int) -> tuple[list[BlockSpec], int]:
@@ -1237,7 +1840,7 @@ class _Parser:
             else:
                 index += 1
             children, index = self.sequence(index, "list_item_close")
-            children = [spec("image", image) for image in images] + children
+            children = self.media(images) + children
             if checked is not None:
                 item = spec("check_item", {"checked": checked}, nodes, children=children)
             else:
@@ -1284,7 +1887,7 @@ class _Parser:
                 inline = tokens[index + 1] if tokens[index + 1].type == "inline" else None
                 nodes, images = _nodes_from_inline_token(inline) if inline else ([], [])
                 content = [spec("paragraph", content=nodes)] if nodes else []
-                content += [spec("image", image) for image in images]
+                content += self.media(images)
                 row.append(spec("table_cell", {"align": align}, children=content))
             index += 1
         return [spec("table", {"header_rows": header_rows}, children=rows)], index + 1
@@ -1377,6 +1980,8 @@ def _attach_parents(blocks: list[BlockSpec]) -> list[BlockSpec]:
 
     result: list[BlockSpec] = []
     by_id: dict[str, BlockSpec] = {}
+    # The last block at each nesting depth: a block indented n goes under the one at n - 1.
+    levels: list[BlockSpec] = []
 
     def remember(block: BlockSpec) -> None:
         if block.id:
@@ -1386,12 +1991,72 @@ def _attach_parents(blocks: list[BlockSpec]) -> list[BlockSpec]:
 
     for block in blocks:
         parent = by_id.get(block.parent_ref) if block.parent_ref else None
+        depth = 0
+        if parent is None and 0 < block.indent <= len(levels):
+            depth = block.indent
+            parent = levels[depth - 1]
         if parent is not None:
             parent.children.append(block)
         else:
             result.append(block)
+        del levels[depth:]
+        levels.append(block)
         remember(block)
     return result
+
+
+def _file_spec(attrs: dict[str, Any]) -> BlockSpec:
+    mime = mimetypes.guess_type(_basename(str(attrs.get("url") or "")))[0]
+    if mime:
+        attrs = {**attrs, "mime": mime}
+    try:
+        return spec("file", attrs)
+    except BlockShapeError:
+        return spec("file", {"url": str(attrs.get("url") or "")})
+
+
+def _split_first_line(nodes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    for index, node in enumerate(nodes):
+        if node["type"] == "text" and "\n" in node["text"]:
+            before, _, after = node["text"].partition("\n")
+            head = nodes[:index] + ([{**node, "text": before}] if before else [])
+            tail = ([{**node, "text": after}] if after else []) + nodes[index + 1:]
+            return schema.merge_inline(head), schema.merge_inline(tail)
+    return nodes, []
+
+
+def _callout(children: list[BlockSpec]) -> BlockSpec | None:
+    """An Obsidian callout: a quote whose first line is ``[!type]``, maybe with a title."""
+
+    first = children[0] if children else None
+    if first is None or first.type != "paragraph" or not first.content:
+        return None
+    head = first.content[0]
+    found = _CALLOUT_RE.match(head["text"]) if head["type"] == "text" and not head.get("marks") else None
+    if not found:
+        return None
+    rest = head["text"][found.end():]
+    title, body = _split_first_line(([{**head, "text": rest}] if rest else []) + first.content[1:])
+    attrs: dict[str, Any] = {}
+    if found.group(1).lower() != "note":
+        attrs["callout_type"] = found.group(1).lower()
+    if found.group(2):
+        attrs["callout_fold"] = found.group(2)
+    blocks: list[BlockSpec] = []
+    if title:
+        attrs["callout_title"] = True
+        blocks.append(spec("paragraph", content=title))
+    if body or first.children:
+        blocks.append(spec("paragraph", content=body, children=first.children))
+    if blocks:
+        # The paragraph's id and comment belong to its last line.
+        last = blocks[-1]
+        last.id, last.provenance, last.indent = first.id, first.provenance, first.indent
+        last.attrs = {**first.attrs, **last.attrs}
+    try:
+        return spec("callout", attrs, children=blocks + children[1:])
+    except BlockShapeError:
+        return None
 
 
 class _Unsupported(Exception):

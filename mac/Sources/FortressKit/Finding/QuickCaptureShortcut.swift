@@ -117,10 +117,10 @@ struct QuickCaptureShortcutRecorder: View {
                     }
                 }
                 if let refusal {
-                    Text(refusal).font(.caption).foregroundStyle(.secondary)
+                    Text(refusal).font(.caption).foregroundStyle(.themeSecondary)
                 } else if state.isShortcutTaken, shortcut != nil {
                     Label("Another app is using this shortcut. Choose another one.", systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.themeSecondary)
                 }
             }
         }

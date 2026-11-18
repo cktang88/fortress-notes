@@ -121,17 +121,17 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
         switch info.kind {
         case .code:
             let rect = decorationRect(info).offsetBy(dx: point.x, dy: point.y)
-            NSColor.quaternarySystemFill.setFill()
+            NSColor.themeSurface.setFill()
             NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
         case .quote:
             let rect = decorationRect(info).offsetBy(dx: point.x, dy: point.y)
-            NSColor.separatorColor.setFill()
+            NSColor.themeQuoteBar.setFill()
             NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5).fill()
         case .bullet:
             let size: CGFloat = 5.5 * theme.scale
             let center = CGPoint(x: point.x - theme.markerWidth + 7 * theme.scale, y: centerY)
             let dot = CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
-            NSColor.secondaryLabelColor.set()
+            NSColor.themeSecondaryText.set()
             let path = NSBezierPath(ovalIn: dot)
             if info.depth % 2 == 1 {
                 path.lineWidth = 1.2
@@ -142,7 +142,7 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
         case .numbered:
             let label = "\(ordinal)." as NSString
             let font = NSFont.monospacedDigitSystemFont(ofSize: theme.baseSize, weight: .regular)
-            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
+            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.themeSecondaryText]
             let size = label.size(withAttributes: attributes)
             let x = point.x - 6 * theme.scale - size.width
             let baseline = centerY + font.xHeight / 2
@@ -150,9 +150,9 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
         case .check:
             guard let box = checkboxRect()?.offsetBy(dx: point.x, dy: point.y) else { break }
             let name = info.checked ? "checkmark.circle.fill" : "circle"
-            let color: NSColor = info.checked ? .controlAccentColor : .tertiaryLabelColor
+            let color: NSColor = info.checked ? .themeAccent : .themeTertiaryText
             let configuration = NSImage.SymbolConfiguration(pointSize: box.height, weight: .regular)
-                .applying(.init(paletteColors: [info.checked ? .white : color, color]))
+                .applying(.init(paletteColors: [info.checked ? .themeBackground : color, color]))
             if let image = NSImage(systemSymbolName: name, accessibilityDescription: info.checked ? "Checked" : "Unchecked")?
                 .withSymbolConfiguration(configuration) {
                 let fitted = CGRect(x: box.minX, y: box.midY - image.size.height / 2, width: image.size.width, height: image.size.height)

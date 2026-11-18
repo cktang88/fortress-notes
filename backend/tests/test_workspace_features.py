@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from support import make_settings, use_settings
+from support import make_settings, use_settings, mirror_file
 
 
 class WorkspaceFeatureTests(unittest.TestCase):
@@ -190,7 +190,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         titles = [doc["title"] for doc in self.documents()]
         self.assertEqual(titles, ["Keep me"])
-        self.assertTrue(self.notes.joinpath(f"{self.documents()[0]['id']}.md").exists())
+        self.assertTrue(mirror_file(self.notes, self.documents()[0]["id"]).exists())
 
     def test_restore_makes_open_editors_conflict_instead_of_overwriting(self) -> None:
         note = self.create("Doc", "before")
@@ -247,8 +247,9 @@ class WorkspaceFeatureTests(unittest.TestCase):
 
         # Mirrors are written in the background; flush_mirrors waits for them.
         created = self.client.post("/api/block-documents", json={"title": "Block doc"}).json()
-        mirror = self.notes / f"{created['id']}.md"
         documents.flush_mirrors()
+        mirror = mirror_file(self.notes, created["id"])
+        self.assertEqual(mirror, self.notes / "Block doc.md")
         self.assertTrue(mirror.exists())
         self.assertEqual(self.client.get(f"/api/block-documents/{created['id']}").json()["title"], "Block doc")
 
