@@ -83,13 +83,87 @@ public final class AppModel {
         route = .note(id: noteId, focusBlockId: blockId)
     }
 
+    // MARK: Navigation (data layer)
+
+    /// How many notes Recent holds (the size asked of the server).
+    public static let recentLimit = 20
+
+    /// A local change to the tree, re-applied over any fetch that started before it.
+    struct NavigationPatch {
+        var sequence: Int
+        var apply: (inout NavigationResponse) -> Void
+    }
+
+    @ObservationIgnored var navigationFetches = 0
+    @ObservationIgnored var newestAppliedFetch = 0
+    @ObservationIgnored var navigationFetchesInFlight = 0
+    @ObservationIgnored var patchSequence = 0
+    @ObservationIgnored var navigationPatches: [NavigationPatch] = []
+    /// Reconnects after the backend goes away (see `startReconnecting`).
+    @ObservationIgnored var reconnectTask: Task<Void, Never>?
+    /// Delays between reconnection attempts (doubling up to the last).
+    @ObservationIgnored public var reconnectDelays: (first: Duration, max: Duration) = (.milliseconds(500), .seconds(30))
+    @ObservationIgnored var hoverPrefetchTask: Task<Void, Never>?
+    /// How many times the app restarted a backend that stopped by itself.
+    @ObservationIgnored var backendRestarts = 0
+
     /// Reloads the sidebar tree and recent notes.
+    ///
+    /// Safe to call often: concurrent calls share one request, an answer that arrives
+    /// after a newer one is dropped, and local changes made while it was in flight (an
+    /// edit, a move) are re-applied over it instead of being overwritten.
     public func refreshNavigation() async {
+        navigationFetches += 1
+        let fetch = navigationFetches
+        let mark = patchSequence
+        navigationFetchesInFlight += 1
+        defer {
+            navigationFetchesInFlight -= 1
+            if navigationFetchesInFlight == 0 { navigationPatches.removeAll() }
+        }
         do {
-            navigation = try await api.navigation(recentLimit: 20)
+            var fresh = try await api.navigation(recentLimit: Self.recentLimit)
             isConnected = true
+            guard fetch > newestAppliedFetch else { return }
+            newestAppliedFetch = fetch
+            for patch in navigationPatches where patch.sequence > mark { patch.apply(&fresh) }
+            navigationPatches.removeAll { $0.sequence <= mark }
+            if fresh != navigation { navigation = fresh }
+            api.store.reconcile(with: fresh)
         } catch {
-            report(error)
+            if fetch == navigationFetches { report(error) }
+        }
+    }
+
+    /// Applies a change to the tree now, and keeps it so a fetch already in flight
+    /// doesn't undo it.
+    func patchNavigation(_ apply: @escaping (inout NavigationResponse) -> Void) {
+        patchSequence += 1
+        var updated = navigation
+        apply(&updated)
+        if updated != navigation { navigation = updated }
+        if navigationFetchesInFlight > 0 {
+            navigationPatches.append(NavigationPatch(sequence: patchSequence, apply: apply))
+        }
+    }
+
+    // MARK: Prefetching
+
+    /// Loads these notes ahead of time (cheap: one request, skipped when cached).
+    public func prefetch(noteIds: [String]) async {
+        guard isConnected, !noteIds.isEmpty else { return }
+        await api.prefetchDocuments(ids: noteIds)
+    }
+
+    /// The pointer rests on a note in the list: load it after a short pause, unless the
+    /// pointer moves on first.
+    public func prefetchOnHover(noteId: String?) {
+        hoverPrefetchTask?.cancel()
+        guard let noteId, noteId != openNoteId else { return }
+        hoverPrefetchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, let self else { return }
+            await self.prefetch(noteIds: [noteId])
         }
     }
 
@@ -102,9 +176,46 @@ public final class AppModel {
 
     // MARK: -
 
+    /// Tells the person about a failure, calmly. Cancelled work (a note closed while it
+    /// loaded) is not a failure; losing the backend shows the offline banner and starts
+    /// reconnecting instead of a notice per request.
     public func report(_ error: Error) {
+        if Self.isCancellation(error) { return }
+        if let urlError = error as? URLError, Self.isConnectionLoss(urlError) {
+            isConnected = false
+            startReconnecting()
+            return
+        }
         if error is URLError { isConnected = false }
-        notice = Notice(message: error.localizedDescription)
+        let message = Self.describe(error)
+        if notice?.message != message { notice = Notice(message: message) }
+    }
+
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
+    }
+
+    static func isConnectionLoss(_ error: URLError) -> Bool {
+        switch error.code {
+        case .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet, .timedOut,
+             .cannotFindHost, .dnsLookupFailed, .secureConnectionFailed:
+            true
+        default:
+            false
+        }
+    }
+
+    /// A sentence for a notice.
+    public static func describe(_ error: Error) -> String {
+        if let error = error as? APIError { return error.message }
+        if let error = error as? URLError {
+            if isConnectionLoss(error) { return "Fortress's local server isn't responding." }
+            if error.code == .badServerResponse { return "Fortress's server sent a reply the app couldn't read." }
+        }
+        if error is DecodingError { return APIError.malformed.message }
+        return error.localizedDescription
     }
 }
 

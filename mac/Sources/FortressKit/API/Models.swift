@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // Mirrors of the backend's JSON (snake_case keys are converted by `APIClient`'s
 // decoder). Timestamps stay ISO-8601 strings; use `Timestamp.date(_:)` to display them.
@@ -489,9 +490,41 @@ public struct CaptureResult: Codable, Hashable, Sendable {
 
 public enum Timestamp {
     /// Parses the backend's ISO-8601 timestamps (with or without fractional seconds).
+    ///
+    /// Every list row and date heading parses its note's stamps on every render, so the
+    /// answers are memoized (the strings repeat: one per note).
     public static func date(_ string: String) -> Date? {
-        let withFraction = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-        if let date = try? withFraction.parse(string) { return date }
-        return try? Date.ISO8601FormatStyle().parse(string)
+        if let cached = memo.withLock({ $0[string] }) { return cached.date }
+        let date = parse(string)
+        memo.withLock { memo in
+            if memo.count >= 20_000 { memo.removeAll(keepingCapacity: true) }
+            memo[string] = Parsed(date: date)
+        }
+        return date
     }
+
+    /// The parse itself, without the memo.
+    public static func parse(_ string: String) -> Date? {
+        if let date = try? fractional.parse(string) { return date }
+        return try? whole.parse(string)
+    }
+
+    /// `now` the way the backend writes it (`datetime.now(timezone.utc).isoformat()`), so
+    /// stamps made locally (a note moved or created) sort among the server's.
+    public static func serverString(_ date: Date = Date()) -> String {
+        let seconds = date.timeIntervalSince1970
+        let whole = seconds.rounded(.down)
+        let micros = min(999_999, Int(((seconds - whole) * 1_000_000).rounded()))
+        let base = Date(timeIntervalSince1970: whole).formatted(
+            Date.ISO8601FormatStyle(timeZone: TimeZone(identifier: "UTC")!).year().month().day()
+                .dateTimeSeparator(.standard).time(includingFractionalSeconds: false))
+        let digits = String(micros)
+        let padded = String(repeating: "0", count: 6 - digits.count) + digits
+        return base + "." + padded + "+00:00"
+    }
+
+    private struct Parsed: Sendable { var date: Date? }
+    private static let memo = Mutex<[String: Parsed]>([:])
+    private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let whole = Date.ISO8601FormatStyle()
 }
