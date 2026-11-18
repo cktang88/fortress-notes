@@ -817,14 +817,15 @@ def _update(
             changes.touch(block_id)
         for block_id in inserts:
             changes.touch(block_id)
-        # Park the blocks being placed on unique temporary keys, then give
-        # every reordered sibling list fresh keys (parents before children).
-        for parent_id in reordered:
-            for block_id in final[parent_id]:
-                if block_id in by_id:
-                    connection.execute(
-                        "UPDATE blocks SET order_key = '~' || id WHERE id = ?", (block_id,)
-                    )
+        # Park the blocks being placed, and those going away (they are deleted
+        # last: matched children move out of them first), on unique temporary
+        # keys; then give every reordered sibling list fresh keys (parents
+        # before children).
+        parked = [*deletable, *(
+            block_id for parent_id in reordered for block_id in final[parent_id] if block_id in by_id
+        )]
+        for block_id in parked:
+            connection.execute("UPDATE blocks SET order_key = '~' || id WHERE id = ?", (block_id,))
         placed: set[str] = set()
 
         def place(parent_id: str | None) -> None:
