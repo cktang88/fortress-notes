@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import block_types as _types
 from . import provenance as _provenance
 from .block_store import (
     _block_snapshot,
@@ -63,13 +64,18 @@ from .models import BlockOperation
 class SourceBlock:
     """One block as the source has it.
 
-    ``markdown`` is the block's own Markdown (one paragraph, heading, list item,
-    code fence, ...); nested content goes in ``children``. ``type`` defaults to
-    what the Markdown parses as. ``provenance`` holds extra per-block fields such
-    as ``source_path`` or ``extra``.
+    Either ``markdown`` -- the block's own Markdown (one paragraph, heading, list
+    item, code fence, ...), with ``type`` defaulting to what it parses as -- or
+    ``type`` plus structured ``content`` (spec.md §2a): rich text runs
+    (``{"blocknote": [...]}``), a table (``{"blocknote": {"rows": ...}}``),
+    math (``{"latex": ...}``); images/files/columns carry their data in
+    ``attrs``. Nested content goes in ``children`` (a ``columns`` block's
+    children are ``column`` blocks). ``provenance`` holds extra per-block fields
+    such as ``source_path`` or ``extra``. :func:`source_block` builds one from a
+    plain dict.
     """
 
-    markdown: str
+    markdown: str = ""
     external_id: str | None = None
     type: str | None = None
     attrs: dict[str, Any] = field(default_factory=dict)
@@ -77,6 +83,10 @@ class SourceBlock:
     created_at: str | None = None
     modified_at: str | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
+    # Structured content; Markdown and plain text are derived from it.
+    content: dict[str, Any] | None = None
+    # Searchable text, when it should differ from what is derived.
+    text: str | None = None
 
 
 @dataclass
@@ -92,6 +102,175 @@ class UpsertResult:
     blocks_skipped: int = 0
     # New conflicts found by this call: {"block_id"|"field", ...}.
     conflicts: list[dict[str, Any]] = field(default_factory=list)
+
+
+# --- Building source blocks from plain dicts ------------------------------------------
+
+_TEXT_ATTR_KEYS = ("level", "ordered", "checked", "checked_at", "language", "list_format", "tags")
+_MEDIA_ATTR_KEYS = ("url", "alt", "caption", "width", "height", "name", "size", "mime")
+
+
+def source_block(data: dict[str, Any] | str) -> SourceBlock:
+    """A :class:`SourceBlock` from the plain dict an importer has at hand.
+
+    Common keys: ``type``, ``id`` (the source's id for this block), ``attrs``,
+    ``children``, ``created_at``, ``modified_at``, ``provenance``, ``markdown``.
+    Per type:
+
+    * text (``paragraph`` (default), ``heading``, ``list``, ``quote``, ``code``):
+      ``inline`` -- runs, canonical or compact (``{"text", "b", "i", "u", "s",
+      "sup", "sub", "code", "color", "highlight", "link"}``) -- or ``text``
+      (plain); ``level``, ``ordered``, ``checked``, ``checked_at``, ``language``.
+    * ``table``: ``rows`` (see :func:`table_content`), ``column_widths`` (CSS px
+      or None), ``header_rows``, ``borders``.
+    * ``columns``: ``columns: [{"width": 0.5, "blocks": [...], "id": ...}]``.
+    * ``image``: ``url``, ``alt``, ``caption``, ``width``, ``height``, ``name``.
+    * ``file``: ``url``, ``name``, ``size``, ``mime``.
+    * ``math``: ``latex`` (and optional ``mathml``).
+
+    A bare string is one block of Markdown.
+    """
+
+    if isinstance(data, str):
+        return SourceBlock(markdown=data)
+    if not isinstance(data, dict):
+        raise _types.BlockShapeError("a source block must be a dict or a Markdown string")
+    block_type = data.get("type")
+    attrs = dict(data.get("attrs") or {})
+    content = data.get("content")
+    children = [source_block(child) for child in data.get("children") or []]
+    if block_type == "table":
+        if content is None:
+            content = {"blocknote": table_content(
+                data.get("rows") or [],
+                column_widths=data.get("column_widths"),
+                header_rows=data.get("header_rows", 0),
+                header_cols=data.get("header_cols", 0),
+            )}
+        if "borders" in data:
+            attrs["borders"] = data["borders"]
+    elif block_type == "columns":
+        if data.get("columns") is not None:
+            children = [
+                source_block({**column, "type": "column"}) for column in data["columns"]
+            ]
+    elif block_type == "column":
+        if "width" in data:
+            attrs["width"] = data["width"]
+        children = [source_block(child) for child in data.get("blocks") or []] + children
+    elif block_type in {"image", "file"}:
+        attrs.update({key: data[key] for key in _MEDIA_ATTR_KEYS if key in data})
+    elif block_type == "math":
+        if content is None:
+            content = {"latex": data.get("latex", "")}
+            if data.get("mathml"):
+                content["mathml"] = data["mathml"]
+    else:
+        attrs.update({key: data[key] for key in _TEXT_ATTR_KEYS if key in data})
+        if content is None:
+            if "inline" in data or "runs" in data:
+                content = {"blocknote": _types.normalize_inline(data.get("inline", data.get("runs")))}
+            elif "text" in data and "markdown" not in data:
+                content = {"blocknote": _types.normalize_inline(data["text"])}
+        if content is not None and block_type is None:
+            block_type = "paragraph"
+    return SourceBlock(
+        markdown=str(data.get("markdown") or ""),
+        external_id=data.get("id", data.get("external_id")),
+        type=block_type,
+        attrs=attrs,
+        children=children,
+        created_at=data.get("created_at"),
+        modified_at=data.get("modified_at"),
+        provenance=dict(data.get("provenance") or {}),
+        content=content,
+    )
+
+
+def source_blocks(items: Iterable[dict[str, Any] | str]) -> list[SourceBlock]:
+    """:func:`source_block` for each item."""
+
+    return [source_block(item) for item in items]
+
+
+def nested_block(data: dict[str, Any] | str) -> dict[str, Any]:
+    """A block inside a table cell, from the same dicts :func:`source_block` takes."""
+
+    children = data.get("children") if isinstance(data, dict) else None
+    block = source_block({**data, "children": []} if isinstance(data, dict) else data)
+    content = {key: value for key, value in (block.content or {}).items() if key != "markdown"}
+    block_type = block.type
+    attrs = dict(block.attrs)
+    if block_type is None or (block_type in _types.TEXT_TYPES and "blocknote" not in content):
+        parsed = _parse_blocks(block.markdown) if block.markdown else []
+        if len(parsed) == 1:
+            attrs = {**parsed[0].attrs, **attrs}
+            block_type = block_type or parsed[0].type
+        if len(parsed) == 1 and parsed[0].content is not None:
+            content = {k: v for k, v in parsed[0].content.items() if k != "markdown"}
+        else:
+            inline = _LINE_MARKER.sub("", block.markdown)
+            runs = _types.inline_from_markdown(inline) if inline else []
+            content = {"blocknote": runs if runs is not None else _types.normalize_inline(inline)}
+        block_type = block_type or "paragraph"
+    result: dict[str, Any] = {"type": block_type, "attrs": attrs, "content": content}
+    if children:
+        result["children"] = [nested_block(child) for child in children]
+    return _types.normalize_nested_block(result)
+
+
+_LINE_MARKER = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)")
+
+
+def table_content(
+    rows: list[Any],
+    *,
+    column_widths: list[float | None] | None = None,
+    header_rows: int = 0,
+    header_cols: int = 0,
+) -> dict[str, Any]:
+    """A table's ``content.blocknote`` from plain rows.
+
+    ``rows`` is a list of rows; a row is a list of cells (or ``{"cells": [...]}``).
+    A cell is a string, a list of runs, or a dict with ``inline``/``text`` (its
+    first line of text), ``blocks`` (more blocks, as :func:`source_block`
+    dicts: lists, images, nested tables, ...), ``background``, ``color``,
+    ``align`` (left/center/right/justify), ``colspan``, ``rowspan``.
+    ``column_widths`` are CSS pixels (None: automatic).
+    """
+
+    table_rows = []
+    for row in rows:
+        cells = row.get("cells") if isinstance(row, dict) else row
+        if not isinstance(cells, list):
+            raise _types.BlockShapeError("every table row must be a list of cells")
+        table_rows.append({"cells": [_table_cell(cell) for cell in cells]})
+    return _types.normalize_table(
+        {
+            "columnWidths": column_widths or [],
+            "headerRows": header_rows,
+            "headerCols": header_cols,
+            "rows": table_rows,
+        }
+    )
+
+
+def _table_cell(cell: Any) -> Any:
+    if not isinstance(cell, dict) or cell.get("type") == "tableCell":
+        return cell
+    props: dict[str, Any] = dict(cell.get("props") or {})
+    for key, name in (("background", "backgroundColor"), ("backgroundColor", "backgroundColor"),
+                      ("color", "textColor"), ("textColor", "textColor"),
+                      ("align", "textAlignment"), ("textAlignment", "textAlignment"),
+                      ("colspan", "colspan"), ("rowspan", "rowspan")):
+        if cell.get(key) is not None:
+            props[name] = cell[key]
+    inline = cell.get("inline", cell.get("runs", cell.get("content", cell.get("text"))))
+    result: dict[str, Any] = {"type": "tableCell", "props": props,
+                              "content": _types.normalize_inline(inline)}
+    if cell.get("blocks"):
+        result["blocks"] = [nested_block(block) for block in cell["blocks"]]
+    return result
 
 
 # --- Folders ------------------------------------------------------------------
@@ -162,10 +341,26 @@ class _Planned:
     created_at: str | None
     modified_at: str | None
     provenance: dict[str, Any]
+    content: dict[str, Any] | None = None
+    text: str | None = None
 
     @property
     def hash(self) -> str:
         return _provenance.content_hash(self.type, self.markdown)
+
+    @property
+    def stored_content(self) -> dict[str, Any]:
+        return self.content if self.content is not None else {"markdown": self.markdown}
+
+    @property
+    def stored_text(self) -> str:
+        return self.text if self.text is not None else self.markdown
+
+
+def _fingerprint(row: sqlite3.Row) -> str:
+    """What a stored block's source hash was computed from."""
+
+    return _types.block_fingerprint(row["text"], row["content_json"])
 
 
 def _prepare(blocks: list[SourceBlock] | str) -> list[_Planned]:
@@ -175,8 +370,31 @@ def _prepare(blocks: list[SourceBlock] | str) -> list[_Planned]:
 
     def convert(block: SourceBlock) -> _Planned:
         block_type, markdown, attrs = block.type, block.markdown, dict(block.attrs)
+        content: dict[str, Any] | None = None
+        text = block.text
         extra_children: list[SourceBlock] = []
-        if block_type is None:
+        if block.content is None and block_type in _types.STRUCTURED_TYPES - {"columns", "column"} and markdown:
+            # A table/image/... given as Markdown: read its structure from it.
+            parsed = _parse_blocks(markdown)
+            if len(parsed) != 1 or parsed[0].type != block_type or parsed[0].content is None:
+                raise _types.BlockShapeError(f"markdown is not one {block_type} block")
+            content, attrs = dict(parsed[0].content), {**parsed[0].attrs, **attrs}
+        elif block.content is not None:
+            content = dict(block.content)
+        if content is not None or block_type in _types.STRUCTURED_TYPES:
+            block_type = block_type or "paragraph"
+            if content is not None and "markdown" not in content and markdown:
+                content["markdown"] = markdown
+            has_runs = isinstance((content or {}).get("blocknote"), list)
+            attrs, content, derived = _types.normalize_block(
+                block_type, attrs, content or {}, text
+            )
+            markdown = str(content.get("markdown", markdown))
+            if block_type in _types.STRUCTURED_TYPES or has_runs:
+                text = derived
+            elif text is None:
+                text = markdown
+        elif block_type is None:
             parsed = _parse_blocks(markdown)
             if parsed:
                 first = parsed[0]
@@ -184,7 +402,10 @@ def _prepare(blocks: list[SourceBlock] | str) -> list[_Planned]:
                 attrs = {**first.attrs, **attrs}
                 if len(parsed) == 1:
                     markdown = first.source
+                    content, text = first.content, first.text
                     extra_children = _from_imported(first.children)
+                elif block_type in _types.STRUCTURED_TYPES:
+                    block_type = "raw"
             else:
                 block_type = "paragraph"
         children = [convert(child) for child in [*extra_children, *block.children]]
@@ -194,6 +415,7 @@ def _prepare(blocks: list[SourceBlock] | str) -> list[_Planned]:
         return _Planned(
             external_id, block_type, markdown, attrs, children,
             block.created_at, block.modified_at, dict(block.provenance),
+            content, text,
         )
 
     return [convert(block) for block in blocks]
@@ -214,6 +436,8 @@ def _from_imported(blocks) -> list[SourceBlock]:
                 type=block.type,
                 attrs=dict(block.attrs),
                 children=_from_imported(block.children),
+                content=dict(block.content) if block.content is not None else None,
+                text=block.text,
                 provenance={
                     key: value for key, value in restored.items()
                     if key in {"source_path", "source_url", "extra"}
@@ -331,8 +555,8 @@ def _insert_planned(
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             block_id, document_id, parent_id, position, block.type,
-            json.dumps(block.attrs), json.dumps({"markdown": block.markdown}),
-            block.markdown, created, block.modified_at or created,
+            json.dumps(block.attrs), json.dumps(block.stored_content),
+            block.stored_text, created, block.modified_at or created,
             _provenance.dumps(_block_provenance(source, block)), revision,
         ),
     )
@@ -411,7 +635,7 @@ def _update(
     previously_synced = set(sync.get("block_ids") or [])
     rows = connection.execute(
         """SELECT rowid AS row_number, id, parent_id, position, type, text, attrs_json,
-                  provenance_json
+                  content_json, provenance_json
              FROM blocks WHERE document_id = ? ORDER BY parent_id, position""",
         (document_id,),
     ).fetchall()
@@ -442,13 +666,20 @@ def _update(
                 matched.add(block_id)
                 row = by_id[block_id]
                 old = stored_provenance[block_id]
-                current_hash = _provenance.content_hash(row["type"], row["text"])
+                current_hash = _provenance.content_hash(row["type"], _fingerprint(row))
                 base_hash = old.get("source_hash")
                 new = _block_provenance(source, block, old)
                 if current_hash == base_hash or current_hash == block.hash:
                     # Untouched (or the source caught up with the local edit).
                     new.pop("dismissed_hash", None)
-                    if current_hash != block.hash or json.loads(row["attrs_json"]) != block.attrs:
+                    if (
+                        current_hash != block.hash
+                        or json.loads(row["attrs_json"]) != block.attrs
+                        or (
+                            block.content is not None
+                            and json.loads(row["content_json"]) != block.content
+                        )
+                    ):
                         content_updates[block_id] = block
                 else:
                     # Edited here: keep the local text, remember what the source has.
@@ -463,6 +694,11 @@ def _update(
                                 "source_hash": block.hash,
                                 "source_type": block.type,
                                 "source_markdown": block.markdown,
+                                **(
+                                    {"source_content": block.content, "source_attrs": block.attrs,
+                                     "source_text": block.stored_text}
+                                    if block.content is not None else {}
+                                ),
                                 **({"source_modified_at": block.modified_at} if block.modified_at else {}),
                             }
                             result.conflicts.append({"block_id": block_id, **new["conflict"]})
@@ -491,7 +727,7 @@ def _update(
         if value.get("source") != source or not value.get("external_id"):
             return False  # added here
         row = by_id[block_id]
-        if _provenance.content_hash(row["type"], row["text"]) != value.get("source_hash"):
+        if _provenance.content_hash(row["type"], _fingerprint(row)) != value.get("source_hash"):
             return False  # edited here
         return all(
             child in matched or can_delete(child)
@@ -568,8 +804,8 @@ def _update(
                 """UPDATE blocks SET type = ?, attrs_json = ?, content_json = ?, text = ?,
                           updated_at = ?, revision = ? WHERE id = ?""",
                 (
-                    block.type, json.dumps(block.attrs), json.dumps({"markdown": block.markdown}),
-                    block.markdown, block.modified_at or now, revision, block_id,
+                    block.type, json.dumps(block.attrs), json.dumps(block.stored_content),
+                    block.stored_text, block.modified_at or now, revision, block_id,
                 ),
             )
             _replace_attrs(connection, block_id, block.attrs)
@@ -711,7 +947,7 @@ def document_info(path: Path, document_id: str) -> dict[str, Any]:
             (document["folder_id"],),
         ).fetchall()
         blocks = connection.execute(
-            """SELECT id, type, text, created_at, updated_at, provenance_json
+            """SELECT id, type, text, content_json, created_at, updated_at, provenance_json
                  FROM blocks WHERE document_id = ?""",
             (document_id,),
         ).fetchall()
@@ -769,7 +1005,7 @@ def document_info(path: Path, document_id: str) -> dict[str, Any]:
         value = _provenance.effective_block_provenance(block["provenance_json"], document_provenance)
         by_source[value["source"]] = by_source.get(value["source"], 0) + 1
         if value.get("source_hash") and value["source_hash"] != _provenance.content_hash(
-            block["type"], text
+            block["type"], _fingerprint(block)
         ):
             edited_here += 1
         if isinstance(value.get("conflict"), dict):
@@ -861,6 +1097,7 @@ def resolve_block_conflict(path: Path, document_id: str, block_id: str, keep: st
     resolved = {key: item for key, item in value.items() if key != "conflict"}
     if keep == "source":
         markdown = str(conflict.get("source_markdown", ""))
+        structured = isinstance(conflict.get("source_content"), dict)
         apply_transaction(
             path,
             document_id,
@@ -869,8 +1106,9 @@ def resolve_block_conflict(path: Path, document_id: str, block_id: str, keep: st
                     operation="update",
                     block_id=block_id,
                     type=conflict.get("source_type"),
-                    text=markdown,
-                    content={"markdown": markdown},
+                    text=conflict.get("source_text") if structured else markdown,
+                    content=conflict["source_content"] if structured else {"markdown": markdown},
+                    attrs=conflict.get("source_attrs") if structured else None,
                 )
             ],
             row["revision"],

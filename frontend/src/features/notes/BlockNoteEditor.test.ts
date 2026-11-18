@@ -33,6 +33,54 @@ describe("isBlockLevelSelection", () => {
 });
 
 describe("toPartialBlock", () => {
+  const node = (type: string, content: BlockNode["content"], attrs = {}): BlockNode => ({
+    id: `${type}-id`,
+    document_id: "document-id",
+    type,
+    parent_id: null,
+    position: 0,
+    attrs,
+    user_attrs: {},
+    content,
+    text: "",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    children: [],
+  });
+
+  it("drops styles and nested cell blocks the editor cannot load", () => {
+    const runs = [{ type: "text", text: "2", styles: { superscript: true, bold: true } }];
+    expect(toPartialBlock(node("paragraph", { blocknote: runs })).content).toEqual([
+      { type: "text", text: "2", styles: { bold: true } },
+    ]);
+    const table = {
+      type: "tableContent",
+      columnWidths: [null],
+      rows: [{ cells: [{ type: "tableCell", props: {}, content: runs, blocks: [{}] }] }],
+    };
+    expect(toPartialBlock(node("table", { blocknote: table })).content).toEqual({
+      type: "tableContent",
+      columnWidths: [null],
+      rows: [
+        {
+          cells: [
+            {
+              type: "tableCell",
+              props: {},
+              content: [{ type: "text", text: "2", styles: { bold: true } }],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("shows imported rich list items from their runs", () => {
+    const runs = [{ type: "text", text: "Done", styles: { underline: true } }];
+    const item = node("list", { blocknote: runs, markdown: "- [x] <u>Done</u>" }, { checked: true });
+    expect(toPartialBlock(item)).toMatchObject({ type: "checkListItem", content: runs });
+  });
+
   it("restores callout blocks with their rich inline content", () => {
     const inlineContent = [{ type: "text", text: "Remember", styles: { bold: true } }];
     const callout: BlockNode = {

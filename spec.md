@@ -49,6 +49,135 @@ resized width survives the round-trip).
 On first start an empty database imports any existing `NOTES_DIR/*.md` files once,
 copying the originals to a timestamped backup folder first.
 
+## 2a. Block shapes (`block_types.py`)
+
+Every block row has `type`, `attrs` (JSON, indexed in `block_attrs`), `content`
+(JSON), `text`, children (`parent_id`/`position`) and provenance (§7a).
+
+- **`text` is the searchable plain text**: FTS, ColBERT embeddings, Ask grep and
+  read_note read it. Blocks with structure or rich runs get it derived by the
+  server (no Markdown, no HTML); plain Markdown-only blocks (imported `.md`)
+  keep their Markdown source there, minus inline mark HTML.
+- **`content.markdown`** is what Markdown export/mirrors write for the block. The
+  server derives it for structured blocks and for rich text whose stored Markdown
+  lacks the marks; otherwise a writer's Markdown is kept.
+
+### Inline marks (the one canonical form)
+
+Rich text lives in `content.blocknote` as BlockNote inline content (what the web
+editor already stores), extended with `superscript`/`subscript` and hex colours:
+
+```jsonc
+{"type": "text", "text": "Hello", "styles": {
+   "bold": true, "italic": true, "underline": true, "strike": true, "code": true,
+   "superscript": true, "subscript": true,          // new (not BlockNote defaults)
+   "textColor": "#C00000",                           // CSS name ("red") or #hex
+   "backgroundColor": "#FFFF00"}}                    // highlight
+{"type": "link", "href": "https://…" /* or "[[doc_id|Title]]" */, "content": [<text runs>]}
+```
+
+Omitted styles are off; `"default"` colours are dropped. Text blocks (`paragraph`,
+`heading` attrs `level`, `list` attrs `ordered`/`checked`/`checked_at`, `quote`,
+`code` attrs `language`, and the web editor's `bulletListItem`, `numberedListItem`,
+`checkListItem`, `codeBlock`, `callout`) store
+`content: {"blocknote": [runs], "markdown": "…"}`; a block with only
+`{"markdown": …}` is plain Markdown (editors parse it). A newline inside a run is a
+line break.
+
+Markdown: bold `**`, italic `*`, strike `~~`, code `` ` ``, links `[t](url)`
+natively; `<u>`, `<sup>`, `<sub>`, `<span style="color:#C00000">`,
+`<mark style="background:#FFFF00">` for the rest. If native emphasis would not
+parse back to the same runs (e.g. `**"x"**y`), the block's marks are all written
+as HTML (`<strong>`, `<em>`, `<s>`, `<code>`, `<a href>`). Import parses all of
+these back into runs (only blocks that contain mark HTML get runs; others stay
+plain Markdown).
+
+### Table (`type: "table"`)
+
+```jsonc
+{"type": "table",
+ "attrs": {"borders": true},                 // false: no visible borders (default true)
+ "content": {"blocknote": {                  // BlockNote's tableContent, extended
+    "type": "tableContent",
+    "columnWidths": [200, null],             // CSS px per column; null = automatic
+    "headerRows": 1,                         // optional; also "headerCols"
+    "rows": [{"cells": [
+      {"type": "tableCell",
+       "props": {"backgroundColor": "#DEEAF6", "textColor": "red",
+                 "textAlignment": "center", "colspan": 1, "rowspan": 1},  // all optional
+       "content": [<runs>],                  // the cell's first line of text
+       "blocks": [<nested blocks>]}          // optional, after content (OneNote cells)
+    ]}]},
+   "markdown": "…"},
+ "text": "Name\tQty\nApples\t3"}              // rows on lines, cells tab-separated
+```
+
+Nested (in-cell) blocks are `{"type", "attrs", "content", "children"?}` with no id:
+text types (content `{"blocknote": runs}`), `table` (nested tables), `image`,
+`file`, `math`, `thematic_break`. Rows need ≥ 1 cell; garbage is rejected with
+**422** by the transactions API (`BlockShapeError`). A cell saved without a
+`blocks` key keeps its nested blocks while the table keeps its shape (the web
+editor cannot show them); `"blocks": []` clears them.
+
+Markdown: a **GFM table** when there is exactly one header row and every cell is
+one line of text (column-uniform alignment allowed); otherwise an HTML
+`<table>` (one HTML block, no blank lines): `data-borders="false"`,
+`<colgroup><col style="width:200px">…`, header cells as `<th>`, cell
+`style="background-color:…;color:…;text-align:…"`, `colspan`/`rowspan`, cell content
+as inline HTML then `<p>`/`<ul>`/`<ol>`/`<li data-checked>`/`<pre><code>`/`<img>`/
+nested `<table>`; other table attrs in `data-attrs='{json}'`. Both import back
+(GFM tables no longer become `raw`).
+
+### Columns (`type: "columns"` → `type: "column"`)
+
+```jsonc
+{"type": "columns", "attrs": {/* free, e.g. onenote geometry */}, "content": {}, "text": "",
+ "children": [
+   {"type": "column", "attrs": {"width": 0.4}, "content": {}, "text": "",   // relative width
+    "children": [<ordinary blocks>]},
+   {"type": "column", "attrs": {"width": 0.6}, "children": […]}]}
+```
+
+Columns are ordinary tree nodes: children are indexed, linked, moved, duplicated
+and undone like any block. A `columns` block holds only `column` blocks and a
+`column` lives only in a `columns` block (insert/move/type change otherwise → 409).
+Markdown (columns written one after another; the comments are invisible):
+
+```markdown
+<!-- fortress:columns {"onenote_y":3} -->
+
+<!-- fortress:column {"width":0.4} -->
+
+Left column blocks…
+
+<!-- fortress:column {"width":0.6} -->
+
+Right column blocks…
+
+<!-- /fortress:columns -->
+```
+
+### Image, file, math
+
+```jsonc
+{"type": "image", "attrs": {"url": "/media/01J….png", "alt": "OCR / alt text",
+  "caption": "…", "width": 480, "height": 320, "name": "scan.png"},   // px; all but url optional
+ "text": "OCR / alt text\n…caption"}          // searchable
+// Markdown: <img src="/media/01J….png" alt="…" title="caption" width="480" height="320" data-name="…">
+//   (other attrs, e.g. the web editor's previewWidth, in data-attrs='{json}')
+
+{"type": "file", "attrs": {"url": "/media/01J….pdf", "name": "Contract.pdf",
+  "size": 48213, "mime": "application/pdf"}, "text": "Contract.pdf"}
+// Markdown: <!-- fortress:file {"mime":…,"name":…,"size":…,"url":…} -->
+//           [Contract.pdf](/media/01J….pdf) (47.1 KB)
+
+{"type": "math", "content": {"latex": "E = mc^2", "mathml": "<math>…"}, "text": "E = mc^2"}
+// Markdown: $$\nE = mc^2\n$$  (mathml is not exported)
+```
+
+A single `<img>` line in imported Markdown becomes an image block. Splitting and
+merging apply to text blocks only.
+
 ## 3. Backend (FastAPI, Python / uv)
 
 ### Modules (`backend/app/`)
@@ -56,6 +185,8 @@ copying the originals to a timestamped backup folder first.
 - `models.py` — Pydantic schemas (`Note`, `NoteSummary`, `NoteCreate`, `NoteUpdate`,
   `SearchResult`, `ReviewResponse`).
 - `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS, rendering.
+- `block_types.py` — rich inline marks, tables, columns, image/file/math: validation,
+  derived Markdown/plain text, Markdown/HTML round trip (§2a).
 - `documents.py` — note lifecycle (create/update/trash/restore/purge) and Markdown mirrors.
 - `embeddings.py` — ColBERT late-interaction via PyLate; encode + MaxSim scoring,
   with a keyword fallback when disabled/unavailable.
@@ -266,7 +397,34 @@ settles a block conflict (taking the source's version is an ordinary undoable ed
 created_at=, modified_at=, provenance=, importer=)` (or
 `sources.upsert_document_from_source(db_path, …)`), with `blocks` a list of
 `SourceBlock(markdown, external_id, type, attrs, children, created_at, modified_at,
-provenance)` or a Markdown body. `folder_path=[(external_id, name), …]` finds/creates
+provenance, content, text)` or a Markdown body. A SourceBlock carries either
+Markdown or `type` + structured `content` (§2a; Markdown and text are derived).
+`sources.source_block(dict)` / `source_blocks([dict])` build them from plain dicts:
+
+```python
+source_blocks([
+  {"id": "{P1}", "type": "heading", "level": 2, "inline": [{"text": "Plan", "u": 1}]},
+  {"id": "{P2}", "text": "plain paragraph"},
+  {"id": "{P3}", "type": "list", "checked": True, "inline": [{"text": "done", "s": 1}]},
+  {"id": "{T1}", "type": "table", "borders": True, "column_widths": [96, None],
+   "header_rows": 0, "rows": [["a", {"inline": [...], "background": "#DEEAF6",
+     "blocks": [{"type": "list", "text": "in cell"}, {"type": "table", "rows": [["x"]]}]}]]},
+  {"id": "{O1}", "type": "columns", "columns": [
+     {"id": "{O1a}", "width": 0.5, "blocks": [{"text": "left"}]},
+     {"id": "{O1b}", "width": 0.5, "blocks": [{"type": "image", "url": "/media/…",
+                                                "alt": "OCR", "width": 300}]}]},
+  {"id": "{F1}", "type": "file", "url": "/media/….pdf", "name": "a.pdf", "size": 1, "mime": "application/pdf"},
+  {"id": "{M1}", "type": "math", "latex": "a^2"},
+])
+```
+
+Runs may be canonical or compact (`{"text", "b", "i", "u", "s", "sup", "sub", "code",
+"color", "highlight", "link"}`; other keys such as `font`/`size` are ignored).
+`table_content(rows, column_widths=, header_rows=)` and `nested_block(dict)` build
+table content and in-cell blocks; invalid shapes raise `BlockShapeError`. A block
+whose structured content changed in the source (a table cell, a column width) is
+updated like changed text; conflicts on structured blocks keep the source's
+`source_content`/`source_attrs` so `keep: "source"` restores them. `folder_path=[(external_id, name), …]` finds/creates
 folders by source id (`sources.ensure_folder_path`). It returns
 `UpsertResult(document_id, status=created|updated|unchanged|skipped_deleted, revision,
 blocks_created, blocks_updated, blocks_deleted, blocks_skipped, conflicts)`. The note
