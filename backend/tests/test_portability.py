@@ -10,7 +10,7 @@ from app.portability import (
 
 
 class PortabilityTests(unittest.TestCase):
-    def test_exports_nested_blocks_without_sqlite_ids(self) -> None:
+    def test_exports_nested_blocks_with_their_block_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             create_document(
@@ -29,7 +29,8 @@ class PortabilityTests(unittest.TestCase):
 
             self.assertIn("title: Guide", markdown)
             self.assertIn("  - Child", markdown)
-            self.assertNotIn(tree["children"][0]["id"], markdown)
+            # Ids travel in Fortress comments, so a re-import keeps links working.
+            self.assertIn(f'# Guide <!-- fortress:block {{"id":"{tree["children"][0]["id"]}"}} -->', markdown)
 
     def test_export_import_round_trip_preserves_document_and_block_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -203,12 +204,10 @@ class NestedBlockRoundTripTests(unittest.TestCase):
             item = first_tree["children"][0]
             self.assertEqual(
                 [child["text"] for child in item["children"][:2]],
-                [
-                    "```bash\npip install x\n    indented arg\n```",
-                    "A second paragraph\nover two lines",
-                ],
+                ["pip install x\n    indented arg", "A second paragraph\nover two lines"],
             )
-            self.assertEqual(item["children"][2]["children"][0]["text"], "```\ndeep code\n```")
+            self.assertEqual(item["children"][0]["attrs"], {"language": "bash"})
+            self.assertEqual(item["children"][2]["children"][0]["text"], "deep code")
 
 
 def _block_shape(blocks: list[dict]) -> list[tuple[str, str, list]]:
