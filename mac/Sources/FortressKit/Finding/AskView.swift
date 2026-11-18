@@ -79,6 +79,7 @@ struct AskView: View {
                     .buttonBorderShape(.circle)
                     .keyboardShortcut(.cancelAction)
                     .help("Stop")
+                    .accessibilityLabel("Stop Answering")
                     .padding(5)
                 } else {
                     Button(action: send) {
@@ -89,6 +90,7 @@ struct AskView: View {
                     .buttonBorderShape(.circle)
                     .disabled(!canSend)
                     .help("Ask")
+                    .accessibilityLabel("Ask")
                     .padding(5)
                 }
             }
@@ -334,7 +336,7 @@ struct AskTrace: View {
                 PulsingDot()
             } else {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))  // HIG minimum
             }
             TimelineView(.periodic(from: turn.started, by: 0.1)) { context in
                 Text(verbatim: line(state, now: context.date))

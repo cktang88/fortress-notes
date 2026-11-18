@@ -69,8 +69,9 @@ struct CommandPaletteView: View {
     private func field(text: Binding<String>) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 17, weight: .medium))
+                .font(.title2.weight(.medium))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             TextField("Search notes and commands", text: text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 20))
