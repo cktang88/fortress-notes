@@ -2,6 +2,8 @@
 
 import heapq
 import math
+import threading
+from collections import OrderedDict
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -50,22 +52,52 @@ def _ranked(scores: dict[str, float]) -> list[SearchResult]:
     return results
 
 
+# Related results per (note, k, block) for one corpus and scoring state: opening
+# a note again (or another window asking) skips the scoring pass.
+_related_cache: OrderedDict[tuple, tuple[object, object, list[RelatedResult]]] = OrderedDict()
+_related_lock = threading.Lock()
+_RELATED_CACHE_SIZE = 256
+
+
 def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list[RelatedResult]:
     settings = get_settings()
-    note = documents.get_note(note_id)
-    if not note:
+    db_path = settings.block_db_path
+    # Only the title and one block's text are needed: this used to build and
+    # render the whole note twice (a full tree and its Markdown) per request.
+    title = block_store.document_title(db_path, note_id)
+    if title is None:
         return []
-    query = f"{note.title}\n\n{note.body}"
+    query = title
     if block_id is not None:
-        source = block_store.document_subtree(settings.block_db_path, note_id, block_id)
-        if source is None:
-            raise KeyError("Block document not found")
-        query = source["subtree"]["text"]
-    all_blocks = block_store.embedding_documents(settings.block_db_path)
+        text = block_store.block_text(db_path, note_id, block_id)
+        if text is None:
+            raise KeyError(f"block not found: {block_id}")
+        query = text
+    all_blocks = block_store.embedding_documents(db_path)
+    state = embeddings.scoring_state(all_blocks)
+    key = (db_path, note_id, k, block_id, title)
+    if state is not None:
+        with _related_lock:
+            cached = _related_cache.get(key)
+            if cached is not None and cached[0] is all_blocks and cached[1] == state:
+                _related_cache.move_to_end(key)
+                return list(cached[2])
+    results = _related_notes(note_id, k, block_id, title, query, all_blocks)
+    if state is not None:
+        with _related_lock:
+            _related_cache[key] = (all_blocks, state, results)
+            while len(_related_cache) > _RELATED_CACHE_SIZE:
+                _related_cache.popitem(last=False)
+    return list(results)
+
+
+def _related_notes(
+    note_id: str, k: int, block_id: str | None, title: str, query: str, all_blocks
+) -> list[RelatedResult]:
     # One pass: the focused paragraph's indexed text (or all of this note's), and every
     # other note's paragraphs.
     candidates = []
-    own_texts = [note.title]
+    own_texts = [title]
     for bid, document_id, updated_at, text in all_blocks:
         if document_id != note_id:
             candidates.append((bid, updated_at, text))
