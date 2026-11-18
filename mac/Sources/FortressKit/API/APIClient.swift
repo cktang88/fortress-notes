@@ -183,7 +183,7 @@ public struct APIClient: Sendable {
     public func related(documentId: String, blockId: String? = nil, count: Int = 5) async throws -> [RelatedResult] {
         var query = ["k": "\(count)"]
         if let blockId { query["block_id"] = blockId }
-        return try await get("api/notes/\(documentId)/related", query: query, kind: .search)
+        return try await get("api/block-documents/\(documentId)/related", query: query, kind: .search)
     }
 
     public func linkTargets(query: String, limit: Int = 20) async throws -> [BlockLinkTarget] {
