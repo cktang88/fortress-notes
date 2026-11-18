@@ -64,7 +64,7 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(backfill_assets(self.database, media), 1)
         with (
             patch.object(block_store, "rebuild_fts") as rebuild,
-            patch.object(block_store, "_rebuild_document_assets") as relink,
+            patch.object(block_store, "rebuild_document_derived") as relink,
             patch.object(Path, "read_bytes", side_effect=AssertionError("re-read")),
         ):
             self.assertEqual(backfill_assets(self.database, media), 1)
@@ -122,11 +122,12 @@ class LargeDocumentTransactionTests(unittest.TestCase):
         target = self.tree["children"][10]["id"]
         with (
             patch.object(
-                block_store, "_replace_references", wraps=block_store._replace_references
+                block_store, "_refresh_row", wraps=block_store._refresh_row
             ) as references,
             patch.object(block_store, "_refresh_fts", wraps=block_store._refresh_fts) as fts,
         ):
-            self.apply(BlockOperation(operation="update", block_id=target, text="Edited"))
+            self.apply(BlockOperation(operation="update", block_id=target,
+                                      content=[{"type": "text", "text": "Edited"}]))
         self.assertLessEqual(references.call_count, 3)
         self.assertLessEqual(fts.call_count, 3)
         self.assertEqual(
@@ -141,11 +142,13 @@ class LargeDocumentTransactionTests(unittest.TestCase):
         mentioning = self.tree["children"][1]["id"]
         new_id = "01J00000000000000000000077"
         # A reference typed before its target exists...
-        self.apply(BlockOperation(operation="update", block_id=mentioning,
-                                  text=f"see (({new_id}))"))
+        self.apply(BlockOperation(operation="update", block_id=mentioning, content=[
+            {"type": "text", "text": "see "}, {"type": "blockRef", "id": new_id},
+        ]))
         self.assertEqual(block_store.document_backlinks(self.database, "big"), [])
         # ...is linked once the target is inserted.
-        self.apply(BlockOperation(operation="insert", block_id=new_id, text=f"(({target}))"))
+        self.apply(BlockOperation(operation="insert", block_id=new_id, type="paragraph",
+                                  content=[{"type": "blockRef", "id": target}]))
         links = sorted(
             (link["source_block_id"], link["target_block_id"])
             for link in block_store.document_backlinks(self.database, "big")
@@ -234,7 +237,7 @@ class ApiWorkTests(unittest.TestCase):
             f"/api/block-documents/{self.note['id']}/transactions?response={response}",
             json={"base_revision": revision, "operations": [{
                 "operation": "update", "block_id": self.note["children"][0]["id"],
-                "text": text,
+                "content": [{"type": "text", "text": text}],
             }]},
         )
 
@@ -365,7 +368,7 @@ class ApiWorkTests(unittest.TestCase):
                 f"/api/block-documents/{other['id']}/transactions",
                 json={"base_revision": other["revision"], "operations": [{
                     "operation": "update", "block_id": other["children"][0]["id"],
-                    "text": "unrelated words entirely"}]},
+                    "content": [{"type": "text", "text": "unrelated words entirely"}]}]},
             )
             self.assertEqual(self.client.get(url).json(), [])
             self.assertEqual(self.client.get("/api/notes/missing/related").status_code, 404)
@@ -381,7 +384,8 @@ class ApiWorkTests(unittest.TestCase):
             return self.client.post(
                 f"/api/block-documents/{self.note['id']}/transactions",
                 json={"base_revision": revision, "operations": [{
-                    "operation": "update", "block_id": block, "text": f"writer {number}"}]},
+                    "operation": "update", "block_id": block,
+                    "content": [{"type": "text", "text": f"writer {number}"}]}]},
             ).status_code
 
         with ThreadPoolExecutor(8) as pool:

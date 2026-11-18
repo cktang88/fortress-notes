@@ -415,7 +415,9 @@ def _render_ref(self, tokens, index, options, env) -> str:
 
 
 def _render_softbreak(self, tokens, index, options, env) -> str:
-    return " "
+    # A note keeps the lines its author typed (as Obsidian and Bear show them),
+    # so a soft break is a line break, not CommonMark's space.
+    return "<br>"
 
 
 def _markdown(*plugins: str) -> MarkdownIt:
@@ -704,6 +706,9 @@ class _Renderer:
         previous: str | None = None
         for node in nodes:
             kind = node["type"]
+            if kind == "paragraph" and not node.get("content") and not node.get("children"):
+                # Markdown has no empty paragraph: a blank line is just spacing.
+                continue
             ordinal = ordinal + 1 if kind == "numbered_item" else 0
             rendered = [part for part in self.block(node, ordinal, parent) if part]
             if kind in _LIST_TYPES and previous == kind and fragments and rendered:
@@ -727,7 +732,9 @@ class _Renderer:
             meta = self.meta(node, parent=parent)
             text = self.text_block(node, ordinal, meta)
             if kind in _LIST_TYPES:
-                indent = " " * len(self.list_marker(node, ordinal))
+                # Children align with the item's text after the bullet; a task's
+                # "[ ] " is part of that text, so it does not count.
+                indent = " " * len(self.list_marker(node, ordinal).removesuffix("[ ] ").removesuffix("[x] "))
                 body = "\n\n".join(self.blocks(children))
                 if body:
                     gap = "\n" if children[0]["type"] in _LIST_TYPES else "\n\n"

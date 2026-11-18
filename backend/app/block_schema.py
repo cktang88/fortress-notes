@@ -33,7 +33,6 @@ _COLOR_RE = re.compile(
 )
 _EXTENSION_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _MAX_ATTRS_BYTES = 65_536
-_MAX_TEXT = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -337,10 +336,7 @@ def normalize_inline(value: object, *, plain: bool = False) -> list[dict[str, An
             nodes.append({"type": kind, "id": target})
         else:
             raise BlockShapeError(f"unknown inline node: {kind!r}")
-    merged = merge_inline(nodes)
-    if sum(len(node.get("text", "")) for node in merged) > _MAX_TEXT:
-        raise BlockShapeError("block text is too long")
-    return merged
+    return merge_inline(nodes)
 
 
 def merge_inline(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:

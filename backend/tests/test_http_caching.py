@@ -85,7 +85,9 @@ class DocumentValidatorTests(ApiCase):
         self.assertEqual(self.revalidate(url, f"W/{tag}, \"other\""), 304)
 
         block = first.json()["children"][0]["id"]
-        self.transact(note["id"], {"operation": "update", "block_id": block, "text": "Edited"})
+        self.transact(note["id"], {
+            "operation": "update", "block_id": block, "content": [{"type": "text", "text": "Edited"}],
+        })
         changed = self.client.get(url, headers={"If-None-Match": tag})
         self.assertEqual(changed.status_code, 200)
         self.assertNotEqual(changed.headers["etag"], tag)
@@ -96,8 +98,11 @@ class DocumentValidatorTests(ApiCase):
         target_block = target["children"][0]["id"]
         source = self.create("Source", "Intro")
         self.transact(source["id"], {
-            "operation": "insert", "block_id": "01J00000000000000000000001",
-            "text": f"See [[{target['id']}|Target]] and (({target_block}))",
+            "operation": "insert", "block_id": "01J00000000000000000000001", "type": "paragraph",
+            "content": [
+                {"type": "text", "text": "See "}, {"type": "docLink", "id": target["id"]},
+                {"type": "text", "text": " and "}, {"type": "blockRef", "id": target_block},
+            ],
         })
         url = f"/api/block-documents/{source['id']}"
         tag = self.client.get(url).headers["etag"]
@@ -113,7 +118,8 @@ class DocumentValidatorTests(ApiCase):
 
         # Editing the referenced block changes its text in resolved_links.
         self.transact(target["id"], {
-            "operation": "update", "block_id": target_block, "text": "New target text",
+            "operation": "update", "block_id": target_block,
+            "content": [{"type": "text", "text": "New target text"}],
         })
         response = self.client.get(url, headers={"If-None-Match": tag})
         self.assertEqual(response.status_code, 200)
@@ -195,7 +201,8 @@ class WorkspaceValidatorTests(ApiCase):
 
         # Editing the linking note changes backlinks/info/navigation.
         self.transact(other["id"], {
-            "operation": "insert", "block_id": "01J00000000000000000000002", "text": "more",
+            "operation": "insert", "block_id": "01J00000000000000000000002", "type": "paragraph",
+            "content": [{"type": "text", "text": "more"}],
         })
         for url in urls[:1] + urls[2:4]:
             self.assertEqual(self.revalidate(url, tags[url]), 200, url)

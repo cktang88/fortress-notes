@@ -57,9 +57,9 @@ class BlockMoveTests(unittest.TestCase):
             self.assertEqual(
                 _shape(moved["children"]),
                 [
-                    ("- a", 0, [("- c0", 0, []), ("- c2", 1, [])]),
-                    ("- c1", 1, []),
-                    ("- b", 2, []),
+                    ("a", 0, [("c0", 0, []), ("c2", 1, [])]),
+                    ("c1", 1, []),
+                    ("b", 2, []),
                 ],
             )
             undone = undo_transaction(database, created["id"], moved["revision"])
@@ -78,7 +78,7 @@ class BlockMoveTests(unittest.TestCase):
                     apply_transaction(
                         database,
                         target["id"],
-                        [BlockOperation(operation="insert", block_id=existing, text="x")],
+                        [BlockOperation(operation="insert", block_id=existing, type="paragraph")],
                         target["revision"],
                     )
             tree = document_tree(database, created["id"])
@@ -156,7 +156,7 @@ class EmbeddingCorpusTests(unittest.TestCase):
                 database,
                 "imported",
                 [BlockOperation(
-                    operation="update", block_id=tree["children"][0]["id"], text="new words"
+                    operation="update", block_id=tree["children"][0]["id"], content=[{"type": "text", "text": "new words"}]
                 )],
                 tree["revision"],
             )
@@ -183,25 +183,27 @@ class MarkdownImportTests(unittest.TestCase):
             created = create_block_document(database, "T", "rough", [], body)
 
             first = created["children"][0]
-            self.assertEqual(first["text"], "- [ ] first paragraph")
+            self.assertEqual((first["type"], first["text"]), ("check_item", "first paragraph"))
             self.assertEqual(first["attrs"], {"checked": False})
             self.assertEqual(
                 [(child["type"], child["text"]) for child in first["children"]],
                 [
                     ("paragraph", "second paragraph"),
-                    ("heading", "## heading inside"),
-                    ("raw", "<div>raw html</div>"),
-                    ("list", "- nested"),
+                    ("heading", "heading inside"),
+                    ("html", "raw html"),
+                    ("bullet_item", "nested"),
                 ],
             )
-            self.assertEqual(created["children"][1]["text"], "- next item")
+            self.assertEqual(created["children"][1]["text"], "next item")
             rendered = render_markdown(created["children"])
             for text in ("first paragraph", "second paragraph", "heading inside", "raw html"):
                 self.assertIn(text, rendered)
-            # The export imports back to the same shape.
+            # The export imports back to the same shape (its ids are taken in this
+            # database, so the copy gets fresh ones).
             again = create_block_document(database, "T2", "rough", [], rendered)
             self.assertEqual(
-                render_markdown(again["children"]), rendered
+                render_markdown(again["children"], include_ids=False),
+                render_markdown(created["children"], include_ids=False),
             )
 
     def test_unicode_line_separators_do_not_shift_block_text(self) -> None:
@@ -301,7 +303,7 @@ class MirrorRaceTests(unittest.TestCase):
                     created["id"],
                     [BlockOperation(
                         operation="update", block_id=created["children"][0]["id"],
-                        text="new text",
+                        content=[{"type": "text", "text": "new text"}],
                     )],
                     created["revision"],
                 )

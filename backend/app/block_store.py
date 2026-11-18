@@ -3041,6 +3041,7 @@ class _Writer:
             return None, None
         if "blocknote" in raw:
             return block_legacy.inline(raw["blocknote"], plain=new_type == "code"), payload
+        # Nothing the server reads (e.g. only the Markdown it used to store): unchanged.
         return content, payload
 
     def move(self, operation: BlockOperation) -> None:
@@ -3095,7 +3096,7 @@ def _operation_block(operation: BlockOperation) -> tuple[schema.Block, list[Bloc
     """The block an insert describes, and children it implies (older request shapes)."""
 
     if not operation.type:
-        raise ValueError("insert requires a type")
+        raise BlockShapeError("insert requires a type")
     raw = operation.content
     if isinstance(raw, dict) or operation.type not in schema.TYPES:
         # The Mac app's current shape: BlockNote names, {"blocknote": ...} content.

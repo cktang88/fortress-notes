@@ -37,13 +37,21 @@ class AutoTitleTests(unittest.TestCase):
         self.addCleanup(self._directory.cleanup)
 
     def write(self, document: dict, text: str) -> dict:
-        block = document["children"][0]
+        """Replace the note's blocks with ``text`` parsed as Markdown, as typed."""
+
+        from app.block_markdown import parse_markdown
+
+        operations = [
+            {"operation": "delete", "block_id": block["id"]} for block in document["children"]
+        ]
+        for parsed in parse_markdown(text):
+            operations.append({
+                "operation": "insert", "type": parsed.type, "attrs": parsed.attrs,
+                "content": parsed.content,
+            })
         response = self.client.post(
             f"/api/block-documents/{document['id']}/transactions",
-            json={
-                "base_revision": document["revision"],
-                "operations": [{"operation": "update", "block_id": block["id"], "text": text}],
-            },
+            json={"base_revision": document["revision"], "operations": operations},
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()

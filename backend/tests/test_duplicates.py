@@ -83,7 +83,8 @@ class DuplicateCheckTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/block-documents/{source}").status_code, 404)
         self.assertIn(source, [item["id"] for item in self.client.get("/api/trash").json()])
         hits = self.client.get("/api/block-search", params={"q": "Moved"}).json()
-        self.assertEqual({hit["document_id"] for hit in hits}, {target})
+        # The linker shows (and so indexes) the referenced block's text.
+        self.assertEqual({hit["document_id"] for hit in hits}, {target, linker})
         self.assertIn("Moved two", (self.notes / f"{target}.md").read_text())
 
     def test_move_into_rejects_itself_and_missing_notes(self) -> None:
