@@ -147,7 +147,7 @@ final class FindingStubProtocol: URLProtocol, @unchecked Sendable {
 
 /// Waits (up to `timeout` seconds; snapshot suites can hold the main thread) for a condition.
 @MainActor
-func eventually(timeout: TimeInterval = 30, _ condition: () -> Bool) async {
+func eventually(timeout: TimeInterval = 120, _ condition: () -> Bool) async {
     let deadline = Date.now.addingTimeInterval(timeout)
     while !condition(), Date.now < deadline {
         try? await Task.sleep(for: .milliseconds(5))

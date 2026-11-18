@@ -139,16 +139,25 @@ extension FindingPerf {
         let controller = SearchController()
         let api = stub.api
         let keystrokes = ["r", "ry", "ryo", "ryok", "ryoka", "ryokan", "ryokan ", "ryokan g", "ryokan gi", "ryokan gix", "ryokan gi", "ryokan gio", "ryokan gion"]
+        var last = ContinuousClock.now
+        var longGaps = 0  // Pauses longer than the debounce (the test's sleeps can overshoot).
         for query in keystrokes {
+            let now = ContinuousClock.now
+            if now - last > .milliseconds(150) { longGaps += 1 }
+            last = now
             controller.update(query: query) { try await api.search($0) }
             try? await Task.sleep(for: .milliseconds(60))
         }
         await eventually { controller.resultsQuery == "ryokan gion" }
         try? await Task.sleep(for: .milliseconds(300))
+        let sent = stub.started.compactMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value }
+        print("PERF search.fastTyping.sent: \(sent) longGaps=\(longGaps)")
         perf("search.requests.fastTyping(13 keys)", count: stub.count("/api/unified-search"))
         perf("search.cancelled.fastTyping", count: stub.cancelledCount("/api/unified-search"))
+        perf("search.store.requests.fastTyping", count: api.store.stats.requests)
         #expect(controller.results.count == 5)
-        #expect(stub.count("/api/unified-search") <= 2)  // "r" at once, then "ryokan gion".
+        // "r" at once, then "ryokan gion" (plus one per pause longer than the debounce).
+        #expect(stub.count("/api/unified-search") <= 2 + longGaps)
     }
 
     /// Slow typing (200 ms a key: every query settles) with a trailing space, a typo and
@@ -164,6 +173,8 @@ extension FindingPerf {
         }
         await eventually { controller.resultsQuery == "kyoto" && !controller.isSearching }
         try? await Task.sleep(for: .milliseconds(400))
+        let sent = stub.started.compactMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value }
+        print("PERF search.slowTyping.sent: \(sent)")
         perf("search.requests.slowTyping(10 keys)", count: stub.count("/api/unified-search"))
         perf("search.cancelled.slowTyping", count: stub.cancelledCount("/api/unified-search"))
         #expect(controller.resultsQuery == "kyoto")

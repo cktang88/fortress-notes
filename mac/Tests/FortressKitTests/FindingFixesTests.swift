@@ -142,7 +142,7 @@ import Testing
         let turn = AskTurn(question: "q")
         turn.stallTimeout = .milliseconds(400)
         turn.start(stub.api.ask("q"))
-        await eventually(timeout: 10) { !turn.state.isStreaming }
+        await eventually { !turn.state.isStreaming }
         #expect(turn.state.phase == .failed("The answer stopped coming in."))
         #expect(turn.state.sentences.count == 1)
         await eventually { stub.cancelledCount("/api/ask") == 1 }
