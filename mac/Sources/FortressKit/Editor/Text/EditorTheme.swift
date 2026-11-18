@@ -50,7 +50,7 @@ struct EditorTheme: Sendable {
     /// Space before / after a block.
     func spacing(for kind: BlockKind) -> (before: CGFloat, after: CGFloat) {
         if isCompact { return (0, 0) }
-        switch kind {
+        return switch kind {
         case .heading1: (24 * scale, 8 * scale)
         case .heading2: (20 * scale, 6 * scale)
         case .heading3: (16 * scale, 4 * scale)

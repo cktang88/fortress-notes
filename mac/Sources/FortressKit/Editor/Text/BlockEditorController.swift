@@ -158,10 +158,13 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         replace(NSRange(location: min(at, string.length), length: 0), with: table,
                 selecting: NSRange(location: min(at, string.length), length: 0))
         if let attachment = storage.attribute(.attachment, at: min(at, storage.length - 1), effectiveRange: nil) as? BlockAttachment {
-            RunLoop.main.perform(inModes: [.common]) {
-                MainActor.assumeIsolated { attachment.live?.focus(atEnd: false) }
-            }
+            Self.later { [weak attachment] in attachment?.live?.focus(atEnd: false) }
         }
+    }
+
+    /// After the current layout pass (a run loop turn).
+    static func later(_ body: @escaping @MainActor () -> Void) {
+        RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { body() } }
     }
 
     /// The height of a column's text at `width` (embedded editors).
