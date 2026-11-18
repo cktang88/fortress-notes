@@ -19,7 +19,6 @@ from app.block_store import (
     delete_document,
     document_backlinks,
     document_tree,
-    embedding_documents,
     fts_is_consistent,
     initialize,
     move_document,
@@ -29,6 +28,7 @@ from app.block_store import (
     store_asset_text,
     undo_transaction,
 )
+from app.corpus import embedding_documents
 from app.models import BlockOperation
 
 _T = "2026-01-01T00:00:00+00:00"

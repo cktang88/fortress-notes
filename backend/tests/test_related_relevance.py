@@ -109,6 +109,73 @@ class RelatedRelevanceApiTests(unittest.TestCase):
         )
         self.assertEqual(by_block, ["Garden"])
 
+    def test_cached_related_lists_take_in_edits_to_other_notes_without_a_full_pass(self) -> None:
+        from app import documents, embeddings, main, search
+
+        scored: list[int] = []
+        real_score_note = embeddings.score_note
+
+        def counting_score_note(texts, docs):
+            scored.append(len(docs))
+            return real_score_note(texts, docs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            settings = _settings(Path(directory), True)
+            with (
+                patch.object(main, "settings", settings),
+                patch.object(documents, "get_settings", return_value=settings),
+                patch.object(search, "get_settings", return_value=settings),
+                patch.object(embeddings, "get_settings", return_value=settings),
+                patch.object(embeddings, "_get_model", return_value=_FakeColBERT()),
+                patch.object(embeddings, "_cache", embeddings._Cache()),
+                patch.object(embeddings, "score_note", side_effect=counting_score_note),
+                TestClient(main.app) as client,
+            ):
+                ids = {}
+                for title, body in [
+                    ("Bread", "sourdough starter doubled overnight with rye flour"),
+                    ("Tiles", "matte grey bathroom tiles quote from the tiler"),
+                    ("Budget", "monthly groceries budget rent transport savings"),
+                    ("Sleep", "no screens after ten no coffee after two"),
+                    ("Cat", "vet vaccines for the cat next visit in a year"),
+                    ("Router", "move the router off the floor or buy a mesh extender"),
+                ]:
+                    ids[title] = client.post("/api/block-documents", json={"title": title, "body": body}).json()["id"]
+                draft = client.post(
+                    "/api/block-documents", json={"title": "Draft", "body": "fed the sourdough starter with rye flour"}
+                ).json()["id"]
+                embeddings.warm_index(queries=False)
+                url = f"/api/block-documents/{draft}/related"
+                names = {value: key for key, value in ids.items()}
+                self.assertEqual([names[r["note"]["id"]] for r in client.get(url).json()], ["Bread"])
+                full = scored[-1]
+                self.assertGreaterEqual(full, 6)
+
+                tiles = client.get(f"/api/block-documents/{ids['Tiles']}").json()
+                client.post(
+                    f"/api/block-documents/{ids['Tiles']}/transactions",
+                    json={"base_revision": tiles["revision"], "operations": [{
+                        "operation": "update", "block_id": tiles["children"][0]["id"],
+                        "content": [{"type": "text", "text": "rye flour sourdough starter fed this morning"}]}]},
+                )
+                related = [names[r["note"]["id"]] for r in client.get(url).json()]
+                self.assertEqual(sorted(related), ["Bread", "Tiles"])
+                # Only the edited note's paragraphs were scored again.
+                self.assertLess(scored[-1], full)
+                self.assertEqual(scored[-1], len(tiles["children"]))
+
+                # Editing the note itself scores everything again.
+                note = client.get(f"/api/block-documents/{draft}").json()
+                client.post(
+                    f"/api/block-documents/{draft}/transactions",
+                    json={"base_revision": note["revision"], "operations": [{
+                        "operation": "update", "block_id": note["children"][0]["id"],
+                        "content": [{"type": "text", "text": "vet vaccines for the cat"}]}]},
+                )
+                self.assertEqual([names[r["note"]["id"]] for r in client.get(url).json()], ["Cat"])
+                self.assertGreaterEqual(scored[-1], full)
+        search._related_cache.clear()
+
 
 class RelevanceLayerTests(unittest.TestCase):
     """The cutoff on its own, with made-up raw MaxSim scores."""

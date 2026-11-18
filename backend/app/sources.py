@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import ocr as _ocr
 from . import block_schema as schema
 from . import order_keys
 from . import provenance as _provenance
@@ -892,6 +893,17 @@ def document_info(path: Path, document_id: str) -> dict[str, Any]:
                      AND source_doc.deleted_at IS NULL)""",
             (document_id, document_id, document_id, document_id),
         ).fetchone()[0]
+        pictures = connection.execute(
+            f"""SELECT block_assets.block_id, assets.media_name, assets.mime_type,
+                       assets.content_hash, assets.text
+                  FROM block_assets
+                  JOIN blocks ON blocks.id = block_assets.block_id
+                  JOIN assets USING (content_hash, media_name)
+                 WHERE blocks.document_id = ?
+                   AND assets.mime_type IN ({",".join("?" for _ in _ocr.OCR_TYPES)})
+                 ORDER BY blocks.order_key, assets.media_name""",
+            (document_id, *sorted(_ocr.OCR_TYPES)),
+        ).fetchall()
         history = connection.execute(
             """SELECT COUNT(*) AS edits,
                       MAX(CASE WHEN undone = 0 THEN 1 ELSE 0 END) AS can_undo,
@@ -985,7 +997,39 @@ def document_info(path: Path, document_id: str) -> dict[str, Any]:
             "blocks_removed_in_source": removed_in_source,
         },
         "conflicts": conflicts,
+        "picture_text": _picture_text(path, pictures),
     }
+
+
+PICTURE_TEXT_CHARS = 4000
+
+
+def _picture_text(path: Path, rows: list) -> list[dict[str, Any]]:
+    """Text read from each picture/PDF of the note (searchable, not in the body)."""
+
+    status = _ocr.asset_status(path, list({row["content_hash"] for row in rows}))
+    result = []
+    for row in rows:
+        state = status.get(row["content_hash"], {})
+        text = str(row["text"] or "")
+        result.append(
+            {
+                "block_id": row["block_id"],
+                "media_name": row["media_name"],
+                "mime_type": row["mime_type"],
+                # queued, running (or retrying), done, failed
+                "status": state.get("status", "queued"),
+                "method": state.get("method") or None,  # ocr, pdf-text, pdf-text+ocr
+                "pages": state.get("pages"),
+                "error": state.get("error"),
+                "model": _ocr.MODEL,
+                "read_at": state.get("updated_at"),
+                # The text in use; it can predate the current model while that is queued.
+                "text": text[:PICTURE_TEXT_CHARS],
+                "text_chars": len(text),
+            }
+        )
+    return result
 
 
 def resolve_block_conflict(path: Path, document_id: str, block_id: str, keep: str) -> dict:

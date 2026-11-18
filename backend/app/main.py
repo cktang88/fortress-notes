@@ -23,17 +23,16 @@ from . import (
     block_query,
     block_store,
     embeddings,
-    images,
     documents,
     document_service,
     duplicates,
     http_cache,
     llm,
     media,
+    ocr,
     onenote_import,
     search,
     sources,
-    vision,
     workspace,
 )
 from .portability import (
@@ -133,13 +132,15 @@ async def lifespan(_app: FastAPI):
     task = (
         asyncio.create_task(_reindex_loop()) if settings.embeddings_enabled else None
     )
-    # Pre-load the vision models in a background thread so the app serves immediately
-    # and the first image upload isn't a cold start.
+    # Reads text in pictures and PDFs in the background, starting with whatever an
+    # earlier run left unread.
     if settings.vision_enabled:
-        _spawn(asyncio.to_thread(vision.warm))
+        ocr.start(settings.block_db_path)
+        onenote_import.jobs.ocr = ocr.wake
     try:
         yield
     finally:
+        await asyncio.to_thread(ocr.stop)
         for running in (task, backup_task):
             if running:
                 running.cancel()
@@ -301,9 +302,16 @@ def health() -> dict:
         "embeddings_enabled": settings.embeddings_enabled,
         "model_loaded": embeddings.model_loaded(),
         "vision_enabled": settings.vision_enabled,
-        "vision_loaded": vision.loaded(),
+        "vision_loaded": ocr.loaded(),
         "block_db_ready": block_store.is_ready(settings.block_db_path),
     }
+
+
+@app.get("/api/ocr")
+def ocr_status() -> dict:
+    """Background reading of pictures and PDFs: model, queued/done/failed counts."""
+
+    return {"enabled": settings.vision_enabled, **ocr.status_counts(settings.block_db_path)}
 
 
 @app.get("/api/block-schema")
@@ -956,8 +964,7 @@ async def upload_file(file: UploadFile = File(...)):
         block_store.register_asset, settings.block_db_path, path, digest,
         media_type or "application/octet-stream",
     )
-    if assets.is_supported_image_type(file.content_type):
-        _spawn(asyncio.to_thread(images.extract_and_store, path))
+    ocr.wake()
     # BlockNote's uploadFile result is a partial block; its file insertion
     # handler passes this object directly to updateBlock.
     return {"props": {"url": url, "name": name}}

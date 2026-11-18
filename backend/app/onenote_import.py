@@ -156,7 +156,7 @@ def safe_link(href: object) -> str | None:
     if _CONTROL_RE.search(href) or any(ch in href for ch in "\n\t"):
         return None
     return href
-# Image types the local OCR reads (images.extract_and_store).
+# Image types the local OCR reads (app/ocr.py).
 _OCR_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
 # Images shown as images; any other image asset (.bin, ...) is kept as a file.
 _IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif",
@@ -1633,39 +1633,6 @@ def import_manifest(
                      cancelled, ocr).run()
 
 
-_ocr_queue: "queue.Queue[Path]" = queue.Queue()
-_ocr_worker: threading.Thread | None = None
-_ocr_lock = threading.Lock()
-
-
-def background_ocr(paths: list[Path]) -> None:
-    """Queue images for the app's caption + OCR (``images.extract_and_store``), one
-    at a time on a daemon thread; the text lands in the assets text cache and
-    the notes' search index."""
-
-    global _ocr_worker
-    for path in paths:
-        _ocr_queue.put(path)
-    with _ocr_lock:
-        if _ocr_worker is None or not _ocr_worker.is_alive():
-            _ocr_worker = threading.Thread(target=_ocr_work, name="onenote-ocr", daemon=True)
-            _ocr_worker.start()
-
-
-def _ocr_work() -> None:
-    from . import images  # heavy model imports stay out of the import path
-
-    while True:
-        path = _ocr_queue.get()
-        try:
-            if path.is_file():
-                images.extract_and_store(path)
-        except Exception:
-            traceback.print_exc()
-        finally:
-            _ocr_queue.task_done()
-
-
 # --- Jobs ------------------------------------------------------------------------------------
 
 
@@ -1702,7 +1669,8 @@ class ImportJobs:
         self._lock = threading.Lock()
         self._queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
         self._worker: threading.Thread | None = None
-        self.ocr: Callable[[list[Path]], None] | None = background_ocr
+        # Set by the app to its OCR queue's wake-up (app/ocr.py); None: no OCR.
+        self.ocr: Callable[[list[Path]], None] | None = None
 
     @staticmethod
     def new_id() -> str:

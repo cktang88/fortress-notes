@@ -34,6 +34,7 @@ import httpx
 import regex
 
 from . import block_query, block_store, llm, search
+from . import corpus as corpus_store
 from .config import get_settings
 
 BUDGET_SECONDS = 3.0
@@ -129,6 +130,16 @@ def _window(text: str, terms: list[str]) -> str:
     return text[start : start + SOURCE_CHARS]
 
 
+def _with_asset_text(row: dict[str, object]) -> str:
+    """A paragraph's text plus the text read from its pictures and PDFs (OCR)."""
+
+    text = str(row.get("text") or "")
+    asset_text = str(row.get("asset_text") or "").strip()
+    if not asset_text:
+        return text
+    return f"{text}\n\n[Text in attached picture/PDF]\n{asset_text}".lstrip()
+
+
 class _Sources:
     """Numbered passages shown to the model, deduplicated by block."""
 
@@ -141,7 +152,7 @@ class _Sources:
         added = []
         for row in rows:
             block_id = str(row["id"])
-            text = str(row.get("text") or "")
+            text = _with_asset_text(row)
             if block_id in self._block_ids or not text.strip():
                 continue
             self._block_ids.add(block_id)
@@ -219,28 +230,14 @@ def grep_blocks(pattern: str, limit: int = TOOL_HITS) -> list[dict[str, object]]
     return [details[block_id] for block_id in hits if block_id in details]
 
 
-# Each paragraph with its note's title, and both lower-cased, built once per change of
-# the corpus so a term grep is one pass of `in` checks.
-_titled: tuple[object, list[tuple[str, str, str, str]]] | None = None
-
-
 def _titled_corpus(db_path) -> list[tuple[str, str, str, str]]:
-    """(block_id, note title, text, lower-cased "title\ntext") for every active paragraph."""
+    """(block_id, note title, text, lower-cased "title\ntext") for every active paragraph.
 
-    global _titled
-    corpus = block_store.embedding_documents(db_path)
-    cached = _titled
-    if cached is not None and cached[0] is corpus:
-        return cached[1]
-    titles = {
-        str(doc["id"]): str(doc["title"] or "") for doc in block_store.list_documents(db_path)
-    }
-    rows = []
-    for block_id, document_id, _version, text in corpus:
-        title = titles.get(str(document_id), "")
-        rows.append((block_id, title, text, f"{title}\n{text}".lower()))
-    _titled = (corpus, rows)
-    return rows
+    Built per note and kept with the corpus snapshot, so an edit only rebuilds the
+    rows of the note it changed; a term grep is then one pass of `in` checks.
+    """
+
+    return corpus_store.snapshot(db_path).titled()
 
 
 def grep_terms(terms: list[str], limit: int = PREFETCH_GREP) -> list[dict[str, object]]:
@@ -298,6 +295,9 @@ def read_note(name: str) -> list[dict[str, object]]:
             visit(node["children"])
 
     visit(tree["children"])
+    details = block_query.block_details(db_path, [str(row["id"]) for row in rows])
+    for row in rows:
+        row["asset_text"] = details.get(str(row["id"]), {}).get("asset_text", "")
     return rows
 
 

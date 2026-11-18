@@ -20,7 +20,6 @@ from app.block_store import (
     delete_document,
     document_backlinks,
     document_tree,
-    embedding_documents,
     ensure_fts_integrity,
     fts_is_consistent,
     initialize,
@@ -37,6 +36,7 @@ from app.block_store import (
     store_asset_text,
     undo_transaction,
 )
+from app.corpus import embedding_documents
 from app.block_schema import BlockShapeError
 from app.models import BlockOperation, BlockTransaction
 from pydantic import ValidationError
@@ -149,10 +149,6 @@ class BlockStoreTests(unittest.TestCase):
                     (f"{audio_id}.mp3", "audio/mpeg", ""),
                     (f"{linked_id}.png", "image/png", ""),
                 ],
-            )
-            digest = hashlib.sha256(b"legacy image").hexdigest()
-            self.assertEqual(
-                (media_dir / f"{digest}.txt").read_text(encoding="utf-8"), "old OCR"
             )
             self.assertEqual(len(search_blocks(database, "old OCR")), 1)
 
