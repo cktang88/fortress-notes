@@ -12,6 +12,7 @@ import json
 import re
 import sqlite3
 import threading
+import time
 from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -531,6 +532,115 @@ def _initialize(path: Path) -> None:
                    ON folders(source_kind, source_external_id)
                 WHERE source_external_id IS NOT NULL"""
         )
+        connection.executescript(_PERFORMANCE_INDEXES)
+        _ensure_change_tracking(connection)
+
+
+# Lookups that EXPLAIN QUERY PLAN showed as full scans: backlinks (by target),
+# the foreign-key checks of every block delete (children by parent_id, refs by
+# target), asset links by media name, and a purge's receipts.
+_PERFORMANCE_INDEXES = """
+CREATE INDEX IF NOT EXISTS block_refs_target ON block_refs(target_block_id);
+CREATE INDEX IF NOT EXISTS document_refs_target ON document_refs(target_document_id);
+CREATE INDEX IF NOT EXISTS blocks_parent ON blocks(parent_id);
+CREATE INDEX IF NOT EXISTS assets_media_name ON assets(media_name);
+CREATE INDEX IF NOT EXISTS block_assets_asset ON block_assets(content_hash, media_name);
+CREATE INDEX IF NOT EXISTS transaction_receipts_document ON transaction_receipts(document_id);
+"""
+
+# Change tracking for HTTP validators (ETags) and server-side response caches.
+# ``change_log.seq`` grows with every change to anything a cached response
+# shows; ``documents.change_seq`` is the seq of the last change to that note's
+# own rows (blocks, user attrs, links, history, the document row). ``epoch``
+# changes when a backup is restored, so validators from before never match.
+# last_opened_at is deliberately not tracked: it is metadata of a read.
+_DOCUMENT_COLUMNS = (
+    "title, status, tags_json, folder_id, position, deleted_at, created_at, updated_at, "
+    "revision, title_auto, provenance_json, source_kind, source_external_id, sync_json"
+)
+
+
+def _bump(document_expr: str | None) -> str:
+    sql = "UPDATE change_log SET seq = seq + 1 WHERE id = 1;"
+    if document_expr:
+        sql += (
+            " UPDATE documents SET change_seq = (SELECT seq FROM change_log WHERE id = 1)"
+            f" WHERE id IN ({document_expr});"
+        )
+    return sql
+
+
+_CHANGE_TRIGGERS = {
+    "blocks_changed_insert": ("AFTER INSERT ON blocks", _bump("NEW.document_id")),
+    "blocks_changed_update": (
+        "AFTER UPDATE ON blocks", _bump("NEW.document_id, OLD.document_id")
+    ),
+    "blocks_changed_delete": ("AFTER DELETE ON blocks", _bump("OLD.document_id")),
+    "documents_changed_insert": ("AFTER INSERT ON documents", _bump("NEW.id")),
+    "documents_changed_update": (
+        f"AFTER UPDATE OF {_DOCUMENT_COLUMNS} ON documents", _bump("NEW.id")
+    ),
+    "documents_changed_delete": ("AFTER DELETE ON documents", _bump(None)),
+    "folders_changed_insert": ("AFTER INSERT ON folders", _bump(None)),
+    "folders_changed_update": ("AFTER UPDATE ON folders", _bump(None)),
+    "folders_changed_delete": ("AFTER DELETE ON folders", _bump(None)),
+    "document_history_changed_insert": (
+        "AFTER INSERT ON document_history", _bump("NEW.document_id")
+    ),
+    "document_history_changed_update": (
+        "AFTER UPDATE ON document_history", _bump("NEW.document_id")
+    ),
+    "document_history_changed_delete": (
+        "AFTER DELETE ON document_history", _bump("OLD.document_id")
+    ),
+}
+for _table, _column in (
+    ("block_user_attrs", "block_id"),
+    ("block_refs", "source_block_id"),
+    ("document_refs", "source_block_id"),
+):
+    for _event, _row in (("insert", "NEW"), ("update", "NEW"), ("delete", "OLD")):
+        _CHANGE_TRIGGERS[f"{_table}_changed_{_event}"] = (
+            f"AFTER {_event.upper()} ON {_table}",
+            _bump(f"SELECT document_id FROM blocks WHERE id = {_row}.{_column}"),
+        )
+
+
+def _ensure_change_tracking(connection: sqlite3.Connection) -> None:
+    _add_columns(connection, "documents", {"change_seq": "INTEGER NOT NULL DEFAULT 0"})
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS change_log (
+               id INTEGER PRIMARY KEY CHECK (id = 1),
+               seq INTEGER NOT NULL,
+               epoch TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        "INSERT OR IGNORE INTO change_log(id, seq, epoch)"
+        " VALUES (1, 0, lower(hex(randomblob(8))))"
+    )
+    for name, (event, body) in _CHANGE_TRIGGERS.items():
+        connection.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {event} BEGIN {body} END")
+
+
+def new_change_epoch(path: Path) -> None:
+    """Invalidate every validator handed out so far (e.g. after a restore)."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        connection.execute(
+            "UPDATE change_log SET seq = seq + 1, epoch = lower(hex(randomblob(8)))"
+            " WHERE id = 1"
+        )
+
+
+def change_state(path: Path) -> tuple[str, int]:
+    """(epoch, seq): changes whenever anything a cached response shows changes."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        row = connection.execute("SELECT epoch, seq FROM change_log WHERE id = 1").fetchone()
+    return str(row["epoch"]), int(row["seq"])
 
 
 def register_asset(db_path: Path, asset_path: Path, content_hash: str, mime_type: str) -> None:
@@ -942,15 +1052,127 @@ def create_document(
             )
 
 
-def mark_opened(path: Path, document_id: str) -> None:
-    """Remember when a note was last opened (metadata only: no revision, no edit time)."""
+# Opening a note writes last_opened_at, but at most once a minute per note: a
+# write on every read would serialize reads behind writers and change the
+# note's validator (ETag) on every GET.
+OPEN_MARK_INTERVAL_S = 60.0
+_opened_marks: dict[tuple[Path, str], float] = {}
+_opened_lock = threading.Lock()
+
+
+def mark_opened(path: Path, document_id: str, *, wait: bool = True) -> bool:
+    """Remember when a note was last opened (metadata only: no revision, no edit time).
+
+    Debounced per note (``OPEN_MARK_INTERVAL_S``). With ``wait=False`` the write
+    is skipped, not waited for, while another writer holds the database (the
+    next open tries again). Returns whether it wrote.
+    """
+
+    key = (path, document_id)
+    now = time.monotonic()
+    with _opened_lock:
+        last = _opened_marks.get(key)
+        if last is not None and now - last < OPEN_MARK_INTERVAL_S:
+            return False
+    initialize(path)
+    try:
+        with connection_scope(path) as connection:
+            if not wait:
+                connection.execute("PRAGMA busy_timeout = 0")
+            try:
+                connection.execute(
+                    "UPDATE documents SET last_opened_at = ? WHERE id = ? AND deleted_at IS NULL",
+                    (_now(), document_id),
+                )
+            finally:
+                if not wait:
+                    connection.execute("PRAGMA busy_timeout = 5000")
+    except sqlite3.OperationalError:
+        if wait:
+            raise
+        return False
+    with _opened_lock:
+        if len(_opened_marks) > 10_000:
+            _opened_marks.clear()
+        _opened_marks[key] = now
+    return True
+
+
+def document_exists(path: Path, document_id: str) -> bool:
+    initialize(path)
+    with connection_scope(path) as connection:
+        return connection.execute(
+            "SELECT 1 FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
+        ).fetchone() is not None
+
+
+def _document_validator(connection: sqlite3.Connection, document_id: str) -> tuple | None:
+    """What a document payload depends on, as a tuple that changes when it does.
+
+    Its own rows (``change_seq``), ``last_opened_at``, and the newest change of
+    every note or block it links to (their titles and text are in
+    ``resolved_links`` and ``[[id|Title]]`` labels). ``change_seq`` values grow
+    globally, so a change to any link target raises the maximum; a link that
+    appears or disappears changes this note's own rows.
+    """
+
+    row = connection.execute(
+        """SELECT change_log.epoch, documents.change_seq, documents.last_opened_at,
+                  (SELECT MAX(target.change_seq)
+                     FROM blocks AS source
+                     JOIN document_refs AS refs ON refs.source_block_id = source.id
+                     JOIN documents AS target ON target.id = refs.target_document_id
+                    WHERE source.document_id = documents.id) AS document_targets,
+                  (SELECT MAX(target_doc.change_seq)
+                     FROM blocks AS source
+                     JOIN block_refs AS refs ON refs.source_block_id = source.id
+                     JOIN blocks AS target ON target.id = refs.target_block_id
+                     JOIN documents AS target_doc ON target_doc.id = target.document_id
+                    WHERE source.document_id = documents.id) AS block_targets
+             FROM documents, change_log
+            WHERE documents.id = ? AND documents.deleted_at IS NULL AND change_log.id = 1""",
+        (document_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return (
+        row["epoch"], row["change_seq"], row["document_targets"], row["block_targets"],
+        row["last_opened_at"],
+    )
+
+
+def document_validator(path: Path, document_id: str) -> tuple | None:
+    """The document's validator (see ``_document_validator``); None if missing."""
 
     initialize(path)
     with connection_scope(path) as connection:
-        connection.execute(
-            "UPDATE documents SET last_opened_at = ? WHERE id = ? AND deleted_at IS NULL",
-            (_now(), document_id),
-        )
+        return _document_validator(connection, document_id)
+
+
+def document_tree_with_validator(path: Path, document_id: str) -> tuple[tuple, dict] | None:
+    """The tree and its validator, read from one snapshot."""
+
+    initialize(path)
+    with read_scope(path) as connection:
+        validator = _document_validator(connection, document_id)
+        if validator is None:
+            return None
+        tree = _document_tree(connection, document_id)
+    return (validator, tree) if tree is not None else None
+
+
+def document_info_validator(path: Path, document_id: str) -> tuple | None:
+    """Info and backlinks show other notes too: the workspace change state."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        row = connection.execute(
+            """SELECT change_log.epoch, change_log.seq, documents.last_opened_at
+                 FROM documents, change_log
+                WHERE documents.id = ? AND documents.deleted_at IS NULL AND change_log.id = 1""",
+            (document_id,),
+        ).fetchone()
+    return None if row is None else tuple(row)
 
 
 def ensure_editable_block(path: Path, document_id: str) -> bool:

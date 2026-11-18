@@ -104,6 +104,9 @@ def restore_backup(db_path: Path, directory: Path, name: str) -> Path:
         snapshot.backup(live)
     # Older snapshots may predate later migrations; bring them up to date.
     block_store.initialize(db_path, force=True)
+    # The snapshot's change counter went back too: hand out validators (ETags)
+    # that can never match ones issued before the restore.
+    block_store.new_change_epoch(db_path)
     with block_store.connection_scope(db_path) as live:
         # Revisions went backwards. Move them past every revision an open editor
         # could hold so its next save is rejected as a conflict instead of
