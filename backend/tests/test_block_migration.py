@@ -17,16 +17,27 @@ from app import block_store, sources
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-SOURCE_PAGE = [
-    {"id": "P/1", "type": "paragraph", "inline": [{"text": "Hello ", "b": 1}, {"text": "world"}]},
-    {"id": "P/2", "type": "quote", "inline": "Quoted text"},
-    {"id": "P/3", "type": "table",
-     "rows": [["a", "b"], [{"inline": "c", "background": "#FF0000"},
-                           {"text": "d", "blocks": [{"type": "list", "text": "inner"}]}]],
-     "column_widths": [100, 200], "borders": True},
-    {"type": "paragraph", "text": "no id para"},
-    {"id": "P/4", "type": "list", "checked": False, "text": "task"},
-    {"id": "P/5", "type": "paragraph", "text": "changed in source"},
+SOURCE_PAGE = [  # what the OneNote importer writes for the page the fixture imported
+    {"id": "P/1", "type": "paragraph", "content": [
+        {"type": "text", "text": "Hello ", "marks": {"bold": True}}, {"type": "text", "text": "world"}]},
+    {"id": "P/2", "type": "quote", "children": [
+        {"type": "paragraph", "content": [{"type": "text", "text": "Quoted text"}]}]},
+    {"id": "P/3", "type": "table", "attrs": {"column_widths": [100, 200], "borders": True}, "children": [
+        {"type": "table_row", "children": [
+            {"type": "table_cell", "children": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}]},
+            {"type": "table_cell", "children": [{"type": "paragraph", "content": [{"type": "text", "text": "b"}]}]},
+        ]},
+        {"type": "table_row", "children": [
+            {"type": "table_cell", "attrs": {"background": "#FF0000"},
+             "children": [{"type": "paragraph", "content": [{"type": "text", "text": "c"}]}]},
+            {"type": "table_cell", "children": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "d"}]},
+                {"type": "bullet_item", "content": [{"type": "text", "text": "inner"}]}]},
+        ]},
+    ]},
+    {"type": "paragraph", "content": [{"type": "text", "text": "no id para"}]},
+    {"id": "P/4", "type": "check_item", "attrs": {"checked": False}, "content": [{"type": "text", "text": "task"}]},
+    {"id": "P/5", "type": "paragraph", "content": [{"type": "text", "text": "changed in source"}]},
 ]
 
 

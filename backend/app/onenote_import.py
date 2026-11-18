@@ -11,7 +11,8 @@ Pipeline (docs/onenote-import.md, F3):
    every page becomes one note through ``sources.upsert_document_from_source``
    keyed by the page GUID, so re-importing the same export updates notes in
    place, keeps local edits, and reports untouched pages as ``unchanged``.
-3. **link** -- ``onenote:`` links become ``[[document_id|Title]]`` links. A link
+3. **link** -- ``onenote:`` links become ``docLink`` nodes (they read as the
+   target note's current title; docs/block-model.md §3). A link
    whose target page was not imported yet is kept as plain text in the first
    pass; once every page exists, the pages that had such links are upserted again
    with the links resolved (an ordinary "untouched blocks follow the source"
@@ -42,14 +43,20 @@ Design choices:
   (``object_id``, ``element_id``; a table lists its cells' ids as ``nested``).
 * **Paragraph links** (``onenote:…&object-id={GUID}&N``): when the target page
   is imported and has a block whose ``element_id``/``object_id`` equals the
-  link's ``object_ref``, the link becomes a block reference ``(( block_id ))``
+  link's ``object_ref``, the link becomes a ``blockRef`` node
   (it previews the paragraph's current text and records a backlink); otherwise
   it links to the page.
 * **Removed in OneNote**: on a re-import, notes previously imported from a
   notebook in this export whose page is no longer there are kept and marked
-  ``provenance.source_removed`` (+ ``source_removed_at``), and listed in the
+  removed in source (sync state ``source_removed_at``), and listed in the
   report with section folders that disappeared (sections that failed to read
   are never counted as removed).
+* **Blocks** are written in the canonical shape (``type``, ``attrs``, inline
+  ``content``, ``payload``, ``children``): tables as ``table`` -> ``table_row``
+  -> ``table_cell`` -> blocks, quotes as containers holding a paragraph.
+  OneNote-only details stay as extension attributes (``onenote_tags``,
+  ``list_format``, ``list_style``, ``list_start``, ``checked_at``,
+  ``text_alignment``, an image's ``link``/``original_url``/``ink``...).
 * **Assets** are copied once into ``NOTES_DIR/assets/<sha256>.<ext>`` (deduped by
   hash). Extensions a browser would render as active content (html, svg from
   attachments, ...) are stored as ``.bin`` (served as a download).
@@ -74,7 +81,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from . import background, block_store, provenance, sources
+from . import assets, background, block_store, provenance, sources
 from .config import get_settings
 
 SOURCE = "onenote_import"
@@ -92,9 +99,68 @@ _COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _MONOSPACE = ("consolas", "courier", "courier new", "lucida console", "menlo", "monaco",
               "source code pro", "cascadia", "fira code", "fira mono", "jetbrains mono",
               "sf mono", "dejavu sans mono", "andale mono", "monospace")
+_NUMBER_STYLES = frozenset({"upper_roman", "lower_roman", "upper_alpha", "lower_alpha"})
 _BAD_LINK_SCHEMES = ("javascript:", "vbscript:", "data:")
+# Link targets kept as links; anything else (file:, UNC paths, ms-word:, javascript:, ...)
+# stays plain text and is listed in the block's provenance (``dropped_links``).
+_SAFE_LINK_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps", "sftp", "news", "sms", "geo"})
+MAX_LINK_LENGTH = 2048
+MAX_TAG_LABEL = 100
+# C0/C1 control characters other than tab and newline (OneNote files can carry them;
+# they are invisible there and break Markdown/terminals here).
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff]")
+_SPACE_CONTROL_RE = re.compile(r"[\x0c\x1c-\x1f\x85]")
+_LINK_JUNK_RE = re.compile(r"[\x00-\x20\x7f-\x9f]")
+_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]{0,31}):")
+_WWW_RE = re.compile(r"^www\.[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+([/?#]\S*)?$", re.IGNORECASE)
+
+
+def _clean(text: str) -> str:
+    """``text`` without control characters (tab and newline kept; CR becomes newline)."""
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Separators (form feed, file/group/record/unit separators, NEL) read as spaces.
+    return _CONTROL_RE.sub("", _SPACE_CONTROL_RE.sub(" ", text))
+
+
+def _clean_manifest(value: Any) -> Any:
+    """Every string of the manifest cleaned, except rich ``text`` (its marks index into it;
+    runs are cleaned once split)."""
+
+    if isinstance(value, str):
+        return _clean(value)
+    if isinstance(value, list):
+        return [_clean_manifest(item) for item in value]
+    if isinstance(value, dict):
+        rich = "marks" in value
+        return {key: (item if rich and key == "text" else _clean_manifest(item)) for key, item in value.items()}
+    return value
+
+
+def safe_link(href: object) -> str | None:
+    """``href`` when it is safe to keep as a clickable link, else None."""
+
+    if not isinstance(href, str):
+        return None
+    href = href.strip()
+    if not href or len(href) > MAX_LINK_LENGTH:
+        return None
+    # Browsers ignore tabs/newlines/control characters inside a scheme ("java\nscript:").
+    probe = _LINK_JUNK_RE.sub("", href)
+    if _SCHEME_RE.match(probe) is None and _WWW_RE.match(href):
+        # OneNote stores "www.example.com" links without a scheme and opens them as web pages.
+        href = probe = "http://" + href
+    match = _SCHEME_RE.match(probe)
+    if match is None or match.group(1).lower() not in _SAFE_LINK_SCHEMES:
+        return None
+    if _CONTROL_RE.search(href) or any(ch in href for ch in "\n\t"):
+        return None
+    return href
 # Image types the local OCR reads (app/ocr.py).
 _OCR_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
+# Images shown as images; any other image asset (.bin, ...) is kept as a file.
+_IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif",
+                               "emf", "wmf", "svg"})
 # Pages whose imported text covers less of the manifest's text are reported.
 COVERAGE_THRESHOLD = 0.98
 # Extensions served as themselves from /media; anything else is stored as .bin.
@@ -242,11 +308,6 @@ def _short_hash(*parts: object) -> str:
     return digest.hexdigest()[:16]
 
 
-def _link_label(title: str) -> str:
-    label = " ".join(str(title).split()).replace("]", ")").replace("[", "(").replace("|", "/")
-    return label or "Untitled"
-
-
 def _px(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         return None
@@ -272,7 +333,9 @@ class _PageContext:
     rewritten: int = 0
     block_level_links: int = 0  # paragraph links that could only point at their page
     block_references: int = 0  # paragraph links that became block references
-    ocr_assets: list[str] = field(default_factory=list)  # image asset names without text
+    ocr_assets: list[str] = field(default_factory=list)
+    warned: set[str] = field(default_factory=set)  # image asset names without text
+    dropped_links: list[str] = field(default_factory=list)  # unsafe/unsupported targets kept as text
 
     def count(self, key: str, amount: int = 1) -> None:
         self.stats[key] = self.stats.get(key, 0) + amount
@@ -280,10 +343,15 @@ class _PageContext:
     def warn(self, message: str) -> None:
         self.importer.warn(f"{self.page_label}: {message}")
 
+    def warn_once(self, message: str) -> None:
+        if message not in self.warned:
+            self.warned.add(message)
+            self.warn(message)
+
 
 def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
           block_links: list[str]) -> list[dict[str, Any]]:
-    """Compact runs (sources.source_block's form) from text + code-point mark spans."""
+    """Canonical inline nodes (docs/block-model.md §3) from text + code-point mark spans."""
 
     if not text:
         return []
@@ -299,52 +367,93 @@ def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
         if start < end:
             usable.append((start, end, mark))
     # Resolve each link mark once (counts and the unresolved list are per link).
-    hrefs: dict[int, str | None] = {}
+    hrefs: dict[int, str | dict[str, str] | None] = {}
     for index, (start, end, mark) in enumerate(usable):
         if mark.get("type") == "link":
             hrefs[index] = _link_href(mark, text[start:end], ctx, block_links)
     bounds = sorted({0, length, *(s for s, _, _ in usable), *(e for _, e, _ in usable)})
+    equations = {index: latex for index, (_, _, mark) in enumerate(usable)
+                 if mark.get("type") == "math" and (latex := _inline_latex(mark)) is not None}
     runs: list[dict[str, Any]] = []
+    emitted: set[int] = set()
+    refs_emitted: set[int] = set()
     for a, b in zip(bounds, bounds[1:]):
-        run: dict[str, Any] = {"text": text[a:b]}
+        equation = next((index for index in equations if usable[index][0] <= a and usable[index][1] >= b), None)
+        if equation is not None:
+            # OneNote's linear text of an equation loses its structure (a/b, x², ∮…):
+            # keep the LaTeX instead, as inline code ``$…$`` (there is no inline math run).
+            if equation not in emitted:
+                emitted.add(equation)
+                runs.append({"type": "text", "text": f"${equations[equation]}$", "marks": {"code": True}})
+            continue
+        marks: dict[str, Any] = {}
+        href: str | None = None
+        ref: dict[str, str] | None = None
+        ref_index = -1
         for index, (start, end, mark) in enumerate(usable):
             if start > a or end < b:
                 continue
             kind = mark.get("type")
-            if kind == "bold":
-                run["b"] = 1
-            elif kind == "italic":
-                run["i"] = 1
-            elif kind == "underline":
-                run["u"] = 1
-            elif kind in {"strikethrough", "strike"}:
-                run["s"] = 1
-            elif kind == "superscript":
-                run["sup"] = 1
-            elif kind == "subscript":
-                run["sub"] = 1
+            if kind in _MARK_NAMES:
+                marks[_MARK_NAMES[kind]] = True
             elif kind in {"color", "highlight"}:
                 color = mark.get("color")
                 if isinstance(color, str) and _COLOR_RE.match(color):
-                    run[kind] = color.upper()
+                    marks[kind] = color.upper()
             elif kind == "font":
                 family = str(mark.get("family") or "").strip().lower()
                 if family and any(family.startswith(name) for name in _MONOSPACE):
-                    run["code"] = 1
+                    marks["code"] = True
             elif kind == "link":
-                href = hrefs.get(index)
-                if href:
-                    run["link"] = href
-            # "math" (inline equations) keeps OneNote's linear text; font_size is dropped.
-        if "code" in run:
-            # Inline code cannot carry other marks in Markdown; keep it plain code.
-            run = {key: value for key, value in run.items() if key in {"text", "code", "link"}}
-        runs.append(run)
+                target = hrefs.get(index)
+                if isinstance(target, dict):
+                    ref, ref_index = target, index
+                elif target:
+                    href = target
+            # font_size is dropped; equations with LaTeX were written above.
+        if marks.get("sup") and marks.get("sub"):
+            del marks["sub"]
+        # Monospace runs keep their other marks (colour, highlight, bold...): the Markdown
+        # export writes them as HTML around the code span and reads them back.
+        if ref is not None:
+            # A note link / block reference reads as its target's current title or text;
+            # one node per OneNote link, however many formatting runs it spans.
+            if ref_index not in refs_emitted:
+                refs_emitted.add(ref_index)
+                runs.append(dict(ref))
+            continue
+        node: dict[str, Any] = {"type": "text", "text": _clean(text[a:b])}
+        if marks:
+            node["marks"] = marks
+        if not node["text"]:
+            continue
+        if href:
+            node = {"type": "link", "href": href, "content": [node]}
+        runs.append(node)
     return runs
 
 
+_MARK_NAMES = {"bold": "bold", "italic": "italic", "underline": "underline", "strikethrough": "strike",
+               "strike": "strike", "superscript": "sup", "subscript": "sub"}
+
+
+def _text_nodes(text: str, **marks: Any) -> list[dict[str, Any]]:
+    """One plain (or uniformly marked) text node, or none for empty text."""
+
+    text = _clean(text)
+    if not text:
+        return []
+    node: dict[str, Any] = {"type": "text", "text": text}
+    if marks:
+        node["marks"] = marks
+    return [node]
+
+
 def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext,
-               block_links: list[str]) -> str | None:
+               block_links: list[str]) -> str | dict[str, str] | None:
+    """A web link's href, a ``docLink``/``blockRef`` node for a OneNote link to an
+    imported page / paragraph, or None (kept as text)."""
+
     href = str(mark.get("href") or "").strip()
     onenote = mark.get("onenote") if isinstance(mark.get("onenote"), dict) else None
     if onenote is None and href.lower().startswith("onenote:"):
@@ -358,7 +467,7 @@ def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext,
                 block_id = ctx.importer.find_block(target.document_id, onenote.get("object_ref"))
                 if block_id is not None:
                     ctx.block_references += 1
-                    return f"(( {block_id} ))"
+                    return {"type": "blockRef", "id": block_id}
                 ctx.block_level_links += 1
                 if (
                     onenote.get("object_ref") and page_id in ctx.importer.manifest_pages
@@ -366,7 +475,7 @@ def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext,
                 ):
                     # The paragraph may be new in a page imported later in this run.
                     ctx.pending.add(page_id)
-            return f"[[{target.document_id}|{_link_label(target.title)}]]"
+            return {"type": "docLink", "id": target.document_id}
         if page_id and page_id in ctx.importer.manifest_pages:
             ctx.pending.add(page_id)
         ctx.unresolved.append({
@@ -376,9 +485,31 @@ def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext,
         })
         block_links.append(href)
         return None
-    if not href or href.lower().startswith(_BAD_LINK_SCHEMES):
+    safe = safe_link(href)
+    if safe is None and href:
+        ctx.dropped_links.append(href[:MAX_LINK_LENGTH])
+    return safe
+
+
+def _inline_latex(mark: dict[str, Any]) -> str | None:
+    latex = mark.get("latex")
+    if not isinstance(latex, str) or not latex.strip():
         return None
-    return href
+    return " ".join(_strip_math_delimiters(latex).split()) or None
+
+
+def _text_without_equations(block: dict[str, Any]) -> str:
+    """A text block's text minus the inline equations the importer writes as LaTeX."""
+
+    text = str(block.get("text") or "")
+    spans = sorted(
+        (mark["start"], mark["end"]) for mark in block.get("marks") or []
+        if isinstance(mark, dict) and mark.get("type") == "math" and _inline_latex(mark) is not None
+        and isinstance(mark.get("start"), int) and isinstance(mark.get("end"), int)
+    )
+    for start, end in reversed(spans):
+        text = text[:start] + " " + text[end:]
+    return text
 
 
 def _strip_math_delimiters(latex: str) -> str:
@@ -389,28 +520,72 @@ def _strip_math_delimiters(latex: str) -> str:
     return latex
 
 
+def _apply_tag_colors(runs: list[dict[str, Any]], tags: object) -> None:
+    """Note tags such as "Highlight" or "Critical" colour their paragraph in OneNote
+    (highlight / font colour): give that colour to runs without their own."""
+
+    highlight = color = None
+    for tag in tags if isinstance(tags, list) else []:
+        if not isinstance(tag, dict):
+            continue
+        if highlight is None and isinstance(tag.get("highlight_color"), str) and _COLOR_RE.match(tag["highlight_color"]):
+            highlight = tag["highlight_color"].upper()
+        if color is None and isinstance(tag.get("text_color"), str) and _COLOR_RE.match(tag["text_color"]):
+            color = tag["text_color"].upper()
+    if highlight is None and color is None:
+        return
+    for run in runs:
+        for node in run.get("content") or [] if run["type"] == "link" else [run]:
+            marks = node.get("marks") or {}
+            if node["type"] != "text" or marks.get("code"):
+                continue
+            if highlight and "highlight" not in marks:
+                marks["highlight"] = highlight
+            if color and "color" not in marks:
+                marks["color"] = color
+            if marks:
+                node["marks"] = marks
+
+
 def _text_block(block: dict[str, Any], ctx: _PageContext) -> tuple[dict[str, Any], list[str]]:
+    """A canonical text block (or a quote holding one paragraph) for a manifest text block."""
+
     block_links: list[str] = []
     runs = _runs(str(block.get("text") or ""), block.get("marks"), ctx, block_links)
+    _apply_tag_colors(runs, block.get("tags"))
     kind = block.get("type")
-    result: dict[str, Any] = {"inline": runs}
+    attrs: dict[str, Any] = {}
     if kind == "heading":
         level = block.get("level")
-        result.update(type="heading", level=level if isinstance(level, int) and 1 <= level <= 6 else 1)
-    elif kind == "list_item":
-        info = block.get("list") or {}
-        result.update(type="list", ordered=bool(info.get("ordered")))
+        block_type = "heading"
+        attrs["level"] = level if isinstance(level, int) and 1 <= level <= 6 else 1
+    elif kind in {"list_item", "check_item"}:
+        # A to-do may also sit in a numbered / bulleted list (``list`` is then set).
+        info = block.get("list") if isinstance(block.get("list"), dict) else {}
+        if kind == "check_item":
+            block_type = "check_item"
+            attrs["checked"] = bool(block.get("checked"))
+        else:
+            block_type = "numbered_item" if info.get("ordered") else "bullet_item"
         if info.get("marker"):
-            result["list_format"] = str(info["marker"])
-    elif kind == "check_item":
-        info = block.get("list") or {}
-        result.update(type="list", ordered=bool(info.get("ordered")), checked=bool(block.get("checked")))
+            attrs["list_format"] = str(info["marker"])
+        if info.get("ordered") and info.get("style") in _NUMBER_STYLES:
+            # a. b. c. / i. ii. iii. numbering (the marker alone does not say which).
+            attrs["list_style"] = info["style"]
+        if isinstance(info.get("restart"), int) and not isinstance(info["restart"], bool):
+            attrs["list_start"] = info["restart"]
         if block.get("checked_at"):
-            result["checked_at"] = str(block["checked_at"])
-    elif kind == "quote":
-        result["type"] = "quote"
+            attrs["checked_at"] = str(block["checked_at"])
     else:
-        result["type"] = "paragraph"
+        block_type = "paragraph"
+    if block.get("align") in {"center", "right"}:
+        attrs["text_alignment"] = block["align"]
+    if kind == "quote":
+        # A quote is a container: its line is its first paragraph.
+        ctx.count("text_blocks")
+        return {"type": "quote", "attrs": attrs,
+                "children": [{"type": "paragraph", "attrs": {}, "content": runs}]}, block_links
+    result: dict[str, Any] = {"type": block_type, "attrs": attrs, "content": runs}
     ctx.count("text_blocks")
     return result, block_links
 
@@ -422,7 +597,11 @@ def _note_tags(block: dict[str, Any]) -> list[str]:
             continue
         if block.get("type") == "check_item" and tag.get("checkable"):
             continue  # it is the checkbox
-        label = str(tag.get("label") or tag.get("shape") or "").strip()
+        # Labels can be empty (third-party writers), padded or very long.
+        label = " ".join(str(tag.get("label") or "").split())[:MAX_TAG_LABEL]
+        if not label:
+            shape = str(tag.get("shape") or "")
+            label = "" if shape in {"", "no_icon"} else shape.replace("_", " ").capitalize()
         if label and label not in labels:
             labels.append(label)
     return labels
@@ -433,19 +612,28 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
 
     kind = block.get("type")
     block_links: list[str] = []
+    dropped_before = len(ctx.dropped_links)
     result: dict[str, Any]
     if kind in {"paragraph", "heading", "list_item", "check_item", "quote"}:
         result, block_links = _text_block(block, ctx)
         if kind == "check_item":
             ctx.count("check_items")
     elif kind == "code":
-        result = {"type": "code", "text": str(block.get("text") or "")}
+        result = {"type": "code", "content": _text_nodes(str(block.get("text") or ""))}
     elif kind == "math":
         latex = block.get("latex")
-        latex = _strip_math_delimiters(latex) if isinstance(latex, str) and latex.strip() else str(block.get("text") or "")
-        result = {"type": "math", "latex": latex}
+        if isinstance(latex, str) and latex.strip():
+            latex = _strip_math_delimiters(latex)
+        else:
+            latex = str(block.get("text") or "")
+            if not (isinstance(block.get("mathml"), str) and block["mathml"]):
+                # Third-party writers store equations without LaTeX/MathML: only the
+                # flattened text is left (x=−b±b2−4ac2a), so say the structure is lost.
+                ctx.warn_once("an equation had no LaTeX or MathML; its plain text was kept "
+                              "(fractions, powers and roots may read flattened)")
+        result = {"type": "math", "payload": {"latex": latex}}
         if isinstance(block.get("mathml"), str) and block["mathml"]:
-            result["mathml"] = block["mathml"]
+            result["payload"]["mathml"] = block["mathml"]
         ctx.count("math")
     elif kind == "table":
         result = _table(block, ctx)
@@ -457,27 +645,45 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
     elif kind == "file":
         result = _file(block, ctx)
     elif kind == "embed":
-        url = str(block.get("url") or "").strip()
-        if not url or url.lower().startswith(_BAD_LINK_SCHEMES):
+        url = safe_link(block.get("url"))
+        raw = str(block.get("url") or "").strip()
+        if url is None and not raw:
             return None
-        result = {"type": "paragraph", "inline": [{"text": url, "link": url}]}
+        thumbnail = ctx.importer.asset_url(block.get("thumbnail_asset")) if block.get("thumbnail_asset") else None
+        if url is None:
+            # Not a web address (file:, javascript:, ...): keep it as text, not a link.
+            ctx.dropped_links.append(raw[:MAX_LINK_LENGTH])
+            result = {"type": "paragraph", "content": _text_nodes(raw)}
+        elif thumbnail:
+            # The video's poster frame (what OneNote shows), linked to the video.
+            result = {"type": "image", "attrs": {"url": thumbnail, "caption": url, "name": "Video",
+                                                 "link": url, "embed": True}}
+            alt = _clean(str(block.get("alt_text") or "")).strip()
+            if alt:
+                result["attrs"]["alt"] = alt
+        else:
+            result = {"type": "paragraph",
+                      "content": [{"type": "link", "href": url, "content": _text_nodes(url)}]}
         ctx.count("embeds")
     else:
         text = str(block.get("text") or "")
         ctx.warn(f"unsupported OneNote content ({kind}) kept as text" if text else f"unsupported OneNote content ({kind}) skipped")
         if not text:
             return None
-        result = {"type": "paragraph", "text": text}
+        result = {"type": "paragraph", "content": _text_nodes(text)}
     tags = _note_tags(block)
     if tags:
         result.setdefault("attrs", {})["onenote_tags"] = tags
     if not nested:
+        dropped = ctx.dropped_links[dropped_before:]
         result["id"], previous = _block_external_id(ctx.page_guid, block)
         if previous:
             result["previous_ids"] = previous
         extra: dict[str, Any] = {}
         if block_links:
             extra["unresolved_links"] = block_links
+        if dropped:
+            extra["dropped_links"] = dropped
         ids = _onenote_ids(block)
         if kind == "table":
             nested_ids = sorted(_nested_object_ids(block))[:200]
@@ -574,55 +780,59 @@ def _tree(blocks: list[dict[str, Any]], ctx: _PageContext, nested: bool = False)
         while len(stack) > 1 and stack[-1][0] >= indent:
             stack.pop()
         stack[-1][1].append(converted)
+        if converted["type"] == "table":
+            # A table's children are its rows: blocks indented under it follow it.
+            stack.append((indent, stack[-1][1]))
+            continue
         converted.setdefault("children", [])
         stack.append((indent, converted["children"]))
     return roots
 
 
 def _table(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
+    """table -> table_row -> table_cell -> blocks (the cells' blocks are ordinary blocks)."""
+
     rows = []
     for row in block.get("rows") or []:
         cells = []
         for cell in (row or {}).get("cells") or []:
-            nested = _tree((cell or {}).get("blocks") or [], ctx, nested=True)
-            entry: dict[str, Any] = {}
+            nested = [_nested_safe(item) for item in _tree((cell or {}).get("blocks") or [], ctx, nested=True)]
+            attrs: dict[str, Any] = {}
             first = nested[0] if nested else None
             if (
-                first is not None and first.get("type") == "paragraph"
-                and not first.get("children") and "inline" in first
+                first is not None and first.get("type") == "paragraph" and not first.get("children")
+                # A cell's first line holds only text: a tagged paragraph keeps its attrs.
+                and set(first.get("attrs") or {}) <= {"text_alignment"}
             ):
-                entry["inline"] = first["inline"]
-                nested = nested[1:]
-            if nested:
-                entry["blocks"] = [_nested_safe(item) for item in nested]
+                align = (first.get("attrs") or {}).get("text_alignment")
+                if align:
+                    attrs["align"] = align  # the cell's first line is centred / right-aligned
+                first["attrs"] = {}
+                if not first.get("content"):
+                    nested = nested[1:]  # an empty first line
             background = (cell or {}).get("background")
             if isinstance(background, str) and _COLOR_RE.match(background):
-                entry["background"] = background.upper()
-            cells.append(entry)
+                attrs["background"] = background.upper()
+            cells.append({"type": "table_cell", "attrs": attrs, "children": nested})
         if not cells:
-            cells = [""]
-        rows.append({"cells": cells})
+            cells = [{"type": "table_cell", "attrs": {}, "children": []}]
+        rows.append({"type": "table_row", "attrs": {}, "children": cells})
     if not rows:
-        rows = [{"cells": [""]}]
+        rows = [{"type": "table_row", "attrs": {},
+                 "children": [{"type": "table_cell", "attrs": {}, "children": []}]}]
+    attrs = {"borders": bool(block.get("borders_visible", True))}
     widths = [_px(width) for width in block.get("column_widths") or []]
-    return {
-        "type": "table",
-        "rows": rows,
-        "column_widths": widths,
-        "borders": bool(block.get("borders_visible", True)),
-    }
+    if any(width is not None for width in widths):
+        attrs["column_widths"] = widths
+    return {"type": "table", "attrs": attrs, "children": rows}
 
 
 def _nested_safe(block: dict[str, Any]) -> dict[str, Any]:
-    """Cells cannot hold layout blocks; drop source-only keys for in-cell blocks."""
+    """Blocks in cells are named by their position in the cell: drop source-only keys."""
 
     block = {key: value for key, value in block.items() if key not in {"id", "previous_ids", "provenance"}}
-    if block.get("type") in {"columns", "column"}:
-        block = {"type": "paragraph", "text": ""}
     if block.get("children"):
         block["children"] = [_nested_safe(child) for child in block["children"]]
-    else:
-        block.pop("children", None)
     return block
 
 
@@ -635,33 +845,44 @@ def _image(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
     name = block.get("original_name")
     if url is None:
         ctx.count("images_missing")
-        label = f"Image missing from the OneNote export{f' ({name})' if name else ''}"
-        return {"type": "paragraph", "inline": [{"text": label, "i": 1}] + ([{"text": f"\n{alt}"}] if alt else [])}
-    result: dict[str, Any] = {"type": "image", "url": url}
+        status = block.get("data_status")
+        what = {"empty": "Empty image (no data) in the OneNote export",
+                "invalid": "Image OneNote marked as damaged"}.get(status, "Image missing from the OneNote export")
+        label = f"{what}{f' ({name})' if name else ''}"
+        return {"type": "paragraph", "content": _text_nodes(label, italic=True) + _text_nodes(f"\n{alt}" if alt else "")}
+    if url.rsplit(".", 1)[-1].lower() not in _IMAGE_EXTENSIONS:
+        # The bytes are not a picture (damaged data, or a format browsers cannot show):
+        # keep them as a downloadable file instead of a broken image.
+        ctx.warn_once("image data that is not a picture was kept as a file attachment")
+        return {"type": "file", "attrs": {
+            "url": url, "name": _file_name(name or "image.bin"),
+            "caption": "Image data that cannot be shown" + (f": {alt}" if alt else "")}}
+    attrs: dict[str, Any] = {"url": url}
     if alt:
-        result["alt"] = alt
+        attrs["alt"] = alt
     elif str(block.get("asset")).rsplit(".", 1)[-1].lower() in _OCR_EXTENSIONS:
         # No OneNote OCR text: the app's own OCR makes it searchable (background).
         ctx.ocr_assets.append(str(block["asset"]))
     for key in ("width", "height"):
         value = _px(block.get(key))
         if value:
-            result[key] = value
+            attrs[key] = value
     if name:
-        result["name"] = str(name)
-    attrs: dict[str, Any] = {}
-    if block.get("hyperlink") and not str(block["hyperlink"]).lower().startswith(_BAD_LINK_SCHEMES):
-        attrs["link"] = str(block["hyperlink"])
-    if block.get("is_printout_page"):
-        attrs["printout_page"] = block.get("printout_page_number")
+        attrs["name"] = _file_name(name)
+    if block.get("hyperlink"):
+        link = safe_link(block["hyperlink"])
+        if link:
+            attrs["link"] = link
+        else:
+            ctx.dropped_links.append(str(block["hyperlink"])[:MAX_LINK_LENGTH])
+    if block.get("is_printout_page") and block.get("printout_page_number") is not None:
+        attrs["printout_page"] = block["printout_page_number"]
     if block.get("is_background"):
         attrs["background"] = True
     original = ctx.importer.asset_url(block.get("original_asset")) if block.get("original_asset") else None
     if original:
         attrs["original_url"] = original
-    if attrs:
-        result["attrs"] = attrs
-    return result
+    return {"type": "image", "attrs": attrs}
 
 
 def _ink(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
@@ -669,39 +890,74 @@ def _ink(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
     url = ctx.importer.asset_url(block.get("asset"), allow_svg=True)
     text = str(block.get("recognized_text") or "").strip()
     if url is None:
-        return {"type": "paragraph", "text": text} if text else None
-    result: dict[str, Any] = {"type": "image", "url": url, "name": "Ink drawing"}
+        return {"type": "paragraph", "content": _text_nodes(text)} if text else None
+    attrs: dict[str, Any] = {"url": url, "name": "Ink drawing"}
     if text:
-        result["alt"] = text
+        attrs["alt"] = text
         ctx.count("ink_text")
     for key in ("width", "height"):
         value = _px(block.get(key))
         if value:
-            result[key] = value
-    result["attrs"] = {"ink": True}
-    return result
+            attrs[key] = value
+    attrs["ink"] = True
+    return {"type": "image", "attrs": attrs}
 
 
 def _file(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
     ctx.count("files")
-    name = str(block.get("filename") or "attachment")
-    result: dict[str, Any] = {"type": "file", "name": name}
+    name = _file_name(block.get("filename"))
+    attrs: dict[str, Any] = {"name": name}
     url = ctx.importer.asset_url(block.get("asset"))
     if url is None:
         ctx.count("files_missing")
-        result["caption"] = "File missing from the OneNote export"
+        attrs["caption"] = {"empty": "Empty file (no data) in the OneNote export",
+                            "invalid": "File OneNote marked as damaged"}.get(
+            block.get("data_status"), "File missing from the OneNote export")
     else:
-        result["url"] = url
-    if isinstance(block.get("size"), int) and block["size"] > 0:
-        result["size"] = block["size"]
+        attrs["url"] = url
+    if isinstance(block.get("size"), int) and not isinstance(block["size"], bool) and block["size"] > 0:
+        attrs["size"] = block["size"]
     mime = block.get("mime")
     if isinstance(mime, str) and mime:
-        result["mime"] = mime
+        attrs["mime"] = mime
     if block.get("media_kind") in {"audio", "video"}:
-        result.setdefault("attrs", {})["media_kind"] = block["media_kind"]
-    if "caption" in result:
-        result.setdefault("attrs", {})["caption"] = result.pop("caption")
-    return result
+        attrs["media_kind"] = block["media_kind"]
+    return {"type": "file", "attrs": attrs}
+
+
+MAX_FILE_NAME = 200
+# provenance.source_path / source_url limit (provenance._STRING_FIELDS).
+MAX_SOURCE_PATH = 2000
+MAX_PATH_PART = 200
+
+
+def _source_path(parts: list[Any], fallback: str) -> str:
+    """"Notebook › Group › Section › Page" within MAX_SOURCE_PATH: very long names are cut,
+    and with very deep section groups the middle groups give way to "…"."""
+
+    names = [name if len(name) <= MAX_PATH_PART else name[: MAX_PATH_PART - 1] + "…"
+             for name in (str(part) for part in parts)]
+    path = " › ".join(names) or fallback
+    while len(path) > MAX_SOURCE_PATH and len(names) > 3:
+        names = [names[0], "…", *names[3:]] if names[1] == "…" else [names[0], "…", *names[2:]]
+        path = " › ".join(names)
+    return path[: MAX_SOURCE_PATH - 1] + "…" if len(path) > MAX_SOURCE_PATH else path
+
+
+def _file_name(value: object) -> str:
+    """A display/download name for an attachment: no folders (``..\\..\\x.exe`` is
+    ``x.exe``), no control characters, at most MAX_FILE_NAME characters (extension kept)."""
+
+    name = assets.safe_filename(str(value or "")) if value else "attachment"
+    if name == "file":
+        name = "attachment"
+    if len(name) > MAX_FILE_NAME:
+        stem, dot, extension = name.rpartition(".")
+        if dot and stem and len(extension) <= 16:
+            name = stem[: MAX_FILE_NAME - len(extension) - 2] + "…." + extension
+        else:
+            name = name[: MAX_FILE_NAME - 1] + "…"
+    return name
 
 
 def _layout(rows: list[dict[str, Any]], items: dict[str, dict[str, Any]], used: set[str],
@@ -734,16 +990,17 @@ def _layout(rows: list[dict[str, Any]], items: dict[str, dict[str, Any]], used: 
                     "id": f"{ctx.page_guid}/column:{content[0]['id']}",
                     "previous_ids": [f"{ctx.page_guid}/column:{old}"
                                      for old in content[0].get("previous_ids") or []],
-                    "width": round(width, 4),
-                    "blocks": content,
+                    "type": "column",
+                    "attrs": {"width": round(width, 4)},
+                    "children": content,
                 })
-            first = entries[0]["blocks"][0]
+            first = entries[0]["children"][0]
             blocks.append({
                 "id": f"{ctx.page_guid}/columns:{first['id']}",
                 "previous_ids": [f"{ctx.page_guid}/columns:{old}" for old in first.get("previous_ids") or []],
                 "type": "columns",
                 "attrs": {"onenote": True},
-                "columns": entries,
+                "children": entries,
             })
             ctx.count("columns")
     return blocks
@@ -761,20 +1018,20 @@ def page_blocks(page: dict[str, Any], ctx: _PageContext) -> list[dict[str, Any]]
     if ink_text and not ctx.stats.get("ink_text"):
         first_ink = _find_ink(blocks)
         if first_ink is not None:
-            first_ink["alt"] = ink_text
+            first_ink["attrs"]["alt"] = ink_text
         else:
-            blocks.append({"id": f"{ctx.page_guid}/ink_text", "type": "paragraph", "text": ink_text})
+            blocks.append({"id": f"{ctx.page_guid}/ink_text", "type": "paragraph", "content": _text_nodes(ink_text)})
     return blocks
 
 
 def _find_ink(blocks: list[dict[str, Any]]) -> dict[str, Any] | None:
     for block in blocks:
-        if block.get("type") == "image" and (block.get("attrs") or {}).get("ink") and not block.get("alt"):
+        attrs = block.get("attrs") or {}
+        if block.get("type") == "image" and attrs.get("ink") and not attrs.get("alt"):
             return block
-        for nested in [block.get("children") or [], *[c.get("blocks") or [] for c in block.get("columns") or []]]:
-            found = _find_ink(nested)
-            if found is not None:
-                return found
+        found = _find_ink(block.get("children") or [])
+        if found is not None:
+            return found
     return None
 
 
@@ -787,13 +1044,13 @@ def _subpage_blocks(page_guid: str, children: list[dict[str, Any]], ctx: _PageCo
         target = ctx.importer.page_docs.get(guid)
         title = str(child.get("title") or "Untitled Page")
         if target is not None:
-            run = {"text": title, "link": f"[[{target.document_id}|{_link_label(target.title)}]]"}
+            content = [{"type": "docLink", "id": target.document_id}]  # reads as its current title
         else:
             ctx.pending.add(guid)
-            run = {"text": title}
-        items.append({"id": f"{page_guid}/subpage:{guid}", "type": "list", "inline": [run]})
+            content = _text_nodes(title)
+        items.append({"id": f"{page_guid}/subpage:{guid}", "type": "bullet_item", "content": content})
     return [{"id": f"{page_guid}/subpages", "type": "paragraph",
-             "inline": [{"text": "Subpages", "b": 1}], "children": items}]
+             "content": _text_nodes("Subpages", bold=True), "children": items}]
 
 
 # --- Import ----------------------------------------------------------------------------------
@@ -830,7 +1087,7 @@ def _manifest_text(blocks: list[Any]) -> list[str]:
         kind = block.get("type")
         if kind in {"paragraph", "heading", "list_item", "check_item", "quote", "code"}:
             if not block.get("is_source_citation"):
-                parts.append(str(block.get("text") or ""))
+                parts.append(_text_without_equations(block))
         elif kind == "image":
             parts.append(str(block.get("alt_text") or ""))
         elif kind == "ink":
@@ -886,7 +1143,7 @@ class _Importer:
         self._block_index: dict[str, dict[str, str]] = {}
         manifest_file = manifest_dir / "manifest.json"
         try:
-            self.manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            self.manifest = _clean_manifest(json.loads(manifest_file.read_text(encoding="utf-8")))
         except (OSError, ValueError) as exc:
             raise OneNoteImportError(f"The converter's manifest could not be read: {exc}") from exc
         if self.manifest.get("format") != MANIFEST_FORMAT:
@@ -1043,6 +1300,7 @@ class _Importer:
                 },
             }
             notebook_info.append(info)
+            planned = len(plan)
             for segments, section in _sections(notebook.get("children") or [], [nb_segment]):
                 folder = sources.ensure_folder_path(self.db_path, SOURCE, segments, parent_id=self.folder_id)
                 info["folder_keys"].update(key for key, _ in segments)
@@ -1056,6 +1314,13 @@ class _Importer:
                         link = _norm_guid(page.get("link_target_id"))
                         if link:
                             self.manifest_pages.add(link)
+            if len(plan) == planned and not entry["failed_sections"]:
+                # The converter reported nothing wrong but found no page (a package of
+                # OneNote 2007 sections, a table of contents naming missing sections...).
+                entry["warnings"].append(
+                    "No pages were found in this notebook although no section was reported as failed. "
+                    "If it has pages in OneNote, open it in OneNote 2016 or later (which upgrades old "
+                    "sections), export it again, or import its folder of .one files.")
 
         self._existing_targets()
         total = len(plan)
@@ -1150,6 +1415,9 @@ class _Importer:
         ctx = _PageContext(self, guid, label)
         blocks = page_blocks(page, ctx)
         blocks += _subpage_blocks(guid, children.get(guid, []), ctx)
+        if ctx.dropped_links:
+            ctx.warn(f"{len(ctx.dropped_links)} link(s) kept as plain text (not a web address, or too long): "
+                     + ", ".join(repr(link[:80]) for link in ctx.dropped_links[:3]))
         source_url = page.get("source_url")
         title = str(page.get("title") or "Untitled Page")
         onenote_extra: dict[str, Any] = {
@@ -1168,10 +1436,11 @@ class _Importer:
         if page.get("author"):
             onenote_extra["author"] = str(page["author"])[:200]
         provenance: dict[str, Any] = {
-            "source_path": " › ".join(str(part) for part in (page.get("source_path") or [])) or label,
+            "source_path": _source_path(page.get("source_path") or [], label),
             "extra": {"onenote": onenote_extra},
         }
-        if isinstance(source_url, str) and source_url.lower().startswith(("http://", "https://")):
+        if (isinstance(source_url, str) and source_url.lower().startswith(("http://", "https://"))
+                and len(source_url) <= MAX_SOURCE_PATH):
             provenance["source_url"] = source_url
         result = sources.upsert_document_from_source(
             self.db_path,

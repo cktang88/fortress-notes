@@ -674,6 +674,16 @@ _NATIVE_ATTRS = {
     "image": set(_IMAGE_NATIVE),
 }
 _LIST_TYPES = ("bullet_item", "numbered_item", "check_item")
+
+
+def _ordinal(node: dict[str, Any], previous: int) -> int:
+    """A numbered item's number: its ``list_start`` extension attribute (an imported
+    list restarting at n, e.g. OneNote), else one more than the item before."""
+
+    start = (node.get("attrs") or {}).get("list_start")
+    if isinstance(start, int) and not isinstance(start, bool) and 0 <= start < 10**9:
+        return start
+    return previous + 1
 _INLINE_COMMENT_TYPES = frozenset({"paragraph", "heading", *_LIST_TYPES})
 
 
@@ -709,7 +719,7 @@ class _Renderer:
             if kind == "paragraph" and not node.get("content") and not node.get("children"):
                 # Markdown has no empty paragraph: a blank line is just spacing.
                 continue
-            ordinal = ordinal + 1 if kind == "numbered_item" else 0
+            ordinal = _ordinal(node, ordinal) if kind == "numbered_item" else 0
             rendered = [part for part in self.block(node, ordinal, parent) if part]
             if kind in _LIST_TYPES and previous == kind and fragments and rendered:
                 # Items of one list stay together (a tight list).

@@ -61,10 +61,10 @@ def build_onenote(directory: Path, pages: int) -> None:
 
     os.environ["NOTES_DIR"] = str(directory)
     from app import block_store, sources
-    from app.config import get_settings
+    from app import config
     from app.models import BlockOperation
 
-    get_settings.cache_clear()
+    config.activate(None)  # read NOTES_DIR again
     db = directory / ".fortress.sqlite3"
     assets = directory / "assets"
     assets.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,7 @@
 """Settings, read once per process from the environment and ``backend/.env``.
 
 Everything else asks :func:`get_settings` for the one active :class:`Settings`
-(tests install their own with :func:`use_settings`). Paths are resolved once,
+(scripts switch them with :func:`activate`, tests patch them). Paths are resolved once,
 when the settings are made: a relative ``NOTES_DIR`` (or converter path) is
 relative to the backend directory, never to the current directory, so the
 backend finds the same notes however it is started.
@@ -10,8 +10,6 @@ backend finds the same notes however it is started.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
 from pydantic import Field
@@ -115,15 +113,10 @@ def get_settings() -> Settings:
     return _active
 
 
-@contextmanager
-def use_settings(settings: Settings) -> Iterator[Settings]:
-    """Make ``settings`` the active ones for the duration (tests, scripts)."""
+def activate(settings: Settings | None) -> None:
+    """Make ``settings`` the active ones (scripts); None reads them again on next use."""
 
     global _active
-    previous = _active
-    settings.create_directories()
+    if settings is not None:
+        settings.create_directories()
     _active = settings
-    try:
-        yield settings
-    finally:
-        _active = previous
