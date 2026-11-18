@@ -39,6 +39,8 @@ private func settle() {
         let document = try richDocument()
         let blocks = BlockCodec.flatten(document.children)
         let editor = controller(blocks)
+        // Read the text back, not the blocks kept from loading.
+        editor.discardReadCache()
         let read = editor.currentBlocks()
         #expect(read.map(\.id) == blocks.map(\.id))
         #expect(read.map(\.kind) == blocks.map(\.kind))
@@ -46,6 +48,24 @@ private func settle() {
         // Nothing was edited, so nothing would be saved.
         let (operations, _) = BlockDiff.operations(from: SyncedTree(blocks), to: read)
         #expect(operations.isEmpty, "unexpected: \(operations.map { "\($0.operation) \($0.blockId ?? "")" })")
+    }
+
+    @Test func noteLinksShowTheCurrentTitleAndReadBackAsOneNode() {
+        let link = NoteLinks.documentNode(id: "N1")
+        let blocks = [EditorBlock(id: "a", runs: [InlineRun("See "), .atomic(link), InlineRun(".")])]
+        let editor = BlockEditorController(baseURL: URL(string: "http://127.0.0.1:8000")!)
+        editor.textView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        editor.context.adoptResolvedLinks(ResolvedLinks(documents: ["N1": .init(title: "Packing list")]))
+        editor.load(blocks)
+        #expect(editor.storage.string == "See Packing list.\n")
+        editor.discardReadCache()
+        #expect(editor.currentBlocks()[0].runs == blocks[0].runs)
+        // Typing into the label doesn't copy the link.
+        editor.textView.setSelectedRange(NSRange(location: 8, length: 0))
+        editor.textView.insertText("x", replacementRange: editor.textView.selectedRange())
+        let runs = editor.currentBlocks()[0].runs
+        #expect(runs.filter { $0.node != nil }.count == 1)
+        #expect(BlockDiff.operations(from: SyncedTree(blocks), to: editor.currentBlocks()).operations.count == 1)
     }
 
     @Test func returnSplitsIntoANewBlock() {
@@ -147,6 +167,8 @@ private func settle() {
         }
         let start = Date()
         let editor = controller(blocks)
+        // Read the text back, not the blocks kept from loading.
+        editor.discardReadCache()
         let read = editor.currentBlocks()
         #expect(read.count == 800)
         #expect(Date().timeIntervalSince(start) < 3)

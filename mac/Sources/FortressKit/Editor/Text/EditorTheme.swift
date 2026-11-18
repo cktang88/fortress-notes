@@ -32,6 +32,8 @@ struct EditorTheme: Sendable {
         case .heading1: .systemFont(ofSize: 22 * scale, weight: .semibold)
         case .heading2: .systemFont(ofSize: 18 * scale, weight: .semibold)
         case .heading3: .systemFont(ofSize: 16 * scale, weight: .semibold)
+        case .heading4: .systemFont(ofSize: 15 * scale, weight: .semibold)
+        case .heading5, .heading6: .systemFont(ofSize: 14 * scale, weight: .semibold)
         case .code: .monospacedSystemFont(ofSize: 14 * scale, weight: .regular)
         default: .systemFont(ofSize: baseSize)
         }
@@ -41,7 +43,8 @@ struct EditorTheme: Sendable {
         switch kind {
         case .heading1: 28 * scale
         case .heading2: 24 * scale
-        case .heading3: 22 * scale
+        case .heading3, .heading4: 22 * scale
+        case .heading5, .heading6: 21 * scale
         case .code: 21 * scale
         default: 26 * scale
         }
@@ -53,7 +56,7 @@ struct EditorTheme: Sendable {
         return switch kind {
         case .heading1: (24 * scale, 8 * scale)
         case .heading2: (20 * scale, 6 * scale)
-        case .heading3: (16 * scale, 4 * scale)
+        case .heading3, .heading4, .heading5, .heading6: (16 * scale, 4 * scale)
         case .bullet, .numbered, .check: (0, 4 * scale)
         case .code: ((8 + 10) * scale, (12 + 10) * scale)
         case .image, .embed, .table, .columns: (14 * scale, 18 * scale)
@@ -80,8 +83,7 @@ struct EditorTheme: Sendable {
         if emphasized, kind == .paragraph { base = .systemFont(ofSize: base.pointSize, weight: .semibold) }
         if marks.sup || marks.sub {
             // Raised and lowered text is three quarters size (the offset is in `attributes`).
-            var smaller = InlineMarks(bold: marks.bold, italic: marks.italic, code: marks.code, link: marks.link)
-            smaller.extraStyles = [:]
+            let smaller = InlineMarks(bold: marks.bold, italic: marks.italic, code: marks.code, link: marks.link)
             let font = self.font(for: kind, marks: smaller)
             return NSFont(descriptor: font.fontDescriptor, size: font.pointSize * 0.75) ?? font
         }
@@ -202,7 +204,7 @@ struct EditorTheme: Sendable {
         if info.kind == .check && info.checked { return .tertiaryLabelColor }
         if let name = textColorName, let color = Self.color(named: name) { return color }
         switch info.kind {
-        case .heading3, .quote: return .secondaryLabelColor
+        case .heading3, .heading5, .heading6, .quote: return .secondaryLabelColor
         default: return .textColor
         }
     }
@@ -236,13 +238,49 @@ struct EditorTheme: Sendable {
         }
         if let link = marks.link, info.kind != .code {
             attributes[.link] = link
-            if InlineMarkdown.isDocumentLink(link) {
-                attributes[.toolTip] = "Open note"
-            } else {
-                attributes[.toolTip] = link
-            }
+            attributes[.toolTip] = link
         }
         return attributes
+    }
+
+    /// What decides a run's presentation: the theme, the block's kind, depth and check
+    /// state, and the marks. Fonts, paragraph styles and colours are made once per
+    /// combination instead of once per run (opening a long note restyles ~10,000 runs).
+    private struct StyleKey: Hashable {
+        var kind: BlockKind
+        var depth: Int
+        var checked: Bool
+        var marks: InlineMarks
+        var baseSize: CGFloat
+        var isCompact: Bool
+        var alignment: Int
+        var emphasized: Bool
+        var textColorName: String?
+    }
+
+    private final class StyleCache: @unchecked Sendable {
+        let lock = NSLock()
+        var attributes: [StyleKey: [NSAttributedString.Key: Any]] = [:]
+    }
+
+    private static let styleCache = StyleCache()
+
+    func cachedAttributes(info: BlockInfo, marks: InlineMarks) -> [NSAttributedString.Key: Any] {
+        let key = StyleKey(kind: info.kind, depth: info.depth, checked: info.checked, marks: marks, baseSize: baseSize,
+                           isCompact: isCompact, alignment: alignment.rawValue, emphasized: emphasized, textColorName: textColorName)
+        let cache = Self.styleCache
+        cache.lock.lock()
+        if let found = cache.attributes[key] {
+            cache.lock.unlock()
+            return found
+        }
+        cache.lock.unlock()
+        let made = attributes(info: info, marks: marks, paragraphStyle: paragraphStyle(for: info))
+        cache.lock.lock()
+        if cache.attributes.count > 4096 { cache.attributes.removeAll() }
+        cache.attributes[key] = made
+        cache.lock.unlock()
+        return made
     }
 
     static let presentationKeys: [NSAttributedString.Key] = [
@@ -267,17 +305,23 @@ struct EditorTheme: Sendable {
 
     private func restyleParagraph(_ storage: NSMutableAttributedString, _ paragraph: NSRange) {
         let info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
-        let style = paragraphStyle(for: info)
         storage.enumerateAttributes(in: paragraph, options: []) { attributes, run, _ in
             var marks = (attributes[.fnMarks] as? MarksBox)?.marks ?? InlineMarks()
             let foreign = attributes[.fnStyled] == nil
             if foreign && attributes[.fnMarks] == nil {
                 marks = Self.marks(fromForeign: attributes)
             }
-            var updated = self.attributes(info: info, marks: marks, paragraphStyle: style)
+            var updated = self.cachedAttributes(info: info, marks: marks)
             updated[.fnBlock] = info
             if !marks.isPlain { updated[.fnMarks] = MarksBox(marks) }
-            if let node = attributes[.fnNode] { updated[.fnNode] = node }
+            if let node = attributes[.fnNode] {
+                updated[.fnNode] = node
+                // A note link keeps the URL that opens it.
+                if let box = node as? NodeBox, let id = NoteLinks.documentTarget(box.node), let url = NoteLinks.documentURL(id: id) {
+                    updated[.link] = url
+                    updated[.toolTip] = "Open note"
+                }
+            }
             if let attachment = attributes[.attachment] { updated[.attachment] = attachment }
             if foreign {
                 storage.setAttributes(updated, range: run)

@@ -134,13 +134,25 @@ final class SpyProtocol: URLProtocol, @unchecked Sendable {
     }
 }
 
+extension BlockNode {
+    /// A paragraph as the server sends it.
+    static func paragraph(_ id: String, _ text: String, documentId: String = "d", createdAt: String = "2026-11-18T00:00:00+00:00",
+                          updatedAt: String = "2026-11-18T00:00:00+00:00") -> BlockNode {
+        BlockNode(id: id, documentId: documentId, type: "paragraph",
+                  content: .array(text.isEmpty ? [] : [.object(["type": .string("text"), "text": .string(text)])]),
+                  text: text, createdAt: createdAt, updatedAt: updatedAt)
+    }
+}
+
+extension FortressKit.BlockOperation {
+    /// The plain text of the inline content an insert or update sends.
+    var plainText: String? { content.map { BlockCodec.plainText(BlockCodec.runs(fromContent: $0)) } }
+}
+
 /// JSON the fake backend answers with.
 enum SpyJSON {
     static func document(_ id: String, revision: Int = 1, title: String = "Note", updatedAt: String = "2026-11-18T10:00:00.000000+00:00") -> BlockDocument {
-        let block = BlockNode(
-            id: "\(id)-b1", documentId: id, parentId: nil, position: 0, type: "paragraph", attrs: [:], userAttrs: [:],
-            content: .object(["markdown": .string(title)]), text: title,
-            createdAt: "2026-11-01T00:00:00+00:00", updatedAt: updatedAt, children: [])
+        let block = BlockNode.paragraph("\(id)-b1", title, documentId: id, createdAt: "2026-11-01T00:00:00+00:00", updatedAt: updatedAt)
         return BlockDocument(
             id: id, revision: revision, titleAuto: false, canUndo: false, canRedo: false, title: title, status: .rough,
             createdAt: "2026-11-01T00:00:00+00:00", updatedAt: updatedAt, children: [block])

@@ -1,1 +1,154 @@
-{"id":"01M7NZXNDZHSR801AP2K15KMAQ","title":"Kyoto trip","status":"rough","tags":[],"created_at":"2026-11-18T00:11:49.055171+00:00","updated_at":"2026-11-18T00:11:49.055171+00:00","revision":0,"title_auto":false,"can_undo":false,"can_redo":false,"children":[{"id":"01M7NZXNE1DFCAQMW15HEBDN4G","document_id":"01M7NZXNDZHSR801AP2K15KMAQ","parent_id":null,"position":0,"type":"heading","attrs":{},"user_attrs":{},"content":{"markdown":"# Plan"},"text":"# Plan","created_at":"2026-11-18T00:11:49.055171+00:00","updated_at":"2026-11-18T00:11:49.055171+00:00","children":[]},{"id":"01M7NZXNE1DFCAQMW15HEBDN4H","document_id":"01M7NZXNDZHSR801AP2K15KMAQ","parent_id":null,"position":1,"type":"paragraph","attrs":{},"user_attrs":{},"content":{"markdown":"We booked a ryokan in Gion."},"text":"We booked a ryokan in Gion.","created_at":"2026-11-18T00:11:49.055171+00:00","updated_at":"2026-11-18T00:11:49.055171+00:00","children":[]},{"id":"01M7NZXNE1DFCAQMW15HEBDN4K","document_id":"01M7NZXNDZHSR801AP2K15KMAQ","parent_id":null,"position":2,"type":"list","attrs":{},"user_attrs":{},"content":{"markdown":"- Fushimi Inari at dawn"},"text":"- Fushimi Inari at dawn","created_at":"2026-11-18T00:11:49.055171+00:00","updated_at":"2026-11-18T00:11:49.055171+00:00","children":[]},{"id":"01M7NZXNE1DFCAQMW15HEBDN4N","document_id":"01M7NZXNDZHSR801AP2K15KMAQ","parent_id":null,"position":3,"type":"list","attrs":{"checked":false},"user_attrs":{},"content":{"markdown":"- [ ] Buy JR pass"},"text":"- [ ] Buy JR pass","created_at":"2026-11-18T00:11:49.055171+00:00","updated_at":"2026-11-18T00:11:49.055171+00:00","children":[]},{"id":"01M7NZXNE1DFCAQMW15HEBDN4P","document_id":"01M7NZXNDZHSR801AP2K15KMAQ","parent_id":null,"position":4,"type":"paragraph","attrs":{},"user_attrs":{},"content":{"markdown":"See [[Packing list]]."},"text":"See [[Packing list]].","created_at":"2026-11-18T00:11:49.055171+00:00","updated_at":"2026-11-18T00:11:49.055171+00:00","children":[]}]}
+{
+  "id": "01M7NZXNDZHSR801AP2K15KMAQ",
+  "title": "Kyoto trip",
+  "status": "rough",
+  "created_at": "2026-11-18T00:11:49.055171+00:00",
+  "updated_at": "2026-11-18T00:11:49.055171+00:00",
+  "revision": 0,
+  "title_auto": false,
+  "can_undo": false,
+  "can_redo": false,
+  "provenance": {
+    "source": "manual"
+  },
+  "resolved_links": {
+    "documents": {},
+    "blocks": {}
+  },
+  "children": [
+    {
+      "id": "01M7NZXNE1DFCAQMW15HEBDN4G",
+      "document_id": "01M7NZXNDZHSR801AP2K15KMAQ",
+      "parent_id": null,
+      "order": "a0",
+      "position": 0,
+      "type": "heading",
+      "attrs": {
+        "level": 1
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Plan"
+        }
+      ],
+      "payload": null,
+      "text": "Plan",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-11-18T00:11:49.055171+00:00",
+      "updated_at": "2026-11-18T00:11:49.055171+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7NZXNE1DFCAQMW15HEBDN4H",
+      "document_id": "01M7NZXNDZHSR801AP2K15KMAQ",
+      "parent_id": null,
+      "order": "a1",
+      "position": 1,
+      "type": "paragraph",
+      "attrs": {},
+      "content": [
+        {
+          "type": "text",
+          "text": "We booked a ryokan in Gion."
+        }
+      ],
+      "payload": null,
+      "text": "We booked a ryokan in Gion.",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-11-18T00:11:49.055171+00:00",
+      "updated_at": "2026-11-18T00:11:49.055171+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7NZXNE1DFCAQMW15HEBDN4K",
+      "document_id": "01M7NZXNDZHSR801AP2K15KMAQ",
+      "parent_id": null,
+      "order": "a2",
+      "position": 2,
+      "type": "bullet_item",
+      "attrs": {},
+      "content": [
+        {
+          "type": "text",
+          "text": "Fushimi Inari at dawn"
+        }
+      ],
+      "payload": null,
+      "text": "Fushimi Inari at dawn",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-11-18T00:11:49.055171+00:00",
+      "updated_at": "2026-11-18T00:11:49.055171+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7NZXNE1DFCAQMW15HEBDN4N",
+      "document_id": "01M7NZXNDZHSR801AP2K15KMAQ",
+      "parent_id": null,
+      "order": "a3",
+      "position": 3,
+      "type": "check_item",
+      "attrs": {
+        "checked": false
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Buy JR pass"
+        }
+      ],
+      "payload": null,
+      "text": "Buy JR pass",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-11-18T00:11:49.055171+00:00",
+      "updated_at": "2026-11-18T00:11:49.055171+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7NZXNE1DFCAQMW15HEBDN4P",
+      "document_id": "01M7NZXNDZHSR801AP2K15KMAQ",
+      "parent_id": null,
+      "order": "a4",
+      "position": 4,
+      "type": "paragraph",
+      "attrs": {},
+      "content": [
+        {
+          "type": "text",
+          "text": "See [[Packing list]]."
+        }
+      ],
+      "payload": null,
+      "text": "See [[Packing list]].",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-11-18T00:11:49.055171+00:00",
+      "updated_at": "2026-11-18T00:11:49.055171+00:00",
+      "children": []
+    }
+  ]
+}

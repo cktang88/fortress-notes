@@ -113,6 +113,11 @@ public struct APIClient: Sendable {
         return document
     }
 
+    /// The server's block type registry (`BlockSchema.bundled` is the copy the editor uses).
+    public func blockSchema() async throws -> BlockSchema {
+        try await get("api/block-schema")
+    }
+
     public func createDocument(title: String = "", folderId: String? = nil) async throws -> BlockDocument {
         let request = try makeRequest(
             "POST", "api/block-documents",

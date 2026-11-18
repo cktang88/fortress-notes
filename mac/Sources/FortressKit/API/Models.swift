@@ -112,15 +112,23 @@ public struct Folder: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// One block as `GET /api/block-documents/{id}` returns it (docs/block-model.md §1):
+/// a `type`, `attrs`, inline `content` (text blocks: an array of inline nodes, else
+/// null), a `payload` (math and html only), and its children in document order.
 public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var documentId: String
     public var parentId: String?
-    public var position: Int
+    /// Sibling order key (server-assigned, read-only).
+    public var order: String?
     public var type: String
     public var attrs: [String: JSONValue]
     public var userAttrs: [String: JSONValue]
+    /// Inline nodes (text blocks), or `.null`.
     public var content: JSONValue
+    /// Structured data (math `{latex}`, html `{html}`), or nil.
+    public var payload: JSONValue?
+    /// Derived plain text (read-only; never sent).
     public var text: String
     public var createdAt: String
     public var updatedAt: String
@@ -131,16 +139,60 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
     /// The note revision that last changed this block (nil: unchanged since creation).
     public var revision: Int? = nil
 
+    public init(
+        id: String, documentId: String = "", parentId: String? = nil, order: String? = nil, type: String,
+        attrs: [String: JSONValue] = [:], userAttrs: [String: JSONValue] = [:], content: JSONValue = .null,
+        payload: JSONValue? = nil, text: String = "", createdAt: String = "", updatedAt: String = "",
+        children: [BlockNode] = [], provenance: JSONValue? = nil, revision: Int? = nil
+    ) {
+        self.id = id
+        self.documentId = documentId
+        self.parentId = parentId
+        self.order = order
+        self.type = type
+        self.attrs = attrs
+        self.userAttrs = userAttrs
+        self.content = content
+        self.payload = payload
+        self.text = text
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.children = children
+        self.provenance = provenance
+        self.revision = revision
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        documentId = try c.decodeIfPresent(String.self, forKey: .documentId) ?? ""
+        parentId = try c.decodeIfPresent(String.self, forKey: .parentId)
+        order = try c.decodeIfPresent(String.self, forKey: .order)
+        type = try c.decode(String.self, forKey: .type)
+        attrs = try c.decodeIfPresent([String: JSONValue].self, forKey: .attrs) ?? [:]
+        userAttrs = try c.decodeIfPresent([String: JSONValue].self, forKey: .userAttrs) ?? [:]
+        content = try c.decodeIfPresent(JSONValue.self, forKey: .content) ?? .null
+        let payload = try c.decodeIfPresent(JSONValue.self, forKey: .payload)
+        self.payload = payload == .null ? nil : payload
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
+        children = try c.decodeIfPresent([BlockNode].self, forKey: .children) ?? []
+        provenance = try c.decodeIfPresent(JSONValue.self, forKey: .provenance)
+        revision = try c.decodeIfPresent(Int.self, forKey: .revision)
+    }
+
     enum CodingKeys: String, CodingKey {
         case provenance, revision
         case id
         case documentId = "document_id"
         case parentId = "parent_id"
-        case position
+        case order
         case type
         case attrs
         case userAttrs = "user_attrs"
         case content
+        case payload
         case text
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -216,53 +268,72 @@ public struct ResolvedLinks: Codable, Hashable, Sendable {
 }
 
 public enum BlockOperationKind: String, Codable, Sendable {
-    case insert, update, move, delete, duplicate, split, merge
-    case setAttrs = "set_attrs"
-    case setUserAttrs = "set_user_attrs"
+    case insert, update, move, delete
 }
 
+/// One operation of a transaction (docs/block-model.md §4). Placement (insert, move):
+/// `afterId`, or `beforeId`, or neither (append under `parentId`, nil: top level).
+/// An update carries only what changed; `attrs` is a patch (a `.null` value deletes
+/// the key, keys not mentioned are kept).
 public struct BlockOperation: Codable, Hashable, Sendable {
     public var operation: BlockOperationKind
     public var blockId: String?
     public var parentId: String?
-    public var position: Int?
+    public var afterId: String?
+    public var beforeId: String?
     public var type: String?
     public var attrs: [String: JSONValue]?
     public var content: JSONValue?
-    public var text: String?
-    public var expectedUpdatedAt: String?
+    public var payload: JSONValue?
     /// Only sent to set it (an insert's source); omitted, the server keeps what it has.
     public var provenance: JSONValue?
 
     public init(
         operation: BlockOperationKind, blockId: String? = nil, parentId: String? = nil,
-        position: Int? = nil, type: String? = nil, attrs: [String: JSONValue]? = nil,
-        content: JSONValue? = nil, text: String? = nil, expectedUpdatedAt: String? = nil,
+        afterId: String? = nil, beforeId: String? = nil, type: String? = nil,
+        attrs: [String: JSONValue]? = nil, content: JSONValue? = nil, payload: JSONValue? = nil,
         provenance: JSONValue? = nil
     ) {
-        self.provenance = provenance
         self.operation = operation
         self.blockId = blockId
         self.parentId = parentId
-        self.position = position
+        self.afterId = afterId
+        self.beforeId = beforeId
         self.type = type
         self.attrs = attrs
         self.content = content
-        self.text = text
-        self.expectedUpdatedAt = expectedUpdatedAt
+        self.payload = payload
+        self.provenance = provenance
     }
 
     enum CodingKeys: String, CodingKey {
         case operation
         case blockId = "block_id"
         case parentId = "parent_id"
-        case position
+        case afterId = "after_id"
+        case beforeId = "before_id"
         case type
         case attrs
         case content
-        case text
-        case expectedUpdatedAt = "expected_updated_at"
+        case payload
         case provenance
+    }
+
+    /// Encodes only the fields that are set (`parent_id: null` would still mean the
+    /// top level, but an update has no placement at all), with `.null` attrs kept as
+    /// JSON nulls (they delete the key).
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(operation, forKey: .operation)
+        try c.encodeIfPresent(blockId, forKey: .blockId)
+        try c.encodeIfPresent(parentId, forKey: .parentId)
+        try c.encodeIfPresent(afterId, forKey: .afterId)
+        try c.encodeIfPresent(beforeId, forKey: .beforeId)
+        try c.encodeIfPresent(type, forKey: .type)
+        try c.encodeIfPresent(attrs, forKey: .attrs)
+        try c.encodeIfPresent(content, forKey: .content)
+        try c.encodeIfPresent(payload, forKey: .payload)
+        try c.encodeIfPresent(provenance, forKey: .provenance)
     }
 }
 

@@ -1,79 +1,103 @@
 import Foundation
 
-// A table block's content as the editor edits it (spec §2a): BlockNote's `tableContent`
-// extended with column widths, header rows, cell colours and nested cell blocks.
-// Foundation-only so it can be unit-tested.
+// A table as the editor edits it (docs/block-model.md §2): `table → table_row →
+// table_cell → blocks`, all ordinary blocks with ids. Each cell's text is its first
+// paragraph; whatever else a cell holds (lists, pictures, nested tables from OneNote)
+// is kept as it came and shown read-only. Foundation-only so it can be unit-tested.
 
-/// One cell: its first line of rich text, its props, and nested blocks kept verbatim.
+/// One `table_cell`: its attrs, the text of its first paragraph, and its other blocks.
 public struct TableCell: Hashable, Sendable {
+    public var id: String
+    /// `colspan`, `rowspan`, `background`, `color`, `align`, and extension attributes.
+    public var attrs: [String: JSONValue]
+    /// The paragraph holding the cell's text. It exists on the server when `hasParagraph`;
+    /// otherwise it is inserted once the cell has text.
+    public var paragraphId: String
+    public var hasParagraph: Bool
+    /// The paragraph's own attrs (extension attributes from an import).
+    public var paragraphAttrs: [String: JSONValue]
     public var runs: [InlineRun]
-    /// `backgroundColor`, `textColor`, `textAlignment`, `colspan`, `rowspan`, and any others.
-    public var props: [String: JSONValue]
-    /// Nested blocks (OneNote cells hold lists, images, nested tables). Shown read-only
-    /// and never changed by the editor.
-    public var blocks: JSONValue?
-    /// Keys the cell had that the editor doesn't manage.
-    public var extra: [String: JSONValue]
+    /// The cell's other blocks, read-only and never rewritten.
+    public var nested: [BlockNode]
 
-    public init(runs: [InlineRun] = [], props: [String: JSONValue] = [:], blocks: JSONValue? = nil,
-                extra: [String: JSONValue] = [:]) {
+    public init(id: String = EditorBlock.newId(), runs: [InlineRun] = [], attrs: [String: JSONValue] = [:],
+                paragraphId: String = EditorBlock.newId(), hasParagraph: Bool = false,
+                paragraphAttrs: [String: JSONValue] = [:], nested: [BlockNode] = []) {
+        self.id = id
         self.runs = runs
-        self.props = props
-        self.blocks = blocks
-        self.extra = extra
+        self.attrs = attrs
+        self.paragraphId = paragraphId
+        self.hasParagraph = hasParagraph
+        self.paragraphAttrs = paragraphAttrs
+        self.nested = nested
     }
 
     public var plainText: String { BlockCodec.plainText(runs) }
 
     private func color(_ key: String) -> String? {
-        guard let value = props[key]?.stringValue, !value.isEmpty, value != "default" else { return nil }
+        guard let value = attrs[key]?.stringValue, !value.isEmpty, value != "default" else { return nil }
         return value
     }
 
-    public var backgroundColor: String? { color("backgroundColor") }
-    public var textColor: String? { color("textColor") }
+    public var backgroundColor: String? { color("background") }
+    public var textColor: String? { color("color") }
     /// left, center, right or justify.
-    public var alignment: String { props["textAlignment"]?.stringValue ?? "left" }
-    public var colspan: Int { max(1, props["colspan"]?.intValue ?? 1) }
-    public var rowspan: Int { max(1, props["rowspan"]?.intValue ?? 1) }
+    public var alignment: String { attrs["align"]?.stringValue ?? "left" }
+    public var colspan: Int { max(1, attrs["colspan"]?.intValue ?? 1) }
+    public var rowspan: Int { max(1, attrs["rowspan"]?.intValue ?? 1) }
 
-    /// The nested blocks, if any.
-    public var nestedBlocks: [JSONValue] {
-        if case .array(let items)? = blocks { return items }
-        return []
+    /// The paragraph written for the cell's text, if it has one (or should get one).
+    public var paragraphFields: BlockFields? {
+        guard hasParagraph || !runs.isEmpty else { return nil }
+        return BlockFields(type: "paragraph", attrs: paragraphAttrs, content: BlockCodec.inlineContent(runs))
     }
 
     /// A fresh cell that looks like `template` (colour, alignment) but spans one column.
     static func empty(like template: TableCell?) -> TableCell {
-        var props = template?.props ?? [:]
-        props["colspan"] = nil
-        props["rowspan"] = nil
-        return TableCell(props: props)
+        var attrs = template?.attrs ?? [:]
+        attrs["colspan"] = nil
+        attrs["rowspan"] = nil
+        return TableCell(attrs: attrs)
+    }
+
+    /// The cell as the server holds it.
+    init(node: BlockNode) {
+        var children = node.children
+        var paragraph: BlockNode?
+        if let first = children.first, first.type == "paragraph", first.children.isEmpty {
+            paragraph = first
+            children.removeFirst()
+        }
+        self.init(id: node.id, runs: paragraph.map { BlockCodec.runs(fromContent: $0.content) } ?? [],
+                  attrs: node.attrs, paragraphId: paragraph?.id ?? EditorBlock.newId(),
+                  hasParagraph: paragraph != nil, paragraphAttrs: paragraph?.attrs ?? [:], nested: children)
     }
 }
 
+/// One `table_row`.
 public struct TableRow: Hashable, Sendable {
+    public var id: String
+    public var attrs: [String: JSONValue]
     public var cells: [TableCell]
-    public var extra: [String: JSONValue]
 
-    public init(cells: [TableCell], extra: [String: JSONValue] = [:]) {
+    public init(id: String = EditorBlock.newId(), cells: [TableCell], attrs: [String: JSONValue] = [:]) {
+        self.id = id
         self.cells = cells
-        self.extra = extra
+        self.attrs = attrs
     }
 }
 
 public struct TableContent: Hashable, Sendable {
     public var rows: [TableRow]
-    /// CSS pixels per column; nil = automatic.
+    /// CSS pixels per column; nil = automatic (`column_widths`).
     public var columnWidths: [Double?]
     public var headerRows: Int
     public var headerCols: Int
-    /// Top-level keys the editor doesn't manage.
+    /// The table's other attrs (`borders`, extension attributes).
     public var extra: [String: JSONValue]
-    /// Cells per row when the table was loaded. While the shape is the same, cells are
-    /// saved without `blocks` and the server keeps their nested blocks (spec §2a);
-    /// after rows or columns change, nested blocks are written out with their cells.
-    public var loadedShape: [Int]
+    /// Which of the managed attrs the table had, so an untouched table writes back
+    /// exactly what it read.
+    var stored: Set<String> = []
 
     public init(rows: [TableRow], columnWidths: [Double?] = [], headerRows: Int = 0, headerCols: Int = 0,
                 extra: [String: JSONValue] = [:]) {
@@ -82,144 +106,67 @@ public struct TableContent: Hashable, Sendable {
         self.headerRows = headerRows
         self.headerCols = headerCols
         self.extra = extra
-        self.loadedShape = rows.map(\.cells.count)
     }
 
     /// A new table: `rows` × `columns` empty cells, the first row a header.
     public static func blank(rows: Int = 3, columns: Int = 3) -> TableContent {
-        let cells = (0..<max(1, columns)).map { _ in TableCell() }
-        return TableContent(rows: (0..<max(1, rows)).map { _ in TableRow(cells: cells) },
-                            columnWidths: Array(repeating: nil, count: max(1, columns)), headerRows: 1)
+        TableContent(rows: (0..<max(1, rows)).map { _ in TableRow(cells: (0..<max(1, columns)).map { _ in TableCell() }) },
+                     columnWidths: Array(repeating: nil, count: max(1, columns)), headerRows: 1)
     }
 
     // MARK: Decoding
 
-    /// The table in a block's `content.blocknote`, or nil when it isn't a usable table.
-    public init?(blockNote value: JSONValue?) {
-        guard case .object(var object)? = value, case .array(let rawRows)? = object["rows"], !rawRows.isEmpty else { return nil }
-        if let type = object["type"]?.stringValue, type != "tableContent" { return nil }
-        var rows: [TableRow] = []
-        for rawRow in rawRows {
-            var extra: [String: JSONValue] = [:]
-            let rawCells: [JSONValue]
-            switch rawRow {
-            case .object(var row):
-                guard case .array(let cells)? = row["cells"] else { return nil }
-                rawCells = cells
-                row["cells"] = nil
-                extra = row
-            case .array(let cells):
-                rawCells = cells
-            default:
-                return nil
-            }
-            guard !rawCells.isEmpty else { return nil }
-            rows.append(TableRow(cells: rawCells.map(Self.cell), extra: extra))
-        }
+    /// The table a `table` block holds, or nil when its children aren't rows of cells
+    /// (then it is shown read-only).
+    public init?(node: BlockNode) {
+        guard node.type == "table", !node.children.isEmpty,
+              node.children.allSatisfy({ $0.type == "table_row" && !$0.children.isEmpty && $0.children.allSatisfy { $0.type == "table_cell" } })
+        else { return nil }
+        var extra = node.attrs
+        var stored: Set<String> = []
         var widths: [Double?] = []
-        if case .array(let items)? = object["columnWidths"] {
+        if case .array(let items)? = extra["column_widths"] {
             widths = items.map { if case .number(let width) = $0 { width } else { nil } }
+            stored.insert("column_widths")
         }
         func count(_ key: String) -> Int {
-            switch object[key] {
-            case .number(let value)?: max(0, Int(value))
-            case .bool(true)?: 1
-            default: 0
-            }
+            guard let value = extra[key] else { return 0 }
+            stored.insert(key)
+            return max(0, value.intValue ?? 0)
         }
-        let headerRows = count("headerRows")
-        let headerCols = count("headerCols")
-        for key in ["type", "rows", "columnWidths", "headerRows", "headerCols"] { object[key] = nil }
-        self.init(rows: rows, columnWidths: widths, headerRows: headerRows, headerCols: headerCols, extra: object)
-    }
-
-    private static func cell(_ value: JSONValue) -> TableCell {
-        switch value {
-        case .object(var object) where object["type"]?.stringValue == "tableCell" || object["content"] != nil || object["props"] != nil:
-            var props: [String: JSONValue] = [:]
-            if case .object(let raw)? = object["props"] { props = raw }
-            let runs = cellRuns(object["content"])
-            let blocks = object["blocks"]
-            for key in ["type", "props", "content", "blocks"] { object[key] = nil }
-            return TableCell(runs: runs, props: props, blocks: blocks, extra: object)
-        default:
-            // Older BlockNote tables store a cell as its inline content.
-            return TableCell(runs: cellRuns(value))
-        }
-    }
-
-    private static func cellRuns(_ value: JSONValue?) -> [InlineRun] {
-        let runs: [InlineRun]
-        switch value {
-        case .array(let items)?: runs = BlockCodec.runs(fromBlockNote: items)
-        case .string(let text)?: runs = [InlineRun(text)]
-        case .object?: runs = BlockCodec.runs(fromBlockNote: [value!])
-        default: runs = []
-        }
-        return BlockCodec.normalized(runs.map { run in
-            var run = run
-            if run.node == nil { run.text = run.text.replacingOccurrences(of: "\n", with: softBreak) }
-            return run
-        })
+        let headerRows = count("header_rows")
+        let headerCols = count("header_cols")
+        for key in ["column_widths", "header_rows", "header_cols"] { extra[key] = nil }
+        self.init(rows: node.children.map { row in TableRow(id: row.id, cells: row.children.map(TableCell.init(node:)), attrs: row.attrs) },
+                  columnWidths: widths, headerRows: headerRows, headerCols: headerCols, extra: extra)
+        self.stored = stored
     }
 
     // MARK: Encoding
 
-    /// Whether rows or columns were added or removed since loading.
-    public var shapeChanged: Bool { rows.map(\.cells.count) != loadedShape }
-
-    /// `content.blocknote` to save. Nested cell blocks are written only when the shape
-    /// changed (otherwise the server keeps them).
-    public var blockNote: JSONValue {
-        let includeBlocks = shapeChanged
-        var object = extra
-        object["type"] = .string("tableContent")
-        let columns = columnCount
-        var widths = Array(columnWidths.prefix(columns))
-        widths += Array(repeating: nil, count: max(0, columns - widths.count))
-        object["columnWidths"] = .array(widths.map { $0.map(JSONValue.number) ?? .null })
-        if headerRows > 0 { object["headerRows"] = .number(Double(headerRows)) }
-        if headerCols > 0 { object["headerCols"] = .number(Double(headerCols)) }
-        object["rows"] = .array(rows.map { row in
-            var rowObject = row.extra
-            rowObject["cells"] = .array(row.cells.map { cell in
-                var cellObject = cell.extra
-                cellObject["type"] = .string("tableCell")
-                cellObject["props"] = .object(cell.props)
-                cellObject["content"] = BlockCodec.blockNote(cell.runs)
-                if includeBlocks, let blocks = cell.blocks { cellObject["blocks"] = blocks }
-                return .object(cellObject)
-            })
-            return .object(rowObject)
-        })
-        return .object(object)
+    /// The `table` block's attrs.
+    public var attrs: [String: JSONValue] {
+        var attrs = extra
+        if stored.contains("column_widths") || columnWidths.contains(where: { $0 != nil }) || !columnWidths.isEmpty {
+            attrs["column_widths"] = .array(columnWidths.map { $0.map(JSONValue.number) ?? .null })
+        }
+        if stored.contains("header_rows") || headerRows > 0 { attrs["header_rows"] = .number(Double(headerRows)) }
+        if stored.contains("header_cols") || headerCols > 0 { attrs["header_cols"] = .number(Double(headerCols)) }
+        return attrs
     }
 
     /// What search reads: rows on lines, cells separated by tabs.
     public var plainText: String {
         rows.map { row in
             row.cells.map { cell in
-                ([cell.plainText] + cell.nestedBlocks.map(Self.nestedText)).filter { !$0.isEmpty }.joined(separator: "\n")
+                ([cell.plainText] + cell.nested.map(Self.nestedText)).filter { !$0.isEmpty }.joined(separator: " ")
                     .replacingOccurrences(of: "\n", with: " ")
             }.joined(separator: "\t")
         }.joined(separator: "\n")
     }
 
-    static func nestedText(_ block: JSONValue) -> String {
-        var parts: [String] = []
-        if let blockNote = block["content"]?["blocknote"] {
-            if case .array = blockNote {
-                parts.append(BlockCodec.inlineText(blockNote))
-            } else if let table = TableContent(blockNote: blockNote) {
-                parts.append(table.plainText)
-            }
-        }
-        if let latex = block["content"]?["latex"]?.stringValue { parts.append(latex) }
-        for key in ["alt", "caption", "name"] {
-            if let value = block["attrs"]?[key]?.stringValue, !value.isEmpty { parts.append(value) }
-        }
-        if case .array(let children)? = block["children"] { parts += children.map(nestedText) }
-        return parts.filter { !$0.isEmpty }.joined(separator: "\n")
+    static func nestedText(_ node: BlockNode) -> String {
+        ([node.text] + node.children.map(nestedText)).filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     // MARK: Shape
@@ -249,7 +196,6 @@ public struct TableContent: Hashable, Sendable {
         rows.insert(TableRow(cells: cells), at: index)
         if index < headerRows { headerRows += 1 }
     }
-
     /// Removes a row; the last row stays.
     @discardableResult
     public mutating func removeRow(at index: Int) -> Bool {
@@ -341,10 +287,7 @@ public struct EditorColumn: Hashable, Sendable {
     public var fields: BlockFields {
         var attrs = origin?.attrs ?? [:]
         if let width { attrs["width"] = .number(width) }
-        if let origin, attrs == origin.attrs {
-            return BlockFields(type: origin.type, attrs: origin.attrs, content: origin.content, text: origin.text)
-        }
-        return BlockFields(type: "column", attrs: attrs, content: .object([:]), text: "")
+        return BlockFields(type: "column", attrs: attrs)
     }
 
     /// Relative widths that add up to 1 (missing ones share equally).

@@ -20,7 +20,8 @@ import Testing
     /// Bug: opening a note with the inspector shown fetched it twice (the editor and the
     /// inspector each call `document(id:)`), and fast re-renders fetched it again.
     @Test func concurrentReadsOfOneNoteShareOneRequest() async throws {
-        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 0.05) }
+        // Long enough that all three start while the first is in flight, even on a busy runner.
+        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 2) }
         // A long max age: on a busy CI machine (other suites hold the main thread while
         // they render) this test has taken over 30 s, the default, and the last read
         // then revalidated, which is right but not what this test is about.
@@ -159,7 +160,9 @@ import Testing
     /// Closing a note while it loads cancels its request, and the cancellation is not
     /// reported as an error.
     @Test func cancelledReadCancelsTheRequestAndShowsNoNotice() async throws {
-        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 1) }
+        // A long delay: on a loaded CI runner the main actor can stall for seconds, and the
+        // answer must not arrive before the cancel does (cancelling ends the test early).
+        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 20) }
         let api = SpyProtocol.client()
         let model = makeModel(api)
         let task = Task { try await api.document(id: "d1") }
@@ -498,7 +501,7 @@ final class Counter: Sendable {
 /// and the snapshot suites can keep the main actor busy for over 10 s on CI.
 @MainActor
 func waitUntil(_ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(30)
+    let deadline = ContinuousClock.now + .seconds(60)
     while !condition() {
         try #require(ContinuousClock.now < deadline, "timed out waiting")
         try await Task.sleep(for: .milliseconds(5))

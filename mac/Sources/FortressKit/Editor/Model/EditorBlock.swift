@@ -6,14 +6,17 @@ import Foundation
 
 /// How a block is presented and edited.
 public enum BlockKind: String, Sendable, Hashable, CaseIterable {
-    case paragraph, heading1, heading2, heading3, bullet, numbered, check, quote, code
+    case paragraph, heading1, heading2, heading3, heading4, heading5, heading6, bullet, numbered, check, code
+    /// A paragraph inside a `quote` (or `callout`) container: each line of a quote is
+    /// one of its paragraph children (docs/block-model.md §2).
+    case quote
     /// Atomic blocks: one attachment character, no inline text.
     case divider, image, file
-    /// Atomic blocks with their own editing inside the attachment: a table grid, side-by-side
+    /// Blocks with their own editing inside the attachment: a table grid, side-by-side
     /// columns (each with its own blocks), and math (shown, saved untouched).
     case table, columns, math
-    /// Any block type the editor doesn't edit (tables, columns, raw HTML, math, types
-    /// added later…): shown read-only and saved back untouched.
+    /// Any block the editor doesn't edit (raw HTML, types added later, quotes holding
+    /// more than lines of text…): shown read-only and never rewritten.
     case embed
 
     public var hasInlineText: Bool {
@@ -24,7 +27,16 @@ public enum BlockKind: String, Sendable, Hashable, CaseIterable {
     }
 
     /// Keeps its children to itself: nothing in the main flow nests under it.
-    public var holdsOwnChildren: Bool { self == .embed || self == .columns }
+    public var holdsOwnChildren: Bool { self == .embed || self == .columns || self == .table }
+
+    /// No block nests under it in the main flow (atomic blocks, containers shown as one
+    /// attachment, and quote lines, whose container holds only them).
+    public var takesNoChildren: Bool {
+        switch self {
+        case .divider, .image, .file, .math, .embed, .table, .columns, .quote, .code: true
+        default: false
+        }
+    }
 
     public var isList: Bool { self == .bullet || self == .numbered || self == .check }
 
@@ -33,40 +45,48 @@ public enum BlockKind: String, Sendable, Hashable, CaseIterable {
         case .heading1: 1
         case .heading2: 2
         case .heading3: 3
+        case .heading4: 4
+        case .heading5: 5
+        case .heading6: 6
         default: nil
         }
     }
 
+    /// The heading kind for `level` (1–6; never clamped below 6).
     public static func heading(_ level: Int) -> BlockKind {
         switch level {
         case ...1: .heading1
         case 2: .heading2
-        default: .heading3
+        case 3: .heading3
+        case 4: .heading4
+        case 5: .heading5
+        default: .heading6
         }
     }
 
-    /// The BlockNote type the web editor writes for this kind.
+    /// The canonical type written for this kind (a quote line is a paragraph; its
+    /// container is written separately).
     public var canonicalType: String {
         switch self {
-        case .paragraph: "paragraph"
-        case .heading1, .heading2, .heading3: "heading"
-        case .bullet: "bulletListItem"
-        case .numbered: "numberedListItem"
-        case .check: "checkListItem"
-        case .quote: "quote"
-        case .code: "codeBlock"
+        case .paragraph, .quote: "paragraph"
+        case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6: "heading"
+        case .bullet: "bullet_item"
+        case .numbered: "numbered_item"
+        case .check: "check_item"
+        case .code: "code"
         case .divider: "divider"
         case .image: "image"
         case .file: "file"
         case .table: "table"
         case .columns: "columns"
         case .math: "math"
-        case .embed: "embed"
+        case .embed: "html"
         }
     }
 }
 
-/// Inline formatting of a run of text. Mirrors BlockNote's `styles` plus links.
+/// Inline formatting of a run of text: the marks of docs/block-model.md §3 plus the
+/// href of the `link` node around it.
 public struct InlineMarks: Hashable, Sendable {
     public var bold = false
     public var italic = false
@@ -75,19 +95,17 @@ public struct InlineMarks: Hashable, Sendable {
     public var code = false
     public var sup = false
     public var sub = false
-    /// A BlockNote color name ("red", "blue", …) or a hex color ("#B4532A").
+    /// Text colour (`color` mark): a colour name ("red", …) or CSS colour ("#B4532A").
     public var textColor: String?
-    /// Background (highlight) color, same vocabulary as `textColor`.
+    /// Background (`highlight` mark), same vocabulary as `textColor`.
     public var highlight: String?
-    /// Link target: a URL, `/media/…`, or a note link `[[id|Title]]`.
+    /// Link target (`href` of a `link` node): a URL or `/media/…`.
     public var link: String?
-    /// Style keys this editor doesn't know, kept so saving never drops them.
-    public var extraStyles: [String: JSONValue] = [:]
 
     public init(
         bold: Bool = false, italic: Bool = false, underline: Bool = false, strike: Bool = false,
         code: Bool = false, textColor: String? = nil, highlight: String? = nil, link: String? = nil,
-        sup: Bool = false, sub: Bool = false, extraStyles: [String: JSONValue] = [:]
+        sup: Bool = false, sub: Bool = false
     ) {
         self.sup = sup
         self.sub = sub
@@ -99,12 +117,11 @@ public struct InlineMarks: Hashable, Sendable {
         self.textColor = textColor
         self.highlight = highlight
         self.link = link
-        self.extraStyles = extraStyles
     }
 
     public var isPlain: Bool { self == InlineMarks() }
 
-    /// The same marks without the link (BlockNote keeps links as wrapper nodes).
+    /// The same marks without the link (links are wrapper nodes).
     var withoutLink: InlineMarks {
         var copy = self
         copy.link = nil
@@ -114,11 +131,11 @@ public struct InlineMarks: Hashable, Sendable {
 
 /// The object replacement character: stands in for an atomic inline node or block.
 public let objectReplacement = "\u{FFFC}"
-/// A soft line break inside one block (a "\n" inside BlockNote text).
+/// A line break inside one block (a "\n" inside a text node).
 public let softBreak = "\u{2028}"
 
 /// A run of inline content: text with marks, or an atomic inline node kept verbatim
-/// (a block reference, a mention, anything unknown), whose text is `objectReplacement`.
+/// (`docLink`, `blockRef`, anything newer), whose text is `objectReplacement`.
 public struct InlineRun: Hashable, Sendable {
     public var text: String
     public var marks: InlineMarks
@@ -135,22 +152,21 @@ public struct InlineRun: Hashable, Sendable {
     }
 }
 
-/// The block as the server sent it. Kept so saving an edited block preserves its type,
-/// attributes and content keys the editor doesn't manage, and so untouched atomic
-/// blocks are written back verbatim.
+/// The block as the server sent it. Kept so saving an edited block keeps attributes the
+/// editor doesn't manage (extension attributes are kept by the attrs patch anyway), and
+/// so blocks the editor doesn't edit are never rewritten.
 public struct BlockOrigin: Hashable, Sendable {
     public var type: String
     public var attrs: [String: JSONValue]
     public var userAttrs: [String: JSONValue]
     public var content: JSONValue
+    public var payload: JSONValue?
     public var text: String
     /// The kind it decoded to; a different kind on save means the person converted it.
     public var kind: BlockKind
-    /// Saved by a rich editor (has `content.blocknote`), so its type is a real editor type.
-    public var native: Bool
     public var createdAt: String
     public var updatedAt: String
-    /// Children of an embed (they are not flattened into the text).
+    /// Children of a block that keeps them to itself (an embed); never flattened.
     public var children: [BlockNode]
     /// Where the block came from (spec §7a). Read-only here: never sent on update.
     public var provenance: JSONValue?
@@ -159,7 +175,7 @@ public struct BlockOrigin: Hashable, Sendable {
 
     public init(
         type: String, attrs: [String: JSONValue] = [:], userAttrs: [String: JSONValue] = [:],
-        content: JSONValue = .object([:]), text: String = "", kind: BlockKind, native: Bool,
+        content: JSONValue = .null, payload: JSONValue? = nil, text: String = "", kind: BlockKind,
         createdAt: String = "", updatedAt: String = "", children: [BlockNode] = [],
         provenance: JSONValue? = nil, revision: Int? = nil
     ) {
@@ -169,12 +185,32 @@ public struct BlockOrigin: Hashable, Sendable {
         self.attrs = attrs
         self.userAttrs = userAttrs
         self.content = content
+        self.payload = payload
         self.text = text
         self.kind = kind
-        self.native = native
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.children = children
+    }
+
+    public init(_ node: BlockNode, kind: BlockKind, keepingChildren: Bool = false) {
+        self.init(type: node.type, attrs: node.attrs, userAttrs: node.userAttrs, content: node.content,
+                  payload: node.payload, text: node.text, kind: kind, createdAt: node.createdAt,
+                  updatedAt: node.updatedAt, children: keepingChildren ? node.children : [],
+                  provenance: node.provenance, revision: node.revision)
+    }
+}
+
+/// The `quote` or `callout` container a quote line belongs to.
+public struct QuoteContainer: Hashable, Sendable {
+    public var id: String
+    public var type: String
+    public var attrs: [String: JSONValue]
+
+    public init(id: String, type: String = "quote", attrs: [String: JSONValue] = [:]) {
+        self.id = id
+        self.type = type
+        self.attrs = attrs
     }
 }
 
@@ -194,13 +230,17 @@ public struct EditorBlock: Hashable, Sendable {
     public var table: TableContent?
     /// A columns block's columns, each with its blocks (kind `.columns`).
     public var columns: [EditorColumn]?
+    /// The container of a quote line (kind `.quote`); nil for a line that just became one
+    /// (it joins the quote above, or a new container is made for it).
+    public var container: QuoteContainer?
 
     public init(
         id: String = EditorBlock.newId(), kind: BlockKind = .paragraph, depth: Int = 0,
         checked: Bool = false, language: String? = nil, runs: [InlineRun] = [],
         origin: BlockOrigin? = nil, newProvenance: JSONValue? = nil, table: TableContent? = nil,
-        columns: [EditorColumn]? = nil
+        columns: [EditorColumn]? = nil, container: QuoteContainer? = nil
     ) {
+        self.container = container
         self.table = table
         self.columns = columns
         self.newProvenance = newProvenance
@@ -219,10 +259,24 @@ public struct EditorBlock: Hashable, Sendable {
     public var plainText: String { BlockCodec.plainText(runs) }
 }
 
-/// The fields a block transaction writes for a block.
+/// What a transaction writes for a block: its canonical type, attrs, inline content
+/// and payload (docs/block-model.md §1). The server derives everything else.
 public struct BlockFields: Hashable, Sendable {
     public var type: String
     public var attrs: [String: JSONValue]
+    /// Inline nodes (text blocks) or `.null`.
     public var content: JSONValue
-    public var text: String
+    public var payload: JSONValue?
+
+    public init(type: String, attrs: [String: JSONValue] = [:], content: JSONValue = .null, payload: JSONValue? = nil) {
+        self.type = type
+        self.attrs = attrs
+        self.content = content
+        self.payload = payload
+    }
+
+    /// The fields of a block as the server sent it.
+    public init(_ node: BlockNode) {
+        self.init(type: node.type, attrs: node.attrs, content: node.content, payload: node.payload)
+    }
 }

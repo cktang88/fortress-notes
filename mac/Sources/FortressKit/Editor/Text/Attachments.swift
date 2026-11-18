@@ -7,10 +7,16 @@ import SwiftUI
 @Observable
 final class AttachmentContext {
     let baseURL: URL
-    var images: [URL: NSImage] = [:]
-    @ObservationIgnored private var loading: Set<URL> = []
+    /// The app's session (APIClient's), so pictures share its URL cache and configuration.
+    @ObservationIgnored var session: URLSession = MediaCache.shared.session
+    @ObservationIgnored var pipeline = ImagePipeline.shared
+    @ObservationIgnored private var slots: [URL: ImageSlot] = [:]
+    /// A picture arrived (blocks without a stored size lay out again).
+    @ObservationIgnored var imageDidLoad: ((URL) -> Void)?
     /// Current text of referenced blocks (block references are living).
     var referenceText: [String: String] = [:]
+    /// Current titles of linked notes (note links show them; labels are never stored).
+    var documentTitles: [String: String] = [:]
     @ObservationIgnored private var resolving: Set<String> = []
     @ObservationIgnored var resolveReference: ((String) async -> String?)?
     @ObservationIgnored var relayout: (() -> Void)?
@@ -35,6 +41,7 @@ final class AttachmentContext {
     func adoptResolvedLinks(_ links: ResolvedLinks?) {
         guard let links else { return }
         for (id, block) in links.blocks { referenceText[id] = block.text }
+        for (id, document) in links.documents { documentTitles[id] = document.title }
     }
 
     func url(for string: String) -> URL? {
@@ -42,22 +49,27 @@ final class AttachmentContext {
         return URL(string: string)
     }
 
-    func image(for url: URL) -> NSImage? {
-        if let image = images[url] { return image }
-        guard !loading.contains(url) else { return nil }
-        loading.insert(url)
-        if url.isFileURL {
-            let image = NSImage(contentsOf: url)
-            images[url] = image
-            return image
-        }
-        Task {
-            if let (data, _) = try? await APIClient.sharedSession.data(from: url), let image = NSImage(data: data) {
-                images[url] = image
-                relayout?()
+    /// The picture's slot; asking starts loading it (off the main thread, downsampled).
+    func slot(for url: URL) -> ImageSlot {
+        if let slot = slots[url] { return slot }
+        let slot = ImageSlot(image: pipeline.cached(url))
+        slots[url] = slot
+        if slot.image == nil {
+            let session = session
+            let pipeline = pipeline
+            Task { [weak self, weak slot] in
+                let image = await pipeline.image(for: url, session: session)
+                guard let image, let slot else { return }
+                slot.image = image
+                self?.imageDidLoad?(url)
             }
         }
-        return nil
+        return slot
+    }
+
+    /// The picture if it has arrived (and starts loading it if not).
+    func image(for url: URL) -> NSImage? {
+        slot(for: url).image
     }
 
     func referenceLabel(blockId: String, fallback: String) -> String {
@@ -96,6 +108,8 @@ final class BlockAttachment: NSTextAttachment {
     let info: BlockInfo
     nonisolated(unsafe) weak var context: AttachmentContext?
     nonisolated(unsafe) var live: (any LiveBlock)?
+    /// Last measured (width, height) of a hosted embed or math view (measuring hosts a view).
+    nonisolated(unsafe) private var measured: (width: CGFloat, height: CGFloat)?
 
     @MainActor init(info: BlockInfo, context: AttachmentContext, block: EditorBlock? = nil) {
         self.info = info
@@ -104,8 +118,8 @@ final class BlockAttachment: NSTextAttachment {
         allowsTextAttachmentView = true
         switch info.kind {
         case .table:
-            let table = block?.table ?? TableContent(blockNote: info.origin?.origin.content["blocknote"]) ?? .blank()
-            live = TableBlockController(table: table, attrs: info.origin?.origin.attrs ?? [:], context: context, attachment: self)
+            let table = block?.table ?? .blank()
+            live = TableBlockController(table: table, attrs: table.attrs, context: context, attachment: self)
         case .columns:
             live = ColumnsBlockController(columns: block?.columns ?? [], context: context, attachment: self)
         default:
@@ -135,9 +149,12 @@ final class BlockAttachment: NSTextAttachment {
             let size = ImageLayout.size(attrs: origin?.attrs ?? [:], image: imageNow(origin), width: width, theme: theme)
             return size.height + ImageLayout.captionHeight(attrs: origin?.attrs ?? [:], width: width, theme: theme)
         default:
+            if let measured, abs(measured.width - width) < 0.5 { return measured.height }
             let view = NSHostingView(rootView: BlockEmbedView(info: info, context: context, width: width))
             view.frame.size.width = width
-            return max(36, view.fittingSize.height)
+            let height = max(36, view.fittingSize.height)
+            measured = (width, height)
+            return height
         }
     }
 
@@ -151,6 +168,12 @@ final class BlockAttachment: NSTextAttachment {
 /// doesn't jump when the picture arrives; otherwise the picture's own size. Never wider
 /// than the column, never taller than 480.
 enum ImageLayout {
+    /// Width and height stored with the block: the space is known before the picture arrives.
+    static func hasStoredSize(_ attrs: [String: JSONValue]) -> Bool {
+        guard case .number(let width)? = attrs["width"], case .number(let height)? = attrs["height"] else { return false }
+        return width > 0 && height > 0
+    }
+
     @MainActor static func size(attrs: [String: JSONValue], image: NSImage?, width: CGFloat, theme: EditorTheme) -> CGSize {
         func number(_ key: String) -> CGFloat? {
             if case .number(let value)? = attrs[key], value > 0 { return CGFloat(value) }
@@ -165,8 +188,7 @@ enum ImageLayout {
             return nil
         }()
         guard let natural, natural.width > 0 else { return CGSize(width: width, height: 220 * theme.scale) }
-        let preview = number("previewWidth") ?? natural.width
-        var shown = min(width, preview, natural.width)
+        var shown = min(width, natural.width)
         var height = shown * natural.height / natural.width
         if height > 480 {
             height = 480
@@ -242,7 +264,7 @@ struct BlockEmbedView: View {
                 FileChip(name: fileName, url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
                          size: fileSize, context: context)
             case .math:
-                MathBlockView(latex: origin?.content["latex"]?.stringValue ?? origin?.text ?? "")
+                MathBlockView(latex: origin?.payload?["latex"]?.stringValue ?? origin?.text ?? "")
             default:
                 EmbedSummary(origin: origin)
             }
@@ -286,7 +308,7 @@ private struct ImageBlockView: View {
 
     @ViewBuilder private func content(width: CGFloat) -> some View {
         let theme = context?.theme ?? EditorTheme()
-        let image = url.flatMap { context?.images[$0] }
+        let image = url.flatMap { context?.slot(for: $0).image }
         let size: CGSize? = ImageLayout.size(attrs: attrs, image: image, width: width, theme: theme)
         VStack(alignment: .leading, spacing: 6 * theme.scale) {
             Group {
@@ -461,18 +483,19 @@ struct EmbedSummary: View {
 
     private var symbol: String {
         switch type {
-        case "table", "raw": "tablecells"
-        case "columns", "column", "columnList": "rectangle.split.2x1"
-        case "mathPlaceholder", "math": "function"
+        case "table": "tablecells"
+        case "html": "chevron.left.forwardslash.chevron.right"
+        case "quote", "callout": "text.quote"
+        case "columns", "column": "rectangle.split.2x1"
+        case "math": "function"
         default: "square.dashed"
         }
     }
 
     private var label: String {
         switch type {
-        case "raw": "HTML"
-        case "columns", "columnList": "Columns"
-        case "mathPlaceholder": "Math"
+        case "html": "HTML"
+        case "columns": "Columns"
         default: type.prefix(1).uppercased() + type.dropFirst()
         }
     }
@@ -490,80 +513,11 @@ struct EmbedSummary: View {
         return parts.joined(separator: "\n")
     }
 
-    /// BlockNote table content: rows of cells of inline content.
+    /// A table kept as it came: rows of cells' text.
     private var tableRows: [[String]]? {
-        guard let content = origin?.content["blocknote"], content["type"]?.stringValue == "tableContent",
-              case .array(let rows)? = content["rows"] else { return nil }
-        return rows.map { row in
-            guard case .array(let cells)? = row["cells"] else { return [] }
-            return cells.map { cell in
-                if let inner = cell["content"] { return BlockCodec.inlineText(inner) }
-                return BlockCodec.inlineText(cell)
-            }
-        }
-    }
-}
-
-// MARK: Inline nodes (block references, mentions, …)
-
-/// An atomic inline node drawn as a small piece of text. Block references show the
-/// referenced block's current text.
-final class InlineNodeAttachment: NSTextAttachment {
-    let node: JSONValue
-    nonisolated(unsafe) weak var context: AttachmentContext?
-
-    @MainActor init(node: JSONValue, context: AttachmentContext) {
-        self.node = node
-        self.context = context
-        super.init(data: nil, ofType: nil)
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    var href: String? { node["href"]?.stringValue }
-
-    @MainActor var label: String {
-        let fallback = BlockCodec.inlineText(node).trimmingCharacters(in: .whitespaces)
-        if let href, let target = InlineMarkdown.blockReferenceTarget(href) {
-            let text = context?.referenceLabel(blockId: target.id, fallback: fallback.isEmpty ? (target.label ?? "block") : fallback) ?? fallback
-            let clean = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            return clean.count > 80 ? String(clean.prefix(79)) + "…" : clean
-        }
-        return fallback.isEmpty ? (node["type"]?.stringValue ?? "•") : fallback
-    }
-
-    @MainActor private func textAttributes(_ attributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
-        let font = (attributes[.font] as? NSFont) ?? (context?.theme ?? EditorTheme()).bodyFont()
-        return [.font: font, .foregroundColor: NSColor.textColor]
-    }
-
-    override func attachmentBounds(
-        for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
-        textContainer: NSTextContainer?, proposedLineFragment: CGRect, position: CGPoint
-    ) -> CGRect {
-        nonisolated(unsafe) let this = self
-        nonisolated(unsafe) let attributes = attributes
-        return MainActor.assumeIsolated {
-            let attrs = this.textAttributes(attributes)
-            let label = this.label
-            let size = (label as NSString).size(withAttributes: attrs)
-            let font = attrs[.font] as! NSFont
-            return CGRect(x: 0, y: font.descender, width: ceil(size.width) + 2, height: ceil(font.ascender - font.descender))
-        }
-    }
-
-    override func image(for bounds: CGRect, attributes: [NSAttributedString.Key: Any], location: any NSTextLocation, textContainer: NSTextContainer?) -> NSImage? {
-        nonisolated(unsafe) let this = self
-        nonisolated(unsafe) let attributes = attributes
-        return MainActor.assumeIsolated {
-            let font = this.textAttributes(attributes)[.font] as! NSFont
-            let label = this.label
-            return NSImage(size: bounds.size, flipped: false) { rect in
-                (label as NSString).draw(at: CGPoint(x: 1, y: -font.descender), withAttributes: [.font: font, .foregroundColor: NSColor.textColor])
-                NSColor.controlAccentColor.withAlphaComponent(0.35).setFill()
-                NSRect(x: 0, y: 0, width: rect.width, height: 2).fill()
-                return true
-            }
-        }
+        guard let origin, origin.type == "table" else { return nil }
+        let rows = origin.children.filter { $0.type == "table_row" }
+        guard !rows.isEmpty else { return nil }
+        return rows.map { row in row.children.map(TableContent.nestedText) }
     }
 }

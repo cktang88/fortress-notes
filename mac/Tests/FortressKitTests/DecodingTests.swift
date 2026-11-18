@@ -26,10 +26,16 @@ private func decode<T: Decodable>(_ type: T.Type, _ name: String) throws -> T {
     #expect(document.title == "Kyoto trip")
     #expect(document.children.first?.type == "heading")
     #expect(document.children.contains { $0.text == "We booked a ryokan in Gion." })
-    // Free-form keys must round-trip untouched (no snake/camel conversion).
-    let encoded = try JSONEncoder().encode(BlockOperation(operation: .setAttrs, blockId: "b", attrs: ["textAlignment": .string("left")]))
-    #expect(String(decoding: encoded, as: UTF8.self).contains("\"textAlignment\""))
-    #expect(String(decoding: encoded, as: UTF8.self).contains("\"block_id\""))
+    #expect(document.children.first?.attrs["level"] == .number(1))
+    #expect(document.children.first?.order != nil)
+    // Free-form keys must round-trip untouched (no snake/camel conversion); unset
+    // fields are left out, and a null in an attrs patch deletes that key.
+    let encoded = String(decoding: try JSONEncoder().encode(FortressKit.BlockOperation(
+        operation: .update, blockId: "b", attrs: ["onenote_tags": .string("x"), "level": .null])), as: UTF8.self)
+    #expect(encoded.contains("\"onenote_tags\""))
+    #expect(encoded.contains("\"block_id\""))
+    #expect(encoded.contains("\"level\":null"))
+    #expect(!encoded.contains("parent_id") && !encoded.contains("after_id") && !encoded.contains("content"))
 }
 
 @Test func decodesSearchAndLookups() throws {

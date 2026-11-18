@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -40,6 +41,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     private var isNormalizing = false
     private var isLoading = false
     private var lastReplacement: String?
+    /// The pending change adds, removes or retypes paragraphs (list numbers may move).
+    private var structuralEdit = false
     private var focusedBlockId: String?
     private lazy var completion = LinkCompletion(controller: self)
     private lazy var blockHover = BlockHover(controller: self)
@@ -69,6 +72,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         context.relayout = { [weak self] in self?.relayoutAttachments() }
+        context.imageDidLoad = { [weak self] url in self?.imageDidLoad(url) }
         context.openURL = { [weak self] url in self?.open(url) }
         context.openNote = { [weak self] id in self?.onOpenNote?(id, nil) }
         context.contentDidChange = { [weak self] in
@@ -98,6 +102,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             return await resolve(id)
         }
         child.context.referenceText = context.referenceText
+        child.context.documentTitles = context.documentTitles
+        child.context.session = context.session
     }
 
     // MARK: Tables and columns
@@ -186,15 +192,68 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         isLoading = true
         defer { isLoading = false }
         let text = DocumentText.build(blocks, theme: theme, context: context)
+        blockCache = [:]
         storage.setAttributedString(text)
+        // A text block just shown is what reading it back gives (unless building the text
+        // rewrote it): keep those, so the baseline right after opening and the first save
+        // don't read every block back. Tables, columns and embeds are read from the text.
+        var byId: [String: EditorBlock] = [:]
+        byId.reserveCapacity(blocks.count)
+        for block in blocks where Self.readsBackAsShown(block) { byId[block.id] = block }
+        var cache: [String: CachedBlock] = [:]
+        cache.reserveCapacity(blocks.count)
+        storage.enumerateAttribute(.fnBlock, in: NSRange(location: 0, length: storage.length), options: []) { value, range, _ in
+            guard let info = value as? BlockInfo, let block = byId[info.id], cache[info.id] == nil else { return }
+            cache[info.id] = CachedBlock(info: info, length: range.length, block: block)
+        }
+        blockCache = cache
+        dirtyBlocks.removeAll()
         textView.undoManager?.removeAllActions()
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         syncTypingAttributes()
     }
 
     /// The blocks as they are now (fixing duplicate ids from pastes as a side effect).
+    ///
+    /// Reading a block back (its runs and marks) is the expensive part, so blocks are kept
+    /// from the last read and only paragraphs edited since (`dirtyBlocks`, or a new
+    /// `BlockInfo`) are read again: a save after a keystroke reads one paragraph, not the
+    /// note. Tables and columns hold their edits in the attachment and are always asked.
     func currentBlocks() -> [EditorBlock] {
-        let (blocks, renamed) = DocumentText.blocks(from: storage)
+        let string = self.string
+        var blocks: [EditorBlock] = []
+        var renamed: [(NSRange, BlockInfo)] = []
+        var seen = Set<String>()
+        var cache: [String: CachedBlock] = [:]
+        cache.reserveCapacity(blockCache.count)
+        var location = 0
+        while location < string.length {
+            let paragraph = string.paragraphRange(at: location)
+            location = NSMaxRange(paragraph)
+            let stored = storage.blockInfo(at: paragraph.location)
+            var info = stored ?? BlockInfo()
+            if seen.contains(info.id) || stored == nil {
+                info = info.renamed()
+                renamed.append((paragraph, info))
+            }
+            seen.insert(info.id)
+            var block: EditorBlock
+            if let cached = blockCache[info.id], cached.info === info, cached.length == paragraph.length,
+               !dirtyBlocks.contains(info.id) {
+                block = cached.block
+            } else {
+                block = DocumentText.block(in: storage, paragraph: paragraph, info: info)
+            }
+            if !info.kind.hasInlineText,
+               let attachment = storage.attribute(.attachment, at: paragraph.location, effectiveRange: nil) as? BlockAttachment,
+               let live = attachment.live {
+                live.write(into: &block)
+            }
+            cache[info.id] = CachedBlock(info: info, length: paragraph.length, block: block)
+            blocks.append(block)
+        }
+        blockCache = cache
+        dirtyBlocks.removeAll(keepingCapacity: true)
         if !renamed.isEmpty {
             isNormalizing = true
             storage.beginEditing()
@@ -205,6 +264,37 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         return blocks
     }
 
+    /// Whether reading `block`'s paragraph back gives `block` itself: inline text only, with
+    /// runs already normalized and no separators or stray attachment characters (building
+    /// the text turns those into soft breaks or drops them).
+    private static func readsBackAsShown(_ block: EditorBlock) -> Bool {
+        guard block.kind.hasInlineText, block.table == nil, block.columns == nil else { return false }
+        for run in block.runs where run.node == nil {
+            if run.text.isEmpty { return false }
+            for unit in run.text.utf16 where unit == 0x0A || unit == 0x0D || unit == 0x2029 || unit == 0xFFFC {
+                return false
+            }
+        }
+        return BlockCodec.normalized(block.runs) == block.runs
+    }
+
+    /// Forgets the blocks kept from loading and earlier reads, so the next
+    /// `currentBlocks()` reads every paragraph back from the text (tests of the round trip).
+    func discardReadCache() {
+        blockCache = [:]
+    }
+
+    private struct CachedBlock {
+        let info: BlockInfo
+        let length: Int
+        let block: EditorBlock
+    }
+
+    /// Blocks as last read back, by id (see `currentBlocks`).
+    private var blockCache: [String: CachedBlock] = [:]
+    /// Blocks whose paragraphs were edited since they were last read.
+    private var dirtyBlocks: Set<String> = []
+
     /// Text of the first non-empty blocks, for the live auto title.
     func leadingTexts(limit: Int = 3) -> [String] {
         var output: [String] = []
@@ -213,7 +303,10 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             let paragraph = string.paragraphRange(at: location)
             location = NSMaxRange(paragraph)
             guard let info = storage.blockInfo(at: paragraph.location), info.kind.hasInlineText else { continue }
-            let text = DocumentText.runs(in: storage, range: contentRange(of: paragraph))
+            // A title is one line of at most 80 characters: never read a whole long paragraph.
+            var content = contentRange(of: paragraph)
+            if content.length > 400 { content = (string as NSString).rangeOfComposedCharacterSequences(for: NSRange(location: content.location, length: 400)) }
+            let text = DocumentText.runs(in: storage, range: content)
             let plain = BlockCodec.plainText(text)
             if !plain.trimmingCharacters(in: .whitespaces).isEmpty { output.append(plain) }
         }
@@ -252,31 +345,50 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         textView.scrollRangeToVisible(textView.selectedRange())
     }
 
+    /// Where the caret is, as a block and an offset in it (survives reloads and edits elsewhere).
+    func selectionAnchor() -> (blockId: String, offset: Int)? {
+        let location = textView.selectedRange().location
+        guard location < string.length, let id = storage.blockInfo(at: paragraph(at: location).location)?.id else { return nil }
+        return (id, location - paragraph(at: location).location)
+    }
+
+    /// Puts the caret back where it was when the note was last open, and scrolls to it.
+    @discardableResult
+    func restoreSelection(_ anchor: (blockId: String, offset: Int)) -> Bool {
+        guard let range = range(ofBlock: anchor.blockId) else { return false }
+        let content = contentRange(of: range)
+        let location = (string as NSString).rangeOfComposedCharacterSequence(at: min(content.location + anchor.offset, NSMaxRange(content))).location
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: min(max(content.location, location), NSMaxRange(content)), length: 0))
+        textView.scrollRangeToVisible(textView.selectedRange())
+        return true
+    }
+
     func focusStart() {
         textView.window?.makeFirstResponder(textView)
         textView.setSelectedRange(NSRange(location: 0, length: 0))
     }
 
     private func scrollToCenter(_ range: NSRange) {
+        // Scroll there first (TextKit 2 places it from estimates), lay out just the
+        // viewport, then center on the block's real frame. Laying out everything above the
+        // block (ensureLayout from the start) made opening a link to the end of a long note
+        // lay out the whole note.
         textView.layoutSubtreeIfNeeded()
-        guard let manager = textView.textLayoutManager, let contentManager = manager.textContentManager,
-              let start = contentManager.location(contentManager.documentRange.location, offsetBy: range.location)
-        else { textView.scrollRangeToVisible(range); return }
-        let end = contentManager.location(start, offsetBy: range.length) ?? start
-        manager.ensureLayout(for: NSTextRange(location: contentManager.documentRange.location, end: end) ?? NSTextRange(location: start))
-        textView.layoutSubtreeIfNeeded()
-        guard let fragment = manager.textLayoutFragment(for: start) else { textView.scrollRangeToVisible(range); return }
+        textView.scrollRangeToVisible(range)
+        guard let manager = textView.textLayoutManager, let textRange = textRange(for: range) else { return }
+        manager.textViewportLayoutController.layoutViewport()
+        guard let fragment = manager.textLayoutFragment(for: textRange.location) else { return }
         let frame = fragment.layoutFragmentFrame.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
         let visible = scrollView.contentView.bounds.height
         // The view may not have grown to the laid-out text yet.
-        textView.sizeToFit()
         if textView.frame.height < frame.maxY + visible / 2 {
             textView.setFrameSize(NSSize(width: textView.frame.width, height: frame.maxY + visible / 2))
         }
-        textView.scrollRangeToVisible(range)
         let y = max(0, frame.midY - visible / 2)
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+        manager.textViewportLayoutController.layoutViewport()
     }
 
     private func flash(_ range: NSRange) {
@@ -296,9 +408,49 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         return NSTextRange(location: start, end: end)
     }
 
+    /// Lays everything out again, once per run loop turn however many ask (a burst of
+    /// resolved block references used to relayout the whole note once each).
     private func relayoutAttachments() {
+        guard !relayoutScheduled else { return }
+        relayoutScheduled = true
+        Self.later { [weak self] in
+            guard let self else { return }
+            self.relayoutScheduled = false
+            guard let manager = self.textView.textLayoutManager else { return }
+            manager.invalidateLayout(for: manager.documentRange)
+            self.textView.needsDisplay = true
+            self.onRelayout?()
+        }
+    }
+
+    private var relayoutScheduled = false
+    private var loadedImages: Set<URL> = []
+
+    /// A picture arrived. Pictures with a stored size already have their space (a
+    /// placeholder of the right size), so nothing moves; only ones without lay out again,
+    /// just their own paragraphs, batched per run loop turn.
+    private func imageDidLoad(_ url: URL) {
+        let first = loadedImages.isEmpty
+        loadedImages.insert(url)
+        guard first else { return }
+        Self.later { [weak self] in self?.relayoutLoadedImages() }
+    }
+
+    private func relayoutLoadedImages() {
+        let urls = loadedImages
+        loadedImages = []
         guard let manager = textView.textLayoutManager else { return }
-        manager.invalidateLayout(for: manager.documentRange)
+        var changed = false
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length), options: []) { value, range, _ in
+            guard let attachment = value as? BlockAttachment, attachment.info.kind == .image,
+                  let attrs = attachment.info.origin?.origin.attrs, !ImageLayout.hasStoredSize(attrs),
+                  let href = attrs["url"]?.stringValue, let url = context.url(for: href), urls.contains(url),
+                  let textRange = textRange(for: paragraph(at: range.location)) else { return }
+            manager.invalidateLayout(for: textRange)
+            changed = true
+        }
+        guard changed else { return }
+        manager.textViewportLayoutController.layoutViewport()
         textView.needsDisplay = true
         onRelayout?()
     }
@@ -392,7 +544,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     ) {
         nonisolated(unsafe) let storage = textStorage
         MainActor.assumeIsolated {
-            guard !isNormalizing else { return }
+            // A loaded note is built well-formed and styled (`DocumentText.build`).
+            guard !isNormalizing, !isLoading else { return }
             isNormalizing = true
             defer { isNormalizing = false }
             normalize(storage, editedRange)
@@ -408,15 +561,17 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             storage.append(NSAttributedString(string: "\n", attributes: [.fnBlock: info]))
         }
         // Foreign separators (pasted "\r\n", U+2029) become paragraph breaks.
-        let edited = NSIntersectionRange(editedRange, NSRange(location: 0, length: storage.length))
+        // In place, so pasted rich text keeps its formatting (replacing the whole range
+        // with the first character's attributes dropped every bold word and link).
+        var edited = NSIntersectionRange(editedRange, NSRange(location: 0, length: storage.length))
         if edited.length > 0 {
-            let piece = (storage.string as NSString).substring(with: edited)
-            if piece.contains("\r") || piece.contains("\u{2029}") {
-                let fixed = piece.replacingOccurrences(of: "\r\n", with: "\n")
-                    .replacingOccurrences(of: "\r", with: "\n").replacingOccurrences(of: "\u{2029}", with: "\n")
-                let attributes = storage.attributes(at: edited.location, effectiveRange: nil)
-                storage.replaceCharacters(in: edited, with: NSAttributedString(string: fixed, attributes: attributes))
+            let mutable = storage.mutableString
+            for (separator, shrinks) in [("\r\n", 1), ("\r", 0), ("\u{2029}", 0)]
+            where mutable.range(of: separator, options: .literal, range: edited).location != NSNotFound {
+                let count = mutable.replaceOccurrences(of: separator, with: "\n", options: .literal, range: edited)
+                edited.length -= count * shrinks
             }
+            if mutable.range(of: "\n", options: .literal, range: edited).location != NSNotFound { structuralEdit = true }
         }
         let text = storage.string as NSString
         let start = text.paragraphRange(at: min(editedRange.location, text.length - 1)).location
@@ -427,7 +582,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             let paragraph = text.paragraphRange(at: location)
             var info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
             if info.id == previousId {
-                info = BlockInfo(kind: info.kind, depth: info.depth, checked: info.checked, language: info.language, origin: info.origin)
+                info = info.renamed()
             }
             if !info.kind.hasInlineText {
                 let hasAttachment = paragraph.length > 1 && storage.attribute(.attachment, at: paragraph.location, effectiveRange: nil) is BlockAttachment
@@ -440,6 +595,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                 if (value as? BlockInfo) !== info { needsTagging = true; stop.pointee = true }
             }
             if needsTagging { storage.addAttribute(.fnBlock, value: info, range: paragraph) }
+            dirtyBlocks.insert(info.id)
             theme.restyle(storage, range: paragraph)
             previousId = info.id
             location = NSMaxRange(paragraph)
@@ -461,6 +617,10 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
         lastReplacement = replacementString
+        if !structuralEdit {
+            structuralEdit = replacementString.map { $0.utf16.contains(0x0A) } ?? true
+                || (affectedCharRange.length > 0 && string.range(of: "\n", options: .literal, range: affectedCharRange).location != NSNotFound)
+        }
         guard !isApplyingEdit, let replacementString, !replacementString.isEmpty, !textView.hasMarkedText() else { return true }
         // Typing next to an image or divider starts a new paragraph instead.
         let paragraph = paragraph(at: affectedCharRange.location)
@@ -490,7 +650,10 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             if inserted == "[" { maybeStartCompletion() }
         }
         completion.textDidChange()
-        invalidateNumbering(around: textView.selectedRange().location)
+        // Typing inside a paragraph can't renumber a list; only structural edits relayout
+        // the items below (a long numbered list would otherwise relayout per keystroke).
+        if structuralEdit { invalidateNumbering(around: textView.selectedRange().location) }
+        structuralEdit = false
         onChange?()
     }
 
@@ -507,8 +670,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let href = (link as? URL)?.absoluteString ?? (link as? String) ?? ""
-        if let target = InlineMarkdown.documentLinkTarget(href) {
-            onOpenNote?(target.id, nil)
+        if let id = NoteLinks.documentId(from: link) {
+            onOpenNote?(id, nil)
             return true
         }
         if let url = context.url(for: href) {
@@ -869,6 +1032,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         case "#" where current == .paragraph: return (.heading1, false)
         case "##" where current == .paragraph: return (.heading2, false)
         case "###" where current == .paragraph: return (.heading3, false)
+        case "####" where current == .paragraph: return (.heading4, false)
+        case "#####" where current == .paragraph: return (.heading5, false)
+        case "######" where current == .paragraph: return (.heading6, false)
         case "-", "*", "+": return current == .paragraph ? (.bullet, false) : nil
         case ">" where current == .paragraph: return (.quote, false)
         case "[]", "[ ]", "- [ ]", "- []": return (.check, false)
@@ -1058,7 +1224,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             // Media from the local server: download to a cache folder and open with its app.
             Task {
                 do {
-                    let (temporary, _) = try await APIClient.sharedSession.download(from: url)
+                    let (temporary, _) = try await MediaCache.shared.session.download(from: url)
                     let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                         .appending(path: "FortressNotes/Files", directoryHint: .isDirectory)
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -1087,9 +1253,10 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// Replaces `[[query` with a link to the chosen note.
     func insertNoteLink(_ suggestion: LinkSuggestion, replacing range: NSRange) {
         let info = info(at: range.location)
-        let href = InlineMarkdown.documentLinkHref(id: suggestion.documentId, title: suggestion.title)
-        let label = suggestion.title.isEmpty ? "Untitled" : suggestion.title
-        let replacement = NSMutableAttributedString(attributedString: attributed(label, info: info, marks: InlineMarks(link: href)))
+        // A `docLink` node: its label is the note's current title, never stored.
+        context.documentTitles[suggestion.documentId] = suggestion.title
+        let node = NoteLinks.documentNode(id: suggestion.documentId)
+        let replacement = NSMutableAttributedString(attributedString: DocumentText.inline([.atomic(node)], info: info, context: context, theme: theme))
         replacement.append(attributed(" ", info: info))
         textView.breakUndoCoalescing()
         replace(range, with: replacement, selecting: NSRange(location: range.location + replacement.length, length: 0))
@@ -1098,6 +1265,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     // MARK: Keys and clicks
 
     func handleKeyEquivalent(_ event: NSEvent) -> Bool {
+        // During IME composition (Japanese, Chinese…) the input method owns the keys;
+        // formatting the uncommitted text would break the composition.
+        guard !textView.hasMarkedText() else { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
         switch (flags, key) {
@@ -1203,42 +1373,70 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     // MARK: Pasting and dropping files
 
-    /// Images and files from the pasteboard upload to the server and become blocks.
-    func pasteFiles(from pasteboard: NSPasteboard) -> Bool {
+    /// Images and files from the pasteboard upload to the server and become blocks, in
+    /// order, after the block at `location` (the drop point, or the caret). Files are read
+    /// off the main thread; the blocks follow their anchor block even if the text is edited
+    /// while uploads run.
+    func pasteFiles(from pasteboard: NSPasteboard, at location: Int? = nil) -> Bool {
         guard let uploadFile else { return false }
-        var items: [(Data, String, String)] = []
+        var sources: [(url: URL?, data: Data?, name: String, type: String)] = []
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             for url in urls {
-                guard let data = try? Data(contentsOf: url) else { continue }
                 let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-                items.append((data, url.lastPathComponent, type))
+                sources.append((url, nil, url.lastPathComponent, type))
             }
         } else if pasteboard.string(forType: .string) == nil,
                   let data = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff).flatMap({ NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }) {
-            items.append((data, "Pasted image.png", "image/png"))
+            sources.append((nil, data, "Pasted image.png", "image/png"))
         }
-        guard !items.isEmpty else { return false }
-        let at = textView.selectedRange()
+        guard !sources.isEmpty else { return false }
+        let at = min(max(0, location ?? textView.selectedRange().location), max(0, string.length - 1))
+        var anchorId = storage.blockInfo(at: paragraph(at: at).location)?.id
+        let depth = info(at: at).depth
         Task {
-            var location = NSMaxRange(paragraph(at: at.location))
-            for (data, name, type) in items {
+            for source in sources {
                 do {
-                    let uploaded = try await uploadFile(data, name, type)
-                    let kind: BlockKind = type.hasPrefix("image/") ? .image : .file
-                    let markdown = kind == .image ? "![\(uploaded.name)](\(uploaded.url))" : "[\(uploaded.name)](\(uploaded.url))"
-                    let origin = BlockOrigin(type: kind.canonicalType, attrs: ["url": .string(uploaded.url), "name": .string(uploaded.name)],
-                                             content: .object(["markdown": .string(markdown)]), text: uploaded.name, kind: kind, native: true)
-                    let paragraph = DocumentText.paragraph(EditorBlock(kind: kind, depth: info(at: at.location).depth, origin: origin), context: context)
-                    location = min(location, string.length)
-                    replace(NSRange(location: location, length: 0), with: paragraph,
-                            selecting: NSRange(location: location + paragraph.length, length: 0))
-                    location += paragraph.length
+                    let data: Data
+                    if let file = source.url {
+                        data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: file, options: .mappedIfSafe) }.value
+                    } else {
+                        data = source.data ?? Data()
+                    }
+                    let uploaded = try await uploadFile(data, source.name, source.type)
+                    let kind: BlockKind = source.type.hasPrefix("image/") ? .image : .file
+                    var attrs: [String: JSONValue] = ["url": .string(uploaded.url), "name": .string(uploaded.name)]
+                    if kind == .image, let size = await Self.pixelSize(of: data) {
+                        // Stored size: the picture's space is right before it loads (no jump).
+                        attrs["width"] = .number(Double(size.width))
+                        attrs["height"] = .number(Double(size.height))
+                    } else if kind == .file {
+                        attrs["size"] = .number(Double(data.count))
+                    }
+                    let origin = BlockOrigin(type: kind.canonicalType, attrs: attrs, text: uploaded.name, kind: kind)
+                    let block = EditorBlock(kind: kind, depth: depth, origin: origin)
+                    let paragraph = DocumentText.paragraph(block, context: context)
+                    let insertAt = min(anchorId.flatMap { range(ofBlock: $0) }.map(NSMaxRange) ?? string.length, string.length)
+                    replace(NSRange(location: insertAt, length: 0), with: paragraph,
+                            selecting: NSRange(location: insertAt + paragraph.length, length: 0))
+                    anchorId = block.id
                 } catch {
                     NSSound.beep()
                 }
             }
         }
         return true
+    }
+
+    /// An image's pixel size from its header (no decoding).
+    nonisolated static func pixelSize(of data: Data) async -> CGSize? {
+        await Task.detached(priority: .utility) { () -> CGSize? in
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
+            let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+            return orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
+        }.value
     }
 
     // MARK: Copying blocks within and between notes
@@ -1250,11 +1448,19 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let (blocks, _) = DocumentText.blocks(from: substring)
         let payload = blocks.map { block -> [String: JSONValue] in
             let fields = BlockCodec.encode(block)
-            return [
-                "type": .string(fields.type), "attrs": .object(fields.attrs), "content": fields.content,
-                "text": .string(fields.text), "depth": .number(Double(block.depth)),
+            var item: [String: JSONValue] = [
+                "type": .string(fields.type), "kind": .string(block.kind.rawValue), "attrs": .object(fields.attrs),
+                "content": fields.content, "depth": .number(Double(block.depth)),
                 "partial": .bool(!substring.string.hasSuffix("\n") && block == blocks.last),
             ]
+            if let payload = fields.payload { item["payload"] = payload }
+            // A table travels with its cells' text (pasted with new ids).
+            if let table = block.table {
+                item["rows"] = .array(table.rows.map { row in
+                    .array(row.cells.map { cell in .object(["attrs": .object(cell.attrs), "content": BlockCodec.inlineContent(cell.runs)]) })
+                })
+            }
+            return item
         }
         guard let data = try? JSONEncoder().encode(payload) else { return false }
         return pasteboard.setData(data, forType: Self.blocksPasteboardType)
@@ -1267,15 +1473,33 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let selection = textView.selectedRange()
         let current = info(at: selection.location)
         var blocks = payload.map { item -> EditorBlock in
+            var rows: [BlockNode] = []
+            if case .array(let items)? = item["rows"] {
+                rows = items.map { row in
+                    guard case .array(let cells) = row else { return BlockNode(id: EditorBlock.newId(), type: "table_row") }
+                    return BlockNode(id: EditorBlock.newId(), type: "table_row", children: cells.map { cell in
+                        var attrs: [String: JSONValue] = [:]
+                        if case .object(let found)? = cell["attrs"] { attrs = found }
+                        return BlockNode(id: EditorBlock.newId(), type: "table_cell", attrs: attrs, children: [
+                            BlockNode(id: EditorBlock.newId(), type: "paragraph", content: cell["content"] ?? .array([])),
+                        ])
+                    })
+                }
+            }
             let node = BlockNode(
-                id: EditorBlock.newId(), documentId: "", parentId: nil, position: 0,
-                type: item["type"]?.stringValue ?? "paragraph",
+                id: EditorBlock.newId(), type: item["type"]?.stringValue ?? "paragraph",
                 attrs: { if case .object(let attrs)? = item["attrs"] { return attrs }; return [:] }(),
-                userAttrs: [:], content: item["content"] ?? .object([:]), text: item["text"]?.stringValue ?? "",
-                createdAt: "", updatedAt: "", children: [])
+                content: item["content"] ?? .null, payload: item["payload"], children: rows)
             var block = BlockCodec.decode(node, depth: (item["depth"]?.intValue ?? 0) + current.depth)
-            block.origin = nil
-            if block.kind.hasInlineText == false { block.origin = BlockCodec.decode(node).origin }
+            if item["kind"]?.stringValue == BlockKind.quote.rawValue { block.kind = .quote }
+            if block.kind.hasInlineText { block.origin = nil }
+            if var table = block.table {
+                // Pasted cells are new blocks: inserted, not updated.
+                for row in table.rows.indices {
+                    for cell in table.rows[row].cells.indices { table.rows[row].cells[cell].hasParagraph = false }
+                }
+                block.table = table
+            }
             return block
         }
         // Columns travel without their blocks on this pasteboard; they aren't pasted.

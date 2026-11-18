@@ -56,9 +56,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     }
 
     private func document(revision: Int, text: String) -> BlockDocument {
-        let node = BlockNode(id: "p1", documentId: "d", parentId: nil, position: 0, type: "paragraph", attrs: [:],
-                             userAttrs: [:], content: .object(["markdown": .string(text)]), text: text,
-                             createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00", children: [])
+        let node = BlockNode.paragraph("p1", text)
         return BlockDocument(id: "d", revision: revision, titleAuto: true, canUndo: false, canRedo: false, title: text,
                              status: .rough, createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
                              children: [node])
@@ -76,7 +74,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         let sent = try JSONDecoder().decode(FortressKit.BlockTransaction.self, from: try #require(StubProtocol.bodies.first))
         #expect(sent.baseRevision == 3)
         #expect(sent.operations.count == 1)
-        #expect(sent.operations[0].text == "Hello there")
+        #expect(sent.operations[0].plainText == "Hello there")
         #expect(session.revision == 4)
         #expect(session.title == "Hello there")  // auto title follows the server
 

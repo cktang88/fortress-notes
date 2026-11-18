@@ -16,8 +16,20 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     let grid = TableGridView()
     var view: NSView { grid }
 
-    private(set) var cells: [[CellTextView]] = []
+    /// The cell editors, made the first time the table is laid out or entered: a note
+    /// with twenty 50 × 8 tables would otherwise make 8,000 text views when it opens,
+    /// most of them never scrolled to.
+    var cells: [[CellTextView]] {
+        buildIfNeeded()
+        return cellViews
+    }
+    private var cellViews: [[CellTextView]] = []
+    private var isBuilt = false
     private var nested: [[NSView?]] = []
+    /// Each cell's text height and nested blocks' height at the measured width, so an
+    /// edit re-measures one cell (and moves the rows below), not the whole table.
+    private var textHeights: [[CGFloat]] = []
+    private var nestedHeights: [[CGFloat]] = []
     /// Logical column edges (count + 1) and row edges, in grid coordinates.
     private(set) var columnEdges: [CGFloat] = []
     private(set) var rowEdges: [CGFloat] = []
@@ -32,11 +44,16 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         self.attachment = attachment
         super.init()
         grid.controller = self
+    }
+
+    private func buildIfNeeded() {
+        guard !isBuilt else { return }
+        isBuilt = true
         rebuild()
     }
 
     var theme: EditorTheme { context?.theme ?? EditorTheme() }
-    var borders: Bool { attrs["borders"]?.boolValue ?? true }
+    var borders: Bool { table.extra["borders"]?.boolValue ?? attrs["borders"]?.boolValue ?? true }
     var padding: CGSize { CGSize(width: 10 * theme.scale, height: 7 * theme.scale) }
     var tableWidth: CGFloat { columnEdges.last ?? 0 }
 
@@ -68,12 +85,12 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         return cellTheme
     }
 
-    /// Creates the cell views for the current table (after loading or a shape change).
+    /// Creates the cell views for the current table (on first layout or a shape change).
     private func rebuild() {
         let focus = focusedCell.map { ($0.row, $0.column) }
-        for row in cells { for cell in row { cell.removeFromSuperview() } }
+        for row in cellViews { for cell in row { cell.removeFromSuperview() } }
         for row in nested { for view in row { view?.removeFromSuperview() } }
-        cells = []
+        cellViews = []
         nested = []
         for (r, row) in table.rows.enumerated() {
             var rowViews: [CellTextView] = []
@@ -89,20 +106,20 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
                 load(cell.runs, into: view)
                 grid.addSubview(view)
                 rowViews.append(view)
-                if cell.nestedBlocks.isEmpty {
+                if cell.nested.isEmpty {
                     rowNested.append(nil)
                 } else {
-                    let hosting = NSHostingView(rootView: NestedCellBlocks(blocks: cell.nestedBlocks, context: context, scale: theme.scale))
+                    let hosting = NSHostingView(rootView: NestedCellBlocks(blocks: cell.nested, context: context, scale: theme.scale))
                     hosting.sizingOptions = []
                     grid.addSubview(hosting)
                     rowNested.append(hosting)
                 }
             }
-            cells.append(rowViews)
+            cellViews.append(rowViews)
             nested.append(rowNested)
         }
         measuredWidth = -1
-        if let focus { self.focus(row: min(focus.0, cells.count - 1), column: focus.1, atEnd: true) }
+        if let focus { self.focus(row: min(focus.0, cellViews.count - 1), column: focus.1, atEnd: true) }
     }
 
     private func load(_ runs: [InlineRun], into view: CellTextView) {
@@ -136,27 +153,26 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     /// Lays the grid out for `width` (cached until something changes).
     func layout(width: CGFloat) {
         guard abs(width - measuredWidth) > 0.5 else { return }
+        buildIfNeeded()
         measuredWidth = width
         let widths = table.layoutWidths(available: Double(max(80, width - 1)), minimum: Double(56 * theme.scale))
         columnEdges = [0]
         for value in widths { columnEdges.append((columnEdges.last ?? 0) + CGFloat(value).rounded(.down)) }
-        rowEdges = [0]
-        for (r, row) in cells.enumerated() {
-            var rowHeight = theme.lineHeight(for: .paragraph) * 0.875 + 2 * padding.height
+        textHeights = []
+        nestedHeights = []
+        for (r, row) in cellViews.enumerated() {
+            var texts: [CGFloat] = []
+            var nesteds: [CGFloat] = []
             for (c, cell) in row.enumerated() {
-                let span = horizontalSpan(row: r, column: c)
-                let inner = max(20, span.width - 2 * padding.width)
-                var height = textHeight(cell, width: inner)
-                if let extra = nested[r][c] {
-                    _ = extra
-                    height += 4 * theme.scale + nestedHeight(row: r, column: c, width: inner)
-                }
-                rowHeight = max(rowHeight, ceil(height) + 2 * padding.height)
+                let inner = innerWidth(row: r, column: c)
+                texts.append(textHeight(cell, width: inner))
+                nesteds.append(nested[r][c] == nil ? 0 : nestedHeight(row: r, column: c, width: inner))
             }
-            rowEdges.append((rowEdges.last ?? 0) + rowHeight)
+            textHeights.append(texts)
+            nestedHeights.append(nesteds)
         }
-        measuredHeight = (rowEdges.last ?? 0) + 2
-        placeViews()
+        updateRowEdges(from: 0)
+        placeViews(fromRow: 0)
         grid.needsDisplay = true
     }
 
@@ -171,10 +187,56 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         }
     }
 
+    /// Re-measures one edited cell: its row, and the rows below only if its height changed.
+    private func remeasure(row: Int, column: Int) {
+        guard measuredWidth > 0, textHeights.indices.contains(row), textHeights[row].indices.contains(column),
+              cellViews.indices.contains(row), cellViews[row].indices.contains(column) else { remeasure(); return }
+        let before = measuredHeight
+        let rowBefore = rowEdges[row + 1] - rowEdges[row]
+        textHeights[row][column] = textHeight(cellViews[row][column], width: innerWidth(row: row, column: column))
+        if abs(rowHeight(row) - rowBefore) > 0.5 {
+            updateRowEdges(from: row)
+            placeViews(fromRow: row)
+            grid.needsDisplay = true
+        } else {
+            placeViews(row: row)
+        }
+        if abs(before - measuredHeight) > 0.5, let attachment {
+            context?.attachmentDidResize?(attachment)
+        }
+    }
+
+    private func innerWidth(row: Int, column: Int) -> CGFloat {
+        max(20, horizontalSpan(row: row, column: column).width - 2 * padding.width)
+    }
+
+    private func rowHeight(_ row: Int) -> CGFloat {
+        var height = theme.lineHeight(for: .paragraph) * 0.875 + 2 * padding.height
+        for column in textHeights[row].indices {
+            var cell = textHeights[row][column]
+            if nested[row][column] != nil { cell += 4 * theme.scale + nestedHeights[row][column] }
+            height = max(height, ceil(cell) + 2 * padding.height)
+        }
+        return height
+    }
+
+    /// Row edges from `row` down, from the measured cell heights.
+    private func updateRowEdges(from row: Int) {
+        if row <= 0 || rowEdges.count <= row {
+            rowEdges = [0]
+        } else {
+            rowEdges.removeSubrange((row + 1)...)
+        }
+        for r in (rowEdges.count - 1)..<textHeights.count {
+            rowEdges.append((rowEdges.last ?? 0) + rowHeight(r))
+        }
+        measuredHeight = (rowEdges.last ?? 0) + 2
+    }
+
     /// The read-only nested blocks' height at `width`.
     private func nestedHeight(row: Int, column: Int, width: CGFloat) -> CGFloat {
-        guard let cell = table.cell(row: row, column: column), !cell.nestedBlocks.isEmpty else { return 0 }
-        let controller = NSHostingController(rootView: NestedCellBlocks(blocks: cell.nestedBlocks, context: context, scale: theme.scale))
+        guard let cell = table.cell(row: row, column: column), !cell.nested.isEmpty else { return 0 }
+        let controller = NSHostingController(rootView: NestedCellBlocks(blocks: cell.nested, context: context, scale: theme.scale))
         return ceil(controller.sizeThatFits(in: CGSize(width: width, height: 10_000)).height)
     }
 
@@ -183,6 +245,14 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         guard (view.textStorage?.length ?? 0) > 0 else {
             if abs(view.frame.width - width) > 0.5 { view.setFrameSize(NSSize(width: width, height: lineHeight)) }
             return lineHeight
+        }
+        // Plain text (no inline attachments) is measured from the string: laying out each
+        // cell's text view to measure it made the first layout of a 50 × 8 table take a
+        // second. Lines have a fixed height (min = max), so both ways agree.
+        if let storage = view.textStorage, !storage.containsAttachments(in: NSRange(location: 0, length: storage.length)) {
+            let bounds = storage.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                                              options: [.usesLineFragmentOrigin, .usesFontLeading])
+            return max(lineHeight, ceil(bounds.height))
         }
         return max(lineHeight, view.fittingTextHeight(width: width))
     }
@@ -208,20 +278,27 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         return (x0, max(0, columnEdges[end] - x0))
     }
 
-    private func placeViews() {
-        for (r, row) in cells.enumerated() {
-            for (c, cell) in row.enumerated() {
-                let frame = cellFrame(row: r, column: c)
-                let inner = frame.insetBy(dx: padding.width, dy: padding.height)
-                let textHeight = self.textHeight(cell, width: max(20, inner.width))
-                cell.frame = CGRect(x: inner.minX, y: inner.minY, width: max(20, inner.width), height: textHeight)
-                if let extra = nested[r][c] {
-                    let height = nestedHeight(row: r, column: c, width: max(20, inner.width))
-                    extra.frame = CGRect(x: inner.minX, y: inner.minY + textHeight + 4 * theme.scale, width: max(20, inner.width), height: height)
-                }
+    private func placeViews(fromRow start: Int) {
+        guard start < cellViews.count else { return }
+        for row in start..<cellViews.count { placeViews(row: row) }
+    }
+
+    /// Frames for one row's cell views, from the measured heights (no measuring here).
+    private func placeViews(row r: Int) {
+        guard textHeights.indices.contains(r) else { return }
+        for (c, cell) in cellViews[r].enumerated() where textHeights[r].indices.contains(c) {
+            let frame = cellFrame(row: r, column: c)
+            let inner = frame.insetBy(dx: padding.width, dy: padding.height)
+            let width = max(20, inner.width)
+            let textFrame = CGRect(x: inner.minX, y: inner.minY, width: width, height: textHeights[r][c])
+            if cell.frame != textFrame { cell.frame = textFrame }
+            if let extra = nested[r][c] {
+                extra.frame = CGRect(x: inner.minX, y: inner.minY + textHeights[r][c] + 4 * theme.scale, width: width,
+                                     height: nestedHeights[r][c])
             }
         }
     }
+
 
     // MARK: Editing (NSTextViewDelegate)
 
@@ -235,7 +312,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
             storage.endEditing()
         }
         table.setRuns(DocumentText.runs(in: storage, range: full), row: view.row, column: view.column)
-        remeasure()
+        remeasure(row: view.row, column: view.column)
         context?.contentDidChange?()
     }
 
@@ -275,8 +352,8 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let href = (link as? URL)?.absoluteString ?? (link as? String) ?? ""
-        if let target = InlineMarkdown.documentLinkTarget(href) {
-            context?.openNote?(target.id)
+        if let id = NoteLinks.documentId(from: link) {
+            context?.openNote?(id)
             return true
         }
         if let url = context?.url(for: href) {
@@ -449,6 +526,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
         let undoManager = grid.window?.undoManager
         table = updated
         focusedCell = nil
+        isBuilt = true
         rebuild()
         remeasureAfterShapeChange()
         undoManager?.registerUndo(withTarget: self) { target in
@@ -501,6 +579,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate {
     }
 
     func handleKeyEquivalent(_ event: NSEvent, in view: CellTextView) -> Bool {
+        guard !view.hasMarkedText() else { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
         switch (flags, key) {
@@ -539,7 +618,9 @@ final class CellTextView: NSTextView {
         view.isAutomaticQuoteSubstitutionEnabled = true
         view.isAutomaticDashSubstitutionEnabled = true
         view.isAutomaticLinkDetectionEnabled = false
-        view.isContinuousSpellCheckingEnabled = true
+        // Only the cell being edited is spell-checked (see becomeFirstResponder): with it on
+        // in every cell, scrolling a 50 × 8 table into view checked 400 views at once.
+        view.isContinuousSpellCheckingEnabled = false
         view.focusRingType = .none
         view.displaysLinkToolTips = true
         view.linkTextAttributes = [.foregroundColor: NSColor.controlAccentColor, .cursor: NSCursor.pointingHand]
@@ -548,12 +629,16 @@ final class CellTextView: NSTextView {
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
-        if accepted { table?.cellDidFocus(self) }
+        if accepted {
+            isContinuousSpellCheckingEnabled = true
+            table?.cellDidFocus(self)
+        }
         return accepted
     }
 
     override func resignFirstResponder() -> Bool {
         let accepted = super.resignFirstResponder()
+        if accepted { isContinuousSpellCheckingEnabled = false }
         if accepted, table?.focusedCell === self { table?.cellDidFocus(nil) }
         return accepted
     }
@@ -669,16 +754,17 @@ final class TableGridView: NSView {
 }
 
 /// What a OneNote cell holds besides its first line: list items, more paragraphs,
-/// pictures, nested tables, math. Read-only; saved untouched.
+/// pictures, nested tables, math. Read-only; never rewritten.
 struct NestedCellBlocks: View {
-    let blocks: [JSONValue]
+    let blocks: [BlockNode]
     let context: AttachmentContext?
     let scale: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3 * scale) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                row(block)
+            ForEach(Array(flattened.enumerated()), id: \.offset) { _, item in
+                row(item.block)
+                    .padding(.leading, CGFloat(item.depth) * 14 * scale)
             }
         }
         .font(.system(size: 13 * scale))
@@ -686,52 +772,60 @@ struct NestedCellBlocks: View {
         .help("Shown as imported")
     }
 
-    @ViewBuilder private func row(_ block: JSONValue) -> some View {
-        let type = block["type"]?.stringValue ?? "paragraph"
-        let runs = block["content"]?["blocknote"]
-        switch type {
+    /// The blocks with their nested items (a table's rows are summarized instead).
+    private var flattened: [(block: BlockNode, depth: Int)] {
+        var output: [(BlockNode, Int)] = []
+        func add(_ nodes: [BlockNode], _ depth: Int) {
+            for node in nodes {
+                output.append((node, depth))
+                if node.type != "table" { add(node.children, depth + 1) }
+            }
+        }
+        add(blocks, 0)
+        return output
+    }
+
+    @ViewBuilder private func row(_ block: BlockNode) -> some View {
+        switch block.type {
         case "image":
-            if let url = block["attrs"]?["url"]?.stringValue.flatMap({ context?.url(for: $0) }), let image = context?.image(for: url) {
+            if let url = block.attrs["url"]?.stringValue.flatMap({ context?.url(for: $0) }), let image = context?.image(for: url) {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
                     .frame(maxWidth: 160 * scale, maxHeight: 120 * scale, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    .accessibilityLabel(block["attrs"]?["alt"]?.stringValue ?? "Image")
+                    .accessibilityLabel(block.attrs["alt"]?.stringValue ?? "Image")
             } else {
-                Label(block["attrs"]?["alt"]?.stringValue ?? "Image", systemImage: "photo")
+                Label(block.attrs["alt"]?.stringValue ?? "Image", systemImage: "photo")
                     .foregroundStyle(.secondary).lineLimit(2)
             }
         case "table":
-            Label(TableContent(blockNote: runs).map { "Table · \($0.rows.count) rows" } ?? "Table", systemImage: "tablecells")
+            Label("Table · \(block.children.count) rows", systemImage: "tablecells")
                 .foregroundStyle(.secondary)
-                .help(TableContent(blockNote: runs)?.plainText ?? "")
+                .help(TableContent.nestedText(block))
         case "math":
-            Text(MathText.attributed(block["content"]?["latex"]?.stringValue ?? "", size: 14 * scale))
+            Text(MathText.attributed(block.payload?["latex"]?.stringValue ?? block.text, size: 14 * scale))
         case "file":
-            Label(block["attrs"]?["name"]?.stringValue ?? "File", systemImage: "doc")
+            Label(block.attrs["name"]?.stringValue ?? "File", systemImage: "doc")
                 .foregroundStyle(.secondary)
-        case "thematic_break", "divider":
+        case "divider":
             Divider()
         default:
-            let text = runs.map(BlockCodec.inlineText) ?? block["text"]?.stringValue ?? ""
             HStack(alignment: .firstTextBaseline, spacing: 6 * scale) {
                 if let marker = marker(for: block) {
                     Text(marker).foregroundStyle(.secondary)
                 }
-                Text(text)
+                Text(block.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    private func marker(for block: JSONValue) -> String? {
-        let type = block["type"]?.stringValue ?? ""
-        let attrs = block["attrs"]
-        if type == "checkListItem" || (type == "list" && attrs?["checked"]?.boolValue != nil) {
-            return attrs?["checked"]?.boolValue == true ? "☑" : "☐"
+    private func marker(for block: BlockNode) -> String? {
+        switch block.type {
+        case "check_item": block.attrs["checked"]?.boolValue == true ? "☑" : "☐"
+        case "numbered_item": "–"
+        case "bullet_item": "•"
+        default: nil
         }
-        if type == "numberedListItem" || (type == "list" && attrs?["ordered"]?.boolValue == true) { return "–" }
-        if type == "bulletListItem" || type == "list" { return "•" }
-        return nil
     }
 }
 
