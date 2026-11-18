@@ -586,7 +586,9 @@ final class InlineNodeAttachment: NSTextAttachment {
             let label = this.label
             let size = (label as NSString).size(withAttributes: attrs)
             let font = attrs[.font] as! NSFont
-            return CGRect(x: 0, y: font.descender, width: ceil(size.width) + 2, height: ceil(font.ascender - font.descender))
+            // Sits on the same baseline as the text around it (which the theme offsets).
+            let offset = (attributes[.baselineOffset] as? CGFloat) ?? CGFloat((attributes[.baselineOffset] as? NSNumber)?.doubleValue ?? 0)
+            return CGRect(x: 0, y: font.descender + offset, width: ceil(size.width) + 2, height: ceil(font.ascender - font.descender))
         }
     }
 
