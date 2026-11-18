@@ -82,8 +82,7 @@ final class SpyProtocol: URLProtocol, @unchecked Sendable {
         self.index.withLock { $0 = index }
         if let gate = reply.gate {
             let loader = self
-            var held = reply
-            held.gate = nil
+            let held = { var held = reply; held.gate = nil; return held }()
             gate.whenOpen { DispatchQueue.global().async { loader.deliver(held) } }
         } else if reply.delay > 0 {
             let loader = self

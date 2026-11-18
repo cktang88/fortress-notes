@@ -171,4 +171,34 @@ struct LoadingExperiments {
             }
         }
     }
+
+    /// Typing in the paragraph after a picture, the picture on screen: how often its
+    /// view is made, loaded and moved per key, with and without reuse.
+    @Test func typingNextToPictures() {
+        for round in 0..<3 {
+            for reuse in [false, true] {
+                BlockAttachment.reusesViews = reuse
+                let editor = PerfEditor(document: LongNote.document())
+                editor.open()
+                editor.controller.finishLoading()
+                editor.layoutViewport()
+                let image = editor.range(ofBlock: "i50")
+                let after = NSRange(location: NSMaxRange(editor.controller.storage.nsString.paragraphRange(at: image.location)) + 5, length: 0)
+                editor.controller.textView.setSelectedRange(after)
+                editor.controller.scrollRangeToVisibleForTests(after)
+                editor.layoutViewport()
+                editor.type("x")
+                let made = BlockAttachment.viewsMade, loaded = BlockAttachment.viewsLoaded, moves = BlockAttachment.hostingMoves
+                var times: [Double] = []
+                for index in 0..<40 {
+                    times.append(milliseconds { editor.type(index % 8 == 7 ? " " : "a") })
+                }
+                print(String(format: "EXP round %d pictures reuse %@ median %.2f perKey made %.2f loaded %.2f moves %.2f kinds %@", round,
+                             reuse ? "yes" : "no", times.sorted()[20], Double(BlockAttachment.viewsMade - made) / 40,
+                             Double(BlockAttachment.viewsLoaded - loaded) / 40, Double(BlockAttachment.hostingMoves - moves) / 40,
+                             editor.viewportKinds))
+            }
+        }
+        BlockAttachment.reusesViews = true
+    }
 }

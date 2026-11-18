@@ -117,6 +117,14 @@ final class BlockAttachment: NSTextAttachment {
     nonisolated(unsafe) var live: (any LiveBlock)?
     /// Last measured (width, height) of a hosted embed or math view (measuring hosts a view).
     nonisolated(unsafe) private var measured: (width: CGFloat, height: CGFloat)?
+    /// The view this block shows, made the first time TextKit asks and kept for as long
+    /// as the attachment lives (EXPERIMENT flag below).
+    nonisolated(unsafe) var shownView: NSView?
+    // EXPERIMENT (profiling): reuse, and how often views are made and moved.
+    nonisolated(unsafe) static var reusesViews = true
+    nonisolated(unsafe) static var viewsMade = 0
+    nonisolated(unsafe) static var viewsLoaded = 0
+    nonisolated(unsafe) static var hostingMoves = 0
 
     @MainActor init(info: BlockInfo, context: AttachmentContext, block: EditorBlock? = nil) {
         self.info = info
@@ -230,12 +238,19 @@ final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
         nonisolated(unsafe) let provider = self
         MainActor.assumeIsolated {
             guard let attachment = provider.textAttachment as? BlockAttachment else { return }
+            BlockAttachment.viewsLoaded += 1
             if let live = attachment.live {
                 provider.view = live.view
                 return
             }
-            let hosting = NSHostingView(rootView: BlockEmbedView(info: attachment.info, context: attachment.context, width: nil))
+            if BlockAttachment.reusesViews, let view = attachment.shownView {
+                provider.view = view
+                return
+            }
+            BlockAttachment.viewsMade += 1
+            let hosting = CountingHostingView(rootView: BlockEmbedView(info: attachment.info, context: attachment.context, width: nil))
             hosting.sizingOptions = []
+            attachment.shownView = hosting
             provider.view = hosting
         }
     }
@@ -250,6 +265,14 @@ final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
             let width = max(40, proposedLineFragment.width - position.x - 2)
             return CGRect(x: 0, y: 0, width: width, height: attachment.height(forWidth: width))
         }
+    }
+}
+
+// EXPERIMENT (profiling): counts window moves.
+final class CountingHostingView: NSHostingView<BlockEmbedView> {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        BlockAttachment.hostingMoves += 1
     }
 }
 
