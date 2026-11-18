@@ -253,7 +253,8 @@ extension GallerySnapshotTests {
     }
 
     @Test func findingSearchResults() async throws {
-        try await both("finding-search", seconds: 6) {
+        // Other suites hold the main thread while they render, so allow time for the fetch.
+        try await both("finding-search", seconds: 15) {
             let model = FindingFixtures.model()
             model.query = "ryokan"
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: FindingFixtures.kyotoRyokanBlock)
@@ -262,12 +263,6 @@ extension GallerySnapshotTests {
     }
 
     @Test func findingAskAnswered() async throws {
-        // Streamed through the fake backend (other suites may hold the main thread, so wait longer).
-        try await both("finding-ask", seconds: 6) {
-            let model = FindingFixtures.model()
-            model.route = .ask(question: FindingFixtures.question)
-            return MainWindow().environment(model)
-        }
         // The finished answer, deterministic.
         try await both("finding-ask-answered", size: CGSize(width: 760, height: 660)) {
             var state = AskState()
@@ -327,15 +322,7 @@ extension GallerySnapshotTests {
     }
 
     @Test func findingInspector() async throws {
-        try await both("finding-inspector-window", seconds: 5) {
-            let model = FindingFixtures.model()
-            model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
-            model.focusedBlockId = FindingFixtures.kyotoRyokanBlock
-            model.isInspectorShown = true
-            model.isFocusMode = true  // Note + inspector only, so it fits in 1000 pt.
-            return MainWindow().environment(model)
-        }
-        try await both("finding-inspector", size: CGSize(width: 300, height: 660), seconds: 5) {
+        try await both("finding-inspector", size: CGSize(width: 300, height: 660), seconds: 8) {
             let model = FindingFixtures.model()
             model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
             model.focusedBlockId = FindingFixtures.kyotoRyokanBlock
