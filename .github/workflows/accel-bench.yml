@@ -1,0 +1,40 @@
+# TEMPORARY (branch apple-accel only): Apple Silicon accelerator benchmark.
+name: Accel bench
+
+on:
+  push:
+    branches: [apple-accel]
+    paths: ["backend/scripts/bench_accel.py", "backend/app/ocr.py", "backend/app/embeddings.py",
+            ".github/workflows/accel-bench.yml"]
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: uv sync --frozen --python 3.13
+      - name: Fetch the ColBERT model
+        run: .venv/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('lightonai/Agent-ModernColBERT')"
+      - name: Bench (CPU, CoreML EP, MPS)
+        run: .venv/bin/python scripts/bench_accel.py all --out "$RUNNER_TEMP/accel" --reps 5 --tag main
+      - name: Bench MLX
+        if: success() || failure()
+        run: |
+          uv pip install --python .venv/bin/python mlx mlx-embeddings
+          .venv/bin/python scripts/bench_accel.py all --out "$RUNNER_TEMP/accel" --reps 5 --tag mlx \
+            --ocr-configs "" --colbert-configs mlx_fp32,mlx_fp16,mlx_bf16
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: accel-${{ matrix.os }}
+          path: ${{ runner.temp }}/accel
