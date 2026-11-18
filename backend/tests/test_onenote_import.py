@@ -557,10 +557,12 @@ class ImportJobApiTests(_Base):
             patch.object(main, "settings", self.settings),
             patch.object(onenote_import, "jobs", self.jobs),
             patch.object(onenote_import, "run_converter", fake_converter),
+            # Importing by path is for token holders (app/auth.py).
+            patch.dict(os.environ, {"FORTRESS_TOKEN": "test-token"}),
         ):
             item.start()
             self.addCleanup(item.stop)
-        self.client = TestClient(main.app)
+        self.client = TestClient(main.app, headers={"X-Fortress-Token": "test-token"})
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
 
@@ -914,11 +916,13 @@ class ImportJobLifecycleTests(_Base):
             patch.object(main, "settings", self.settings),
             patch.object(onenote_import, "jobs", self.jobs),
             patch.object(onenote_import, "run_converter", fake_converter),
+            # Importing by path is for token holders (app/auth.py).
+            patch.dict(os.environ, {"FORTRESS_TOKEN": "test-token"}),
         ):
             item.start()
             self.addCleanup(item.stop)
         self.addCleanup(self.gate.set)
-        self.client = TestClient(main.app)
+        self.client = TestClient(main.app, headers={"X-Fortress-Token": "test-token"})
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
         self.source = self.root / "Work.zip"

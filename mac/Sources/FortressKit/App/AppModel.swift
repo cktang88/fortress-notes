@@ -178,6 +178,9 @@ public final class AppModel {
     public var focusedBlockId: String?
     /// Text in the ⌘K palette (set it before showing the palette to open in a mode, e.g. "? " for Ask).
     public var paletteQuery = ""
+    /// The open note's blocks as last saved: block id → a version of its text. Set by
+    /// `noteDidChange` (via `recordBlockVersions`); "Seen before" caches per block text.
+    public internal(set) var savedBlockVersions: [String: Int] = [:]
 
     // MARK: -
 

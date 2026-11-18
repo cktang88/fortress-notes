@@ -70,7 +70,7 @@ struct BackendSettingsView: View {
                 }
                 HStack {
                     if backend.isProcessRunning {
-                        Button("Stop Backend") { backend.stop(waitUpTo: 2) }
+                        Button("Stop Backend") { Task { await backend.stop() } }
                     } else {
                         Button("Start Backend") { Task { await model.startBackend() } }
                             .disabled(!backend.canStart || model.isConnected)

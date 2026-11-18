@@ -42,14 +42,21 @@ public struct MarkdownImportRequest: Identifiable, Hashable, Sendable {
 extension AppModel {
     // MARK: Connection
 
-    /// First contact with the backend: load the sidebar, or start the backend when it
-    /// isn't running and Settings allow it.
+    /// First contact with the backend. When Settings let the app start the backend, it
+    /// starts its own (with this launch's token) and only ever talks to that one, never
+    /// to whatever already answers on the port; otherwise it loads the sidebar from the
+    /// address in Settings (a backend run by hand).
     public func connect() async {
         applyBackendAddress()
         backend.onUnexpectedExit = { [weak self] in
             guard let self else { return }
             self.isConnected = false
             self.startReconnecting()
+        }
+        if backend.startsAutomatically && backend.canStart && !Self.isRunningTests {
+            notice = nil
+            await startBackend()
+            return
         }
         await refreshNavigation()
         if isConnected {
@@ -59,9 +66,6 @@ extension AppModel {
             return
         }
         notice = nil
-        if backend.startsAutomatically && backend.canStart && !Self.isRunningTests {
-            await startBackend()
-        }
     }
 
     /// Tests open windows too; they must never launch a backend.
@@ -74,25 +78,43 @@ extension AppModel {
     /// Points the API client at the address in Settings (keeping the session; caches
     /// belong to an address, so a new address starts with empty ones).
     public func applyBackendAddress() {
-        if api.baseURL != backend.baseURL { api = APIClient(baseURL: backend.baseURL, session: api.session) }
+        if api.baseURL != backend.serverURL { api = APIClient(baseURL: backend.serverURL, session: api.session) }
+    }
+
+    /// Whether a healthy server answers that the app may use: the backend this launch
+    /// started (its instance id), or, when it started none, whatever is at the address.
+    func backendAnswers() async -> Bool {
+        do {
+            return backend.accepts(instance: try await api.healthInstance())
+        } catch {
+            return false
+        }
     }
 
     /// Starts the local backend and waits for it to answer: as long as the process is
     /// alive, up to three minutes (the first launch loads models), checking often at
     /// first and then less often.
     public func startBackend() async {
-        applyBackendAddress()
+        await startBackend(attemptsLeft: 2)
+    }
+
+    private func startBackend(attemptsLeft: Int) async {
         guard backend.start() else { return }
+        // The port it serves on is chosen at start.
+        applyBackendAddress()
         let started = ContinuousClock.now
         var delay = Duration.milliseconds(250)
         while ContinuousClock.now - started < .seconds(180) {
             try? await Task.sleep(for: delay)
             delay = min(delay * 2, .seconds(2))
             if case .failed = backend.state {
-                await backendFailedToStart()
+                // Something took the port between choosing and binding it: pick again.
+                if backend.logSaysPortInUse() && attemptsLeft > 0 && backend.canStart {
+                    await startBackend(attemptsLeft: attemptsLeft - 1)
+                }
                 return
             }
-            if (try? await api.health()) != nil {
+            if await backendAnswers() {
                 backend.markReachable()
                 await backendAnswered()
                 return
@@ -109,18 +131,6 @@ extension AppModel {
         if scope == .trash { await refreshTrash() }
     }
 
-    /// The started process exited. When it couldn't bind its port, another server may be
-    /// there: if it's a Fortress backend, use it; otherwise say what's in the way.
-    private func backendFailedToStart() async {
-        guard backend.logSaysPortInUse() else { return }
-        if (try? await api.health()) != nil {
-            backend.adoptRunningServer()
-            await backendAnswered()
-        } else {
-            backend.markPortInUse()
-        }
-    }
-
     // MARK: Reconnecting
 
     /// The backend went away (a request couldn't connect): poll it with backoff until it
@@ -134,7 +144,7 @@ extension AppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: delay)
                 guard let self, !Task.isCancelled else { return }
-                if (try? await self.api.health()) != nil {
+                if await self.backendAnswers() {
                     self.reconnectTask = nil
                     await self.backendAnswered()
                     return
@@ -162,6 +172,7 @@ extension AppModel {
     /// Tries the backend again (after it was started by hand, or the address changed).
     public func retryConnection() async {
         applyBackendAddress()
+        if backend.ownsServer, !(await backendAnswers()) { return }
         await refreshNavigation()
         if isConnected {
             hasLoadedNavigation = true
@@ -238,6 +249,7 @@ extension AppModel {
             NavigationEdits.touchRecent(changed, in: &navigation.recent, limit: Self.recentLimit)
         }
         patchNavigation({ patch(&$0, onlyIfNewer: false) }, replay: { patch(&$0, onlyIfNewer: true) })
+        recordBlockVersions(of: document)  // Finding: "Seen before" cache key.
     }
 
     // MARK: Notes

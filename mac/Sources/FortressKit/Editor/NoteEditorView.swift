@@ -351,7 +351,7 @@ enum EditorUpload {
         var props: Props
     }
 
-    static func upload(_ data: Data, name: String, type: String, baseURL: URL, session: URLSession = .shared) async throws -> (url: String, name: String) {
+    static func upload(_ data: Data, name: String, type: String, baseURL: URL, session: URLSession = APIClient.sharedSession) async throws -> (url: String, name: String) {
         let boundary = "fortress-\(UUID().uuidString)"
         var request = URLRequest(url: baseURL.appending(path: "api/files"))
         request.httpMethod = "POST"
