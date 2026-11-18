@@ -235,7 +235,12 @@ struct EditorHeader: View {
     var onSubmitTitle: () -> Void
     var onHeightChange: (CGFloat) -> Void
 
+    // Hosted in its own NSHostingView inside the text view: theme it here.
     var body: some View {
+        themedBody.fortressTheme().foregroundStyle(.themeText)
+    }
+
+    @ViewBuilder private var themedBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Untitled", text: Binding(get: { session.title }, set: { session.titleDidChange($0) }), axis: .vertical)
                 .textFieldStyle(.plain)

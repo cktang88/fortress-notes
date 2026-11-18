@@ -251,7 +251,12 @@ struct BlockEmbedView: View {
     private var origin: BlockOrigin? { info.origin?.origin }
     private var attrs: [String: JSONValue] { origin?.attrs ?? [:] }
 
+    // Hosted in its own NSHostingView inside the text view: theme it here.
     var body: some View {
+        themedBody.fortressTheme().foregroundStyle(.themeText)
+    }
+
+    @ViewBuilder private var themedBody: some View {
         Group {
             switch info.kind {
             case .divider:

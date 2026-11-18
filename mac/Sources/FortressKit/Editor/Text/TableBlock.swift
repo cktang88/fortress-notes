@@ -1074,7 +1074,12 @@ struct NestedCellBlocks: View {
     let context: AttachmentContext?
     let scale: CGFloat
 
+    // Hosted in its own NSHostingView inside the text view: theme it here.
     var body: some View {
+        themedBody.fortressTheme().foregroundStyle(.themeText)
+    }
+
+    @ViewBuilder private var themedBody: some View {
         VStack(alignment: .leading, spacing: 3 * scale) {
             ForEach(Array(flattened.enumerated()), id: \.offset) { _, item in
                 row(item.block)
