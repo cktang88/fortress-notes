@@ -30,20 +30,43 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Render one or more ink objects into a single SVG. Returns `None` when
-/// there are no strokes.
-pub fn render(inks: &[&Ink]) -> Option<RenderedInk> {
+/// Bounding box `(min_x, min_y, max_x, max_y)` of an ink object's strokes in
+/// ink units, or `None` if it has no points.
+pub fn bounds(ink: &Ink) -> Option<(f32, f32, f32, f32)> {
     let mut strokes = Vec::new();
-    for ink in inks {
-        collect(ink, &mut strokes);
+    collect(ink, &mut strokes);
+    let mut b: Option<(f32, f32, f32, f32)> = None;
+    for s in strokes {
+        for p in s.absolute_path() {
+            let (x, y) = (p.x(), p.y());
+            if !x.is_finite() || !y.is_finite() {
+                continue;
+            }
+            b = Some(match b {
+                None => (x, y, x, y),
+                Some((a, c, d, e)) => (a.min(x), c.min(y), d.max(x), e.max(y)),
+            });
+        }
+    }
+    b
+}
+
+/// Render ink objects into a single SVG. Each part carries a translation in
+/// ink units. Returns `None` when there are no strokes.
+pub fn render(parts: &[(&Ink, (f32, f32))]) -> Option<RenderedInk> {
+    let mut strokes: Vec<(&InkStroke, (f32, f32))> = Vec::new();
+    for (ink, off) in parts {
+        let mut s = Vec::new();
+        collect(ink, &mut s);
+        strokes.extend(s.into_iter().map(|st| (st, *off)));
     }
     let paths: Vec<(Vec<(f32, f32)>, &InkStroke)> = strokes
         .iter()
-        .map(|s| {
+        .map(|(s, (dx, dy))| {
             (
                 s.absolute_path()
                     .iter()
-                    .map(|p| (p.x(), p.y()))
+                    .map(|p| (p.x() + dx, p.y() + dy))
                     .filter(|(x, y)| x.is_finite() && y.is_finite())
                     .collect::<Vec<_>>(),
                 *s,
@@ -51,6 +74,7 @@ pub fn render(inks: &[&Ink]) -> Option<RenderedInk> {
         })
         .filter(|(p, _)| !p.is_empty())
         .collect();
+    let strokes: Vec<&InkStroke> = strokes.iter().map(|(s, _)| *s).collect();
     if paths.is_empty() {
         return None;
     }

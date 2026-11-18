@@ -39,5 +39,9 @@ pub fn render(segments: &[(String, MathInlineObject)], block: bool) -> RenderedM
         .and_then(|eq| render::mathml(eq, block))
         .ok()
         .filter(|s| !s.trim().is_empty());
-    RenderedMath { latex, mathml }
+    let clean = |s: String| -> String { s.chars().filter(|c| !c.is_control()).collect() };
+    RenderedMath {
+        latex: latex.map(clean),
+        mathml: mathml.map(clean),
+    }
 }

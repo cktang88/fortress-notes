@@ -217,7 +217,10 @@ pub fn convert_runs(
         for k in 0..w {
             map16[pos16 + k] = chars.len();
         }
-        if !fmt_of(ri).map(|f| f.hidden).unwrap_or(false) {
+        // OneNote uses the noncharacters U+FDD0..U+FDEF as structure markers
+        // in equations (and U+FDDF for hyperlink fields); never show them.
+        let marker = ('\u{FDD0}'..='\u{FDEF}').contains(&ch);
+        if !marker && !fmt_of(ri).map(|f| f.hidden).unwrap_or(false) {
             let ch = match ch {
                 '\u{000B}' | '\r' => '\n',
                 c => c,
@@ -378,7 +381,12 @@ pub fn convert_runs(
     for m in URL_RE.find_iter(plain) {
         let mut url = m.as_str();
         while let Some(last) = url.chars().last() {
-            if ".,;:!?)]}'>".contains(last) {
+            let unbalanced_close = match last {
+                ')' => url.matches('(').count() < url.matches(')').count(),
+                ']' => url.matches('[').count() < url.matches(']').count(),
+                _ => false,
+            };
+            if ".,;:!?}'>".contains(last) || unbalanced_close {
                 url = &url[..url.len() - last.len_utf8()];
             } else {
                 break;

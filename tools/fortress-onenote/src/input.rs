@@ -358,13 +358,6 @@ pub fn discover(root: &Path, report: &mut InputReport) -> Vec<NotebookSource> {
         let mut candidates = tocs[r].clone();
         candidates.sort();
         let toc = candidates[0].clone();
-        if candidates.len() > 1 {
-            report.warnings.push(format!(
-                "several .onetoc2 files in {}; using {}",
-                display_rel(r, root),
-                file_name(&toc)
-            ));
-        }
         out.push(NotebookSource::Toc {
             name: notebook_name(r, root, &toc),
             rel: rel_of(r, root),
@@ -401,10 +394,6 @@ pub fn discover(root: &Path, report: &mut InputReport) -> Vec<NotebookSource> {
     out
 }
 
-fn display_rel(p: &Path, root: &Path) -> String {
-    let r = rel_of(p, root);
-    if r.is_empty() { ".".into() } else { r }
-}
 
 fn stem(p: &Path) -> String {
     p.file_stem()
