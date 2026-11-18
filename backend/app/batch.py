@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from . import block_store
+from . import block_store, document_service, http_cache
 
 router = APIRouter()
 
@@ -18,66 +18,22 @@ MAX_BATCH_DOCUMENTS = 50
 MAX_BATCH_MOVES = 500
 
 
-def _db_path():
-    # Read through ``main`` so tests that patch ``main.settings`` reach this module too.
-    from . import main
-
-    return main.settings.block_db_path
-
-
 class DocumentBatchRequest(BaseModel):
     ids: list[str] = Field(default_factory=list, max_length=MAX_BATCH_DOCUMENTS)
-    # Revisions the client already holds: those documents come back as ``unchanged``.
-    known: dict[str, int] = Field(default_factory=dict)
+    # ETags the client already holds (as ``GET`` sent them): matching notes come
+    # back as ``unchanged``.
+    known: dict[str, str] = Field(default_factory=dict)
 
 
 @router.post("/api/batch/block-documents")
 def batch_block_documents(request: DocumentBatchRequest):
-    """Several block documents in one read, for prefetching.
+    """Several block documents in one read, for prefetching (never writes).
 
-    Unlike ``GET /api/block-documents/{id}`` this does not mark the notes as opened:
-    a prefetch is not the person opening a note.
+    Answers ``{documents, etags: {id: ETag}, unchanged, missing}``; each body is
+    exactly what ``GET /api/block-documents/{id}`` answers under that ETag.
     """
 
-    from . import http_cache, main
-
-    path = _db_path()
-    bodies: list[bytes] = []
-    unchanged: list[str] = []
-    missing: list[str] = []
-    seen: set[str] = set()
-    block_store.initialize(path)
-    for document_id in request.ids:
-        if document_id in seen:
-            continue
-        seen.add(document_id)
-        # The editor needs a block to type into (same rule as the single read).
-        block_store.ensure_editable_block(path, document_id)
-    with block_store.connection_scope(path) as connection:
-        for document_id in dict.fromkeys(request.ids):
-            known = request.known.get(document_id)
-            if known is not None:
-                row = connection.execute(
-                    "SELECT revision FROM documents WHERE id = ? AND deleted_at IS NULL",
-                    (document_id,),
-                ).fetchone()
-                if row is None:
-                    missing.append(document_id)
-                    continue
-                if row["revision"] == known:
-                    unchanged.append(document_id)
-                    continue
-            # Rendered once per validator and shared with the single GET's cache.
-            validator = block_store._document_validator(connection, document_id)
-            rendered = None if validator is None else main._document_body(document_id, validator)
-            if rendered is None:
-                missing.append(document_id)
-            else:
-                bodies.append(rendered[1])
-    return http_cache.json_response(b"".join([
-        b'{"documents":[', b",".join(bodies), b'],"unchanged":', http_cache.render(unchanged),
-        b',"missing":', http_cache.render(missing), b"}",
-    ]))
+    return http_cache.json_response(document_service.batch(request.ids, request.known))
 
 
 class DocumentMoveItem(BaseModel):
@@ -103,7 +59,7 @@ def batch_move(request: MoveBatchRequest) -> dict:
     that fails stops the batch with its status, and the moves before it stay applied.
     """
 
-    path = _db_path()
+    path = document_service.db_path()
     moved_folders = 0
     moved_documents = 0
     for folder in request.folders:

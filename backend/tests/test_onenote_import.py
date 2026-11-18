@@ -558,10 +558,12 @@ class ImportJobApiTests(_Base):
             patch.object(main, "settings", self.settings),
             patch.object(onenote_import, "jobs", self.jobs),
             patch.object(onenote_import, "run_converter", fake_converter),
+            # Importing by path is for token holders (app/auth.py).
+            patch.dict(os.environ, {"FORTRESS_TOKEN": "test-token"}),
         ):
             item.start()
             self.addCleanup(item.stop)
-        self.client = TestClient(main.app)
+        self.client = TestClient(main.app, headers={"X-Fortress-Token": "test-token"})
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
 
@@ -712,7 +714,7 @@ class LivingDocumentTests(_Base):
         self.assertEqual(before["provenance"]["extra"]["onenote"],
                          {"object_id": oid(0x1B), "element_id": oid(0x1A)})
         # Another note references the paragraph.
-        other = block_store.create_block_document(self.db, "Elsewhere", "rough", [], f"See (( {before['id']} ))")
+        other = block_store.create_block_document(self.db, "Elsewhere", "rough", f"See (( {before['id']} ))")
 
         def references() -> list:
             return [(link["source_document_id"], link["target_block_id"])
@@ -915,11 +917,13 @@ class ImportJobLifecycleTests(_Base):
             patch.object(main, "settings", self.settings),
             patch.object(onenote_import, "jobs", self.jobs),
             patch.object(onenote_import, "run_converter", fake_converter),
+            # Importing by path is for token holders (app/auth.py).
+            patch.dict(os.environ, {"FORTRESS_TOKEN": "test-token"}),
         ):
             item.start()
             self.addCleanup(item.stop)
         self.addCleanup(self.gate.set)
-        self.client = TestClient(main.app)
+        self.client = TestClient(main.app, headers={"X-Fortress-Token": "test-token"})
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
         self.source = self.root / "Work.zip"

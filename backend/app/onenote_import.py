@@ -57,6 +57,7 @@ Design choices:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -196,6 +197,20 @@ def converter_path() -> Path | None:
     return None
 
 
+_converters: set[subprocess.Popen] = set()
+_converters_lock = threading.Lock()
+
+
+def terminate_converters() -> None:
+    """Stops every running converter (the backend is shutting down)."""
+
+    with _converters_lock:
+        running = list(_converters)
+    for process in running:
+        with contextlib.suppress(OSError):
+            process.kill()
+
+
 def run_converter(input_path: Path, out_dir: Path, *, timeout: float | None = None,
                   cancelled: Callable[[], bool] | None = None) -> dict[str, Any]:
     """Run the converter; returns its JSON summary line. Raises OneNoteImportError
@@ -218,21 +233,13 @@ def run_converter(input_path: Path, out_dir: Path, *, timeout: float | None = No
         )
     except OSError as exc:
         raise OneNoteImportError(f"The OneNote converter could not be started: {exc}") from exc
-    deadline = time.monotonic() + limit
-    while True:
-        try:
-            stdout, stderr = process.communicate(timeout=0.25)
-            break
-        except subprocess.TimeoutExpired:
-            stopped_by_user = cancelled is not None and cancelled()
-            if stopped_by_user or time.monotonic() > deadline:
-                process.kill()
-                process.communicate()
-                if stopped_by_user:
-                    raise ImportCancelled() from None
-                raise OneNoteImportError(
-                    f"The OneNote converter took longer than {int(limit)} s and was stopped."
-                ) from None
+    with _converters_lock:
+        _converters.add(process)
+    try:
+        stdout, stderr = _wait_for_converter(process, limit, cancelled)
+    finally:
+        with _converters_lock:
+            _converters.discard(process)
     if process.returncode != 0:
         detail = (stderr or "").strip().splitlines()
         message = detail[-1] if detail else f"exit code {process.returncode}"
@@ -247,6 +254,24 @@ def run_converter(input_path: Path, out_dir: Path, *, timeout: float | None = No
     if not (out_dir / "manifest.json").is_file():
         raise OneNoteImportError("The OneNote converter did not write a manifest.")
     return summary
+
+
+def _wait_for_converter(process: subprocess.Popen, limit: float,
+                        cancelled: Callable[[], bool] | None) -> tuple[str, str]:
+    deadline = time.monotonic() + limit
+    while True:
+        try:
+            return process.communicate(timeout=0.25)
+        except subprocess.TimeoutExpired:
+            stopped_by_user = cancelled is not None and cancelled()
+            if stopped_by_user or time.monotonic() > deadline:
+                process.kill()
+                process.communicate()
+                if stopped_by_user:
+                    raise ImportCancelled() from None
+                raise OneNoteImportError(
+                    f"The OneNote converter took longer than {int(limit)} s and was stopped."
+                ) from None
 
 
 # --- Manifest -> source blocks -----------------------------------------------------------

@@ -57,6 +57,21 @@ struct NoteInfo: Hashable, Sendable {
         return info
     }
 
+    /// The note's `updated_at` in the sidebar tree (its revision stamp), stopping at the note.
+    static func updatedAt(of documentId: String, in navigation: NavigationResponse) -> String? {
+        func find(_ nodes: [NavigationNode]) -> String? {
+            for node in nodes {
+                switch node {
+                case .document(let document) where document.id == documentId: return document.updatedAt
+                case .document: continue
+                case .folder(let folder): if let found = find(folder.children) { return found }
+                }
+            }
+            return nil
+        }
+        return find(navigation.items) ?? navigation.recent.first { $0.id == documentId }?.updatedAt
+    }
+
     /// Adds what the full document says (counts and dates), for backends without `/info`.
     mutating func add(_ document: BlockDocument) {
         createdAt = Timestamp.date(document.createdAt) ?? createdAt

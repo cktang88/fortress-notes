@@ -24,7 +24,9 @@ public final class AppModel {
 
     public var navigation = NavigationResponse(items: [], recent: [])
     public var scope: LibraryScope = .all
-    public var route: Route = .empty
+    public var route: Route = .empty {
+        didSet { noteMayHaveOpened() }
+    }
     /// Search box text; non-empty shows search results in place of the note list.
     public var query = ""
     public var isInspectorShown = false
@@ -81,6 +83,33 @@ public final class AppModel {
 
     public func open(noteId: String, blockId: String? = nil) {
         route = .note(id: noteId, focusBlockId: blockId)
+    }
+
+    /// Records "last opened" once a note has stayed open for a moment (skimming the list
+    /// opens and closes notes every few milliseconds). Reading a note never writes on the
+    /// server, so this is its own fire-and-forget request.
+    @ObservationIgnored var openedMarkTask: Task<Void, Never>?
+    @ObservationIgnored var lastMarkedOpenId: String?
+    /// How long a note stays open before it counts as opened.
+    @ObservationIgnored public var openedDwell: Duration = .seconds(1)
+
+    private func noteMayHaveOpened() {
+        guard let id = openNoteId else {
+            openedMarkTask?.cancel()
+            lastMarkedOpenId = nil
+            return
+        }
+        guard id != lastMarkedOpenId else { return }  // a jump within the same note
+        openedMarkTask?.cancel()
+        lastMarkedOpenId = id
+        guard connectsOnAppear else { return }  // previews, snapshots, most tests
+        let api = api
+        let dwell = openedDwell
+        openedMarkTask = Task { [weak self] in
+            try? await Task.sleep(for: dwell)
+            guard !Task.isCancelled, self?.openNoteId == id else { return }
+            await api.markOpened(id: id)
+        }
     }
 
     // MARK: Navigation (data layer)
@@ -178,6 +207,9 @@ public final class AppModel {
     public var focusedBlockId: String?
     /// Text in the ⌘K palette (set it before showing the palette to open in a mode, e.g. "? " for Ask).
     public var paletteQuery = ""
+    /// The open note's blocks as last saved: block id → a version of its text. Set by
+    /// `noteDidChange` (via `recordBlockVersions`); "Seen before" caches per block text.
+    public internal(set) var savedBlockVersions: [String: Int] = [:]
 
     // MARK: -
 

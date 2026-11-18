@@ -59,7 +59,7 @@ class QuickCaptureTests(unittest.TestCase):
         self.assertEqual(len(self.folder()["children"]), 6)
 
     def test_each_capture_is_its_own_note_in_uncategorized_newest_first(self) -> None:
-        self.client.post("/api/notes", json={"title": "Existing", "body": "x"})
+        self.client.post("/api/block-documents", json={"title": "Existing", "body": "x"})
         first = self.client.post("/api/capture", json={"text": "Call the plumber"})
         self.assertEqual(first.status_code, 201, first.text)
         second = self.client.post(
@@ -75,11 +75,13 @@ class QuickCaptureTests(unittest.TestCase):
             [child["title"] for child in folder["children"]],
             ["Idea: shared calendar", "Call the plumber"],
         )
-        note = self.client.get(f"/api/notes/{second['document_id']}").json()
-        self.assertIn("with the whole family", note["body"])
+        note = self.client.get(f"/api/block-documents/{second['document_id']}").json()
+        self.assertIn("with the whole family", " ".join(b["text"] for b in note["children"]))
         self.assertTrue((self.notes / f"{second['document_id']}.md").exists())
-        hits = self.client.get("/api/block-search", params={"q": "plumber"}).json()
-        self.assertEqual([hit["document_id"] for hit in hits], [first.json()["document_id"]])
+        from app import block_store
+
+        hits = block_store.search_blocks(self.notes / ".fortress.sqlite3", "plumber")
+        self.assertEqual({hit["document_id"] for hit in hits}, {first.json()["document_id"]})
 
     def test_a_deleted_folder_is_recreated_and_blank_text_is_refused(self) -> None:
         note = self.client.post("/api/capture", json={"text": "one"}).json()
@@ -97,7 +99,7 @@ class QuickCaptureTests(unittest.TestCase):
             "/api/capture", json={"text": "- [ ] Buy oat milk\nfrom the corner shop"}
         ).json()
         self.assertEqual(todo["title"], "Buy oat milk")
-        quote = self.client.post("/api/notes", json={"title": "", "body": "> Stay hungry"}).json()
+        quote = self.client.post("/api/block-documents", json={"title": "", "body": "> Stay hungry"}).json()
         self.assertEqual(quote["title"], "Stay hungry")
         long = self.client.post("/api/capture", json={"text": "word " * 40}).json()
         self.assertTrue(long["title"].endswith("word…"), long["title"])

@@ -52,10 +52,10 @@ class AskYourNotesTests(unittest.TestCase):
         self.addCleanup(self.client.__exit__, None, None, None)
         self.addCleanup(self._directory.cleanup)
         self.hotel = self.client.post(
-            "/api/notes",
+            "/api/block-documents",
             json={"title": "Lisbon trip", "body": "We picked the hotel in Alfama, 3 nights."},
         ).json()["id"]
-        self.client.post("/api/notes", json={"title": "Groceries", "body": "Milk and eggs"})
+        self.client.post("/api/block-documents", json={"title": "Groceries", "body": "Milk and eggs"})
 
     def ask(self, question: str, reply, ) -> tuple[dict, AsyncMock]:
         from app import llm
@@ -109,7 +109,7 @@ class AskYourNotesTests(unittest.TestCase):
 
     def test_quotes_match_despite_typographic_and_markdown_differences(self) -> None:
         self.client.post(
-            "/api/notes",
+            "/api/block-documents",
             json={"title": "Ferry", "body": "We didn’t book the “fast” ferry — too pricey."},
         )
 
@@ -156,7 +156,7 @@ class AskYourNotesTests(unittest.TestCase):
         from app import ask
 
         kyoto = self.client.post(
-            "/api/notes",
+            "/api/block-documents",
             json={"title": "Kyoto trip", "body": "We booked a ryokan in Gion for four nights."},
         ).json()["id"]
         terms = ask.key_terms("Where are we staying in Kyoto?")
@@ -171,7 +171,7 @@ class AskYourNotesTests(unittest.TestCase):
 
     def test_prefetch_greps_exact_names_before_any_model_call(self) -> None:
         miguel = self.client.post(
-            "/api/notes", json={"title": "Contractors", "body": "Miguel quoted 12k for the deck."}
+            "/api/block-documents", json={"title": "Contractors", "body": "Miguel quoted 12k for the deck."}
         ).json()["id"]
         result, fake = self.ask(
             "What did Miguel quote?",
@@ -192,7 +192,7 @@ class AskYourNotesTests(unittest.TestCase):
 
     def test_model_can_grep_then_answer_from_the_new_passages(self) -> None:
         self.client.post(
-            "/api/notes", json={"title": "Dentist", "body": "Appointment moved to 14 March."}
+            "/api/block-documents", json={"title": "Dentist", "body": "Appointment moved to 14 March."}
         )
         result, fake = self.ask(
             "Which hotel did we pick?",
@@ -217,7 +217,7 @@ class AskYourNotesTests(unittest.TestCase):
 
     def test_not_found_retries_once_with_the_models_alternative_wording(self) -> None:
         self.client.post(
-            "/api/notes", json={"title": "Bakery", "body": "Try pastel de nata at Manteigaria."}
+            "/api/block-documents", json={"title": "Bakery", "body": "Try pastel de nata at Manteigaria."}
         )
         not_found = {"action": "answer", "found": False, "sentences": [], "try": "pastel de nata"}
         result, fake = self.ask(
@@ -285,7 +285,7 @@ class AskYourNotesTests(unittest.TestCase):
 
         from app import ask
 
-        self.client.post("/api/notes", json={"title": "Scream", "body": "a" * 34 + "!"})
+        self.client.post("/api/block-documents", json={"title": "Scream", "body": "a" * 34 + "!"})
         started = time.monotonic()
         rows = ask.grep_blocks(r"(a|aa)+$")
         self.assertLess(time.monotonic() - started, 1.5)
@@ -303,7 +303,7 @@ class AskYourNotesTests(unittest.TestCase):
     def test_invalid_grep_regex_still_searches_each_alternative_literally(self) -> None:
         from app import ask
 
-        self.client.post("/api/notes", json={"title": "Servers", "body": "Runs on any *nix box"})
+        self.client.post("/api/block-documents", json={"title": "Servers", "body": "Runs on any *nix box"})
         rows = ask.grep_blocks("*nix|unix")  # "nothing to repeat": not a valid regex
         self.assertEqual([r["document_title"] for r in rows], ["Servers"])
 

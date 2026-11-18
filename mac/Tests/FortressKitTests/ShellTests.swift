@@ -234,3 +234,94 @@ private func fixtureData(_ name: String) throws -> Data {
         #expect(ColumnLayout(layout.visibility) == layout)
     }
 }
+
+// MARK: Backend process and token
+
+@Test func tokenAndInstanceAreStable() {
+    #expect(BackendAuth.token.count >= 32)
+    #expect(BackendAuth.instanceID == BackendAuth.instance(for: BackendAuth.token))
+    // The backend computes the same: sha256(token) hex, first 16 digits (backend/app/auth.py).
+    #expect(BackendAuth.instance(for: "abc") == "ba7816bf8f01cfea")
+    #expect(APIClient.sessionConfiguration().httpAdditionalHeaders?[BackendAuth.tokenHeader] as? String == BackendAuth.token)
+}
+
+@Test @MainActor func appOnlyUsesItsOwnBackendOnceItStartedOne() throws {
+    let defaults = try #require(UserDefaults(suiteName: "fortress-tests-\(UUID().uuidString)"))
+    let backend = BackendController(defaults: defaults)
+    // Started none: whatever is at the address (a backend run by hand).
+    #expect(backend.accepts(instance: nil) && backend.accepts(instance: "someone-else"))
+    #expect(backend.serverURL == backend.baseURL)
+}
+
+@Test func freePortsAreFound() throws {
+    let port = try #require(BackendController.freePort())
+    #expect(port > 0)
+    #expect(BackendController.isPortFree(port))
+}
+
+/// Whether `pid` is gone (a zombie reparented to launchd is reaped quickly).
+private func waitUntilGone(_ pid: pid_t, seconds: Double = 5) async -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        if kill(pid, 0) != 0 && errno == ESRCH { return true }
+        try? await Task.sleep(for: .milliseconds(50))
+    }
+    return false
+}
+
+/// A stand-in backend: a shell (like `uv run`) whose child (like uvicorn) ignores
+/// nothing, writes its pid to a file and waits.
+@MainActor
+private func startStandIn(_ backend: BackendController, folder: URL, trapTerm: Bool = false) async throws -> pid_t {
+    let pidFile = folder.appending(path: "child.pid")
+    let trap = trapTerm ? "trap '' TERM; " : ""
+    let launch = BackendLaunch(
+        executable: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "\(trap)/bin/sleep 600 & echo $! > '\(pidFile.path)'; wait"],
+        workingDirectory: folder, path: "/usr/bin:/bin")
+    #expect(backend.start(launch, port: 1))
+    #expect(backend.isProcessRunning && backend.ownsServer)
+    #expect(backend.serverURL.absoluteString == "http://127.0.0.1:1")
+    #expect(!backend.accepts(instance: "someone-else") && backend.accepts(instance: BackendAuth.instanceID))
+    let deadline = Date().addingTimeInterval(10)
+    var child: pid_t?
+    while child == nil, Date() < deadline {
+        child = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        if child == nil { try await Task.sleep(for: .milliseconds(50)) }
+    }
+    return try #require(child)
+}
+
+@Test @MainActor func stoppingTheBackendStopsItsWholeProcessGroup() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "fortress-pg-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let defaults = try #require(UserDefaults(suiteName: "fortress-tests-\(UUID().uuidString)"))
+    let backend = BackendController(defaults: defaults)
+    backend.logURL = folder.appending(path: "backend.log")
+
+    // The shell ignores SIGTERM, so the group's SIGKILL after the grace period ends it.
+    let child = try await startStandIn(backend, folder: folder, trapTerm: true)
+    // (No timing bound: on a busy CI runner the main actor is shared with snapshot tests.)
+    await backend.stop(gracePeriod: .milliseconds(500))
+    #expect(await waitUntilGone(child))
+    try await waitUntil { !backend.isProcessRunning }
+    #expect(backend.state == .idle)
+}
+
+@Test @MainActor func aBackendThatDiesTakesItsChildrenWithIt() async throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "fortress-pg-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let defaults = try #require(UserDefaults(suiteName: "fortress-tests-\(UUID().uuidString)"))
+    let backend = BackendController(defaults: defaults)
+    backend.logURL = folder.appending(path: "backend.log")
+
+    let child = try await startStandIn(backend, folder: folder)
+    // SIGKILL only the shell (like `uv` being killed): the sleep it started must not linger.
+    let leader = try #require(backend.processGroup)
+    kill(leader, SIGKILL)
+    try await waitUntil { !backend.isProcessRunning }
+    #expect(await waitUntilGone(child))
+    if case .failed = backend.state {} else { Issue.record("expected a failure state, got \(backend.state)") }
+}

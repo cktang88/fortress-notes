@@ -5,11 +5,9 @@ Trash keeps deleted documents recoverable until someone empties it. Saved search
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .block_store import (
-    _new_ulid,
     _now,
     _rebuild_document_assets,
     _rebuild_document_references,
@@ -18,9 +16,6 @@ from .block_store import (
     initialize,
 )
 
-SAVED_SEARCH_MODES = {"text", "embedding"}
-
-
 # --- Trash -------------------------------------------------------------------
 
 
@@ -28,7 +23,7 @@ def list_trash(path: Path) -> list[dict[str, object]]:
     initialize(path)
     with connection_scope(path) as connection:
         rows = connection.execute(
-            """SELECT id, title, status, tags_json, deleted_at,
+            """SELECT id, title, status, deleted_at,
                       COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
                                 ORDER BY parent_id, position, id LIMIT 1), '') AS snippet
                  FROM documents
@@ -40,7 +35,6 @@ def list_trash(path: Path) -> list[dict[str, object]]:
             "id": row["id"],
             "title": row["title"],
             "status": row["status"],
-            "tags": _tags(row["tags_json"]),
             "deleted_at": row["deleted_at"],
             "snippet": row["snippet"][:160],
         }
@@ -141,69 +135,6 @@ def _purge(connection, document_ids: list[str]) -> None:
         connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
 
 
-def _tags(raw: str) -> list[str]:
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError):
-        return []
-    return [str(tag) for tag in value] if isinstance(value, list) else []
-
-
 # --- Saved searches ----------------------------------------------------------
 
 
-def list_saved_searches(path: Path) -> list[dict[str, object]]:
-    initialize(path)
-    with connection_scope(path) as connection:
-        rows = connection.execute(
-            "SELECT * FROM saved_searches ORDER BY created_at ASC, id ASC"
-        ).fetchall()
-    return [_saved_search(row) for row in rows]
-
-
-def create_saved_search(
-    path: Path, name: str, query: str, mode: str, filters: dict[str, object]
-) -> dict[str, object]:
-    name, query = name.strip(), query.strip()
-    if not query:
-        raise ValueError("a saved search needs a query")
-    if mode not in SAVED_SEARCH_MODES:
-        raise ValueError("unknown search mode")
-    clean_filters = {
-        key: value for key, value in filters.items() if isinstance(value, str) and value
-    }
-    initialize(path)
-    search_id = _new_ulid()
-    with connection_scope(path) as connection:
-        connection.execute(
-            """INSERT INTO saved_searches(id, name, query, mode, filters_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (search_id, name or query, query, mode, json.dumps(clean_filters), _now()),
-        )
-        row = connection.execute(
-            "SELECT * FROM saved_searches WHERE id = ?", (search_id,)
-        ).fetchone()
-    return _saved_search(row)
-
-
-def delete_saved_search(path: Path, search_id: str) -> None:
-    initialize(path)
-    with connection_scope(path) as connection:
-        cursor = connection.execute("DELETE FROM saved_searches WHERE id = ?", (search_id,))
-        if cursor.rowcount == 0:
-            raise KeyError("saved search not found")
-
-
-def _saved_search(row) -> dict[str, object]:
-    try:
-        filters = json.loads(row["filters_json"])
-    except ValueError:
-        filters = {}
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "query": row["query"],
-        "mode": row["mode"],
-        "filters": filters if isinstance(filters, dict) else {},
-        "created_at": row["created_at"],
-    }

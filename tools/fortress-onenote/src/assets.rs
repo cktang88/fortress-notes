@@ -71,6 +71,8 @@ pub fn sniff(head: &[u8]) -> Option<(&'static str, &'static str)> {
         Some(("tiff", "image/tiff"))
     } else if head.len() >= 12 && &head[0..4] == b"RIFF" && &head[8..12] == b"WEBP" {
         Some(("webp", "image/webp"))
+    } else if starts(&[0x00, 0x00, 0x01, 0x00]) && head.len() >= 6 {
+        Some(("ico", "image/x-icon"))
     } else if starts(b"%PDF") {
         Some(("pdf", "application/pdf"))
     } else if starts(&[0x01, 0x00, 0x00, 0x00]) && head.len() >= 44 && &head[40..44] == b" EMF" {
@@ -118,6 +120,7 @@ pub fn mime_for_ext(ext: &str) -> &'static str {
         "emf" => "image/emf",
         "wmf" => "image/wmf",
         "heic" => "image/heic",
+        "ico" => "image/x-icon",
         "pdf" => "application/pdf",
         "xps" => "application/vnd.ms-xpsdocument",
         "doc" => "application/msword",
