@@ -414,3 +414,128 @@ fn fuzzed_crash_repros_convert() {
     }
     assert!(n >= 30);
 }
+
+/// The page titled `title` (the first one).
+fn page<'a>(m: &'a Value, title: &str) -> &'a Value {
+    objects(&m["notebooks"])
+        .into_iter()
+        .find(|o| o["title"] == title && o["layout"].is_array())
+        .unwrap_or_else(|| panic!("no page {title:?}"))
+}
+
+/// Compact layout: `i3` item, `[a|b]` columns (`![..]` scattered), `,` between rows.
+fn show_layout(rows: &Value) -> String {
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .map(|r| match r["kind"].as_str() {
+            Some("item") => r["item"].as_str().unwrap().to_string(),
+            _ => format!(
+                "{}[{}]",
+                if r["scattered"] == true { "!" } else { "" },
+                r["columns"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|c| show_layout(&c["rows"]))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The id of the item of `page` whose text starts with `prefix`.
+fn item_id<'a>(page: &'a Value, prefix: &str) -> &'a str {
+    page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|it| {
+            objects(&it["blocks"])
+                .iter()
+                .any(|b| b["text"].as_str().is_some_and(|t| t.starts_with(prefix)))
+        })
+        .unwrap_or_else(|| panic!("no item {prefix:?}"))["id"]
+        .as_str()
+        .unwrap()
+}
+
+#[test]
+fn paragraph_style_formatting_becomes_marks() {
+    let Some(c) = corpus() else { return };
+    let m = run(&c, "generated-aspose/gen-styles.one");
+    let b = objects(&m["notebooks"])
+        .into_iter()
+        .find(|o| o["text"] == "Big bold paragraph (heading look-alike)")
+        .expect("block");
+    let marks: Vec<String> = b["marks"]
+        .as_array()
+        .expect("marks")
+        .iter()
+        .map(|mk| {
+            assert_eq!(
+                (mk["start"].as_u64(), mk["end"].as_u64()),
+                (Some(0), Some(39))
+            );
+            format!("{}{}{}", mk["type"], mk["color"], mk["pt"])
+        })
+        .collect();
+    for want in [
+        "\"bold\"nullnull",
+        "\"color\"\"#0000FF\"null",
+        "\"font_size\"null20.0",
+    ] {
+        assert!(marks.iter().any(|m| m == want), "{want} not in {marks:?}");
+    }
+}
+
+#[test]
+fn bridging_items_do_not_stack_side_by_side_outlines() {
+    let Some(c) = corpus() else { return };
+    // An ink drawing over the Cornell template's cue column and notes area.
+    let m = run(
+        &c,
+        "onenotegem-extracted/studentnotebook/Note-Taking Tips.one",
+    );
+    let p = page(&m, "Cornell Note-Taking Method");
+    let (cue, notes) = (item_id(p, "Cue Column"), item_id(p, "Note-Taking Area"));
+    assert!(
+        show_layout(&p["layout"]).starts_with(&format!("[{cue}|{notes}],")),
+        "{}",
+        show_layout(&p["layout"])
+    );
+    // A picture across the gap between columns 2 and 3 of five aligned
+    // columns; the five are a grid, not scattered notes.
+    let m = run(&c, "generated-aspose/gen-layout-columns.one");
+    let p = page(&m, "Five columns, overlaps, floating images");
+    let cols: Vec<&str> = (1..=5)
+        .map(|i| item_id(p, &format!("Col {i} para 1")))
+        .collect();
+    let want = format!("[{}]", cols.join("|"));
+    assert!(
+        show_layout(&p["layout"]).contains(&want),
+        "{want} not in {}",
+        show_layout(&p["layout"])
+    );
+}
+
+#[test]
+fn list_item_nested_under_a_to_do_keeps_its_depth() {
+    // The writer nests "tagged list item" under the "done task" to-do (an
+    // outline-element child), which OneNote shows indented one level.
+    let Some(c) = corpus() else { return };
+    let m = run(&c, "generated-notecraft/nc-rich-text.one");
+    let p = page(&m, "Tags");
+    let blocks = objects(&p["items"]);
+    let depth = |t: &str| {
+        blocks
+            .iter()
+            .find(|b| b["text"] == t)
+            .unwrap_or_else(|| panic!("{t}"))["indent"]
+            .as_u64()
+    };
+    assert_eq!(depth("done task"), Some(0));
+    assert_eq!(depth("tagged list item"), Some(1));
+}

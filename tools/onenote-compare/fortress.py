@@ -252,7 +252,9 @@ class _TreeWalker:
                     ordered = _ordered(block)
                     fmt = str(attrs.get("list_style") or "decimal") if ordered else "bullet"
                     self.model.list_items.append((text, ordered, list_depth, fmt))
-                child_depth = list_depth + 1
+                    # Only list items nest lists: a list under a plain to-do starts at depth 0,
+                    # as on the reference side (one2html counts <ul>/<ol> ancestors only).
+                    child_depth = list_depth + 1
             align = attrs.get("text_alignment")
             if align in {"center", "right"}:
                 self.model.aligned.append((align, text))
