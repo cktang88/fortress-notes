@@ -44,6 +44,13 @@ one JSON summary line is printed to stdout; see SCHEMA.md for exit codes.
 - Names from the notebook (attachment file names, image names) are untrusted
   and only appear as display strings; assets are named by SHA-256.
 - Ink is rendered to standalone SVG; equations to LaTeX and MathML.
+- Blocks carry OneNote's own object ids (`object_id`, `element_id`: ExGUIDs
+  that survive edits) where they can be matched unambiguously, and paragraph
+  links carry their target id (`onenote.object_ref`), so an importer can
+  update edited paragraphs in place and link to the exact paragraph.
+  `onenote_parser` does not expose these ids on its content types; they are
+  read from its `dump_onestore` view (`src/objectids.rs`, SCHEMA.md
+  "Object ids"), which is why the crate is pinned to an exact version.
 
 ## Locating the binary (for the importer)
 

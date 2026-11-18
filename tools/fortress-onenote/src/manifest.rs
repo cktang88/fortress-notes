@@ -245,8 +245,11 @@ pub struct OneNoteLink {
     /// Target page GUID, `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}` upper case.
     pub page_id: Option<String>,
     pub section_id: Option<String>,
-    /// Paragraph link target (object-id), if any.
+    /// Paragraph link target (object-id GUID only), if any.
     pub object_id: Option<String>,
+    /// Full paragraph link target `{GUID}&N` (N hex, upper case): equals the
+    /// `element_id` (or `object_id`) of the linked block.
+    pub object_ref: Option<String>,
     /// Section file part of the URL (decoded), e.g. `.../Notebook/Section.one`.
     pub section_file: Option<String>,
     /// Page title fragment (decoded).
@@ -287,6 +290,13 @@ pub struct BlockCommon {
     pub align: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
+    /// ExGUID of the OneNote content node (`{GUID}&N`), stable across edits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    /// ExGUID of the enclosing outline element (paragraph): what paragraph
+    /// links (`object-id=`) name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_id: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]

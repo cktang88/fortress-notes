@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -637,6 +638,360 @@ class ImportJobApiTests(_Base):
         self.assertEqual([child["name"] for child in inbox["children"]], ["Work"])
 
 
+G = "{0A0B0C0D-1111-2222-3333-444455556666}"
+
+
+def oid(n: int) -> str:
+    """A manifest ExGUID (`{GUID}&N`, N hex)."""
+
+    return f"{G}&{n:X}"
+
+
+def _pages(manifest: dict) -> dict:
+    found = {}
+
+    def walk(entries):
+        for entry in entries:
+            if entry["kind"] == "section":
+                for page in entry["pages"]:
+                    found[page["id"]] = page
+            else:
+                walk(entry["children"])
+
+    for notebook in manifest["notebooks"]:
+        walk(notebook["children"])
+    return found
+
+
+def with_object_ids(manifest: dict) -> dict:
+    """The fixture as a converter with object ids writes it: every top-level
+    block and table-cell block gets object/element ids; the Plan page links
+    to the Child page's paragraph by its element id."""
+
+    manifest = copy.deepcopy(manifest)
+    counter = iter(range(0x10, 0x1000, 2))
+
+    def tag(blocks):
+        for block in blocks:
+            n = next(counter)
+            block["object_id"], block["element_id"] = oid(n + 1), oid(n)
+            for row in block.get("rows") or []:
+                for cell in row["cells"]:
+                    tag(cell["blocks"])
+
+    pages = _pages(manifest)
+    for guid in sorted(pages):
+        for item in pages[guid]["items"]:
+            tag(item["blocks"])
+    child_body = pages[P2]["items"][0]["blocks"][0]
+    for block in pages[P1]["items"][0]["blocks"]:
+        for mark in block.get("marks") or []:
+            if mark.get("type") == "link" and (mark.get("onenote") or {}).get("object_id"):
+                mark["onenote"]["object_ref"] = child_body["element_id"]
+    return manifest
+
+
+class LivingDocumentTests(_Base):
+    """Object ids, paragraph links, pages removed in OneNote, coverage, OCR."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.manifest = with_object_ids(self.manifest)
+        write_manifest(self.export, self.manifest)
+
+    def block(self, guid: str, text: str) -> dict:
+        found = _find(self.tree(guid)["children"], lambda node: node["text"] == text)
+        assert found is not None, text
+        return found
+
+    def test_paragraph_edited_in_source_updates_the_same_block(self) -> None:
+        self.run_import()
+        before = self.block(P1, "Editable paragraph")
+        self.assertEqual(before["provenance"]["external_id"], f"{P1}/obj:{oid(0x1B)}")
+        self.assertEqual(before["provenance"]["extra"]["onenote"],
+                         {"object_id": oid(0x1B), "element_id": oid(0x1A)})
+        # Another note references the paragraph.
+        other = block_store.create_block_document(self.db, "Elsewhere", "rough", [], f"See (( {before['id']} ))")
+
+        def references() -> list:
+            return [(link["source_document_id"], link["target_block_id"])
+                    for link in block_store.document_backlinks(self.db, self.doc_id(P1))]
+
+        self.assertEqual(references(), [(other["id"], before["id"])])
+
+        changed = copy.deepcopy(self.manifest)
+        _pages(changed)[P1]["items"][0]["blocks"][5]["text"] = "Edited in OneNote"
+        result = self.run_import(changed)["notebooks"][0]
+        self.assertEqual((result["pages_updated"], result["pages_unchanged"]), (1, 3))
+        after = self.block(P1, "Edited in OneNote")
+        self.assertEqual(after["id"], before["id"])  # same Fortress block, updated in place
+        self.assertNotIn("Editable paragraph", [node["text"] for node in _walk(self.tree(P1)["children"])])
+        self.assertEqual(references(), [(other["id"], before["id"])])
+
+    def test_local_edit_wins_and_source_edit_becomes_a_conflict(self) -> None:
+        self.run_import()
+        tree = self.tree(P1)
+        block = self.block(P1, "Editable paragraph")
+        apply_transaction(self.db, tree["id"], [BlockOperation(
+            operation="update", block_id=block["id"], text="Edited in Fortress",
+            content={"markdown": "Edited in Fortress"})], tree["revision"])
+        changed = copy.deepcopy(self.manifest)
+        _pages(changed)[P1]["items"][0]["blocks"][5]["text"] = "Edited in OneNote"
+        result = self.run_import(changed)["notebooks"][0]
+        self.assertEqual(result["conflicts"], 1)
+        kept = self.block(P1, "Edited in Fortress")
+        self.assertEqual(kept["id"], block["id"])
+        self.assertEqual(kept["provenance"]["conflict"]["source_markdown"], "Edited in OneNote")
+
+    def test_notes_imported_with_hash_ids_migrate_in_place(self) -> None:
+        self.run_import(build_manifest())  # an old, format-1 style manifest
+        before = {node["text"]: node["id"] for node in _walk(self.tree(P1)["children"]) if node["text"]}
+        columns_before = [node["id"] for node in self.tree(P1)["children"] if node["type"] == "columns"]
+        result = self.run_import(self.manifest)["notebooks"][0]
+        self.assertEqual(result["pages_created"], 0)
+        tree = self.tree(P1)
+        after = {node["text"]: node["id"] for node in _walk(tree["children"]) if node["text"]}
+        self.assertEqual(after, before)
+        self.assertEqual([node["id"] for node in tree["children"] if node["type"] == "columns"], columns_before)
+        migrated = self.block(P1, "Editable paragraph")
+        self.assertEqual(migrated["provenance"]["external_id"], f"{P1}/obj:{oid(0x1B)}")
+        # Now keyed by object id: an edit in OneNote keeps the block.
+        changed = copy.deepcopy(self.manifest)
+        _pages(changed)[P1]["items"][0]["blocks"][5]["text"] = "Edited later"
+        self.run_import(changed)
+        self.assertEqual(self.block(P1, "Edited later")["id"], migrated["id"])
+
+    def test_paragraph_link_becomes_a_block_reference(self) -> None:
+        result = self.run_import()
+        self.assertEqual(result["links"]["block_references"], 1)
+        self.assertEqual(result["links"]["block_links_as_page_links"], 0)
+        target = self.block(P2, "Child body")
+        paragraph = _find(self.tree(P1)["children"], lambda node: node["text"].startswith("Bold italic"))
+        hrefs = {run["content"][0]["text"]: run["href"]
+                 for run in paragraph["content"]["blocknote"] if run["type"] == "link"}
+        self.assertEqual(hrefs["child"], f"(( {target['id']} ))")
+        with block_store.connection_scope(self.db) as connection:
+            refs = connection.execute(
+                "SELECT source_block_id FROM block_refs WHERE target_block_id = ?", (target["id"],)
+            ).fetchall()
+        self.assertEqual([row["source_block_id"] for row in refs], [paragraph["id"]])
+        # Re-import: unchanged. Edit the target paragraph in OneNote: the reference
+        # still points at the same (updated) block.
+        self.assertEqual(self.run_import()["notebooks"][0]["pages_unchanged"], 4)
+        changed = copy.deepcopy(self.manifest)
+        _pages(changed)[P2]["items"][0]["blocks"][0]["text"] = "Child body, revised"
+        self.run_import(changed)
+        self.assertEqual(self.block(P2, "Child body, revised")["id"], target["id"])
+        paragraph = _find(self.tree(P1)["children"], lambda node: node["text"].startswith("Bold italic"))
+        self.assertIn(f"(( {target['id']} ))", json.dumps(paragraph["content"]))
+
+    def test_paragraph_link_to_a_table_cell_points_at_the_table(self) -> None:
+        manifest = copy.deepcopy(self.manifest)
+        pages = _pages(manifest)
+        table = pages[P1]["items"][3]["blocks"][0]
+        cell_block = table["rows"][1]["cells"][1]["blocks"][0]
+        child = pages[P2]["items"][0]["blocks"][0]
+        child["marks"] = [{"start": 0, "end": 5, "type": "link", "href": "onenote:#x",
+                           "onenote": {"page_id": P1, "section_id": None, "object_id": G,
+                                       "object_ref": cell_block["element_id"], "section_file": None,
+                                       "page_title": "Plan"}}]
+        self.run_import(manifest)
+        table_block = _find(self.tree(P1)["children"], lambda node: node["type"] == "table")
+        body = self.block(P2, "Child body")
+        self.assertIn(f"(( {table_block['id']} ))", json.dumps(body["content"]))
+
+    def test_pages_and_sections_removed_in_onenote_are_marked_not_deleted(self) -> None:
+        self.run_import()
+        ids = {guid: self.doc_id(guid) for guid in (P1, P2, P2B, P3)}
+        changed = copy.deepcopy(self.manifest)
+        notebook = changed["notebooks"][0]
+        notebook["children"] = notebook["children"][:1]  # the Meetings section is gone
+        alpha = notebook["children"][0]["children"][0]
+        alpha["pages"] = [page for page in alpha["pages"] if page["id"] != P2B]  # and a page
+        result = self.run_import(changed)["notebooks"][0]
+        removed = {item["document_id"]: item for item in result["pages_removed_in_source"]}
+        self.assertEqual(set(removed), {ids[P2B], ids[P3]})
+        self.assertTrue(all(item["newly_removed"] for item in removed.values()))
+        self.assertEqual(removed[ids[P3]]["source_path"], "Work › Meetings › Standup notes")
+        self.assertEqual([item["name"] for item in result["sections_removed_in_source"]], ["Meetings"])
+        self.assertEqual(result["sections_removed_in_source"][0]["path"], "Work › Meetings")
+        for guid in (P2B, P3):
+            provenance = self.tree(guid)["provenance"]  # still there
+            self.assertTrue(provenance["source_removed"])
+            self.assertTrue(provenance["source_removed_at"])
+        self.assertNotIn("source_removed", self.tree(P1)["provenance"])
+        # Still listed next time, with the first date.
+        again = self.run_import(changed)["notebooks"][0]
+        self.assertEqual({item["document_id"] for item in again["pages_removed_in_source"]}, {ids[P2B], ids[P3]})
+        self.assertFalse(any(item["newly_removed"] for item in again["pages_removed_in_source"]))
+        # The page comes back: the mark goes away.
+        restored = self.run_import(self.manifest)["notebooks"][0]
+        self.assertEqual(restored["pages_removed_in_source"], [])
+        self.assertEqual(restored["sections_removed_in_source"], [])
+        self.assertNotIn("source_removed", self.tree(P3)["provenance"])
+        self.assertNotIn("source_removed_at", self.tree(P3)["provenance"])
+
+    def test_unreadable_sections_and_other_notebooks_are_not_removed(self) -> None:
+        self.run_import()
+        changed = copy.deepcopy(self.manifest)
+        notebook = changed["notebooks"][0]
+        notebook["children"] = notebook["children"][:1]
+        notebook["report"]["failed_sections"].append({
+            "path": ["Work", "Meetings"], "file": "Meetings.one", "reason": "damaged", "hint": "", "error": "x"})
+        result = self.run_import(changed)["notebooks"][0]
+        self.assertEqual(result["pages_removed_in_source"], [])
+        self.assertEqual(result["sections_removed_in_source"], [])
+        other = copy.deepcopy(self.manifest)
+        other["notebooks"][0].update(id="nb-2", file_identity="nb-2", name="Home", children=[])
+        result = self.run_import(other)["notebooks"][0]
+        self.assertEqual(result["pages_removed_in_source"], [])
+        self.assertNotIn("source_removed", self.tree(P3)["provenance"])
+
+    def test_text_coverage(self) -> None:
+        result = self.run_import()
+        self.assertEqual(result["notebooks"][0]["low_coverage_pages"], [])
+        self.assertEqual(onenote_import.text_coverage("Hello, World", "**hello** [[x|world]]")[0], 1.0)
+        self.assertAlmostEqual(onenote_import.text_coverage("ab cd", "ab")[0], 0.5)
+        self.assertEqual(onenote_import.text_coverage("", "anything")[0], 1.0)
+
+        original = onenote_import._convert_block
+
+        def lossy(block, ctx, nested=False):
+            if block.get("text") == "Editable paragraph":
+                return None
+            return original(block, ctx, nested)
+
+        changed = copy.deepcopy(self.manifest)
+        _pages(changed)[P1]["items"][0]["blocks"][5]["text"] = "Editable paragraph"
+        with patch.object(onenote_import, "_convert_block", lossy):
+            result = self.run_import(changed)
+        [low] = result["notebooks"][0]["low_coverage_pages"]
+        self.assertEqual(low["page"], "Work › Projects › Alpha › Plan")
+        self.assertEqual(low["document_id"], self.doc_id(P1))
+        self.assertLess(low["coverage"], 0.98)
+        self.assertGreater(low["manifest_chars"], low["imported_chars"] - 1000)
+
+    def test_images_without_onenote_text_are_queued_for_ocr(self) -> None:
+        changed = copy.deepcopy(self.manifest)
+        image = _pages(changed)[P1]["items"][2]["blocks"][0]
+        image["alt_text"] = None
+        queued: list[list[Path]] = []
+        result = onenote_import.import_manifest(
+            write_manifest(self.export, changed), db_path=self.db, notes_path=self.notes,
+            assets_path=self.settings.assets_path, ocr=queued.append)
+        self.assertEqual(result["notebooks"][0]["images_ocr_queued"], 1)
+        self.assertEqual([[path.name for path in batch] for batch in queued], [[PNG_NAME]])
+        # Once the OCR stored text, a re-import does not queue it again.
+        block_store.store_asset_text(self.db, PNG_NAME.split(".")[0], "Text in image: revenue")
+        self.assertTrue(search_blocks(self.db, "revenue"))
+        queued.clear()
+        onenote_import.import_manifest(self.export, db_path=self.db, notes_path=self.notes,
+                                       assets_path=self.settings.assets_path, ocr=queued.append)
+        self.assertEqual(queued, [])
+
+
+class ImportJobLifecycleTests(_Base):
+    """Job records on disk while running, restarts, cancelling."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from app import main
+
+        self.jobs = onenote_import.ImportJobs()
+        self.jobs.ocr = None
+        self.gate = threading.Event()
+        self.converting = threading.Event()
+
+        def fake_converter(input_path: Path, out_dir: Path, *, cancelled=None, **_):
+            self.converting.set()
+            while not self.gate.wait(0.02):
+                if cancelled is not None and cancelled():
+                    raise onenote_import.ImportCancelled()
+            write_manifest(out_dir, self.manifest)
+            return {"pages": 4}
+
+        for item in (
+            patch.object(main, "settings", self.settings),
+            patch.object(onenote_import, "jobs", self.jobs),
+            patch.object(onenote_import, "run_converter", fake_converter),
+        ):
+            item.start()
+            self.addCleanup(item.stop)
+        self.addCleanup(self.gate.set)
+        self.client = TestClient(main.app)
+        self.client.__enter__()
+        self.addCleanup(self.client.__exit__, None, None, None)
+        self.source = self.root / "Work.zip"
+        self.source.write_bytes(b"zip")
+
+    def stored(self, job_id: str) -> dict:
+        return json.loads((self.notes / ".fortress-imports" / f"{job_id}.json").read_text())
+
+    def test_record_is_saved_while_running_and_a_restart_reads_as_failed(self) -> None:
+        job_id = self.client.post("/api/import/onenote", json={"path": str(self.source)}).json()["job_id"]
+        self.assertTrue(self.converting.wait(10))
+        self.assertEqual(self.stored(job_id)["status"], "converting")
+        # A new process (restart) knows nothing of the running job.
+        restarted = onenote_import.ImportJobs()
+        with patch.object(onenote_import, "jobs", restarted):
+            job = self.client.get(f"/api/import/onenote/{job_id}")
+            self.assertEqual(job.status_code, 200)
+            self.assertEqual(job.json()["status"], "failed")
+            self.assertIn("interrupted by a restart", job.json()["error"])
+            self.assertIn("already imported are kept", job.json()["error"])
+            [listed] = self.client.get("/api/import/onenote").json()
+            self.assertEqual(listed["status"], "failed")
+            self.assertEqual(self.client.post(f"/api/import/onenote/{job_id}/cancel").status_code, 409)
+        self.assertEqual(self.stored(job_id)["status"], "failed")
+        self.gate.set()
+        self.jobs.wait(30)
+
+    def test_cancel_running_and_queued_jobs(self) -> None:
+        first = self.client.post("/api/import/onenote", json={"path": str(self.source)}).json()["job_id"]
+        second = self.client.post("/api/import/onenote", json={"path": str(self.source)}).json()["job_id"]
+        self.assertTrue(self.converting.wait(10))
+        queued = self.client.post(f"/api/import/onenote/{second}/cancel")
+        self.assertEqual(queued.status_code, 202)
+        self.assertEqual(queued.json()["status"], "cancelled")
+        running = self.client.post(f"/api/import/onenote/{first}/cancel")
+        self.assertEqual(running.status_code, 202)
+        self.assertTrue(running.json()["cancel_requested"])
+        self.jobs.wait(30)
+        for job_id in (first, second):
+            job = self.client.get(f"/api/import/onenote/{job_id}").json()
+            self.assertEqual(job["status"], "cancelled", job)
+            self.assertIn("kept", job["error"])
+            self.assertEqual(self.stored(job_id)["status"], "cancelled")
+        self.assertEqual(self.client.post(f"/api/import/onenote/{first}/cancel").status_code, 409)
+        self.assertEqual(self.client.post("/api/import/onenote/NOSUCHJOB/cancel").status_code, 404)
+
+    def test_cancel_between_pages_keeps_imported_pages(self) -> None:
+        self.gate.set()
+        calls = []
+        original = onenote_import._Importer._import_page
+
+        def import_page(importer, *args, **kwargs):
+            calls.append(args[0]["id"])
+            state = original(importer, *args, **kwargs)
+            if len(calls) == 2:
+                self.jobs.cancel(job_id, self.notes)
+            return state
+
+        with patch.object(onenote_import._Importer, "_import_page", import_page):
+            job_id = self.client.post("/api/import/onenote", json={"path": str(self.source)}).json()["job_id"]
+            self.jobs.wait(30)
+        job = self.client.get(f"/api/import/onenote/{job_id}").json()
+        self.assertEqual(job["status"], "cancelled", job)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(self.doc_id(P1))  # the pages imported before cancelling stay
+        # Importing again is idempotent and completes.
+        again = self.client.post("/api/import/onenote", json={"path": str(self.source)}).json()["job_id"]
+        self.jobs.wait(30)
+        result = self.client.get(f"/api/import/onenote/{again}").json()["result"]["notebooks"][0]
+        self.assertEqual(result["pages_created"], 2)
+        self.assertEqual(result["pages_created"] + result["pages_updated"] + result["pages_unchanged"], 4)
+
+
 SAMPLES = os.environ.get("FORTRESS_ONENOTE_SAMPLES", "")
 
 
@@ -676,6 +1031,32 @@ class OneNoteSamplesTests(_Base):
         for nb in second["notebooks"]:
             self.assertEqual((nb["pages_created"], nb["pages_updated"]), (0, 0), nb["name"])
         self.assertEqual(sum(nb["pages_unchanged"] for nb in second["notebooks"]), summary["pages"])
+        # Nothing lost silently.
+        self.assertEqual([page for nb in notebooks for page in nb["low_coverage_pages"]], [])
+
+        # Simulate an edit in OneNote: the paragraph keeps its object id, so the
+        # same Fortress block is updated.
+        edited = next((
+            (page, block) for page in _pages(manifest).values() for item in page["items"]
+            for block in item["blocks"]
+            if block.get("type") == "paragraph" and block.get("object_id") and block.get("text")
+        ), None)
+        self.assertIsNotNone(edited, "the converter found no object ids")
+        page, block = edited
+        with block_store.connection_scope(self.db) as connection:
+            [before] = [row["id"] for row in connection.execute(
+                "SELECT blocks.id, blocks.provenance_json FROM blocks JOIN documents ON documents.id = blocks.document_id"
+                " WHERE documents.source_external_id = ?", (page["id"],))
+                if block["object_id"] in (row["provenance_json"] or "")]
+        block["text"] += " (edited)"
+        block.pop("marks", None)
+        (out / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        third = onenote_import.import_manifest(
+            out, db_path=self.db, notes_path=self.notes, assets_path=self.settings.assets_path)
+        self.assertEqual(sum(nb["pages_updated"] for nb in third["notebooks"]), 1)
+        with block_store.connection_scope(self.db) as connection:
+            row = connection.execute("SELECT text FROM blocks WHERE id = ?", (before,)).fetchone()
+        self.assertTrue(row["text"].endswith("(edited)"))
 
 
 def _manifest_blocks(notebook):

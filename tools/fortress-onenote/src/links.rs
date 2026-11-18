@@ -93,6 +93,16 @@ pub fn parse_onenote_link(href: &str) -> Option<OneNoteLink> {
     let page_id = get_guid("page-id=");
     let section_id = get_guid("section-id=");
     let object_id = get_guid("object-id=");
+    // The object's counter follows as a bare hexadecimal parameter:
+    // `object-id={GUID}&3C`.
+    let object_ref = param(fragment, "object-id=").and_then(|v| {
+        let lower = fragment.to_ascii_lowercase();
+        let start = lower.find(&format!("object-id={}", v.to_ascii_lowercase()))?;
+        let after = &fragment[start + "object-id=".len() + v.len()..];
+        let suffix = after.strip_prefix('&')?;
+        let suffix = &suffix[..suffix.find('&').unwrap_or(suffix.len())];
+        crate::objectids::object_ref(&decode(v), Some(suffix))
+    });
 
     let lower = fragment.to_ascii_lowercase();
     let first_param = ["section-id=", "page-id=", "object-id="]
@@ -117,6 +127,7 @@ pub fn parse_onenote_link(href: &str) -> Option<OneNoteLink> {
         page_id,
         section_id,
         object_id,
+        object_ref,
         section_file,
         page_title,
     })
@@ -176,10 +187,32 @@ mod tests {
             l.object_id.as_deref(),
             Some("{99999999-8888-7777-6666-555555555555}")
         );
+        assert_eq!(
+            l.object_ref.as_deref(),
+            Some("{99999999-8888-7777-6666-555555555555}&1A")
+        );
         assert_eq!(l.page_title.as_deref(), Some("Weekly"));
         assert_eq!(
             l.section_file.as_deref(),
             Some(r"D:\Notes\Work\Meetings.one")
+        );
+    }
+
+    #[test]
+    fn paragraph_link_counter() {
+        let l = parse_onenote_link(
+            "onenote:#T&section-id={11111111-2222-3333-4444-555555555555}&page-id={AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}&object-id={99999999-8888-7777-6666-555555555555}&end",
+        )
+        .unwrap();
+        assert!(l.object_id.is_some());
+        assert_eq!(l.object_ref, None);
+        let l = parse_onenote_link(
+            "onenote:#T&page-id={AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}&object-id=%7B99999999-8888-7777-6666-555555555555%7D&2f&end",
+        )
+        .unwrap();
+        assert_eq!(
+            l.object_ref.as_deref(),
+            Some("{99999999-8888-7777-6666-555555555555}&2F")
         );
     }
 

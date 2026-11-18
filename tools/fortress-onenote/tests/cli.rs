@@ -118,10 +118,45 @@ fn garbage_section_is_reported_as_failed() {
 
 // ---- sample-based checks ------------------------------------------------------
 
-fn check_blocks(blocks: &Value, ctx: &str, n: &mut usize) {
+/// Per-page object id bookkeeping: ids seen and (text blocks, with an id).
+#[derive(Default)]
+struct IdCheck {
+    seen: HashSet<String>,
+    text_blocks: usize,
+    with_id: usize,
+}
+
+fn is_object_id(s: &str) -> bool {
+    let Some((g, n)) = s.split_once('&') else {
+        return false;
+    };
+    g.len() == 38
+        && g.starts_with('{')
+        && g.ends_with('}')
+        && !n.is_empty()
+        && n.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase())
+}
+
+fn check_blocks(blocks: &Value, ctx: &str, n: &mut usize, idc: &mut IdCheck) {
     for b in blocks.as_array().unwrap() {
         *n += 1;
         let ty = b["type"].as_str().unwrap();
+        for key in ["object_id", "element_id"] {
+            if let Some(id) = b[key].as_str() {
+                assert!(is_object_id(id), "{ctx}: malformed {key} {id}");
+            }
+        }
+        if let Some(id) = b["object_id"].as_str() {
+            assert!(
+                idc.seen.insert(id.to_string()),
+                "{ctx}: object id {id} used twice"
+            );
+        }
+        if b["text"].as_str().is_some_and(|t| !t.trim().is_empty()) {
+            idc.text_blocks += 1;
+            idc.with_id += usize::from(b["object_id"].is_string());
+        }
         if let Some(text) = b["text"].as_str() {
             let len = text.chars().count();
             for m in b["marks"].as_array().into_iter().flatten() {
@@ -140,7 +175,7 @@ fn check_blocks(blocks: &Value, ctx: &str, n: &mut usize) {
         if ty == "table" {
             for row in b["rows"].as_array().unwrap() {
                 for cell in row["cells"].as_array().unwrap() {
-                    check_blocks(&cell["blocks"], ctx, n);
+                    check_blocks(&cell["blocks"], ctx, n, idc);
                 }
             }
         }
@@ -175,12 +210,13 @@ fn check_entries(
     ids: &mut HashSet<String>,
     pages: &mut usize,
     blocks: &mut usize,
+    coverage: &mut (usize, usize),
 ) {
     for e in entries.as_array().unwrap() {
         let id = e["id"].as_str().unwrap().to_string();
         assert!(ids.insert(id.clone()), "duplicate id {id}");
         match e["kind"].as_str().unwrap() {
-            "section_group" => check_entries(&e["children"], ids, pages, blocks),
+            "section_group" => check_entries(&e["children"], ids, pages, blocks, coverage),
             "section" => {
                 for p in e["pages"].as_array().unwrap() {
                     *pages += 1;
@@ -200,9 +236,12 @@ fn check_entries(
                     a.sort();
                     laid_out.sort();
                     assert_eq!(a, laid_out, "layout must reference every item once");
+                    let mut idc = IdCheck::default();
                     for it in p["items"].as_array().unwrap() {
-                        check_blocks(&it["blocks"], pid.as_str(), blocks);
+                        check_blocks(&it["blocks"], pid.as_str(), blocks, &mut idc);
                     }
+                    coverage.0 += idc.text_blocks;
+                    coverage.1 += idc.with_id;
                 }
             }
             k => panic!("unknown entry kind {k}"),
@@ -240,6 +279,7 @@ fn converts_real_samples_when_configured() {
     assert!(!inputs.is_empty(), "no samples in {dir}");
     let base = tmp("samples");
     let mut total_pages = 0;
+    let mut coverage = (0usize, 0usize);
     for (i, input) in inputs.iter().enumerate() {
         let out_dir = base.join(format!("o{i}"));
         let out = Command::new(bin())
@@ -268,7 +308,13 @@ fn converts_real_samples_when_configured() {
         let (mut pages, mut blocks) = (0, 0);
         for nb in m["notebooks"].as_array().unwrap() {
             assert!(ids.insert(nb["id"].as_str().unwrap().to_string()));
-            check_entries(&nb["children"], &mut ids, &mut pages, &mut blocks);
+            check_entries(
+                &nb["children"],
+                &mut ids,
+                &mut pages,
+                &mut blocks,
+                &mut coverage,
+            );
         }
         assert_eq!(summary["pages"].as_u64().unwrap() as usize, pages);
         // Every asset exists and matches its hash.
@@ -284,5 +330,15 @@ fn converts_real_samples_when_configured() {
         total_pages += pages;
     }
     assert!(total_pages > 0);
+    // Stable object ids are derived for most text blocks (see objectids.rs).
+    eprintln!("object ids on {} of {} text blocks", coverage.1, coverage.0);
+    if coverage.0 > 20 {
+        assert!(
+            coverage.1 * 2 > coverage.0,
+            "object ids on only {} of {} text blocks",
+            coverage.1,
+            coverage.0
+        );
+    }
     fs::remove_dir_all(&base).unwrap();
 }

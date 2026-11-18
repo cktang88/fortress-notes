@@ -87,6 +87,10 @@ class SourceBlock:
     content: dict[str, Any] | None = None
     # Searchable text, when it should differ from what is derived.
     text: str | None = None
+    # Source ids this block had in earlier imports (e.g. a content hash before
+    # the source exposed a stable id): a stored block with one of them is this
+    # block, and takes ``external_id`` from now on.
+    previous_external_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -184,6 +188,7 @@ def source_block(data: dict[str, Any] | str) -> SourceBlock:
         modified_at=data.get("modified_at"),
         provenance=dict(data.get("provenance") or {}),
         content=content,
+        previous_external_ids=[str(item) for item in data.get("previous_ids") or [] if item],
     )
 
 
@@ -346,6 +351,7 @@ class _Planned:
     provenance: dict[str, Any]
     content: dict[str, Any] | None = None
     text: str | None = None
+    previous_external_ids: list[str] = field(default_factory=list)
 
     @property
     def hash(self) -> str:
@@ -418,7 +424,7 @@ def _prepare(blocks: list[SourceBlock] | str) -> list[_Planned]:
         return _Planned(
             external_id, block_type, markdown, attrs, children,
             block.created_at, block.modified_at, dict(block.provenance),
-            content, text,
+            content, text, list(block.previous_external_ids),
         )
 
     return [convert(block) for block in blocks]
@@ -530,6 +536,48 @@ def upsert_document_from_source(
             return UpsertResult(row["id"], "skipped_deleted", row["revision"])
         return _update(connection, row, source, title, planned, folder_id, modified_at,
                        document_provenance)
+
+
+def mark_documents_source_removed(
+    path: Path, source: str, document_ids: Iterable[str], *, at: str | None = None
+) -> list[dict[str, Any]]:
+    """Record that the source no longer has these notes; nothing is deleted.
+
+    Sets ``provenance.source_removed: true`` and ``source_removed_at`` (kept from
+    an earlier run if already marked). The next upsert of a note clears both.
+    Returns ``{"document_id", "title", "source_path", "source_removed_at",
+    "newly_removed"}`` per note of ``source`` that is not in the trash.
+    """
+
+    now = at or _now()
+    result: list[dict[str, Any]] = []
+    initialize(path)
+    with connection_scope(path, immediate=True) as connection:
+        for document_id in document_ids:
+            row = connection.execute(
+                """SELECT id, title, provenance_json FROM documents
+                    WHERE id = ? AND source_kind = ? AND deleted_at IS NULL""",
+                (document_id, source),
+            ).fetchone()
+            if row is None:
+                continue
+            value = _provenance.loads(row["provenance_json"])
+            newly = not value.get("source_removed")
+            if newly:
+                value["source_removed"] = True
+                value["source_removed_at"] = now
+                connection.execute(
+                    "UPDATE documents SET provenance_json = ? WHERE id = ?",
+                    (_provenance.dumps(value), document_id),
+                )
+            result.append({
+                "document_id": row["id"],
+                "title": row["title"],
+                "source_path": value.get("source_path"),
+                "source_removed_at": value.get("source_removed_at") or now,
+                "newly_removed": newly,
+            })
+    return result
 
 
 def _flatten(blocks: list[_Planned]) -> list[_Planned]:
@@ -661,10 +709,23 @@ def _update(
     content_updates: dict[str, _Planned] = {}
     provenance_updates: dict[str, dict] = {}
 
+    primary_ids = {block.external_id for block in _flatten(planned)}
+
+    def lookup(block: _Planned) -> str | None:
+        block_id = by_external.get(block.external_id)
+        if block_id is not None:
+            return block_id
+        for previous in block.previous_external_ids:
+            # A stored id some other source block still uses is that block's.
+            candidate = by_external.get(previous)
+            if previous not in primary_ids and candidate is not None and candidate not in matched:
+                return candidate
+        return None
+
     def plan(blocks: list[_Planned], parent_id: str | None) -> None:
         order: list[str] = []
         for block in blocks:
-            block_id = by_external.get(block.external_id)
+            block_id = lookup(block)
             if block_id is not None and block_id not in matched:
                 matched.add(block_id)
                 row = by_id[block_id]
@@ -711,7 +772,10 @@ def _update(
                     provenance_updates[block_id] = new
                 order.append(block_id)
                 plan(block.children, block_id)
-            elif block.external_id in previously_synced:
+            elif block.external_id in previously_synced or any(
+                previous in previously_synced and previous not in primary_ids
+                for previous in block.previous_external_ids
+            ):
                 result.blocks_skipped += 1
             else:
                 block_id = _new_ulid()
@@ -881,7 +945,9 @@ def _update(
         )
     old_provenance = _provenance.loads(document["provenance_json"])
     new_provenance = {
-        **{key: value for key, value in old_provenance.items() if key not in {"backfilled"}},
+        # A page the source has again is no longer "removed in the source".
+        **{key: value for key, value in old_provenance.items()
+           if key not in {"backfilled", "source_removed", "source_removed_at"}},
         **document_provenance,
     }
     new_provenance.setdefault("imported_at", now)

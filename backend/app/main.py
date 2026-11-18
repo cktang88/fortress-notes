@@ -496,6 +496,18 @@ def get_onenote_import(job_id: str):
     return record
 
 
+@app.post("/api/import/onenote/{job_id}/cancel", status_code=202)
+def cancel_onenote_import(job_id: str):
+    """Stop an import between pages; imported pages are kept (status ``cancelled``)."""
+
+    record, accepted = onenote_import.jobs.cancel(job_id, settings.notes_path)
+    if record is None:
+        raise HTTPException(404, "import job not found")
+    if not accepted:
+        raise HTTPException(409, f"The import already ended ({record.get('status')}).")
+    return record
+
+
 def _attachment(filename: str) -> str:
     ascii_name = filename.encode("ascii", "ignore").decode() or "download"
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"

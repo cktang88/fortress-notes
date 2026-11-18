@@ -26,7 +26,9 @@ The JSON shape (all keys but ``source`` are optional)::
       # set by re-imports (blocks only):
       "source_hash": "...",                 # hash of the content the source last wrote
       "conflict": {...},                    # source changed a locally edited block
-      "source_removed": true,               # gone from the source; kept (edited locally)
+      "source_removed": true,               # gone from the source; kept (edited locally),
+                                            # or (notes) the page was deleted in the source
+      "source_removed_at": "...",           # notes: when a re-import first missed the page
       "backfilled": true                    # guessed by the schema migration
     }
 
@@ -65,7 +67,9 @@ _STRING_FIELDS = {
 }
 _ORIGIN_OPERATIONS = {"move_into", "duplicate", "split"}
 # Written only by the server (re-imports and migrations), never accepted from clients.
-INTERNAL_FIELDS = ("source_hash", "conflict", "source_removed", "dismissed_hash", "backfilled")
+INTERNAL_FIELDS = (
+    "source_hash", "conflict", "source_removed", "source_removed_at", "dismissed_hash", "backfilled",
+)
 _MAX_EXTRA_BYTES = 16_384
 
 # A block's provenance in exported Markdown: one comment line right before the block.
