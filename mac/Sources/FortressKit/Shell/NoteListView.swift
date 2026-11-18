@@ -213,7 +213,6 @@ enum NoteCopy {
         let provider = NSItemProvider()
         for type in [UTType.utf8PlainText.identifier, MarkdownCopy.typeIdentifier] {
             provider.registerDataRepresentation(forTypeIdentifier: type, visibility: .all) { @Sendable completion in
-                nonisolated(unsafe) let completion = completion
                 Task {
                     let text = (try? await api.markdown(documentId: noteId)) ?? title
                     completion(Data(text.utf8), nil)
