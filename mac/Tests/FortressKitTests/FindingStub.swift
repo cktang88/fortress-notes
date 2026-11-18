@@ -39,6 +39,8 @@ final class FindingStub: Sendable {
         var started: [URL] = []
         var cancelled: [URL] = []
         var finished: [URL] = []
+        /// "start" and "finish" in the order they happened (on the loading threads).
+        var events: [String] = []
     }
 
     let host: String
@@ -73,12 +75,12 @@ final class FindingStub: Sendable {
     }
 
     fileprivate func reply(to request: URLRequest) -> Reply {
-        state.withLock { $0.started.append(request.url!) }
+        state.withLock { $0.started.append(request.url!); $0.events.append("start") }
         return handler(request)
     }
 
     fileprivate func didCancel(_ url: URL) { state.withLock { $0.cancelled.append(url) } }
-    fileprivate func didFinish(_ url: URL) { state.withLock { $0.finished.append(url) } }
+    fileprivate func didFinish(_ url: URL) { state.withLock { $0.finished.append(url); $0.events.append("finish") } }
 }
 
 final class FindingStubProtocol: URLProtocol, @unchecked Sendable {
@@ -108,16 +110,17 @@ final class FindingStubProtocol: URLProtocol, @unchecked Sendable {
         for (index, chunk) in reply.chunks.enumerated() {
             delay += chunk.delay
             let isLast = index == reply.chunks.count - 1
-            let needsResponse = !sentResponse && reply.failure == nil
+            // The response goes with the first piece, unless the request fails outright
+            // (a lone failing piece with no data: no connection at all).
+            let failsHere = isLast && reply.failure != nil
+            let needsResponse = !sentResponse && !(failsHere && chunk.data.isEmpty)
             sentResponse = sentResponse || needsResponse
             queue.asyncAfter(deadline: .now() + delay) { [self] in
                 guard !flags.withLock({ $0.stopped }) else { return }
                 if isLast { flags.withLock { $0.done = true } }
                 if let failure = reply.failure, isLast {
-                    if !chunk.data.isEmpty {
-                        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                        client?.urlProtocol(self, didLoad: chunk.data)
-                    }
+                    if needsResponse { client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed) }
+                    if !chunk.data.isEmpty { client?.urlProtocol(self, didLoad: chunk.data) }
                     client?.urlProtocol(self, didFailWithError: URLError(failure))
                     return
                 }
@@ -144,7 +147,7 @@ final class FindingStubProtocol: URLProtocol, @unchecked Sendable {
 
 /// Waits (up to `timeout` seconds; snapshot suites can hold the main thread) for a condition.
 @MainActor
-func eventually(timeout: TimeInterval = 30, _ condition: () -> Bool) async {
+func eventually(timeout: TimeInterval = 120, _ condition: () -> Bool) async {
     let deadline = Date.now.addingTimeInterval(timeout)
     while !condition(), Date.now < deadline {
         try? await Task.sleep(for: .milliseconds(5))

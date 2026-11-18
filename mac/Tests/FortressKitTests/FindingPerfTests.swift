@@ -84,6 +84,13 @@ struct SplitMix {
     }
 }
 
+/// Timing and request-count measurements. They need the machine to themselves (other
+/// suites hold the main thread for seconds while they render), so they run only when
+/// FINDING_PERF=1, one at a time, in their own CI step:
+/// `FINDING_PERF=1 swift test --filter FindingPerf`.
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["FINDING_PERF"] == "1"))
+enum FindingPerf {}
+
 func perf(_ name: String, _ value: Double, unit: String = "ms") {
     print("PERF \(name): \(String(format: "%.3f", value)) \(unit)")
 }
@@ -120,10 +127,11 @@ final class Host<V: View> {
     func close() { window.close() }
 }
 
+extension FindingPerf {
 // MARK: Search typing
 
 @MainActor
-@Suite(.serialized) struct SearchRequestTests {
+@Suite struct SearchRequestTests {
     /// Types like a fast typist (60 ms a key, faster than the debounce), with a trailing
     /// space and a backspace over a typo; the server takes 120 ms an answer.
     @Test func typingSendsOneRequestPerSettledQuery() async {
@@ -131,16 +139,24 @@ final class Host<V: View> {
         let controller = SearchController()
         let api = stub.api
         let keystrokes = ["r", "ry", "ryo", "ryok", "ryoka", "ryokan", "ryokan ", "ryokan g", "ryokan gi", "ryokan gix", "ryokan gi", "ryokan gio", "ryokan gion"]
+        var last = ContinuousClock.now
+        var longGaps = 0  // Pauses longer than the debounce (the test's sleeps can overshoot).
         for query in keystrokes {
+            let now = ContinuousClock.now
+            if now - last > .milliseconds(150) { longGaps += 1 }
+            last = now
             controller.update(query: query) { try await api.search($0) }
             try? await Task.sleep(for: .milliseconds(60))
         }
         await eventually { controller.resultsQuery == "ryokan gion" }
         try? await Task.sleep(for: .milliseconds(300))
+        let sent = stub.started.compactMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value }
+        print("PERF search.fastTyping.sent: \(sent) longGaps=\(longGaps)")
         perf("search.requests.fastTyping(13 keys)", count: stub.count("/api/unified-search"))
         perf("search.cancelled.fastTyping", count: stub.cancelledCount("/api/unified-search"))
         #expect(controller.results.count == 5)
-        #expect(stub.count("/api/unified-search") <= 2)  // "r" at once, then "ryokan gion".
+        // "r" at once, then "ryokan gion" (plus one per pause longer than the debounce).
+        #expect(stub.count("/api/unified-search") <= 2 + longGaps)
     }
 
     /// Slow typing (200 ms a key: every query settles) with a trailing space, a typo and
@@ -156,6 +172,8 @@ final class Host<V: View> {
         }
         await eventually { controller.resultsQuery == "kyoto" && !controller.isSearching }
         try? await Task.sleep(for: .milliseconds(400))
+        let sent = stub.started.compactMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value }
+        print("PERF search.slowTyping.sent: \(sent)")
         perf("search.requests.slowTyping(10 keys)", count: stub.count("/api/unified-search"))
         perf("search.cancelled.slowTyping", count: stub.cancelledCount("/api/unified-search"))
         #expect(controller.resultsQuery == "kyoto")
@@ -179,12 +197,14 @@ final class Host<V: View> {
 // MARK: Inspector: Seen before, related, backlinks, info
 
 @MainActor
-@Suite(.serialized) struct InspectorRequestTests {
+@Suite struct InspectorRequestTests {
     static func stub(latency: TimeInterval = 0.08) -> FindingStub {
         FindingStub { request in
             let url = request.url!
             let path = url.path()
             let block = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "block_id" }?.value
+            // The note "other" never answers in time: it is always left before it does.
+            let latency = path.contains("/other/") ? 30 : latency
             if path.hasSuffix("/related") { return .json(PerfData.related(block ?? "note"), delay: latency) }
             if path.hasSuffix("/backlinks") { return .json([Backlink](), delay: latency) }
             if path.hasSuffix("/info") { return Reply(delay: latency, body: FindingFixtures.info) }
@@ -245,7 +265,7 @@ final class Host<V: View> {
 // MARK: Ask streaming
 
 @MainActor
-@Suite(.serialized) struct AskStreamTests {
+@Suite struct AskStreamTests {
     /// The server finds sources (300 ms), then streams sentences 40 ms apart.
     @Test func timeToFirstSentence() async {
         let stub = FindingStub { _ in
@@ -331,7 +351,7 @@ final class Host<V: View> {
 // MARK: Search results list
 
 @MainActor
-@Suite(.serialized) struct SearchListPerfTests {
+@Suite struct SearchListPerfTests {
     @Test func hundredPassagesRenderAndMove() async {
         let stub = FindingStub { _ in .json([SearchMatch]()) }
         let model = AppModel(api: stub.api)
@@ -360,4 +380,5 @@ final class Host<V: View> {
         perf("searchList.selectionMove.median", moves.sorted()[moves.count / 2])
         perf("searchList.selectionMove.worst", moves.max() ?? 0)
     }
+}
 }

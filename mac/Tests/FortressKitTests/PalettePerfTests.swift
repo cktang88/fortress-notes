@@ -3,8 +3,9 @@ import Testing
 
 @testable import FortressKit
 
+extension FindingPerf {
 @MainActor
-@Suite(.serialized) struct PalettePerfTests {
+@Suite struct PalettePerfTests {
     static let queries = ["k", "ky", "kyo", "kyot", "kyoto", "kyoto ", "kyoto t", "kyoto tr", "trip kyo", "zq", "旅", "cafe"]
 
     /// What the palette does per keystroke with 5,000 notes (the view's whole body path).
@@ -27,4 +28,5 @@ import Testing
         perf("palette.keystroke.worst(5000 notes)", worst)
         perf("palette.keystroke.mean(5000 notes)", total / Double(Self.queries.count))
     }
+}
 }
