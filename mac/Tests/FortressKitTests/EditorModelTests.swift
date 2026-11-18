@@ -12,24 +12,22 @@ private typealias BlockOp = Core.BlockOperation
 // Block ↔ editor mapping, inline marks and the diff that turns edits into operations.
 
 private func node(
-    _ id: String, _ type: String, markdown: String? = nil, blocknote: JSONValue? = nil,
-    attrs: [String: JSONValue] = [:], children: [BlockNode] = [], extraContent: [String: JSONValue] = [:]
+    _ id: String, _ type: String, content: [JSONValue]? = nil, payload: JSONValue? = nil,
+    attrs: [String: JSONValue] = [:], children: [BlockNode] = []
 ) -> BlockNode {
-    var content = extraContent
-    if let markdown { content["markdown"] = .string(markdown) }
-    if let blocknote { content["blocknote"] = blocknote }
-    return BlockNode(
-        id: id, documentId: "doc", parentId: nil, position: 0, type: type, attrs: attrs,
-        userAttrs: [:], content: .object(content), text: markdown ?? "", createdAt: "", updatedAt: "",
-        children: children)
+    BlockNode(id: id, documentId: "doc", type: type, attrs: attrs, content: content.map(JSONValue.array) ?? .null,
+              payload: payload, children: children)
 }
 
-private func text(_ text: String, _ styles: [String: JSONValue] = [:]) -> JSONValue {
-    .object(["type": .string("text"), "text": .string(text), "styles": .object(styles)])
+private func text(_ text: String, _ marks: [String: JSONValue] = [:]) -> JSONValue {
+    var object: [String: JSONValue] = ["type": .string("text"), "text": .string(text)]
+    if !marks.isEmpty { object["marks"] = .object(marks) }
+    return .object(object)
 }
 
-/// Applies operations the way `backend/app/block_store.py` does (positions shift on
-/// insert/move/delete, delete removes the subtree), so the diff can be checked end to end.
+/// Applies operations the way `backend/app/block_store.py` does (placement after or
+/// before a sibling or at the end of a parent, attrs as a patch, delete removes the
+/// subtree), so the diff can be checked end to end.
 private struct ServerTree {
     var children: [String?: [String]] = [nil: []]
     var parent: [String: String?] = [:]
@@ -38,49 +36,56 @@ private struct ServerTree {
     init(_ tree: SyncedTree) {
         children = tree.children
         parent = tree.parent
-        fields = tree.fields
+        for id in tree.order { fields[id] = tree.fields(of: id) }
         if children[nil] == nil { children[nil] = [] }
     }
 
+    struct Rejected: Error { var reason: String }
+
+    /// (parent, index) for a placement.
+    func place(_ op: BlockOp, moving id: String? = nil) throws -> (String?, Int) {
+        if op.afterId != nil && op.beforeId != nil { throw Rejected(reason: "both after and before") }
+        if let anchor = op.afterId ?? op.beforeId {
+            guard anchor != id, let p = parent[anchor] else { throw Rejected(reason: "no anchor \(anchor)") }
+            if let given = op.parentId, given != p { throw Rejected(reason: "parent disagrees") }
+            let index = try #require(children[p]?.firstIndex(of: anchor))
+            return (p, op.afterId != nil ? index + 1 : index)
+        }
+        if let p = op.parentId, parent[p] == nil { throw Rejected(reason: "no parent \(p)") }
+        return (op.parentId, children[op.parentId]?.count ?? 0)
+    }
+
     mutating func apply(_ operations: [BlockOp]) throws {
-        struct Rejected: Error { var reason: String }
         for op in operations {
             switch op.operation {
             case .insert:
                 let id = try #require(op.blockId)
                 guard parent[id] == nil else { throw Rejected(reason: "exists \(id)") }
-                let p = op.parentId
-                if let p, parent[p] == nil { throw Rejected(reason: "no parent \(p)") }
-                var list = children[p] ?? []
-                let position = op.position ?? list.count
-                guard position <= list.count else { throw Rejected(reason: "gap at \(position)") }
-                list.insert(id, at: position)
-                children[p] = list
+                let (p, index) = try place(op)
+                children[p, default: []].insert(id, at: index)
                 children[id] = []
                 parent.updateValue(p, forKey: id)
-                fields[id] = BlockFields(type: op.type ?? "paragraph", attrs: op.attrs ?? [:], content: op.content ?? .object([:]), text: op.text ?? "")
+                fields[id] = BlockFields(type: try #require(op.type), attrs: op.attrs ?? [:], content: op.content ?? .null, payload: op.payload)
             case .move:
                 let id = try #require(op.blockId)
                 guard let old = parent[id] else { throw Rejected(reason: "missing \(id)") }
-                var cursor = op.parentId
+                children[old]?.removeAll { $0 == id }
+                let (p, index) = try place(op, moving: id)
+                var cursor = p
                 while let c = cursor {
                     if c == id { throw Rejected(reason: "cycle") }
                     cursor = parent[c] ?? nil
                 }
-                children[old]?.removeAll { $0 == id }
-                var list = children[op.parentId] ?? []
-                let position = op.position ?? list.count
-                guard position <= list.count else { throw Rejected(reason: "gap") }
-                list.insert(id, at: position)
-                children[op.parentId] = list
-                parent.updateValue(op.parentId, forKey: id)
+                children[p, default: []].insert(id, at: index)
+                parent.updateValue(p, forKey: id)
             case .update:
                 let id = try #require(op.blockId)
                 guard var current = fields[id] else { throw Rejected(reason: "missing \(id)") }
+                guard op.type != nil || op.attrs != nil || op.content != nil || op.payload != nil else { throw Rejected(reason: "empty update") }
                 if let type = op.type { current.type = type }
-                if let attrs = op.attrs { current.attrs = attrs }
+                for (key, value) in op.attrs ?? [:] { current.attrs[key] = value == .null ? nil : value }
                 if let content = op.content { current.content = content }
-                if let text = op.text { current.text = text }
+                if let payload = op.payload { current.payload = payload == .null ? nil : payload }
                 fields[id] = current
             case .delete:
                 let id = try #require(op.blockId)
@@ -93,8 +98,6 @@ private struct ServerTree {
                     fields[id] = nil
                 }
                 remove(id)
-            default:
-                throw Rejected(reason: "unexpected \(op.operation)")
             }
         }
     }
@@ -113,17 +116,19 @@ private struct ServerTree {
     }
 }
 
-private func expected(_ blocks: [EditorBlock]) -> [String] {
-    BlockDiff.shape(blocks).map { "\($0.block.id)<\($0.parent ?? "-")" }
-}
-
 private func check(_ base: [EditorBlock], _ target: [EditorBlock]) throws -> [BlockOp] {
     let tree = SyncedTree(base)
     let (operations, result) = BlockDiff.operations(from: tree, to: target)
     var server = ServerTree(tree)
     try server.apply(operations)
-    #expect(server.flattened() == expected(target))
-    #expect(server.fields == result.fields)
+    #expect(server.flattened() == ServerTree(result).flattened())
+    #expect(server.fields == ServerTree(result).fields)
+    // Every block sits under the parent its depth gives it (a quote line under its
+    // container, which sits there).
+    for item in BlockDiff.shape(target) {
+        let parent = result.parent[item.block.id] ?? nil
+        #expect((item.block.kind == .quote ? parent.flatMap { result.parent[$0] ?? nil } : parent) == item.parent)
+    }
     return operations
 }
 
@@ -134,117 +139,108 @@ private func para(_ id: String, _ text: String, depth: Int = 0, kind: BlockKind 
 }
 
 @Suite struct BlockMappingTests {
-    @Test func decodesImportedMarkdownBlocks() {
+    @Test func decodesCanonicalBlocks() {
         let blocks = BlockCodec.flatten([
-            node("h", "heading", markdown: "## Plan"),
-            node("l", "list", markdown: "- [x] Buy **JR** pass", attrs: ["checked": .bool(true)], children: [
-                node("n", "list", markdown: "1. nested", attrs: ["ordered": .bool(true)]),
+            node("h", "heading", content: [text("Plan")], attrs: ["level": .number(5)]),
+            node("l", "check_item", content: [text("Buy "), text("JR", ["bold": .bool(true)]), text(" pass")], attrs: ["checked": .bool(true)], children: [
+                node("n", "numbered_item", content: [text("nested")]),
             ]),
-            node("q", "quote", markdown: "> quoted\n> twice"),
-            node("c", "code", markdown: "```swift\nlet a = 1\n```", attrs: ["language": .string("swift")]),
-            node("i", "paragraph", markdown: "![Kyoto](/media/abc.png)"),
-            node("t", "thematic_break", markdown: "---"),
-            node("r", "raw", markdown: "<table></table>"),
+            node("q", "quote", children: [node("q1", "paragraph", content: [text("quoted")]), node("q2", "paragraph", content: [text("twice")])]),
+            node("c", "code", content: [text("let a = 1\nlet b = 2")], attrs: ["language": .string("swift")]),
+            node("i", "image", attrs: ["url": .string("/media/abc.png")]),
+            node("t", "divider"),
+            node("m", "math", payload: .object(["latex": .string("x^2")])),
+            node("r", "html", payload: .object(["html": .string("<b>x</b>")])),
+            node("u", "something_newer", content: [text("future")]),
         ])
-        #expect(blocks.map(\.kind) == [.heading2, .check, .numbered, .quote, .code, .image, .divider, .embed])
-        #expect(blocks.map(\.depth) == [0, 0, 1, 0, 0, 0, 0, 0])
+        #expect(blocks.map(\.kind) == [.heading5, .check, .numbered, .quote, .quote, .code, .image, .divider, .math, .embed, .embed])
+        #expect(blocks.map(\.depth) == [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
         #expect(blocks[0].plainText == "Plan")
         #expect(blocks[1].checked)
         #expect(blocks[1].runs == [InlineRun("Buy "), InlineRun("JR", InlineMarks(bold: true)), InlineRun(" pass")])
-        #expect(blocks[3].plainText == "quoted\ntwice")
-        #expect(blocks[4].plainText == "let a = 1")
-        #expect(blocks[4].language == "swift")
+        #expect(blocks[3].container == QuoteContainer(id: "q"))
+        #expect(blocks[3].id == "q1" && blocks[4].id == "q2")
+        #expect(blocks[5].plainText == "let a = 1\nlet b = 2")
+        #expect(blocks[5].language == "swift")
+        #expect(blocks[8].origin?.payload?["latex"] == .string("x^2"))
     }
 
-    @Test func decodesBlockNoteInlineMarksAndLinks() {
-        let content: JSONValue = .array([
-            text("Hello ", ["bold": .bool(true), "textColor": .string("red"), "fontSize": .string("12px")]),
+    @Test func headingLevelsAreNeverClamped() {
+        for level in 1...6 {
+            let block = BlockCodec.decode(node("h", "heading", content: [text("x")], attrs: ["level": .number(Double(level))]))
+            #expect(block.kind.headingLevel == level)
+            #expect(BlockCodec.encode(block).attrs["level"] == .number(Double(level)))
+        }
+    }
+
+    @Test func decodesInlineMarksLinksAndNoteLinks() {
+        let content: [JSONValue] = [
+            text("Hello ", ["bold": .bool(true), "color": .string("red")]),
             .object(["type": .string("link"), "href": .string("https://example.com"), "content": .array([text("site", ["italic": .bool(true)])])]),
             text(" and "),
-            .object(["type": .string("link"), "href": .string("[[N1|Packing list]]"), "content": .array([text("Packing list")])]),
-            .object(["type": .string("mention"), "user": .string("me")]),
-            text(" ", ["backgroundColor": .string("yellow"), "underline": .bool(true), "strike": .bool(true), "code": .bool(true)]),
-        ])
-        let block = BlockCodec.decode(node("p", "paragraph", blocknote: content))
+            .object(["type": .string("docLink"), "id": .string("N1")]),
+            .object(["type": .string("blockRef"), "id": .string("B1")]),
+            text(" ", ["highlight": .string("yellow"), "underline": .bool(true), "strike": .bool(true), "code": .bool(true)]),
+        ]
+        let block = BlockCodec.decode(node("p", "paragraph", content: content))
         #expect(block.runs.count == 6)
-        #expect(block.runs[0].marks == InlineMarks(bold: true, textColor: "red", extraStyles: ["fontSize": .string("12px")]))
+        #expect(block.runs[0].marks == InlineMarks(bold: true, textColor: "red"))
         #expect(block.runs[1].marks == InlineMarks(italic: true, link: "https://example.com"))
-        #expect(block.runs[3].marks.link == "[[N1|Packing list]]")
-        #expect(block.runs[4].node != nil)
+        #expect(block.runs[3].node.flatMap(NoteLinks.documentTarget) == "N1")
+        #expect(block.runs[4].node.flatMap(NoteLinks.blockTarget) == "B1")
         #expect(block.runs[5].marks == InlineMarks(underline: true, strike: true, code: true, highlight: "yellow"))
+        let resolved = ResolvedLinks(documents: ["N1": .init(title: "Packing list")], blocks: ["B1": .init(text: "a block")])
+        #expect(BlockCodec.plainText(block.runs, resolved: resolved) == "Hello site and Packing lista block ")
     }
 
-    @Test func roundTripsBlockNoteContentExactly() {
-        let content: JSONValue = .array([
-            text("Hello ", ["bold": .bool(true), "textColor": .string("red"), "fontSize": .string("12px")]),
-            .object(["type": .string("link"), "href": .string("https://example.com"), "content": .array([text("site", ["italic": .bool(true)])])]),
-            .object(["type": .string("mention"), "user": .string("me")]),
-            text("line\nbreak"),
-        ])
-        let original = node("p", "paragraph", blocknote: content, attrs: ["textAlignment": .string("left"), "provenance": .object(["source": .string("onenote")])], extraContent: ["future": .bool(true)])
+    @Test func roundTripsCanonicalContentExactly() {
+        let content: [JSONValue] = [
+            text("Hello ", ["bold": .bool(true), "color": .string("red")]),
+            .object(["type": .string("link"), "href": .string("https://example.com"), "content": .array([text("site", ["italic": .bool(true)]), text("!")])]),
+            .object(["type": .string("docLink"), "id": .string("N1")]),
+            text("line\nbreak", ["sup": .bool(true)]),
+        ]
+        let original = node("p", "paragraph", content: content, attrs: ["onenote_tags": .array([.string("todo")])])
         let block = BlockCodec.decode(original)
         let fields = BlockCodec.encode(block)
-        #expect(fields.type == "paragraph")
-        #expect(fields.attrs == original.attrs)
-        #expect(fields.content["blocknote"] == content)
-        #expect(fields.content["future"] == .bool(true))
-        #expect(fields.text == "Hello siteline\nbreak")
+        #expect(fields == BlockFields(original))
     }
 
     @Test func keepsUnknownBlocksVerbatim() {
-        let table: JSONValue = .object(["type": .string("tableContent"), "rows": .array([])])
-        let original = node("t", "table", blocknote: table, attrs: ["x": .number(1)], children: [node("c", "paragraph", markdown: "inside")])
+        let original = node("t", "something_newer", content: [text("x")], attrs: ["x": .number(1)], children: [node("c", "paragraph", content: [text("inside")])])
         let blocks = BlockCodec.flatten([original])
         #expect(blocks.count == 1)
         #expect(blocks[0].kind == .embed)
         #expect(blocks[0].origin?.children.count == 1)
-        let fields = BlockCodec.encode(blocks[0])
-        #expect(fields.type == "table")
-        #expect(fields.content == original.content)
-        #expect(fields.attrs == original.attrs)
+        #expect(BlockCodec.encode(blocks[0]) == BlockFields(original))
+        let (operations, _) = BlockDiff.operations(from: SyncedTree(blocks), to: blocks)
+        #expect(operations.isEmpty)
     }
 
-    @Test func convertingKindWritesBlockNoteTypes() {
-        var block = BlockCodec.decode(node("l", "list", markdown: "- [ ] task", attrs: ["checked": .bool(false)]))
+    @Test func quotesHoldingMoreThanLinesAreShownAsTheyAre() {
+        let quote = node("q", "quote", children: [node("p", "paragraph", content: [text("a")]), node("l", "bullet_item", content: [text("b")])])
+        let blocks = BlockCodec.flatten([quote])
+        #expect(blocks.map(\.kind) == [.embed])
+        #expect(blocks[0].origin?.children.count == 2)
+    }
+
+    @Test func convertingKindWritesCanonicalTypes() {
+        var block = BlockCodec.decode(node("l", "check_item", content: [text("task")], attrs: ["checked": .bool(false), "onenote_tags": .bool(true)]))
         block.checked = true
         var fields = BlockCodec.encode(block)
-        #expect(fields.type == "checkListItem")
-        #expect(fields.attrs["checked"] == .bool(true))
-        #expect(fields.content["markdown"] == .string("- [x] task"))
+        #expect(fields.type == "check_item")
+        #expect(fields.attrs == ["checked": .bool(true), "onenote_tags": .bool(true)])
         block.kind = .heading2
         fields = BlockCodec.encode(block)
         #expect(fields.type == "heading")
-        #expect(fields.attrs["level"] == .number(2))
-        #expect(fields.attrs["checked"] == nil)
-    }
-
-    @Test func rendersMarkdownMirror() {
-        let runs = [
-            InlineRun("a "), InlineRun("bold", InlineMarks(bold: true)), InlineRun(" "),
-            InlineRun("link", InlineMarks(link: "https://x.y")), InlineRun(" "),
-            InlineRun("Note", InlineMarks(link: "[[N1|Note]]")), InlineRun(" "),
-            InlineRun("x", InlineMarks(code: true)),
-        ]
-        #expect(InlineMarkdown.render(runs) == "a **bold** [link](https://x.y) [[N1|Note]] `x`")
-        #expect(InlineMarkdown.parse("a **bold** [link](https://x.y) [[N1|Note]] `x`") == BlockCodec.normalized(runs))
-    }
-
-    @Test func parsesEmphasisVariants() {
-        #expect(InlineMarkdown.parse("*it* and _it_ and snake_case ~~gone~~") == [
-            InlineRun("it", InlineMarks(italic: true)), InlineRun(" and "),
-            InlineRun("it", InlineMarks(italic: true)), InlineRun(" and snake_case "),
-            InlineRun("gone", InlineMarks(strike: true)),
-        ])
-        #expect(InlineMarkdown.parse("2 * 3 * 4") == [InlineRun("2 * 3 * 4")])
-        #expect(InlineMarkdown.parse(#"not \*em\*"#) == [InlineRun("not *em*")])
-    }
-
-    @Test func noteLinkFormatMatchesBackend() {
-        #expect(InlineMarkdown.documentLinkHref(id: "01ABC", title: "A | b]") == "[[01ABC|A b]]")
-        #expect(InlineMarkdown.documentLinkTarget("[[01ABC|Kyoto trip]]")?.id == "01ABC")
-        #expect(InlineMarkdown.blockReferenceTarget("(( 01XYZ \"label\" ))")?.id == "01XYZ")
-        let runs = InlineMarkdown.parse("See [[01M7|Packing list]].")
-        #expect(runs[1] == InlineRun("Packing list", InlineMarks(link: "[[01M7|Packing list]]")))
+        #expect(fields.attrs == ["level": .number(2), "onenote_tags": .bool(true)])
+        block.kind = .bullet
+        #expect(BlockCodec.encode(block).type == "bullet_item")
+        block.kind = .numbered
+        #expect(BlockCodec.encode(block).type == "numbered_item")
+        block.kind = .code
+        block.runs = [InlineRun("x", InlineMarks(bold: true))]
+        #expect(BlockCodec.encode(block).content == .array([text("x")]))
     }
 
     @Test func autoTitleMatchesBackendRule() {
@@ -275,17 +271,60 @@ private func para(_ id: String, _ text: String, depth: Int = 0, kind: BlockKind 
         #expect(operations.count == 1)
         #expect(operations[0].operation == .update)
         #expect(operations[0].blockId == "a")
-        #expect(operations[0].text == "Alpha!")
+        #expect(operations[0].content == .array([text("Alpha!")]))
+        #expect(operations[0].type == nil && operations[0].attrs == nil)
     }
 
-    @Test func splitInsertsAfterWithPosition() throws {
+    @Test func splitInsertsAfterTheBlockBefore() throws {
         var target = base
         target[0].runs = [InlineRun("Al")]
         target.insert(para("new", "pha"), at: 1)
         let operations: [BlockOp] = try check(base, target)
         #expect(kinds(operations) == [BlockOperationKind.update, .insert])
-        #expect(operations[1].position == 1)
-        #expect(operations[1].parentId == nil)
+        #expect(operations[1].afterId == "a")
+        #expect(operations[1].parentId == nil && operations[1].beforeId == nil)
+        // A new first block goes before the old first one; a first child is appended.
+        let first: [BlockOp] = try check(base, [para("top", "Top")] + base)
+        #expect(first.first?.beforeId == "a")
+        var child = base
+        child.insert(para("kid", "kid", depth: 1), at: 1)
+        let appended: [BlockOp] = try check(base, child)
+        #expect(appended.first?.parentId == "a" && appended.first?.afterId == nil)
+    }
+
+    @Test func kindChangesAreTypeAndAttrsPatches() throws {
+        var target = base
+        target[0].kind = .heading4
+        var operations: [BlockOp] = try check(base, target)
+        #expect(operations.count == 1)
+        #expect(operations[0].type == "heading" && operations[0].attrs == ["level": .number(4)] && operations[0].content == nil)
+        let heading = target
+        target[0].kind = .paragraph
+        operations = try check(heading, target)
+        #expect(operations[0].type == "paragraph" && operations[0].attrs == ["level": .null])
+    }
+
+    @Test func crossCategoryChangeIsDeleteAndInsert() throws {
+        var target = base
+        target[4].kind = .divider
+        target[4].runs = []
+        let operations: [BlockOp] = try check(base, target)
+        #expect(kinds(operations) == [BlockOperationKind.delete, .insert])
+        #expect(operations[1].blockId == "c" && operations[1].type == "divider")
+    }
+
+    @Test func quoteLinesShareTheirContainer() throws {
+        let quoted = [para("a", "Alpha"), para("q1", "one", kind: .quote), para("q2", "two", kind: .quote), para("c", "Charlie")]
+        let operations: [BlockOp] = try check(base.filter { $0.depth == 0 }, quoted)
+        let container = try #require(operations.first { $0.type == "quote" })
+        #expect(operations.filter { $0.blockId == "q1" || $0.blockId == "q2" }.allSatisfy { $0.parentId == container.blockId || $0.afterId == "q1" })
+        // The same lines give the same container in the next diff (nothing to send).
+        #expect(try check(quoted, quoted).isEmpty)
+        // A line that stops being a quote leaves the container.
+        var unquoted = quoted
+        unquoted[2].kind = .paragraph
+        let moves: [BlockOp] = try check(quoted, unquoted)
+        #expect(kinds(moves) == [BlockOperationKind.move])
     }
 
     @Test func mergeUpdatesAndDeletes() throws {
@@ -308,7 +347,7 @@ private func para(_ id: String, _ text: String, depth: Int = 0, kind: BlockKind 
         outdented[3].depth = 0
         let operations: [BlockOp] = try check(base, outdented)
         #expect(kinds(operations).allSatisfy { $0 == BlockOperationKind.move })
-        #expect(operations.first?.parentId == nil)
+        #expect(operations.first?.afterId == "b")
     }
 
     @Test func deletingParentKeepsSurvivingChildren() throws {
@@ -317,7 +356,8 @@ private func para(_ id: String, _ text: String, depth: Int = 0, kind: BlockKind 
         let operations: [BlockOp] = try check(base, target)
         let moves = operations.filter { $0.operation == BlockOperationKind.move }
         #expect(operations.last?.operation == BlockOperationKind.delete)
-        #expect(moves.filter { $0.blockId?.hasPrefix("b") == true }.allSatisfy { $0.parentId == "a" })
+        #expect(moves.first { $0.blockId == "b1" }?.parentId == "a")
+        #expect(moves.first { $0.blockId == "b2" }?.afterId == "b1")
     }
 
     @Test func reorderingAndWholesaleChanges() throws {
@@ -328,7 +368,7 @@ private func para(_ id: String, _ text: String, depth: Int = 0, kind: BlockKind 
     }
 
     @Test func nothingNestsUnderAnEmbed() {
-        let embed = EditorBlock(id: "e", kind: .embed, origin: BlockOrigin(type: "table", kind: .embed, native: true))
+        let embed = EditorBlock(id: "e", kind: .embed, origin: BlockOrigin(type: "html", kind: .embed))
         let shaped = BlockDiff.shape([embed, para("p", "after", depth: 1)])
         #expect(shaped[1].parent == nil)
     }
@@ -342,11 +382,14 @@ private func para(_ id: String, _ text: String, depth: Int = 0, kind: BlockKind 
             current = BlockDiff.shape(current).map(\.block)
             var target = current
             for step in 0..<Int.random(in: 1...6, using: &generator) {
-                switch Int.random(in: 0...4, using: &generator) {
+                switch Int.random(in: 0...5, using: &generator) {
                 case 0: target.insert(para("n\(step)", "new", depth: Int.random(in: 0...3, using: &generator)), at: Int.random(in: 0...target.count, using: &generator))
                 case 1 where target.count > 1: target.remove(at: Int.random(in: 0..<target.count, using: &generator))
                 case 2: let i = Int.random(in: 0..<target.count, using: &generator); target[i].depth = Int.random(in: 0...3, using: &generator)
                 case 3: let i = Int.random(in: 0..<target.count, using: &generator); target[i].runs = [InlineRun("edited \(step)")]
+                case 4:
+                    let i = Int.random(in: 0..<target.count, using: &generator)
+                    target[i].kind = [.quote, .paragraph, .heading3, .bullet][Int.random(in: 0...3, using: &generator)]
                 default:
                     let i = Int.random(in: 0..<target.count, using: &generator)
                     let moved = target.remove(at: i)

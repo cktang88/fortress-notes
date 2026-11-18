@@ -104,6 +104,59 @@ struct IntegrationTests {
         #expect(counts["after"]! == 1)
     }
 
+    /// The editor's operations against the real server (docs/block-model.md): a note
+    /// written block by block (marks, a level-5 heading, a quote, code, a table), then
+    /// edited (a cell, a new row, a quote line out of its quote, a paragraph that becomes
+    /// a divider), reads back as exactly what the editor holds, every time.
+    @Test func editorOperationsRoundTripThroughTheServer() async throws {
+        let api = client(APIStore.Options.uncached)
+        var document = try await api.createDocument(title: "Block model round trip")
+        var base = SyncedTree(BlockCodec.flatten(document.children))
+        var blocks = [
+            EditorBlock(kind: .paragraph, runs: [InlineRun("Plain, "), InlineRun("bold", InlineMarks(bold: true)),
+                                                 InlineRun(" and a "), InlineRun("link", InlineMarks(link: "https://example.com"))]),
+            EditorBlock(kind: .heading5, runs: [InlineRun("Fifth level")]),
+            EditorBlock(kind: .bullet, runs: [InlineRun("item")]),
+            EditorBlock(kind: .check, depth: 1, checked: true, runs: [InlineRun("done")]),
+            EditorBlock(kind: .quote, runs: [InlineRun("quoted one")]),
+            EditorBlock(kind: .quote, runs: [InlineRun("quoted two")]),
+            EditorBlock(kind: .code, language: "swift", runs: [InlineRun("let x = 1\u{2028}print(x)")]),
+            EditorBlock(kind: .table, table: {
+                var table = TableContent.blank(rows: 2, columns: 2)
+                table.setRuns([InlineRun("A")], row: 0, column: 0)
+                table.setRuns([InlineRun("1", InlineMarks(italic: true))], row: 1, column: 1)
+                return table
+            }()),
+            EditorBlock(kind: .paragraph, runs: [InlineRun("Last")]),
+        ]
+        func save() async throws {
+            let (operations, _) = BlockDiff.operations(from: base, to: blocks)
+            try #require(!operations.isEmpty)
+            document = try await api.apply(BlockTransaction(baseRevision: document.revision, operations: operations), to: document.id)
+            let reloaded = BlockCodec.flatten(document.children, resolved: document.resolvedLinks)
+            base = SyncedTree(reloaded)
+            let left = BlockDiff.operations(from: base, to: blocks).operations
+            #expect(left.isEmpty, "not what the editor holds: \(left.map { "\($0.operation) \($0.type ?? "") \($0.blockId ?? "")" })")
+            #expect(reloaded.map(\.kind) == BlockDiff.shape(blocks).map(\.block.kind))
+            blocks = reloaded
+        }
+        try await save()
+        #expect(document.children.contains { $0.type == "quote" && $0.children.count == 2 })
+        #expect(document.children.contains { $0.type == "heading" && $0.attrs["level"] == .number(5) })
+
+        let table = try #require(blocks.firstIndex { $0.kind == .table })
+        blocks[table].table?.setRuns([InlineRun("B")], row: 0, column: 1)
+        blocks[table].table?.insertRow(at: 2)
+        blocks[table].table?.setRuns([InlineRun("new row")], row: 2, column: 0)
+        let quote = try #require(blocks.lastIndex { $0.kind == .quote })
+        blocks[quote].kind = .paragraph
+        blocks[blocks.count - 1].kind = .divider
+        blocks[blocks.count - 1].runs = []
+        blocks[blocks.count - 1].origin = nil
+        try await save()
+        try await api.trashDocument(id: document.id)
+    }
+
     /// Rename then reopen: the save's answer is the note, so reopening is free.
     @Test func saveThenReopen() async throws {
         var counts: [String: Int] = [:]

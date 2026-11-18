@@ -1,590 +1,1111 @@
 {
- "id": "01M7RICHDOC000000000000000",
- "title": "Kyoto trip",
- "status": "polished",
- "tags": [],
- "created_at": "2026-03-02T09:00:00+00:00",
- "updated_at": "2026-11-16T09:00:00+00:00",
- "revision": 12,
- "title_auto": false,
- "can_undo": false,
- "can_redo": false,
- "children": [
-  {
-   "id": "01M7RICH000000000000000001",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "paragraph",
-   "attrs": {},
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Three slow days in Kyoto, mostly on foot. The plan is loose on purpose: ",
-      "styles": {}
-     },
-     {
-      "type": "text",
-      "text": "one temple a morning",
-      "styles": {
-       "bold": true
+  "id": "01M7RICHDOC000000000000000",
+  "title": "Kyoto trip",
+  "status": "polished",
+  "created_at": "2026-03-02T09:00:00+00:00",
+  "updated_at": "2026-11-16T09:00:00+00:00",
+  "revision": 12,
+  "title_auto": false,
+  "can_undo": false,
+  "can_redo": false,
+  "provenance": {
+    "source": "manual"
+  },
+  "resolved_links": {
+    "documents": {
+      "01M7NZXNENK5XG14881ZB8R42Q": {
+        "title": "Packing list"
       }
-     },
-     {
-      "type": "text",
-      "text": ", long lunches, and the rest of the time for ",
-      "styles": {}
-     },
-     {
-      "type": "text",
-      "text": "wandering",
-      "styles": {
-       "italic": true
-      }
-     },
-     {
-      "type": "text",
-      "text": ".",
-      "styles": {}
-     }
-    ]
-   },
-   "text": "Three slow days in Kyoto, mostly on foot. The plan is loose on purpose: one temple a morning, long lunches, and the rest of the time for wandering.",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
+    },
+    "blocks": {}
   },
-  {
-   "id": "01M7RICH000000000000000002",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "heading",
-   "attrs": {
-    "level": 2
-   },
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Before we go",
-      "styles": {}
-     }
-    ]
-   },
-   "text": "Before we go",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000003",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "checkListItem",
-   "attrs": {
-    "checked": true
-   },
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Book the ryokan in Gion",
-      "styles": {}
-     }
-    ]
-   },
-   "text": "Book the ryokan in Gion",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000004",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "checkListItem",
-   "attrs": {
-    "checked": false
-   },
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Buy a 7-day JR pass",
-      "styles": {}
-     }
-    ]
-   },
-   "text": "Buy a 7-day JR pass",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000005",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "checkListItem",
-   "attrs": {
-    "checked": false
-   },
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Print the ",
-      "styles": {}
-     },
-     {
-      "type": "link",
-      "href": "[[01M7NZXNENK5XG14881ZB8R42Q|Packing list]]",
-      "content": [
-       {
-        "type": "text",
-        "text": "Packing list",
-        "styles": {}
-       }
-      ]
-     },
-     {
-      "type": "text",
-      "text": " and check the weather",
-      "styles": {}
-     }
-    ]
-   },
-   "text": "Print the Packing list and check the weather",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000006",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "heading",
-   "attrs": {
-    "level": 2
-   },
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Days",
-      "styles": {}
-     }
-    ]
-   },
-   "text": "Days",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000009",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "numberedListItem",
-   "attrs": {},
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Fushimi Inari at dawn, before the crowds",
-      "styles": {}
-     }
-    ]
-   },
-   "text": "Fushimi Inari at dawn, before the crowds",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": [
+  "children": [
     {
-     "id": "01M7RICH000000000000000007",
-     "document_id": "01M7RICHDOC000000000000000",
-     "parent_id": null,
-     "position": 0,
-     "type": "bulletListItem",
-     "attrs": {},
-     "user_attrs": {},
-     "content": {
-      "blocknote": [
-       {
-        "type": "text",
-        "text": "Take the ",
-        "styles": {}
-       },
-       {
-        "type": "text",
-        "text": "JR Nara line",
-        "styles": {
-         "code": true
+      "id": "01M7RICH000000000000000001",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a0",
+      "position": 0,
+      "type": "paragraph",
+      "attrs": {},
+      "content": [
+        {
+          "type": "text",
+          "text": "Three slow days in Kyoto, mostly on foot. The plan is loose on purpose: "
+        },
+        {
+          "type": "text",
+          "text": "one temple a morning",
+          "marks": {
+            "bold": true
+          }
+        },
+        {
+          "type": "text",
+          "text": ", long lunches, and the rest of the time for "
+        },
+        {
+          "type": "text",
+          "text": "wandering",
+          "marks": {
+            "italic": true
+          }
+        },
+        {
+          "type": "text",
+          "text": "."
         }
-       },
-       {
-        "type": "text",
-        "text": " two stops from Kyoto Station",
-        "styles": {}
-       }
-      ]
-     },
-     "text": "Take the JR Nara line two stops from Kyoto Station",
-     "created_at": "2026-03-02T09:00:00+00:00",
-     "updated_at": "2026-11-16T09:00:00+00:00",
-     "children": []
+      ],
+      "payload": null,
+      "text": "Three slow days in Kyoto, mostly on foot. The plan is loose on purpose: one temple a morning, long lunches, and the rest of the time for wandering.",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
     },
     {
-     "id": "01M7RICH000000000000000008",
-     "document_id": "01M7RICHDOC000000000000000",
-     "parent_id": null,
-     "position": 0,
-     "type": "bulletListItem",
-     "attrs": {},
-     "user_attrs": {},
-     "content": {
-      "blocknote": [
-       {
-        "type": "text",
-        "text": "The upper trail is quiet after the Yotsutsuji crossing",
-        "styles": {
-         "textColor": "gray"
-        }
-       }
-      ]
-     },
-     "text": "The upper trail is quiet after the Yotsutsuji crossing",
-     "created_at": "2026-03-02T09:00:00+00:00",
-     "updated_at": "2026-11-16T09:00:00+00:00",
-     "children": []
-    }
-   ]
-  },
-  {
-   "id": "01M7RICH000000000000000010",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "numberedListItem",
-   "attrs": {},
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Arashiyama bamboo grove, then the ",
-      "styles": {}
-     },
-     {
-      "type": "text",
-      "text": "Okochi Sanso villa",
-      "styles": {
-       "backgroundColor": "yellow"
-      }
-     }
-    ]
-   },
-   "text": "Arashiyama bamboo grove, then the Okochi Sanso villa",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000011",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "numberedListItem",
-   "attrs": {},
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Philosopher's Path, coffee at ",
-      "styles": {}
-     },
-     {
-      "type": "link",
-      "href": "https://example.com/weekenders",
+      "id": "01M7RICH000000000000000002",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a1",
+      "position": 1,
+      "type": "heading",
+      "attrs": {
+        "level": 2
+      },
       "content": [
-       {
-        "type": "text",
-        "text": "Weekenders",
-        "styles": {}
-       }
+        {
+          "type": "text",
+          "text": "Before we go"
+        }
+      ],
+      "payload": null,
+      "text": "Before we go",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000003",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a2",
+      "position": 2,
+      "type": "check_item",
+      "attrs": {
+        "checked": true
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Book the ryokan in Gion"
+        }
+      ],
+      "payload": null,
+      "text": "Book the ryokan in Gion",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000004",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a3",
+      "position": 3,
+      "type": "check_item",
+      "attrs": {
+        "checked": false
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Buy a 7-day JR pass"
+        }
+      ],
+      "payload": null,
+      "text": "Buy a 7-day JR pass",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000005",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a4",
+      "position": 4,
+      "type": "check_item",
+      "attrs": {
+        "checked": false
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Print the "
+        },
+        {
+          "type": "docLink",
+          "id": "01M7NZXNENK5XG14881ZB8R42Q"
+        },
+        {
+          "type": "text",
+          "text": " and check the weather"
+        }
+      ],
+      "payload": null,
+      "text": "Print the Packing list and check the weather",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000006",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a5",
+      "position": 5,
+      "type": "heading",
+      "attrs": {
+        "level": 2
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Days"
+        }
+      ],
+      "payload": null,
+      "text": "Days",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000009",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a6",
+      "position": 6,
+      "type": "numbered_item",
+      "attrs": {},
+      "content": [
+        {
+          "type": "text",
+          "text": "Fushimi Inari at dawn, before the crowds"
+        }
+      ],
+      "payload": null,
+      "text": "Fushimi Inari at dawn, before the crowds",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": [
+        {
+          "id": "01M7RICH000000000000000007",
+          "document_id": "01M7RICHDOC000000000000000",
+          "parent_id": "01M7RICH000000000000000009",
+          "order": "a0",
+          "position": 0,
+          "type": "bullet_item",
+          "attrs": {},
+          "content": [
+            {
+              "type": "text",
+              "text": "Take the "
+            },
+            {
+              "type": "text",
+              "text": "JR Nara line",
+              "marks": {
+                "code": true
+              }
+            },
+            {
+              "type": "text",
+              "text": " two stops from Kyoto Station"
+            }
+          ],
+          "payload": null,
+          "text": "Take the JR Nara line two stops from Kyoto Station",
+          "user_attrs": {},
+          "provenance": {
+            "source": "manual",
+            "inherited": true
+          },
+          "revision": null,
+          "created_at": "2026-03-02T09:00:00+00:00",
+          "updated_at": "2026-11-16T09:00:00+00:00",
+          "children": []
+        },
+        {
+          "id": "01M7RICH000000000000000008",
+          "document_id": "01M7RICHDOC000000000000000",
+          "parent_id": "01M7RICH000000000000000009",
+          "order": "a1",
+          "position": 1,
+          "type": "bullet_item",
+          "attrs": {},
+          "content": [
+            {
+              "type": "text",
+              "text": "The upper trail is quiet after the Yotsutsuji crossing",
+              "marks": {
+                "color": "gray"
+              }
+            }
+          ],
+          "payload": null,
+          "text": "The upper trail is quiet after the Yotsutsuji crossing",
+          "user_attrs": {},
+          "provenance": {
+            "source": "manual",
+            "inherited": true
+          },
+          "revision": null,
+          "created_at": "2026-03-02T09:00:00+00:00",
+          "updated_at": "2026-11-16T09:00:00+00:00",
+          "children": []
+        }
       ]
-     }
-    ]
-   },
-   "text": "Philosopher's Path, coffee at Weekenders",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000012",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "image",
-   "attrs": {
-    "url": "FIXTURE_IMAGE",
-    "name": "Higashiyama at dusk",
-    "previewWidth": 640
-   },
-   "user_attrs": {},
-   "content": {},
-   "text": "",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000013",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "quote",
-   "attrs": {},
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "The best plan for Kyoto is the one you are willing to abandon.",
-      "styles": {
-       "italic": true
-      }
-     }
-    ]
-   },
-   "text": "The best plan for Kyoto is the one you are willing to abandon.",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000014",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "codeBlock",
-   "attrs": {
-    "language": "text"
-   },
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
+    },
+    {
+      "id": "01M7RICH000000000000000010",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a7",
+      "position": 7,
+      "type": "numbered_item",
+      "attrs": {},
+      "content": [
+        {
+          "type": "text",
+          "text": "Arashiyama bamboo grove, then the "
+        },
+        {
+          "type": "text",
+          "text": "Okochi Sanso villa",
+          "marks": {
+            "highlight": "yellow"
+          }
+        }
+      ],
+      "payload": null,
+      "text": "Arashiyama bamboo grove, then the Okochi Sanso villa",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000011",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a8",
+      "position": 8,
+      "type": "numbered_item",
+      "attrs": {},
+      "content": [
+        {
+          "type": "text",
+          "text": "Philosopher's Path, coffee at "
+        },
+        {
+          "type": "link",
+          "href": "https://example.com/weekenders",
+          "content": [
+            {
+              "type": "text",
+              "text": "Weekenders"
+            }
+          ]
+        }
+      ],
+      "payload": null,
+      "text": "Philosopher's Path, coffee at Weekenders",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000012",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "a9",
+      "position": 9,
+      "type": "image",
+      "attrs": {
+        "url": "FIXTURE_IMAGE",
+        "name": "Higashiyama at dusk",
+        "width": 640
+      },
+      "content": null,
+      "payload": null,
+      "text": "",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000013",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "aA",
+      "position": 10,
+      "type": "quote",
+      "attrs": {},
+      "content": null,
+      "payload": null,
+      "text": "",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": [
+        {
+          "id": "01M7PN9DJETH0MA9DZTD47TESN",
+          "document_id": "01M7RICHDOC000000000000000",
+          "parent_id": "01M7RICH000000000000000013",
+          "order": "a0",
+          "position": 0,
+          "type": "paragraph",
+          "attrs": {},
+          "content": [
+            {
+              "type": "text",
+              "text": "The best plan for Kyoto is the one you are willing to abandon.",
+              "marks": {
+                "italic": true
+              }
+            }
+          ],
+          "payload": null,
+          "text": "The best plan for Kyoto is the one you are willing to abandon.",
+          "user_attrs": {},
+          "provenance": {
+            "source": "manual",
+            "inherited": true
+          },
+          "revision": null,
+          "created_at": "2026-03-02T09:00:00+00:00",
+          "updated_at": "2026-11-16T09:00:00+00:00",
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "01M7RICH000000000000000014",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "aB",
+      "position": 11,
+      "type": "code",
+      "attrs": {
+        "language": "text"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Shinkansen  Tokyo 07:03  →  Kyoto 09:15\nNozomi 3    Car 7, seats 12A–12B"
+        }
+      ],
+      "payload": null,
       "text": "Shinkansen  Tokyo 07:03  →  Kyoto 09:15\nNozomi 3    Car 7, seats 12A–12B",
-      "styles": {}
-     }
-    ]
-   },
-   "text": "Shinkansen  Tokyo 07:03  →  Kyoto 09:15\nNozomi 3    Car 7, seats 12A–12B",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000015",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "divider",
-   "attrs": {},
-   "user_attrs": {},
-   "content": {},
-   "text": "",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000016",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "table",
-   "attrs": {},
-   "user_attrs": {},
-   "content": {
-    "blocknote": {
-     "type": "tableContent",
-     "rows": [
-      {
-       "cells": [
-        [
-         {
-          "type": "text",
-          "text": "Day",
-          "styles": {}
-         }
-        ],
-        [
-         {
-          "type": "text",
-          "text": "Area",
-          "styles": {}
-         }
-        ],
-        [
-         {
-          "type": "text",
-          "text": "Dinner",
-          "styles": {}
-         }
-        ]
-       ]
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
       },
-      {
-       "cells": [
-        [
-         {
-          "type": "text",
-          "text": "Fri",
-          "styles": {}
-         }
-        ],
-        [
-         {
-          "type": "text",
-          "text": "Fushimi",
-          "styles": {}
-         }
-        ],
-        [
-         {
-          "type": "text",
-          "text": "Izakaya near the station",
-          "styles": {}
-         }
-        ]
-       ]
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000015",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "aC",
+      "position": 12,
+      "type": "divider",
+      "attrs": {},
+      "content": null,
+      "payload": null,
+      "text": "",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
       },
-      {
-       "cells": [
-        [
-         {
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000016",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "aD",
+      "position": 13,
+      "type": "table",
+      "attrs": {},
+      "content": null,
+      "payload": null,
+      "text": "",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": [
+        {
+          "id": "01M7PN9DJETH0MA9DZTD47TESP",
+          "document_id": "01M7RICHDOC000000000000000",
+          "parent_id": "01M7RICH000000000000000016",
+          "order": "a0",
+          "position": 0,
+          "type": "table_row",
+          "attrs": {},
+          "content": null,
+          "payload": null,
+          "text": "",
+          "user_attrs": {},
+          "provenance": {
+            "source": "manual",
+            "inherited": true
+          },
+          "revision": null,
+          "created_at": "2026-03-02T09:00:00+00:00",
+          "updated_at": "2026-11-16T09:00:00+00:00",
+          "children": [
+            {
+              "id": "01M7PN9DJETH0MA9DZTD47TESQ",
+              "document_id": "01M7RICHDOC000000000000000",
+              "parent_id": "01M7PN9DJETH0MA9DZTD47TESP",
+              "order": "a0",
+              "position": 0,
+              "type": "table_cell",
+              "attrs": {},
+              "content": null,
+              "payload": null,
+              "text": "",
+              "user_attrs": {},
+              "provenance": {
+                "source": "manual",
+                "inherited": true
+              },
+              "revision": null,
+              "created_at": "2026-03-02T09:00:00+00:00",
+              "updated_at": "2026-11-16T09:00:00+00:00",
+              "children": [
+                {
+                  "id": "01M7PN9DJETH0MA9DZTD47TESR",
+                  "document_id": "01M7RICHDOC000000000000000",
+                  "parent_id": "01M7PN9DJETH0MA9DZTD47TESQ",
+                  "order": "a0",
+                  "position": 0,
+                  "type": "paragraph",
+                  "attrs": {},
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Day"
+                    }
+                  ],
+                  "payload": null,
+                  "text": "Day",
+                  "user_attrs": {},
+                  "provenance": {
+                    "source": "manual",
+                    "inherited": true
+                  },
+                  "revision": null,
+                  "created_at": "2026-03-02T09:00:00+00:00",
+                  "updated_at": "2026-11-16T09:00:00+00:00",
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "01M7PN9DJETH0MA9DZTD47TESS",
+              "document_id": "01M7RICHDOC000000000000000",
+              "parent_id": "01M7PN9DJETH0MA9DZTD47TESP",
+              "order": "a1",
+              "position": 1,
+              "type": "table_cell",
+              "attrs": {},
+              "content": null,
+              "payload": null,
+              "text": "",
+              "user_attrs": {},
+              "provenance": {
+                "source": "manual",
+                "inherited": true
+              },
+              "revision": null,
+              "created_at": "2026-03-02T09:00:00+00:00",
+              "updated_at": "2026-11-16T09:00:00+00:00",
+              "children": [
+                {
+                  "id": "01M7PN9DJETH0MA9DZTD47TEST",
+                  "document_id": "01M7RICHDOC000000000000000",
+                  "parent_id": "01M7PN9DJETH0MA9DZTD47TESS",
+                  "order": "a0",
+                  "position": 0,
+                  "type": "paragraph",
+                  "attrs": {},
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Area"
+                    }
+                  ],
+                  "payload": null,
+                  "text": "Area",
+                  "user_attrs": {},
+                  "provenance": {
+                    "source": "manual",
+                    "inherited": true
+                  },
+                  "revision": null,
+                  "created_at": "2026-03-02T09:00:00+00:00",
+                  "updated_at": "2026-11-16T09:00:00+00:00",
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "01M7PN9DJETH0MA9DZTD47TESV",
+              "document_id": "01M7RICHDOC000000000000000",
+              "parent_id": "01M7PN9DJETH0MA9DZTD47TESP",
+              "order": "a2",
+              "position": 2,
+              "type": "table_cell",
+              "attrs": {},
+              "content": null,
+              "payload": null,
+              "text": "",
+              "user_attrs": {},
+              "provenance": {
+                "source": "manual",
+                "inherited": true
+              },
+              "revision": null,
+              "created_at": "2026-03-02T09:00:00+00:00",
+              "updated_at": "2026-11-16T09:00:00+00:00",
+              "children": [
+                {
+                  "id": "01M7PN9DJETH0MA9DZTD47TESW",
+                  "document_id": "01M7RICHDOC000000000000000",
+                  "parent_id": "01M7PN9DJETH0MA9DZTD47TESV",
+                  "order": "a0",
+                  "position": 0,
+                  "type": "paragraph",
+                  "attrs": {},
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Dinner"
+                    }
+                  ],
+                  "payload": null,
+                  "text": "Dinner",
+                  "user_attrs": {},
+                  "provenance": {
+                    "source": "manual",
+                    "inherited": true
+                  },
+                  "revision": null,
+                  "created_at": "2026-03-02T09:00:00+00:00",
+                  "updated_at": "2026-11-16T09:00:00+00:00",
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "01M7PN9DJETH0MA9DZTD47TESX",
+          "document_id": "01M7RICHDOC000000000000000",
+          "parent_id": "01M7RICH000000000000000016",
+          "order": "a1",
+          "position": 1,
+          "type": "table_row",
+          "attrs": {},
+          "content": null,
+          "payload": null,
+          "text": "",
+          "user_attrs": {},
+          "provenance": {
+            "source": "manual",
+            "inherited": true
+          },
+          "revision": null,
+          "created_at": "2026-03-02T09:00:00+00:00",
+          "updated_at": "2026-11-16T09:00:00+00:00",
+          "children": [
+            {
+              "id": "01M7PN9DJETH0MA9DZTD47TESY",
+              "document_id": "01M7RICHDOC000000000000000",
+              "parent_id": "01M7PN9DJETH0MA9DZTD47TESX",
+              "order": "a0",
+              "position": 0,
+              "type": "table_cell",
+              "attrs": {},
+              "content": null,
+              "payload": null,
+              "text": "",
+              "user_attrs": {},
+              "provenance": {
+                "source": "manual",
+                "inherited": true
+              },
+              "revision": null,
+              "created_at": "2026-03-02T09:00:00+00:00",
+              "updated_at": "2026-11-16T09:00:00+00:00",
+              "children": [
+                {
+                  "id": "01M7PN9DJETH0MA9DZTD47TESZ",
+                  "document_id": "01M7RICHDOC000000000000000",
+                  "parent_id": "01M7PN9DJETH0MA9DZTD47TESY",
+                  "order": "a0",
+                  "position": 0,
+                  "type": "paragraph",
+                  "attrs": {},
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Fri"
+                    }
+                  ],
+                  "payload": null,
+                  "text": "Fri",
+                  "user_attrs": {},
+                  "provenance": {
+                    "source": "manual",
+                    "inherited": true
+                  },
+                  "revision": null,
+                  "created_at": "2026-03-02T09:00:00+00:00",
+                  "updated_at": "2026-11-16T09:00:00+00:00",
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "01M7PN9DJETH0MA9DZTD47TET0",
+              "document_id": "01M7RICHDOC000000000000000",
+              "parent_id": "01M7PN9DJETH0MA9DZTD47TESX",
+              "order": "a1",
+              "position": 1,
+              "type": "table_cell",
+              "attrs": {},
+              "content": null,
+              "payload": null,
+              "text": "",
+              "user_attrs": {},
+              "provenance": {
+                "source": "manual",
+                "inherited": true
+              },
+              "revision": null,
+              "created_at": "2026-03-02T09:00:00+00:00",
+              "updated_at": "2026-11-16T09:00:00+00:00",
+              "children": [
+                {
+                  "id": "01M7PN9DJETH0MA9DZTD47TET1",
+                  "document_id": "01M7RICHDOC000000000000000",
+                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET0",
+                  "order": "a0",
+                  "position": 0,
+                  "type": "paragraph",
+                  "attrs": {},
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Fushimi"
+                    }
+                  ],
+                  "payload": null,
+                  "text": "Fushimi",
+                  "user_attrs": {},
+                  "provenance": {
+                    "source": "manual",
+                    "inherited": true
+                  },
+                  "revision": null,
+                  "created_at": "2026-03-02T09:00:00+00:00",
+                  "updated_at": "2026-11-16T09:00:00+00:00",
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "01M7PN9DJETH0MA9DZTD47TET2",
+              "document_id": "01M7RICHDOC000000000000000",
+              "parent_id": "01M7PN9DJETH0MA9DZTD47TESX",
+              "order": "a2",
+              "position": 2,
+              "type": "table_cell",
+              "attrs": {},
+              "content": null,
+              "payload": null,
+              "text": "",
+              "user_attrs": {},
+              "provenance": {
+                "source": "manual",
+                "inherited": true
+              },
+              "revision": null,
+              "created_at": "2026-03-02T09:00:00+00:00",
+              "updated_at": "2026-11-16T09:00:00+00:00",
+              "children": [
+                {
+                  "id": "01M7PN9DJETH0MA9DZTD47TET3",
+                  "document_id": "01M7RICHDOC000000000000000",
+                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET2",
+                  "order": "a0",
+                  "position": 0,
+                  "type": "paragraph",
+                  "attrs": {},
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Izakaya near the station"
+                    }
+                  ],
+                  "payload": null,
+                  "text": "Izakaya near the station",
+                  "user_attrs": {},
+                  "provenance": {
+                    "source": "manual",
+                    "inherited": true
+                  },
+                  "revision": null,
+                  "created_at": "2026-03-02T09:00:00+00:00",
+                  "updated_at": "2026-11-16T09:00:00+00:00",
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "01M7PN9DJETH0MA9DZTD47TET4",
+          "document_id": "01M7RICHDOC000000000000000",
+          "parent_id": "01M7RICH000000000000000016",
+          "order": "a2",
+          "position": 2,
+          "type": "table_row",
+          "attrs": {},
+          "content": null,
+          "payload": null,
+          "text": "",
+          "user_attrs": {},
+          "provenance": {
+            "source": "manual",
+            "inherited": true
+          },
+          "revision": null,
+          "created_at": "2026-03-02T09:00:00+00:00",
+          "updated_at": "2026-11-16T09:00:00+00:00",
+          "children": [
+            {
+              "id": "01M7PN9DJETH0MA9DZTD47TET5",
+              "document_id": "01M7RICHDOC000000000000000",
+              "parent_id": "01M7PN9DJETH0MA9DZTD47TET4",
+              "order": "a0",
+              "position": 0,
+              "type": "table_cell",
+              "attrs": {},
+              "content": null,
+              "payload": null,
+              "text": "",
+              "user_attrs": {},
+              "provenance": {
+                "source": "manual",
+                "inherited": true
+              },
+              "revision": null,
+              "created_at": "2026-03-02T09:00:00+00:00",
+              "updated_at": "2026-11-16T09:00:00+00:00",
+              "children": [
+                {
+                  "id": "01M7PN9DJETH0MA9DZTD47TET6",
+                  "document_id": "01M7RICHDOC000000000000000",
+                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET5",
+                  "order": "a0",
+                  "position": 0,
+                  "type": "paragraph",
+                  "attrs": {},
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Sat"
+                    }
+                  ],
+                  "payload": null,
+                  "text": "Sat",
+                  "user_attrs": {},
+                  "provenance": {
+                    "source": "manual",
+                    "inherited": true
+                  },
+                  "revision": null,
+                  "created_at": "2026-03-02T09:00:00+00:00",
+                  "updated_at": "2026-11-16T09:00:00+00:00",
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "01M7PN9DJETH0MA9DZTD47TET7",
+              "document_id": "01M7RICHDOC000000000000000",
+              "parent_id": "01M7PN9DJETH0MA9DZTD47TET4",
+              "order": "a1",
+              "position": 1,
+              "type": "table_cell",
+              "attrs": {},
+              "content": null,
+              "payload": null,
+              "text": "",
+              "user_attrs": {},
+              "provenance": {
+                "source": "manual",
+                "inherited": true
+              },
+              "revision": null,
+              "created_at": "2026-03-02T09:00:00+00:00",
+              "updated_at": "2026-11-16T09:00:00+00:00",
+              "children": [
+                {
+                  "id": "01M7PN9DJETH0MA9DZTD47TET8",
+                  "document_id": "01M7RICHDOC000000000000000",
+                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET7",
+                  "order": "a0",
+                  "position": 0,
+                  "type": "paragraph",
+                  "attrs": {},
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Arashiyama"
+                    }
+                  ],
+                  "payload": null,
+                  "text": "Arashiyama",
+                  "user_attrs": {},
+                  "provenance": {
+                    "source": "manual",
+                    "inherited": true
+                  },
+                  "revision": null,
+                  "created_at": "2026-03-02T09:00:00+00:00",
+                  "updated_at": "2026-11-16T09:00:00+00:00",
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "01M7PN9DJETH0MA9DZTD47TET9",
+              "document_id": "01M7RICHDOC000000000000000",
+              "parent_id": "01M7PN9DJETH0MA9DZTD47TET4",
+              "order": "a2",
+              "position": 2,
+              "type": "table_cell",
+              "attrs": {},
+              "content": null,
+              "payload": null,
+              "text": "",
+              "user_attrs": {},
+              "provenance": {
+                "source": "manual",
+                "inherited": true
+              },
+              "revision": null,
+              "created_at": "2026-03-02T09:00:00+00:00",
+              "updated_at": "2026-11-16T09:00:00+00:00",
+              "children": [
+                {
+                  "id": "01M7PN9DJETH0MA9DZTD47TETA",
+                  "document_id": "01M7RICHDOC000000000000000",
+                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET9",
+                  "order": "a0",
+                  "position": 0,
+                  "type": "paragraph",
+                  "attrs": {},
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Tofu kaiseki"
+                    }
+                  ],
+                  "payload": null,
+                  "text": "Tofu kaiseki",
+                  "user_attrs": {},
+                  "provenance": {
+                    "source": "manual",
+                    "inherited": true
+                  },
+                  "revision": null,
+                  "created_at": "2026-03-02T09:00:00+00:00",
+                  "updated_at": "2026-11-16T09:00:00+00:00",
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "01M7RICH000000000000000017",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "aE",
+      "position": 14,
+      "type": "file",
+      "attrs": {
+        "url": "/media/kyoto-itinerary.pdf",
+        "name": "Kyoto itinerary.pdf"
+      },
+      "content": null,
+      "payload": null,
+      "text": "Kyoto itinerary.pdf",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
+    },
+    {
+      "id": "01M7RICH000000000000000018",
+      "document_id": "01M7RICHDOC000000000000000",
+      "parent_id": null,
+      "order": "aF",
+      "position": 15,
+      "type": "paragraph",
+      "attrs": {},
+      "content": [
+        {
           "type": "text",
-          "text": "Sat",
-          "styles": {}
-         }
-        ],
-        [
-         {
+          "text": "Budget is "
+        },
+        {
           "type": "text",
-          "text": "Arashiyama",
-          "styles": {}
-         }
-        ],
-        [
-         {
+          "text": "¥180,000",
+          "marks": {
+            "bold": true,
+            "color": "red"
+          }
+        },
+        {
           "type": "text",
-          "text": "Tofu kaiseki",
-          "styles": {}
-         }
-        ]
-       ]
-      }
-     ]
+          "text": " for two, "
+        },
+        {
+          "type": "text",
+          "text": "not counting",
+          "marks": {
+            "underline": true
+          }
+        },
+        {
+          "type": "text",
+          "text": " the "
+        },
+        {
+          "type": "text",
+          "text": "rail pass",
+          "marks": {
+            "strike": true
+          }
+        },
+        {
+          "type": "text",
+          "text": "."
+        }
+      ],
+      "payload": null,
+      "text": "Budget is ¥180,000 for two, not counting the rail pass.",
+      "user_attrs": {},
+      "provenance": {
+        "source": "manual",
+        "inherited": true
+      },
+      "revision": null,
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-11-16T09:00:00+00:00",
+      "children": []
     }
-   },
-   "text": "",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000017",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "file",
-   "attrs": {
-    "url": "/media/kyoto-itinerary.pdf",
-    "name": "Kyoto itinerary.pdf"
-   },
-   "user_attrs": {},
-   "content": {},
-   "text": "",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  },
-  {
-   "id": "01M7RICH000000000000000018",
-   "document_id": "01M7RICHDOC000000000000000",
-   "parent_id": null,
-   "position": 0,
-   "type": "paragraph",
-   "attrs": {},
-   "user_attrs": {},
-   "content": {
-    "blocknote": [
-     {
-      "type": "text",
-      "text": "Budget is ",
-      "styles": {}
-     },
-     {
-      "type": "text",
-      "text": "¥180,000",
-      "styles": {
-       "bold": true,
-       "textColor": "red"
-      }
-     },
-     {
-      "type": "text",
-      "text": " for two, ",
-      "styles": {}
-     },
-     {
-      "type": "text",
-      "text": "not counting",
-      "styles": {
-       "underline": true
-      }
-     },
-     {
-      "type": "text",
-      "text": " the ",
-      "styles": {}
-     },
-     {
-      "type": "text",
-      "text": "rail pass",
-      "styles": {
-       "strike": true
-      }
-     },
-     {
-      "type": "text",
-      "text": ".",
-      "styles": {}
-     }
-    ]
-   },
-   "text": "Budget is ¥180,000 for two, not counting the rail pass.",
-   "created_at": "2026-03-02T09:00:00+00:00",
-   "updated_at": "2026-11-16T09:00:00+00:00",
-   "children": []
-  }
- ]
+  ]
 }

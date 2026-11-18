@@ -50,7 +50,7 @@ enum DocumentText {
                 attributes[.fnNode] = NodeBox(node)
                 attributes[.attachment] = InlineNodeAttachment(node: node, context: context)
                 // A note link opens its note when clicked (see `clickedOnLink`).
-                if let id = NoteLinks.documentTarget(node) { attributes[.link] = NoteLinks.documentURL(id: id) }
+                if let id = NoteLinks.documentTarget(node), let url = NoteLinks.documentURL(id: id) { attributes[.link] = url }
                 output.append(NSAttributedString(string: objectReplacement, attributes: attributes))
                 continue
             }

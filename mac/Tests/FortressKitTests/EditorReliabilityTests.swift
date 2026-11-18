@@ -60,9 +60,7 @@ private func stubAPI() -> APIClient {
 }
 
 private func node(_ id: String, _ text: String) -> BlockNode {
-    BlockNode(id: id, documentId: "d", parentId: nil, position: 0, type: "paragraph", attrs: [:], userAttrs: [:],
-              content: .object(["markdown": .string(text)]), text: text,
-              createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00", children: [])
+    BlockNode.paragraph(id, text)
 }
 
 private func document(revision: Int, _ nodes: [BlockNode]) -> BlockDocument {
@@ -107,7 +105,7 @@ private func pendingDirectory() -> URL {
         let second = try sent(1)
         #expect(second.baseRevision == 2)
         #expect(second.operations.map(\.blockId) == ["b"])
-        #expect(second.operations.first?.text == "Two?")
+        #expect(second.operations.first?.plainText == "Two?")
         #expect(!session.hasUnsavedChanges)
     }
 
@@ -131,7 +129,7 @@ private func pendingDirectory() -> URL {
         #expect(SaveStub.bodies.count == 1)
         let transaction = try sent(0)
         #expect(transaction.operations.count == 2)
-        #expect(transaction.operations.map(\.text) == ["Onexyz", "Two!"])
+        #expect(transaction.operations.map(\.plainText) == ["Onexyz", "Two!"])
     }
 
     /// A 5xx keeps the edits and retries the same transaction (same id: applied once).
@@ -201,7 +199,7 @@ private func pendingDirectory() -> URL {
         await session.flush()
         #expect(session.saveState == .offline)
         let record = try #require(PendingEdits.load(documentId: "d"))
-        #expect(record.operations.first?.text == "Written on a plane")
+        #expect(record.operations.first?.plainText == "Written on a plane")
     }
 
     /// Skimming the note list (30 selections 2 ms apart, each editor replaced by the next)
@@ -227,14 +225,16 @@ private func pendingDirectory() -> URL {
     /// Replaying operations never repeats one the server already applied.
     @Test func replayingIsIdempotent() {
         let nodes = [node("a", "A"), node("b", "B")]
-        let operations = [Op(operation: .insert, blockId: "c", parentId: nil, position: 1, type: "paragraph", text: "C"),
-                          Op(operation: .update, blockId: "a", text: "A2"),
+        func content(_ text: String) -> JSONValue { .array([.object(["type": .string("text"), "text": .string(text)])]) }
+        let operations = [Op(operation: .insert, blockId: "c", afterId: "b", type: "paragraph", content: content("C")),
+                          Op(operation: .update, blockId: "a", attrs: ["x": .bool(true)], content: content("A2")),
                           Op(operation: .delete, blockId: "b")]
         let once = PendingEdits.apply(operations, to: nodes)
         let twice = PendingEdits.apply(operations, to: once)
         #expect(once.map(\.id) == ["a", "c"])
         #expect(twice.map(\.id) == ["a", "c"])
-        #expect(twice.map(\.text) == ["A2", "C"])
+        #expect(twice.map { BlockCodec.plainText(BlockCodec.runs(fromContent: $0.content)) } == ["A2", "C"])
+        #expect(twice.first?.attrs == ["x": .bool(true)])
     }
 }
 
@@ -263,16 +263,15 @@ private func pendingDirectory() -> URL {
         }
         for item in BlockDiff.shape(blocks) {
             let fields = BlockCodec.encode(item.block)
-            let node = BlockNode(id: item.block.id, documentId: "d", parentId: item.parent, position: 0, type: fields.type,
-                                 attrs: fields.attrs, userAttrs: [:], content: fields.content, text: fields.text,
-                                 createdAt: "", updatedAt: "", children: [])
+            let node = BlockNode(id: item.block.id, documentId: "d", parentId: item.parent, type: fields.type,
+                                 attrs: fields.attrs, content: fields.content, payload: fields.payload)
             _ = insert(node, under: item.parent, into: &roots)
         }
         return roots
     }
 
     static func outline(_ nodes: [BlockNode], depth: Int = 0) -> [String] {
-        nodes.flatMap { ["\(depth):\($0.id):\($0.text)"] + outline($0.children, depth: depth + 1) }
+        nodes.flatMap { ["\(depth):\($0.id):\(BlockCodec.plainText(BlockCodec.runs(fromContent: $0.content)))"] + outline($0.children, depth: depth + 1) }
     }
 
     @Test(arguments: 0..<200) func operationsReproduceTheEditorsTree(seed: Int) {
@@ -310,7 +309,7 @@ private func pendingDirectory() -> URL {
         edited = BlockDiff.shape(edited).map(\.block)
         let (operations, result) = BlockDiff.operations(from: base, to: edited)
         let applied = PendingEdits.apply(operations, to: server)
-        #expect(Self.outline(applied) == Self.outline(Self.tree(edited)), "seed \(seed): \(operations.map { "\($0.operation.rawValue) \($0.blockId ?? "") \($0.parentId ?? "-") \($0.position ?? -1)" })")
+        #expect(Self.outline(applied) == Self.outline(Self.tree(edited)), "seed \(seed): \(operations.map { "\($0.operation.rawValue) \($0.blockId ?? "") \($0.parentId ?? "-") \($0.afterId ?? $0.beforeId ?? "")" })")
         #expect(result == SyncedTree(edited))
         // Nothing left to send afterwards.
         #expect(BlockDiff.operations(from: result, to: edited).operations.isEmpty)
@@ -417,7 +416,7 @@ private func paragraph(_ id: String, _ text: String, kind: BlockKind = .paragrap
         #expect(block.plainText == text + "!")
         #expect(block.runs.first?.marks.bold == true)
         let fields = BlockCodec.encode(block)
-        #expect(fields.text == text + "!")
+        #expect(BlockCodec.plainText(BlockCodec.runs(fromContent: fields.content)) == text + "!")
     }
 
     /// Text loaded from the server with a CR or paragraph separator inside a block stays one block.
@@ -439,7 +438,7 @@ private func paragraph(_ id: String, _ text: String, kind: BlockKind = .paragrap
         settle()
         let (operations, _) = BlockDiff.operations(from: base, to: controller.currentBlocks())
         #expect(operations.map(\.blockId) == ["p20"])
-        #expect(operations.first?.text == "Parxagraph 20")
+        #expect(operations.first?.plainText == "Parxagraph 20")
         // Undo brings back the text and the next diff sends just that block again.
         controller.textView.undoManager?.undo()
         #expect(controller.currentBlocks()[20].plainText == "Paragraph 20")

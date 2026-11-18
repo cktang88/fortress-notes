@@ -317,8 +317,8 @@ struct EditorTheme: Sendable {
             if let node = attributes[.fnNode] {
                 updated[.fnNode] = node
                 // A note link keeps the URL that opens it.
-                if let box = node as? NodeBox, let id = NoteLinks.documentTarget(box.node) {
-                    updated[.link] = NoteLinks.documentURL(id: id)
+                if let box = node as? NodeBox, let id = NoteLinks.documentTarget(box.node), let url = NoteLinks.documentURL(id: id) {
+                    updated[.link] = url
                     updated[.toolTip] = "Open note"
                 }
             }

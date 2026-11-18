@@ -39,6 +39,8 @@ private func settle() {
         let document = try richDocument()
         let blocks = BlockCodec.flatten(document.children)
         let editor = controller(blocks)
+        // Read the text back, not the blocks kept from loading.
+        editor.discardReadCache()
         let read = editor.currentBlocks()
         #expect(read.map(\.id) == blocks.map(\.id))
         #expect(read.map(\.kind) == blocks.map(\.kind))
@@ -147,6 +149,8 @@ private func settle() {
         }
         let start = Date()
         let editor = controller(blocks)
+        // Read the text back, not the blocks kept from loading.
+        editor.discardReadCache()
         let read = editor.currentBlocks()
         #expect(read.count == 800)
         #expect(Date().timeIntervalSince(start) < 3)

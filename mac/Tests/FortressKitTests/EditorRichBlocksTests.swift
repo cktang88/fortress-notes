@@ -8,55 +8,67 @@ import Testing
 // and gallery scenes of an imported OneNote page.
 
 enum RichPage {
-    static func run(_ text: String, _ styles: [String: JSONValue] = [:]) -> JSONValue {
-        .object(["type": .string("text"), "text": .string(text), "styles": .object(styles)])
+    static func run(_ text: String, _ marks: [String: JSONValue] = [:]) -> JSONValue {
+        var object: [String: JSONValue] = ["type": .string("text"), "text": .string(text)]
+        if !marks.isEmpty { object["marks"] = .object(marks) }
+        return .object(object)
     }
 
-    static func node(_ id: String, _ type: String, attrs: [String: JSONValue] = [:], content: [String: JSONValue] = [:],
-                     text: String = "", children: [BlockNode] = []) -> BlockNode {
-        BlockNode(id: id, documentId: "01M7ONENOTEPAGE00000000000", parentId: nil, position: 0, type: type, attrs: attrs,
-                  userAttrs: [:], content: .object(content), text: text, createdAt: "2024-03-11T09:00:00+00:00",
-                  updatedAt: "2026-11-16T09:00:00+00:00", children: children,
+    static func node(_ id: String, _ type: String, attrs: [String: JSONValue] = [:], content: [JSONValue]? = nil,
+                     payload: JSONValue? = nil, text: String = "", children: [BlockNode] = []) -> BlockNode {
+        BlockNode(id: id, documentId: "01M7ONENOTEPAGE00000000000", type: type, attrs: attrs,
+                  content: content.map(JSONValue.array) ?? .null, payload: payload, text: text,
+                  createdAt: "2024-03-11T09:00:00+00:00", updatedAt: "2026-11-16T09:00:00+00:00", children: children,
                   provenance: .object(["source": .string("onenote_import"), "source_path": .string("Lab › Week 12 › Titration")]))
     }
 
     static func paragraph(_ id: String, _ runs: [JSONValue], type: String = "paragraph", attrs: [String: JSONValue] = [:]) -> BlockNode {
-        node(id, type, attrs: attrs, content: ["blocknote": .array(runs)], text: runs.map(BlockCodec.inlineText).joined())
+        node(id, type, attrs: attrs, content: runs, text: runs.map { BlockCodec.inlineText($0) }.joined())
     }
 
-    static func cell(_ text: String, _ props: [String: JSONValue] = [:], styles: [String: JSONValue] = [:], blocks: JSONValue? = nil) -> JSONValue {
-        var object: [String: JSONValue] = ["type": .string("tableCell"), "props": .object(props), "content": .array([run(text, styles)])]
-        if let blocks { object["blocks"] = blocks }
-        return .object(object)
+    /// A cell: its text in a paragraph, then any other blocks it holds.
+    static func cell(_ id: String, _ text: String, _ attrs: [String: JSONValue] = [:], marks: [String: JSONValue] = [:],
+                     more: [BlockNode] = []) -> BlockNode {
+        node(id, "table_cell", attrs: attrs, children: [paragraph(id + "P", [run(text, marks)])] + more)
     }
 
-    static let header: [String: JSONValue] = ["backgroundColor": .string("#DEEAF6")]
+    static let header: [String: JSONValue] = ["background": .string("#DEEAF6")]
+    static let right: [String: JSONValue] = ["align": .string("right")]
 
-    static var table: JSONValue {
-        .object([
-            "type": .string("tableContent"), "columnWidths": .array([.number(150), .null, .number(110)]), "headerRows": .number(1),
-            "rows": .array([
-                .object(["cells": .array([cell("Sample", header), cell("Observation", header), cell("pH", ["textAlignment": .string("right")].merging(header) { $1 })])]),
-                .object(["cells": .array([cell("A · HCl 0.1 M"), cell("Turned pink at 24.6 mL"), cell("8.2", ["textAlignment": .string("right")])])]),
-                .object(["cells": .array([cell("B · CH₃COOH"), cell("Faint pink, fades", styles: ["italic": .bool(true)],
-                    blocks: .array([.object(["type": .string("list"), "attrs": .object([:]), "content": .object(["blocknote": .array([run("repeat with fresh indicator")])])])])),
-                    cell("7.9", ["textAlignment": .string("right"), "textColor": .string("#C00000")])])]),
+    /// The id of the paragraph holding a cell's text.
+    static func cellParagraph(row: Int, column: Int) -> String { "01M7ONENOTECELL000000\(row)\(column)P" }
+
+    static var table: BlockNode {
+        func id(_ row: Int, _ column: Int) -> String { "01M7ONENOTECELL000000\(row)\(column)" }
+        return node("01M7ONENOTEBLOCK0000000002", "table", attrs: [
+            "borders": .bool(true), "column_widths": .array([.number(150), .null, .number(110)]), "header_rows": .number(1),
+        ], children: [
+            node("01M7ONENOTEROW00000000000", "table_row", children: [
+                cell(id(0, 0), "Sample", header), cell(id(0, 1), "Observation", header), cell(id(0, 2), "pH", right.merging(header) { $1 }),
+            ]),
+            node("01M7ONENOTEROW00000000001", "table_row", children: [
+                cell(id(1, 0), "A · HCl 0.1 M"), cell(id(1, 1), "Turned pink at 24.6 mL"), cell(id(1, 2), "8.2", right),
+            ]),
+            node("01M7ONENOTEROW00000000002", "table_row", children: [
+                cell(id(2, 0), "B · CH₃COOH"),
+                cell(id(2, 1), "Faint pink, fades", marks: ["italic": .bool(true)],
+                     more: [paragraph("01M7ONENOTENESTED00000001", [run("repeat with fresh indicator")], type: "bullet_item")]),
+                cell(id(2, 2), "7.9", right.merging(["color": .string("#C00000")]) { $1 }),
             ]),
         ])
     }
 
     static func document(image: URL) -> BlockDocument {
         let blocks: [BlockNode] = [
-            paragraph("01M7ONENOTEBLOCK0000000001", [run("Titrated three samples against 0.1 M NaOH. Water is H"), run("2", ["subscript": .bool(true)]),
-                                                      run("O; the fit is y = ax"), run("2", ["superscript": .bool(true)]), run(" + b.")]),
-            node("01M7ONENOTEBLOCK0000000002", "table", attrs: ["borders": .bool(true)], content: ["blocknote": table],
-                 text: "Sample\tObservation\tpH"),
-            paragraph("01M7ONENOTEBLOCK0000000003", [run("Setup", [:])], type: "heading", attrs: ["level": .number(2)]),
+            paragraph("01M7ONENOTEBLOCK0000000001", [run("Titrated three samples against 0.1 M NaOH. Water is H"), run("2", ["sub": .bool(true)]),
+                                                      run("O; the fit is y = ax"), run("2", ["sup": .bool(true)]), run(" + b.")]),
+            table,
+            paragraph("01M7ONENOTEBLOCK0000000003", [run("Setup")], type: "heading", attrs: ["level": .number(2)]),
             node("01M7ONENOTEBLOCK0000000004", "columns", attrs: ["onenote_y": .number(3)], children: [
                 node("01M7ONENOTEBLOCK0000000005", "column", attrs: ["width": .number(0.45)], children: [
-                    paragraph("01M7ONENOTEBLOCK0000000006", [run("Burette rinsed twice; ", [:]), run("phenolphthalein", ["bold": .bool(true)]), run(" as indicator.")]),
-                    paragraph("01M7ONENOTEBLOCK0000000007", [run("Swirl continuously")], type: "bulletListItem"),
-                    paragraph("01M7ONENOTEBLOCK0000000008", [run("Read at eye level")], type: "bulletListItem"),
+                    paragraph("01M7ONENOTEBLOCK0000000006", [run("Burette rinsed twice; "), run("phenolphthalein", ["bold": .bool(true)]), run(" as indicator.")]),
+                    paragraph("01M7ONENOTEBLOCK0000000007", [run("Swirl continuously")], type: "bullet_item"),
+                    paragraph("01M7ONENOTEBLOCK0000000008", [run("Read at eye level")], type: "bullet_item"),
                 ]),
                 node("01M7ONENOTEBLOCK0000000009", "column", attrs: ["width": .number(0.55)], children: [
                     node("01M7ONENOTEBLOCK0000000010", "image", attrs: [
@@ -64,7 +76,7 @@ enum RichPage {
                         "caption": .string("Readings on the lab whiteboard"), "width": .number(640), "height": .number(427)]),
                 ]),
             ]),
-            node("01M7ONENOTEBLOCK0000000011", "math", content: ["latex": .string(#"c_{acid} = \frac{c_{base} \cdot V_{base}}{V_{acid}} \approx 0.098"#)],
+            node("01M7ONENOTEBLOCK0000000011", "math", payload: .object(["latex": .string(#"c_{acid} = \frac{c_{base} \cdot V_{base}}{V_{acid}} \approx 0.098"#)]),
                  text: "c_acid"),
             node("01M7ONENOTEBLOCK0000000012", "file", attrs: ["url": .string("/media/titration-printout.pdf"), "name": .string("Titration printout.pdf"),
                                                               "size": .number(482_133), "mime": .string("application/pdf")], text: "Titration printout.pdf"),
@@ -127,14 +139,10 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         cell.setSelectedRange(NSRange(location: cell.textStorage!.length, length: 0))
         cell.insertText(" (pale)", replacementRange: cell.selectedRange())
         let (operations, _) = BlockDiff.operations(from: base, to: controller.currentBlocks())
+        // One update of the cell's paragraph; nothing else (the nested list stays).
         #expect(operations.count == 1)
-        #expect(operations.first?.blockId == "01M7ONENOTEBLOCK0000000002")
-        #expect(operations.first?.text?.contains("Turned pink at 24.6 mL (pale)") == true)
-        guard case .array(let rows)? = operations.first?.content?["blocknote"]?["rows"], case .array(let cells)? = rows[2]["cells"] else {
-            Issue.record("no rows"); return
-        }
-        // Same shape: the nested list stays on the server.
-        #expect(cells[1]["blocks"] == nil)
+        #expect(operations.first?.blockId == RichPage.cellParagraph(row: 1, column: 1))
+        #expect(operations.first?.plainText == "Turned pink at 24.6 mL (pale)")
     }
 
     @Test func tabMovesBetweenCellsAndAddsARowAtTheEnd() throws {
@@ -163,12 +171,10 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         table.perform("Insert Column") { $0.insertColumn(at: 1); return true }
         #expect(table.cells[0].count == 4)
         let (operations, _) = BlockDiff.operations(from: base, to: controller.currentBlocks())
-        #expect(operations.count == 1)
-        guard case .array(let rows)? = operations.first?.content?["blocknote"]?["rows"], case .array(let cells)? = rows[2]["cells"] else {
-            Issue.record("no rows"); return
-        }
-        // The shape changed: nested blocks travel with their cell.
-        #expect(cells[2]["blocks"] != nil)
+        // The widths, and a new (empty) cell in each row; nothing deleted or rewritten.
+        #expect(operations.map(\.operation) == [.update, .insert, .insert, .insert])
+        #expect(operations.dropFirst().allSatisfy { $0.type == "table_cell" })
+        #expect(operations[1].afterId == "01M7ONENOTECELL00000000")
         window.undoManager?.undo()
         #expect(table.table.columnCount == 3)
     }
@@ -200,10 +206,9 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         left.textView.insertText("Note the volume", replacementRange: left.textView.selectedRange())
         let (operations, result) = BlockDiff.operations(from: base, to: controller.currentBlocks())
         #expect(operations.map(\.operation) == [.insert])
-        #expect(operations.first?.parentId == "01M7ONENOTEBLOCK0000000005")
-        #expect(operations.first?.position == 2)
-        #expect(operations.first?.type == "bulletListItem")
-        #expect(operations.first?.text == "Note the volume")
+        #expect(operations.first?.afterId == "01M7ONENOTEBLOCK0000000007")
+        #expect(operations.first?.type == "bullet_item")
+        #expect(operations.first?.plainText == "Note the volume")
         #expect(result.parent[operations.first?.blockId ?? ""] == .some("01M7ONENOTEBLOCK0000000005"))
     }
 
@@ -242,10 +247,12 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         controller.textView.setSelectedRange(NSRange(location: 2, length: 0))
         controller.insertTable()
         let (operations, _) = BlockDiff.operations(from: base, to: controller.currentBlocks())
-        #expect(operations.count == 1)
-        #expect(operations.first?.operation == .insert)
+        // The table, its three rows and nine (empty) cells, in that order.
+        #expect(operations.count == 13)
+        #expect(operations.allSatisfy { $0.operation == .insert })
         #expect(operations.first?.type == "table")
-        #expect(operations.first?.content?["blocknote"]?["headerRows"] == .number(1))
+        #expect(operations.first?.attrs?["header_rows"] == .number(1))
+        #expect(operations.filter { $0.type == "table_cell" }.count == 9)
     }
 
     // MARK: Gallery

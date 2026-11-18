@@ -51,18 +51,17 @@ func footprintMB() -> Double {
 enum LongNote {
     static let documentId = "01PERFDOC0000000000000000"
 
-    static func run(_ text: String, _ styles: [String: JSONValue] = [:]) -> JSONValue {
-        .object(["type": .string("text"), "text": .string(text), "styles": .object(styles)])
+    static func run(_ text: String, _ marks: [String: JSONValue] = [:]) -> JSONValue {
+        var object: [String: JSONValue] = ["type": .string("text"), "text": .string(text)]
+        if !marks.isEmpty { object["marks"] = .object(marks) }
+        return .object(object)
     }
 
     static func node(_ id: String, _ type: String, attrs: [String: JSONValue] = [:], runs: [JSONValue]? = nil,
-                     content: [String: JSONValue] = [:], children: [BlockNode] = []) -> BlockNode {
-        var content = content
-        if let runs { content["blocknote"] = .array(runs) }
-        let text = runs.map { $0.map(BlockCodec.inlineText).joined() } ?? ""
-        return BlockNode(id: id, documentId: documentId, parentId: nil, position: 0, type: type, attrs: attrs,
-                         userAttrs: [:], content: .object(content), text: text, createdAt: "2026-11-18T00:00:00+00:00",
-                         updatedAt: "2026-11-18T00:00:00+00:00", children: children)
+                     payload: JSONValue? = nil, children: [BlockNode] = []) -> BlockNode {
+        BlockNode(id: id, documentId: documentId, type: type, attrs: attrs, content: runs.map(JSONValue.array) ?? .null,
+                  payload: payload, text: runs.map { $0.map { BlockCodec.inlineText($0) }.joined() } ?? "",
+                  createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00", children: children)
     }
 
     static let sentence = "The quick brown fox jumps over the lazy dog while the editor keeps every block in step with the server. "
@@ -74,14 +73,13 @@ enum LongNote {
     }
 
     static func table(_ index: Int, rows: Int = 50, columns: Int = 8) -> BlockNode {
-        let rowValues: [JSONValue] = (0..<rows).map { r in
-            .object(["cells": .array((0..<columns).map { c in
-                .object(["type": .string("tableCell"), "props": .object([:]),
-                         "content": .array([run(r == 0 ? "Column \(c)" : "R\(r)C\(c) value")])])
-            })])
-        }
-        let content: JSONValue = .object(["type": .string("tableContent"), "headerRows": .number(1), "rows": .array(rowValues)])
-        return node("t\(index)", "table", attrs: ["borders": .bool(true)], content: ["blocknote": content])
+        node("t\(index)", "table", attrs: ["borders": .bool(true), "header_rows": .number(1)], children: (0..<rows).map { r in
+            node("t\(index)r\(r)", "table_row", children: (0..<columns).map { c in
+                node("t\(index)r\(r)c\(c)", "table_cell", children: [
+                    node("t\(index)r\(r)c\(c)p", "paragraph", runs: [run(r == 0 ? "Column \(c)" : "R\(r)C\(c) value")]),
+                ])
+            })
+        })
     }
 
     static func columns(_ index: Int) -> BlockNode {
@@ -97,8 +95,7 @@ enum LongNote {
     static func image(_ index: Int, url: String) -> BlockNode {
         node("i\(index)", "image", attrs: ["url": .string(url), "name": .string("photo-\(index).jpg"),
                                            "width": .number(3000), "height": .number(2000),
-                                           "caption": .string("Picture \(index)")],
-             content: ["markdown": .string("![photo-\(index).jpg](\(url))")])
+                                           "caption": .string("Picture \(index)")])
     }
 
     /// `count` top-level-equivalent blocks (nested ones count too).
@@ -125,13 +122,17 @@ enum LongNote {
                 // A chain nested six deep.
                 var chain: BlockNode?
                 for depth in (0..<6).reversed() {
-                    chain = node("n\(i)-\(depth)", "bulletListItem", runs: prose(i + depth), children: chain.map { [$0] } ?? [])
+                    chain = node("n\(i)-\(depth)", "bullet_item", runs: prose(i + depth), children: chain.map { [$0] } ?? [])
                 }
                 nodes.append(chain!); made += 6
             } else {
-                let types = ["paragraph", "paragraph", "paragraph", "numberedListItem", "checkListItem", "quote", "bulletListItem"]
+                let types = ["paragraph", "paragraph", "paragraph", "numbered_item", "check_item", "quote", "bullet_item"]
                 let type = types[i % types.count]
-                nodes.append(node("p\(i)", type, attrs: type == "checkListItem" ? ["checked": .bool(i % 2 == 0)] : [:], runs: prose(i)))
+                if type == "quote" {
+                    nodes.append(node("q\(i)", "quote", children: [node("p\(i)", "paragraph", runs: prose(i))]))
+                } else {
+                    nodes.append(node("p\(i)", type, attrs: type == "check_item" ? ["checked": .bool(i % 2 == 0)] : [:], runs: prose(i)))
+                }
                 made += 1
             }
         }

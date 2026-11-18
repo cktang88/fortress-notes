@@ -299,7 +299,11 @@ private actor Calls {
     info.add(try JSONDecoder().decode(BlockDocument.self, from: try findingFixture("document.json")))
     #expect((info.blocks ?? 0) >= 4)
     #expect((info.words ?? 0) > 8)
-    #expect(NoteInfo.linkCount(in: .object(["markdown": .string("See [[Kyoto trip]] and [map](https://x.y)")])) == 2)
+    #expect(NoteInfo.linkCount(in: .array([
+        .object(["type": .string("text"), "text": .string("See ")]),
+        .object(["type": .string("docLink"), "id": .string("01M7")]),
+        .object(["type": .string("link"), "href": .string("https://x.y"), "content": .array([.object(["type": .string("text"), "text": .string("map")])])]),
+    ])) == 2)
 }
 
 @MainActor @Test func noteInfoFromTheRealInfoEndpoint() throws {
