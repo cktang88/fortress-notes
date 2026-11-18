@@ -1828,12 +1828,31 @@ def render_markdown(
     """
 
     fragments: list[str] = []
+    number = 0
     for node in nodes:
-        fragments.extend(_render_node(node, depth, document_provenance))
+        # Each item is written as "1. "; number consecutive ordered items, since a
+        # provenance comment between items starts a new list in Markdown viewers.
+        number = number + 1 if _is_ordered_item(node) else 0
+        fragments.extend(_render_node(node, depth, document_provenance, number))
     return "\n\n".join(fragments)
 
 
-def _render_node(node: dict, depth: int, document_provenance: dict | None) -> list[str]:
+def _is_ordered_item(node: dict) -> bool:
+    attrs = node.get("attrs") or {}
+    return node.get("type") == "numberedListItem" or (
+        node.get("type") == "list" and bool(attrs.get("ordered")) and not isinstance(attrs.get("checked"), bool)
+    )
+
+
+def _number_item(source: str, number: int) -> str:
+    if number > 1 and source.startswith("1. "):
+        return f"{number}. " + source[3:]
+    return source
+
+
+def _render_node(
+    node: dict, depth: int, document_provenance: dict | None, number: int = 0
+) -> list[str]:
     def placed(source: str, block: dict) -> str:
         if source and document_provenance is not None:
             own = block.get("provenance")
@@ -1855,11 +1874,13 @@ def _render_node(node: dict, depth: int, document_provenance: dict | None) -> li
                 fragments.extend(_render_node(child, depth, document_provenance))
                 continue
             fragments.append(placed(_types.marker("column", child.get("attrs") or {}), child))
+            number = 0
             for grandchild in child.get("children", []):
-                fragments.extend(_render_node(grandchild, depth, document_provenance))
+                number = number + 1 if _is_ordered_item(grandchild) else 0
+                fragments.extend(_render_node(grandchild, depth, document_provenance, number))
         fragments.append(placed("<!-- /fortress:columns -->", {}))
         return fragments
-    source = _node_markdown(node)
+    source = _number_item(_node_markdown(node), number)
     if node["type"] == "divider" and not source:
         source = "---"
     fragments = []

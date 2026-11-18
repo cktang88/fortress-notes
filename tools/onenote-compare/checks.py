@@ -159,18 +159,25 @@ def check_tables(ref: Model, ours: Model):
                    applicable=bool(ref.tables or ours.tables))
 
 
-def _image_shas(images):
-    return [i["sha"] for i in images]
+def _image_match(image: dict, pool: list[dict]) -> dict | None:
+    """The Fortress image with the same bytes (or the same original, e.g. an XPS printout),
+    preferring one with the same alt text (printout pages share one original)."""
+
+    if not image["sha"]:
+        return None
+    candidates = [o for o in pool if image["sha"] == o["sha"]] or \
+        [o for o in pool if image["sha"] == o.get("original_sha")]
+    same_alt = [o for o in candidates if words(o["alt"]) == words(image.get("alt") or "")]
+    return (same_alt or candidates or [None])[0]
 
 
 def check_images(ref: Model, ours: Model):
     ours_pool = list(ours.images)
     details = []
-    for image in ref.images:
-        hit = next((o for o in ours_pool if image["sha"] and image["sha"] in (o["sha"], o.get("original_sha"))), None)
+    for image in sorted(ref.images, key=lambda i: not i.get("alt")):  # alt-matched pairs first
+        hit = _image_match(image, ours_pool)
         if hit is None and image["sha"] is None:
-            details.append(f"reference image {image['name']} has no data")
-            continue
+            continue  # no data in the file either (Fortress shows "Image missing from the OneNote export")
         if hit is None:
             details.append(f"missing image {image['name']} ({image['size']} bytes, sha {str(image['sha'])[:12]})")
             continue
@@ -183,12 +190,12 @@ def check_images(ref: Model, ours: Model):
 def check_image_alt(ref: Model, ours: Model):
     details = []
     pool = list(ours.images)
-    for image in ref.images:
-        hit = next((o for o in pool if image["sha"] and image["sha"] in (o["sha"], o.get("original_sha"))), None)
+    for image in sorted(ref.images, key=lambda i: not i.get("alt")):  # alt-matched pairs first
+        hit = _image_match(image, pool)
         if hit is None:
             continue
         pool.remove(hit)
-        if words(image["alt"]) != words(hit["alt"]):
+        if image["alt"] and words(image["alt"]) != words(hit["alt"]):
             details.append(f"{image['name']}: alt {image['alt'][:80]!r} vs {hit['alt'][:80]!r}")
     with_alt = sum(1 for i in ref.images if i["alt"])
     return _result("image_alt", not details, f"{with_alt} images with alt/OCR text", details,
@@ -199,7 +206,8 @@ def check_files(ref: Model, ours: Model):
     pool = list(ours.files)
     details = []
     for item in ref.files:
-        hit = next((o for o in pool if item["sha"] and o["sha"] == item["sha"]), None)
+        hit = next((o for o in pool if o["sha"] == item["sha"] and (item["sha"] or o["name"] in item["name"]
+                                                                      or item["name"].startswith(o["name"].rsplit(".", 1)[0]))), None)
         if hit is None:
             details.append(f"missing attachment {item['name']} ({item['size']} bytes)")
             continue
@@ -216,6 +224,26 @@ def check_count(name, ref_items, our_items, fmt=str):
     details = [] if ok else [f"reference: {fmt(i)}" for i in ref_items] + [f"fortress: {fmt(i)}" for i in our_items]
     return _result(name, ok, f"{len(ref_items)} vs {len(our_items)}", details,
                    applicable=bool(ref_items or our_items))
+
+
+def check_ink(ref: Model, ours: Model):
+    """Drawings: present on both sides, recognised handwriting kept.
+
+    one2html draws every ink object separately while the converter merges a
+    page's drawings into one SVG, so counts differ by design; the side-by-side
+    image shows the strokes.
+    """
+
+    ref_words = Counter(w for i in ref.ink for w in words(i.get("text") or ""))
+    our_words = Counter(w for i in ours.ink for w in words(i.get("text") or ""))
+    details = []
+    if bool(ref.ink) != bool(ours.ink):
+        details.append(f"ink objects: {len(ref.ink)} vs {len(ours.ink)}")
+    missing = ref_words - our_words
+    if missing:
+        details.append(f"recognised handwriting missing: {' '.join(missing.elements())}")
+    return _result("ink", not details, f"{len(ref.ink)} vs {len(ours.ink)} drawings", details,
+                   applicable=bool(ref.ink or ours.ink))
 
 
 def check_tags(ref: Model, ours: Model):
@@ -242,11 +270,19 @@ def _match_containers(ref: Model, ours: Model) -> dict[int, dict]:
 
     from difflib import SequenceMatcher
 
-    a, b = ref.word_list(), ours.word_list()
+    # Align each reference container on its own (Fortress may order containers
+    # differently, which a single whole-page alignment would hide).
+    b = ours.word_list()
     mapping: dict[int, int] = {}
-    for block in SequenceMatcher(None, a, b, autojunk=len(a) > 2000).get_matching_blocks():
-        for k in range(block.size):
-            mapping[block.a + k] = block.b + k
+    by_container: dict[int, list[int]] = {}
+    for index, token in enumerate(ref.tokens):
+        by_container.setdefault(token.container, []).append(index)
+    for indices in by_container.values():
+        a = [ref.tokens[i].word for i in indices]
+        matcher = SequenceMatcher(None, a, b, autojunk=False)
+        for block in matcher.get_matching_blocks():
+            for k in range(block.size):
+                mapping[indices[block.a + k]] = block.b + k
     found: dict[int, dict] = {}
     for index, token in enumerate(ref.tokens):
         if index not in mapping:
@@ -331,7 +367,7 @@ def run_all(ref: Model, ours: Model, boxes, imported_pages: set[str]) -> list[di
         check_image_alt(ref, ours),
         check_files(ref, ours),
         check_count("math", ref.math, ours.math),
-        check_count("ink", ref.ink, ours.ink, lambda i: i.get("text") or "(no text)"),
+        check_ink(ref, ours),
         check_tags(ref, ours),
         check_align(ref, ours),
         check_layout(ref, ours, boxes),

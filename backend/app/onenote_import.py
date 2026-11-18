@@ -279,8 +279,19 @@ def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
         if mark.get("type") == "link":
             hrefs[index] = _link_href(mark, text[start:end], ctx, block_links)
     bounds = sorted({0, length, *(s for s, _, _ in usable), *(e for _, e, _ in usable)})
+    equations = {index: latex for index, (_, _, mark) in enumerate(usable)
+                 if mark.get("type") == "math" and (latex := _inline_latex(mark)) is not None}
     runs: list[dict[str, Any]] = []
+    emitted: set[int] = set()
     for a, b in zip(bounds, bounds[1:]):
+        equation = next((index for index in equations if usable[index][0] <= a and usable[index][1] >= b), None)
+        if equation is not None:
+            # OneNote's linear text of an equation loses its structure (a/b, x², ∮…):
+            # keep the LaTeX instead, as inline code ``$…$`` (there is no inline math run).
+            if equation not in emitted:
+                emitted.add(equation)
+                runs.append({"text": f"${equations[equation]}$", "code": 1})
+            continue
         run: dict[str, Any] = {"text": text[a:b]}
         for index, (start, end, mark) in enumerate(usable):
             if start > a or end < b:
@@ -310,7 +321,7 @@ def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
                 href = hrefs.get(index)
                 if href:
                     run["link"] = href
-            # "math" (inline equations) keeps OneNote's linear text; font_size is dropped.
+            # font_size is dropped; equations with LaTeX were written above.
         if "code" in run:
             # Inline code cannot carry other marks in Markdown; keep it plain code.
             run = {key: value for key, value in run.items() if key in {"text", "code", "link"}}
@@ -356,6 +367,27 @@ def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext,
     return href
 
 
+def _inline_latex(mark: dict[str, Any]) -> str | None:
+    latex = mark.get("latex")
+    if not isinstance(latex, str) or not latex.strip():
+        return None
+    return " ".join(_strip_math_delimiters(latex).split()) or None
+
+
+def _text_without_equations(block: dict[str, Any]) -> str:
+    """A text block's text minus the inline equations the importer writes as LaTeX."""
+
+    text = str(block.get("text") or "")
+    spans = sorted(
+        (mark["start"], mark["end"]) for mark in block.get("marks") or []
+        if isinstance(mark, dict) and mark.get("type") == "math" and _inline_latex(mark) is not None
+        and isinstance(mark.get("start"), int) and isinstance(mark.get("end"), int)
+    )
+    for start, end in reversed(spans):
+        text = text[:start] + " " + text[end:]
+    return text
+
+
 def _strip_math_delimiters(latex: str) -> str:
     latex = latex.strip()
     for opening, closing in (("\\[", "\\]"), ("$$", "$$"), ("\\(", "\\)")):
@@ -386,6 +418,9 @@ def _text_block(block: dict[str, Any], ctx: _PageContext) -> tuple[dict[str, Any
         result["type"] = "quote"
     else:
         result["type"] = "paragraph"
+    if block.get("align") in {"center", "right"}:
+        # BlockNote's paragraph prop (what the web editor reads and writes).
+        result["attrs"] = {"textAlignment": block["align"]}
     ctx.count("text_blocks")
     return result, block_links
 
@@ -435,7 +470,16 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
         url = str(block.get("url") or "").strip()
         if not url or url.lower().startswith(_BAD_LINK_SCHEMES):
             return None
-        result = {"type": "paragraph", "inline": [{"text": url, "link": url}]}
+        thumbnail = ctx.importer.asset_url(block.get("thumbnail_asset")) if block.get("thumbnail_asset") else None
+        if thumbnail:
+            # The video's poster frame (what OneNote shows), linked to the video.
+            result = {"type": "image", "url": thumbnail, "caption": url, "name": "Video",
+                      "attrs": {"link": url, "embed": True}}
+            alt = str(block.get("alt_text") or "").strip()
+            if alt:
+                result["alt"] = alt
+        else:
+            result = {"type": "paragraph", "inline": [{"text": url, "link": url}]}
         ctx.count("embeds")
     else:
         text = str(block.get("text") or "")
@@ -567,6 +611,9 @@ def _table(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
                 and not first.get("children") and "inline" in first
             ):
                 entry["inline"] = first["inline"]
+                align = (first.get("attrs") or {}).get("textAlignment")
+                if align:
+                    entry["align"] = align  # the cell's first line is centred / right-aligned
                 nested = nested[1:]
             if nested:
                 entry["blocks"] = [_nested_safe(item) for item in nested]
@@ -805,7 +852,7 @@ def _manifest_text(blocks: list[Any]) -> list[str]:
         kind = block.get("type")
         if kind in {"paragraph", "heading", "list_item", "check_item", "quote", "code"}:
             if not block.get("is_source_citation"):
-                parts.append(str(block.get("text") or ""))
+                parts.append(_text_without_equations(block))
         elif kind == "image":
             parts.append(str(block.get("alt_text") or ""))
         elif kind == "ink":

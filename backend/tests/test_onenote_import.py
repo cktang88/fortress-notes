@@ -1072,5 +1072,85 @@ def _manifest_blocks(notebook):
     yield from entries(notebook["children"])
 
 
+class CompareFindingsTests(_Base):
+    """Regressions found by tools/onenote-compare (rendered OneNote vs imported note)."""
+
+    def import_blocks(self, blocks: list[dict], guid: str = P3) -> dict:
+        page = _pages(self.manifest)[guid]
+        page["items"] = [_outline("i0", blocks)]
+        page["layout"] = [{"kind": "item", "item": "i0"}]
+        self.run_import(self.manifest)
+        return self.tree(guid)
+
+    def test_markdown_export_numbers_ordered_list_items(self) -> None:
+        info = {"ordered": True, "style": "decimal", "marker": "%.", "restart": None}
+        tree = self.import_blocks([
+            {"type": "list_item", "indent": 0, "text": f"Step {n}", "list": info,
+             "object_id": f"{{{n}AAAAAAA-0000-0000-0000-000000000000}}&1"}
+            for n in range(1, 4)
+        ])
+        markdown = export_document_markdown(self.db, tree["id"])
+        # Every OneNote block carries a provenance comment, which ends a Markdown list:
+        # without real numbers each item would read "1." in any Markdown viewer.
+        self.assertIn("1. Step 1", markdown)
+        self.assertIn("2. Step 2", markdown)
+        self.assertIn("3. Step 3", markdown)
+
+    def test_monospace_runs_become_inline_code(self) -> None:
+        tree = self.import_blocks([{
+            "type": "paragraph", "indent": 0, "text": "run ls -la now",
+            "marks": [{"start": 4, "end": 10, "type": "font", "family": "Consolas"}],
+        }])
+        runs = tree["children"][0]["content"]["blocknote"]
+        self.assertIn({"type": "text", "text": "ls -la", "styles": {"code": True}}, runs)
+
+    def test_inline_equations_keep_their_latex(self) -> None:
+        text = "Pythagoras: 𝑎2+𝑏2=𝑐2 holds"
+        start = text.index("𝑎")
+        end = start + len("𝑎2+𝑏2=𝑐2")
+        tree = self.import_blocks([
+            {"type": "paragraph", "indent": 0, "text": text,
+             "marks": [{"start": start, "end": end, "type": "math", "latex": "\\(a^{2}+b^{2}=c^{2}\\)"}]},
+            # An equation alone in a list item (converter >= 0.2.1 keeps it a list item).
+            {"type": "list_item", "indent": 0, "text": "∫1𝑥𝑑𝑥",
+             "list": {"ordered": False, "style": "bullet", "marker": "•", "restart": None},
+             "marks": [{"start": 0, "end": 6, "type": "math", "latex": "\\[\\int \\frac{1}{x}dx\\]"}]},
+        ])
+        paragraph, item = tree["children"]
+        self.assertEqual(paragraph["content"]["blocknote"], [
+            {"type": "text", "text": "Pythagoras: ", "styles": {}},
+            {"type": "text", "text": "$a^{2}+b^{2}=c^{2}$", "styles": {"code": True}},
+            {"type": "text", "text": " holds", "styles": {}},
+        ])
+        self.assertEqual(item["type"], "list")
+        self.assertEqual(item["text"], "$\\int \\frac{1}{x}dx$")
+        report = self.run_import(self.manifest)
+        self.assertEqual([page for nb in report["notebooks"] for page in nb["low_coverage_pages"]], [])
+
+    def test_alignment_is_kept(self) -> None:
+        cell = {"background": None, "blocks": [{"type": "paragraph", "indent": 0, "text": "Total", "align": "right"}]}
+        tree = self.import_blocks([
+            {"type": "paragraph", "indent": 0, "text": "Centred title", "align": "center"},
+            {"type": "table", "indent": 0, "row_count": 1, "col_count": 1, "column_widths": [3.0],
+             "borders_visible": True, "rows": [{"cells": [cell]}]},
+        ])
+        paragraph, table = tree["children"]
+        self.assertEqual(paragraph["attrs"].get("textAlignment"), "center")
+        cell_props = table["content"]["blocknote"]["rows"][0]["cells"][0]["props"]
+        self.assertEqual(cell_props.get("textAlignment"), "right")
+
+    def test_video_embed_keeps_its_poster_image(self) -> None:
+        tree = self.import_blocks([{
+            "type": "embed", "indent": 0, "url": "https://www.youtube.com/watch?v=abc",
+            "thumbnail_asset": PNG_NAME, "alt_text": "Talent Connect",
+        }])
+        [image] = tree["children"]
+        self.assertEqual(image["type"], "image")
+        self.assertEqual(image["attrs"]["link"], "https://www.youtube.com/watch?v=abc")
+        self.assertEqual(image["attrs"]["caption"], "https://www.youtube.com/watch?v=abc")
+        self.assertEqual(image["attrs"]["alt"], "Talent Connect")
+        self.assertTrue(image["attrs"]["url"].startswith("/media/"))
+
+
 if __name__ == "__main__":
     unittest.main()

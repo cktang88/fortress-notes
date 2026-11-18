@@ -22,7 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from model import Model, Token, norm_color, norm_text, sha256_file, words
+from model import Model, Token, norm_color, norm_text, sha256_file, tokens_from_pieces, words
 
 
 # --- import ---------------------------------------------------------------------------------
@@ -96,6 +96,8 @@ class FortressNotes:
 # --- tree -> model ----------------------------------------------------------------------------
 
 _GENERATED_SUFFIXES = ("/subpages", "/ink_text")
+# Placeholders the importer writes for content whose data is not in the export.
+_GENERATED_LABELS = ("Image missing from the OneNote export",)
 
 
 def _external_id(block: dict) -> str:
@@ -134,21 +136,29 @@ class _TreeWalker:
         self.container = -1
 
     def runs_text(self, runs: list[dict], record: bool = True) -> str:
-        parts = []
+        """Tokenise a block's runs together (a word may span runs); returns its plain text."""
+
+        pieces: list[tuple[str, frozenset[str]]] = []
         for run in runs or []:
             if run.get("type") == "link":
                 inner = run.get("content") or []
                 text = "".join(r.get("text", "") for r in inner)
                 if record:
                     self.model.links.append((norm_text(text), str(run.get("href") or "")))
-                for r in inner:
-                    self.add_words(r.get("text", ""), _run_marks(r.get("styles") or {}))
-                parts.append(text)
-            else:
-                text = run.get("text", "")
-                self.add_words(text, _run_marks(run.get("styles") or {}))
-                parts.append(text)
-        text = "".join(parts)
+                pieces += [(r.get("text", ""), _run_marks(r.get("styles") or {})) for r in inner]
+                continue
+            text = run.get("text", "")
+            if text.startswith(_GENERATED_LABELS):
+                self.model.notes.append(f"generated label skipped: {text[:60]}")
+                continue
+            styles = run.get("styles") or {}
+            if styles.get("code") and len(text) > 2 and text.startswith("$") and text.endswith("$"):
+                self.model.math.append(text.strip("$"))  # inline equation (LaTeX)
+                pieces.append((" ", frozenset()))
+                continue
+            pieces.append((text, _run_marks(styles)))
+        self.model.tokens.extend(tokens_from_pieces(pieces, self.container))
+        text = "".join(t for t, _ in pieces)
         self.readable.append(text)
         return norm_text(text)
 
@@ -232,6 +242,12 @@ class _TreeWalker:
                 self.runs_text(cell.get("content") or [])
                 self.nested(cell.get("blocks") or [])
                 texts.append(" ".join(t.word for t in self.model.tokens[start:]))
+                align = (cell.get("props") or {}).get("textAlignment")
+                if align in {"center", "right"}:
+                    first = " ".join(words("".join(r.get("text", "") if r.get("type") != "link" else
+                                                   "".join(x.get("text", "") for x in r.get("content") or [])
+                                                   for r in cell.get("content") or [])))
+                    self.model.aligned.append((align, first))
                 colors.append(norm_color((cell.get("props") or {}).get("backgroundColor")))
             entry["cells"].append(texts)
             entry["bg"].append(colors)

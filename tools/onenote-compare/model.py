@@ -91,3 +91,25 @@ class Model:
 
     def word_list(self) -> list[str]:
         return [token.word for token in self.tokens]
+
+
+def tokens_from_pieces(pieces: list[tuple[str, frozenset[str]]], container: int = -1) -> list[Token]:
+    """Words of consecutive inline text pieces (runs), each with the marks of its first character.
+
+    Words are found in the joined text, so a word split across runs (``**bo**ld``,
+    a link ending mid-word) is still one word.
+    """
+
+    texts = [unicodedata.normalize("NFC", text) for text, _ in pieces]
+    joined = "".join(texts)
+    starts, position = [], 0
+    for text in texts:
+        starts.append(position)
+        position += len(text)
+    tokens = []
+    piece = 0
+    for match in WORD_RE.finditer(joined):
+        while piece + 1 < len(starts) and starts[piece + 1] <= match.start():
+            piece += 1
+        tokens.append(Token(match.group(0).casefold(), pieces[piece][1], container))
+    return tokens

@@ -16,9 +16,10 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 
-from model import MARK_NAMES, Model, Token, norm_color, norm_text, sha256_file, words
+from model import MARK_NAMES, Model, norm_color, norm_text, sha256_file, tokens_from_pieces, words
 
 VOID = {"img", "br", "embed", "meta", "link", "input", "hr", "col", "source", "wbr", "area", "base", "param", "track"}
+FIELD_CODE_RE = re.compile(r'\ufddfHYPERLINK "[^"]*"?')
 BLOCK_STYLE_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "cite", "div", "li", "td", "ul", "ol", "table", "blockquote", "code", "pre"}
 
 
@@ -139,10 +140,9 @@ def _marks_of(text_parent: Node) -> frozenset[str]:
         family = style.get("font-family", "").lower()
         if any(name in family for name in ("consolas", "courier", "lucida console", "monaco", "menlo")):
             marks.add("code")
-        if node.tag != "a":
-            color = norm_color(style.get("color"))
-            if color and "color" not in {m.split(":")[0] for m in marks}:
-                marks.add(f"color:{color}")
+        color = norm_color(style.get("color"))
+        if color and "color" not in {m.split(":")[0] for m in marks}:
+            marks.add(f"color:{color}")
         background = norm_color(style.get("background-color"))
         if background and "highlight" not in {m.split(":")[0] for m in marks}:
             marks.add(f"highlight:{background}")
@@ -192,6 +192,10 @@ def load(path: Path) -> tuple[str | None, Model, list[str]]:
                 model.title = norm_text(_own_text_deep(outlines[0]))
             continue
         containers.append(child)
+    if not model.title:
+        # one2html omits the title block when the title outline holds only a link marker etc.
+        head_title = _find(root, "title")
+        model.title = norm_text(head_title.text_content()) if head_title is not None else ""
     for index, container in enumerate(containers):
         style = container.style()
         model.containers.append({
@@ -202,7 +206,9 @@ def load(path: Path) -> tuple[str | None, Model, list[str]]:
     readable: list[str] = []
     for index, container in enumerate(containers):
         cwords: list[str] = []
-        _walk(container, model, index, path.parent, cwords, readable, depth_state={"tables": 0})
+        holder = Node("#holder", {}, None)
+        holder.children = [container]  # the container itself may be an img / ink svg / embed
+        _walk(holder, model, index, path.parent, cwords, readable, depth_state={"tables": 0})
         model.containers[index]["text"] = " ".join(cwords[:12])
         model.containers[index]["words"] = len(cwords)
     model.text = norm_text(" ".join(readable))
@@ -213,85 +219,128 @@ def _own_text_deep(node: Node) -> str:
     return " ".join(norm_text(_own_text(n)) for n in node.iter() if "outline-element" in n.classes)
 
 
+INLINE_TAGS = {"span", "a", "b", "i", "u", "s", "strong", "em", "sup", "sub", "font", "mark", "small", "big"}
+
+
+class _State:
+    """Walk state: inline text pieces are buffered and tokenised together per paragraph."""
+
+    def __init__(self, model: Model, container: int, base: Path, cwords: list[str], readable: list[str]):
+        self.model, self.container, self.base, self.cwords, self.readable = model, container, base, cwords, readable
+        self.pieces: list[tuple[str, frozenset[str]]] = []
+        self.tables = 0
+
+    def flush(self) -> None:
+        if self.pieces:
+            tokens = tokens_from_pieces(self.pieces, self.container)
+            self.model.tokens.extend(tokens)
+            self.cwords.extend(t.word for t in tokens)
+            self.readable.append("".join(t for t, _ in self.pieces))
+            self.pieces = []
+
+
 def _walk(node: Node, model: Model, container: int, base: Path, cwords: list[str], readable: list[str],
-          depth_state: dict) -> None:
+          depth_state: dict | None = None) -> None:
+    state = _State(model, container, base, cwords, readable)
+    _visit(node, state)
+    state.flush()
+
+
+def _visit(node: Node, st: _State) -> None:
     for child in node.children:
         if isinstance(child, str):
-            found = words(child)
-            if found:
-                marks = _marks_of(node)
-                for word in found:
-                    model.tokens.append(Token(word, marks, container))
-                cwords.extend(found)
-                readable.append(child)
+            # OneNote hides hyperlink field codes; one2html prints them when a link's
+            # marker and display runs are split oddly.
+            child = FIELD_CODE_RE.sub(" ", child)
+            if child:
+                st.pieces.append((child, _marks_of(node)))
             continue
         tag = child.tag
         classes = child.classes
         if tag in {"style", "script", "title"}:
             continue
-        if tag == "svg":
-            if any("note-tag-icon" in a.classes for a in _ancestors(child)):
-                continue
+        inline = tag in INLINE_TAGS and "note-tag-icon" not in classes
+        if not inline:
+            st.flush()
+        _element(child, tag, classes, st)
+        if not inline:
+            st.flush()
+
+
+def _file_entry(child: Node, st: _State, alt: bool) -> dict:
+    src = child.attrs.get("src", "")
+    file = (st.base / src) if src and "/" not in src.replace("\\", "/") else None
+    empty = file is None or not file.is_file() or file.stat().st_size == 0
+    entry = {"sha": None if empty else sha256_file(file), "name": src,
+             "size": file.stat().st_size if file and file.is_file() else None}
+    if alt:
+        entry["alt"] = norm_text(child.attrs.get("alt", ""))
+    return entry
+
+
+def _element(child: Node, tag: str, classes: set[str], st: _State) -> None:
+    model = st.model
+    if tag == "svg":
+        if any("note-tag-icon" in a.classes for a in _ancestors(child)):
+            return
+        title = _find(child, "title")
+        model.ink.append({"text": norm_text(title.text_content()) if title else ""})
+        return
+    if tag == "math":
+        model.math.append(norm_text(child.text_content()))
+        return
+    if "note-tag-icon" in classes:
+        para = _paragraph(child)
+        text = norm_text(_own_text(para)) if para is not None else ""
+        if child.attrs.get("role") == "checkbox":
+            model.checks.append((text, child.attrs.get("aria-checked") == "true"))
+        else:
             title = _find(child, "title")
-            model.ink.append({"text": norm_text(title.text_content()) if title else ""})
-            continue
-        if tag == "math":
-            model.math.append(norm_text(child.text_content()))
-            continue
-        if "note-tag-icon" in classes:
-            para = _paragraph(child)
-            text = norm_text(_own_text(para)) if para is not None else ""
-            if child.attrs.get("role") == "checkbox":
-                model.checks.append((text, child.attrs.get("aria-checked") == "true"))
-            else:
-                title = _find(child, "title")
-                model.tags.append((norm_text(title.text_content()) if title else "tag", text))
-            continue
-        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-            model.headings.append((int(tag[1]), norm_text(_own_text(child))))
-        if tag == "li" and child.parent is not None and child.parent.tag in {"ul", "ol"} \
-                and "tagged-list" not in child.parent.classes:
-            depth = sum(1 for a in _ancestors(child) if a.tag in {"ul", "ol"} and "tagged-list" not in a.classes) - 1
-            parent_style = child.parent.style().get("list-style-type", "decimal" if child.parent.tag == "ol" else "bullet")
-            model.list_items.append((norm_text(_own_text(child)), child.parent.tag == "ol", depth, parent_style))
-        if "outline-element" in classes or tag in {"p", "h1", "h2", "h3", "h4", "h5", "h6"}:
-            align = child.style().get("text-align")
-            if align in {"center", "right"}:
-                model.aligned.append((align, norm_text(_own_text(child))))
-        if tag == "a" and child.attrs.get("href"):
-            model.links.append((norm_text(child.text_content()), child.attrs["href"]))
-        if tag == "table":
-            rows = [r for r in child.children if isinstance(r, Node) and r.tag == "tr"]
-            for tbody in (c for c in child.children if isinstance(c, Node) and c.tag == "tbody"):
-                rows += [r for r in tbody.children if isinstance(r, Node) and r.tag == "tr"]
-            cells = [[c for c in r.children if isinstance(c, Node) and c.tag == "td"] for r in rows]
-            model.tables.append({
-                "rows": len(rows), "cols": max((len(r) for r in cells), default=0),
-                "cells": [[" ".join(words(c.text_content())) for c in r] for r in cells],
-                "bg": [[norm_color(c.style().get("background") or c.style().get("background-color")) for c in r]
-                       for r in cells],
-                "depth": depth_state["tables"],
-            })
-            depth_state["tables"] += 1
-            _walk(child, model, container, base, cwords, readable, depth_state)
-            depth_state["tables"] -= 1
-            continue
-        if tag == "img":
-            src = child.attrs.get("src", "")
-            file = (base / src) if src and "/" not in src.replace("\\", "/") else None
-            model.images.append({
-                "sha": sha256_file(file), "alt": norm_text(child.attrs.get("alt", "")), "name": src,
-                "size": file.stat().st_size if file and file.is_file() else None,
-            })
-            continue
-        if tag in {"embed", "audio", "video"}:
-            src = child.attrs.get("src", "")
-            file = (base / src) if src and "/" not in src.replace("\\", "/") else None
-            model.files.append({
-                "sha": sha256_file(file), "name": src,
-                "size": file.stat().st_size if file and file.is_file() else None,
-            })
-            continue
-        if tag == "br":
-            continue
-        _walk(child, model, container, base, cwords, readable, depth_state)
+            model.tags.append((norm_text(title.text_content()) if title else "tag", text))
+        return
+    if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        model.headings.append((int(tag[1]), norm_text(_own_text(child))))
+    if tag == "li" and child.parent is not None and child.parent.tag in {"ul", "ol"} \
+            and "tagged-list" not in child.parent.classes:
+        depth = sum(1 for a in _ancestors(child) if a.tag in {"ul", "ol"} and "tagged-list" not in a.classes) - 1
+        parent_style = child.parent.style().get("list-style-type", "decimal" if child.parent.tag == "ol" else "bullet")
+        model.list_items.append((norm_text(_own_text(child)), child.parent.tag == "ol", depth, parent_style))
+    if "outline-element" in classes or tag in {"p", "h1", "h2", "h3", "h4", "h5", "h6"}:
+        align = child.style().get("text-align")
+        if align in {"center", "right"}:
+            model.aligned.append((align, norm_text(_own_text(child))))
+    if tag == "a" and child.attrs.get("href"):
+        model.links.append((norm_text(child.text_content()), child.attrs["href"]))
+    if tag == "table":
+        rows = [r for r in child.children if isinstance(r, Node) and r.tag == "tr"]
+        for tbody in (c for c in child.children if isinstance(c, Node) and c.tag == "tbody"):
+            rows += [r for r in tbody.children if isinstance(r, Node) and r.tag == "tr"]
+        cells = [[c for c in r.children if isinstance(c, Node) and c.tag == "td"] for r in rows]
+        entry = {
+            "rows": len(rows), "cols": max((len(r) for r in cells), default=0), "cells": [],
+            "bg": [[norm_color(c.style().get("background") or c.style().get("background-color")) for c in r]
+                   for r in cells],
+            "depth": st.tables,
+        }
+        model.tables.append(entry)
+        st.tables += 1
+        for row in cells:
+            texts = []
+            for cell in row:
+                start = len(model.tokens)
+                _visit(cell, st)
+                st.flush()
+                texts.append(" ".join(t.word for t in model.tokens[start:]))
+            entry["cells"].append(texts)
+        st.tables -= 1
+        return
+    if tag == "img":
+        model.images.append(_file_entry(child, st, alt=True))
+        return
+    if tag in {"embed", "audio", "video"}:
+        model.files.append(_file_entry(child, st, alt=False))
+        return
+    if tag == "br":
+        st.pieces.append(("\n", frozenset()))
+        return
+    _visit(child, st)

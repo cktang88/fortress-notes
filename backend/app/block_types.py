@@ -40,7 +40,7 @@ EXTENDED_STYLES = frozenset({"underline", "superscript", "subscript", *COLOR_STY
 # Short names an importer may use (the OneNote converter's run format).
 STYLE_ALIASES = {
     "b": "bold", "i": "italic", "u": "underline", "s": "strike", "strikethrough": "strike",
-    "sup": "superscript", "sub": "subscript", "color": "textColor", "highlight": "backgroundColor",
+    "sup": "superscript", "sub": "subscript", "code": "code", "color": "textColor", "highlight": "backgroundColor",
     "background": "backgroundColor",
 }
 

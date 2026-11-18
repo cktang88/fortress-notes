@@ -399,6 +399,8 @@ pub enum Block {
         url: String,
         /// Poster image for the embed, if any.
         thumbnail_asset: Option<String>,
+        /// Alt / OCR text of the picture that carried the embed.
+        alt_text: Option<String>,
     },
     File {
         #[serde(flatten)]

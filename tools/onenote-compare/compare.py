@@ -96,10 +96,9 @@ def section_files(folder: Path) -> list[Path]:
     return found
 
 
-def units_from_each(folder: Path) -> list[Path]:
+def units_from_each(folder: Path, seen: set[str]) -> list[Path]:
     """Every .one/.onepkg/.zip under ``folder`` as its own unit, duplicates (same bytes) once."""
 
-    seen: set[str] = set()
     units = []
     for path in sorted(folder.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in (*SOURCE_SUFFIXES, ".zip") or path.stat().st_size == 0:
@@ -259,6 +258,10 @@ def process_unit(unit: Path, out: Path, args, renderer: Renderer) -> dict:
         result["errors"].append(f"import failed: {exc}\n{traceback.format_exc()[-1500:]}")
         report = {"notebooks": []}
     (work / "import-report.json").write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
+    for notebook in manifest.get("notebooks") or []:
+        for failed in (notebook.get("report") or {}).get("failed_sections") or []:
+            result["errors"].append(f"converter could not read section {' › '.join(failed.get('path') or [])}: "
+                                    f"{failed.get('reason')} [{str(failed.get('error'))[:160]}]")
     docs = notes.documents_by_page()
     imported_pages = set(docs)
     manifest_pages = {}
@@ -299,12 +302,17 @@ def process_unit(unit: Path, out: Path, args, renderer: Renderer) -> dict:
             else:
                 our_model = Model()
             if ref_path is None:
-                entry["checks"] = [checks._result("page", False, "page not rendered by one2html (reference missing)")]
+                entry["checks"] = [checks._result("page", True, "page not rendered by one2html (no reference to compare)",
+                                                  applicable=False)]
                 entry["status"] = "no-reference"
             elif doc_id is None:
                 entry["checks"] = [checks._result("page", False, "page missing in Fortress")]
                 entry["status"] = "missing"
             else:
+                if not ref_model.title and (page_info or {}).get("title_derived"):
+                    # Untitled in OneNote: Fortress names the note after its first line.
+                    our_model.notes.append(f"untitled page named {our_model.title!r}")
+                    ref_model.title = our_model.title
                 entry["checks"] = checks.run_all(ref_model, our_model, boxes, imported_pages)
                 entry["status"] = "ok"
             entry["words"] = len(ref_model.tokens)
@@ -415,8 +423,9 @@ def main() -> int:
     parser.add_argument("--one2html", required=True)
     args = parser.parse_args()
     units = list(args.inputs)
+    seen: set[str] = set()
     for folder in args.each:
-        units += units_from_each(folder)
+        units += units_from_each(folder, seen)
     if not units:
         parser.error("no inputs")
     args.out.mkdir(parents=True, exist_ok=True)
