@@ -84,7 +84,7 @@ import Testing
     first.connectsOnAppear = false
     second.connectsOnAppear = false
     first.navigation = ShellFixtures.navigation
-    #expect(second.navigation == ShellFixtures.navigation)
+    #expect(second.navigation == first.navigation)
 
     first.select(.folder(id: "travel"))
     first.open(noteId: "n1")
@@ -221,14 +221,21 @@ import Testing
 }
 
 @Test @MainActor func theEditorOffersRichPlainAndMarkdownOnCopyAndReadsTheUsualTypes() {
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: true)
     let text = FortressTextView.make()
+    window.contentView = text
+    text.string = "Kyoto"
+    text.setSelectedRange(NSRange(location: 0, length: 5))  // The text system offers types for a selection.
     let writable = text.writablePasteboardTypes
     #expect(writable.contains(BlockEditorController.blocksPasteboardType))
     #expect(writable.contains(NSPasteboard.PasteboardType(MarkdownCopy.typeIdentifier)))
-    #expect(writable.contains(.rtf))
-    #expect(writable.contains(.string))
+    // The text system may list the legacy names ("NeXT Rich Text Format…", "NSStringPboardType").
+    let rtf: Set<String> = ["public.rtf", "NeXT Rich Text Format v1.0 pasteboard type"]
+    let plain: Set<String> = ["public.utf8-plain-text", "NSStringPboardType"]
+    #expect(writable.contains { rtf.contains($0.rawValue) })
+    #expect(writable.contains { plain.contains($0.rawValue) })
     let readable = text.readablePasteboardTypes
-    for type in [BlockEditorController.blocksPasteboardType, .rtf, .string] {
-        #expect(readable.contains(type), "can't paste \(type.rawValue)")
-    }
+    #expect(readable.contains(BlockEditorController.blocksPasteboardType))
+    #expect(readable.contains { rtf.contains($0.rawValue) })
+    #expect(readable.contains { plain.contains($0.rawValue) })
 }
