@@ -392,15 +392,33 @@ public enum AskStatus: String, Codable, Sendable {
     case timeout, unavailable
 }
 
+/// A passage Ask looked at (shown when there is no answer, e.g. no model configured).
+public struct AskSource: Codable, Hashable, Identifiable, Sendable {
+    public var blockId: String
+    public var documentId: String
+    public var documentTitle: String
+    public var text: String
+    public var id: String { blockId }
+
+    enum CodingKeys: String, CodingKey {
+        case blockId = "block_id"
+        case documentId = "document_id"
+        case documentTitle = "document_title"
+        case text
+    }
+}
+
 public struct AskResponse: Codable, Hashable, Sendable {
     public var status: AskStatus
     public var answer: [AskSentence]
+    public var sources: [AskSource]?
     public var steps: [AskStep]?
     public var elapsedMs: Int?
 
     enum CodingKeys: String, CodingKey {
         case status
         case answer
+        case sources
         case steps
         case elapsedMs = "elapsed_ms"
     }

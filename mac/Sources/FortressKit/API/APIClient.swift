@@ -10,7 +10,8 @@ public struct APIError: LocalizedError, Sendable {
 /// Talks to the Fortress Notes backend (FastAPI, by default on localhost:8000).
 public struct APIClient: Sendable {
     public var baseURL: URL
-    private let session: URLSession
+    /// Internal so feature-area extensions (e.g. Finding) send through the same session.
+    let session: URLSession
 
     public init(baseURL: URL = URL(string: "http://127.0.0.1:8000")!, session: URLSession = .shared) {
         self.baseURL = baseURL

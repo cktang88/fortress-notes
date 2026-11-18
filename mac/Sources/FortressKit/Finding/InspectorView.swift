@@ -1,8 +1,362 @@
 import SwiftUI
 
-/// Related passages ("Seen before"), related notes and backlinks. (Finding area — placeholder.)
+/// The inspector for the open note: Info (where it came from, dates, size, links),
+/// "Seen before" for the block being written, related notes and backlinks.
 struct InspectorView: View {
+    @Environment(AppModel.self) private var model
+
+    @State private var info = NoteInfo()
+    @State private var seenBefore: [RelatedResult] = []
+    @State private var related: [RelatedResult] = []
+    @State private var backlinks: [Backlink] = []
+    @State private var loadedNoteId: String?
+
     var body: some View {
-        Text("Related").foregroundStyle(.secondary)
+        Group {
+            if let noteId = model.openNoteId {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        InfoSection(info: info, provenance: info.provenance)
+                        if !seenBefore.isEmpty {
+                            seenBeforeSection.transition(.opacity)
+                        }
+                        relatedSection
+                        backlinksSection
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .animation(.smooth(duration: 0.25), value: seenBefore)
+                }
+                .task(id: noteId) { await loadNote(noteId) }
+                .task(id: InfoKey(noteId: noteId, edited: editedStamp(noteId))) {
+                    await loadInfo(noteId)
+                }
+                .task(id: SeenKey(noteId: noteId, blockId: model.focusedBlockId)) {
+                    await loadSeenBefore(noteId: noteId, blockId: model.focusedBlockId)
+                }
+            } else {
+                ContentUnavailableView(
+                    "No Note Selected", systemImage: "sidebar.trailing",
+                    description: Text("Open a note to see where it came from and what it connects to."))
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private struct InfoKey: Hashable {
+        var noteId: String
+        var edited: String?
+    }
+
+    private func editedStamp(_ noteId: String) -> String? {
+        NoteInfo.from(navigation: model.navigation, documentId: noteId).updatedAt?.ISO8601Format()
+    }
+
+    private struct SeenKey: Hashable {
+        var noteId: String
+        var blockId: String?
+    }
+
+    // MARK: Loading
+
+    private func loadNote(_ noteId: String) async {
+        if loadedNoteId != noteId {
+            info = NoteInfo.from(navigation: model.navigation, documentId: noteId)
+            related = []
+            backlinks = []
+            seenBefore = []
+            loadedNoteId = noteId
+        }
+        let api = model.api
+        async let relatedNotes = try? api.related(documentId: noteId, count: 8)
+        async let links = try? api.backlinks(documentId: noteId)
+        let (loadedRelated, loadedLinks) = await (relatedNotes, links)
+        guard !Task.isCancelled else { return }
+        related = loadedRelated ?? []
+        backlinks = loadedLinks ?? []
+    }
+
+    /// Dates, provenance and counts from `…/info`; refetched (quietly, after a pause)
+    /// whenever the note is edited. Falls back to counting the document itself.
+    private func loadInfo(_ noteId: String) async {
+        if info.words != nil { try? await Task.sleep(for: .milliseconds(800)) }
+        guard !Task.isCancelled else { return }
+        let api = model.api
+        do {
+            let loaded = try await api.documentInfo(id: noteId)
+            guard !Task.isCancelled, model.openNoteId == noteId else { return }
+            info = NoteInfo(loaded)
+        } catch {
+            guard let document = try? await api.document(id: noteId), !Task.isCancelled else { return }
+            var fallback = NoteInfo.from(navigation: model.navigation, documentId: noteId)
+            fallback.add(document)
+            fallback.backlinksIn = Set(backlinks.map(\.sourceDocumentId)).count
+            info = fallback
+        }
+    }
+
+    /// Passages like the block being written; refreshed 400 ms after the caret settles.
+    private func loadSeenBefore(noteId: String, blockId: String?) async {
+        guard let blockId else {
+            seenBefore = []
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
+        let results = (try? await model.api.related(documentId: noteId, blockId: blockId, count: 3)) ?? []
+        guard !Task.isCancelled else { return }
+        seenBefore = results.filter { $0.matchedBlockId != nil && !$0.matchedBlockText.isEmpty }
+    }
+
+    // MARK: Sections
+
+    private var seenBeforeSection: some View {
+        InspectorSection(title: "Seen before", symbol: "eye") {
+            Text("You’ve written something like this")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+            ForEach(seenBefore) { item in
+                PassageCard(title: item.note.title, text: item.matchedBlockText, number: nil) {
+                    model.open(noteId: item.note.id, blockId: item.matchedBlockId)
+                }
+            }
+        }
+    }
+
+    private var relatedSection: some View {
+        InspectorSection(title: "Related notes", symbol: "point.3.connected.trianglepath.dotted") {
+            if related.isEmpty {
+                Text("Notes on the same subject show up here as you write.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(related) { item in
+                        InspectorRow(
+                            title: item.note.title,
+                            detail: item.matchedBlockText.isEmpty ? item.note.snippet : item.matchedBlockText
+                        ) {
+                            model.open(noteId: item.note.id, blockId: item.matchedBlockId)
+                        }
+                    }
+                }
+                .padding(.horizontal, -8)
+            }
+        }
+    }
+
+    private var backlinksSection: some View {
+        InspectorSection(title: "Backlinks", symbol: "arrow.uturn.backward") {
+            if backlinks.isEmpty {
+                Text("No notes link here yet.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(backlinks) { link in
+                        InspectorRow(
+                            title: link.sourceDocumentTitle,
+                            detail: link.sourceText,
+                            emphasis: link.label
+                        ) {
+                            model.open(noteId: link.sourceDocumentId, blockId: link.sourceBlockId)
+                        }
+                    }
+                }
+                .padding(.horizontal, -8)
+            }
+        }
+    }
+}
+
+/// A titled inspector group: small semibold secondary header, sentence case.
+struct InspectorSection<Content: View>: View {
+    let title: String
+    let symbol: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: symbol)
+                .labelStyle(InspectorHeaderLabelStyle())
+            content
+        }
+    }
+}
+
+private struct InspectorHeaderLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) {
+            configuration.icon
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            configuration.title
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// A clickable note row: title and one line of detail (with an emphasized phrase, e.g. the link label).
+private struct InspectorRow: View {
+    let title: String
+    let detail: String
+    var emphasis: String? = nil
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title.isEmpty ? "Untitled" : title)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                detailText
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(isHovered ? AnyShapeStyle(.quaternary.opacity(0.7)) : AnyShapeStyle(.clear)))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+
+    private var detailText: Text {
+        guard let emphasis, !emphasis.isEmpty, let range = detail.range(of: emphasis) else {
+            return Text(verbatim: detail)
+        }
+        return Text.joined([
+            Text(verbatim: String(detail[..<range.lowerBound])),
+            Text(verbatim: String(detail[range])).foregroundStyle(.tint).fontWeight(.medium),
+            Text(verbatim: String(detail[range.upperBound...])),
+        ])
+    }
+}
+
+/// Finder "Get Info"-style facts about the note: where it came from, dates, size and links.
+struct InfoSection: View {
+    let info: NoteInfo
+    let provenance: NoteProvenance?
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        InspectorSection(title: "Info", symbol: "info.circle") {
+            if let provenance, provenance.isNotable { source(provenance) }
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 5) {
+                if !info.folderPath.isEmpty { row("Folder", info.folderPath.joined(separator: " › ")) }
+                if let created = info.createdAt { row("Created", Self.format(created)) }
+                if let updated = info.updatedAt { row("Edited", Self.format(updated)) }
+                if let opened = info.openedAt { row("Opened", Self.format(opened)) }
+                if let words = info.words {
+                    row("Length", Self.length(words: words, blocks: info.blocks))
+                }
+                if let mixed = info.mixedSources { row("Blocks", mixed) }
+                if info.linksOut != nil || info.backlinksIn != nil {
+                    row("Links", "\(info.linksOut ?? 0) out · \(info.backlinksIn ?? 0) in")
+                }
+                if let edits = info.edits, edits > 0 { row("Edits", edits.formatted()) }
+            }
+        }
+    }
+
+    private func source(_ provenance: NoteProvenance) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label {
+                Text(provenance.label).font(.callout.weight(.medium))
+            } icon: {
+                Image(systemName: provenance.symbol)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            if let path = provenance.path {
+                Text(path)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            if let url = provenance.url {
+                Link(url.host() ?? url.absoluteString, destination: url)
+                    .font(.subheadline)
+                    .lineLimit(1)
+            }
+            if let line = provenance.originLine {
+                Button(line) {
+                    if let id = provenance.originDocumentId { model.open(noteId: id) }
+                }
+                .buttonStyle(.link)
+                .font(.subheadline)
+                .disabled(provenance.originDocumentId == nil)
+            }
+            if let dates = Self.sourceDates(provenance) {
+                Text(dates)
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if info.conflicts > 0 {
+                Label("\(info.conflicts) \(info.conflicts == 1 ? "change differs" : "changes differ") from the source",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .quaternarySystemFill), in: .rect(cornerRadius: 8, style: .continuous))
+        .padding(.bottom, 4)
+    }
+
+    /// "Written Mar 3, 2021 · changed May 12, 2024 · imported Nov 2, 2026"
+    static func sourceDates(_ provenance: NoteProvenance) -> String? {
+        let day = { (date: Date) in date.formatted(date: .abbreviated, time: .omitted) }
+        var parts: [String] = []
+        if let date = provenance.originalCreatedAt { parts.append("Written \(day(date))") }
+        if let date = provenance.originalUpdatedAt, date != provenance.originalCreatedAt {
+            parts.append("\(parts.isEmpty ? "Changed" : "changed") \(day(date))")
+        }
+        if let date = provenance.syncedAt {
+            parts.append("\(parts.isEmpty ? "Synced" : "synced") \(day(date))")
+        } else if let date = provenance.importedAt {
+            parts.append("\(parts.isEmpty ? "Imported" : "imported") \(day(date))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    static func length(words: Int, blocks: Int?) -> String {
+        var text = "\(words.formatted()) \(words == 1 ? "word" : "words")"
+        if let blocks { text += " · \(blocks) \(blocks == 1 ? "block" : "blocks")" }
+        return text
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        GridRow {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+                .gridColumnAlignment(.trailing)
+            Text(value)
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+    }
+
+    static func format(_ date: Date) -> String {
+        if Calendar.current.isDateInToday(date) {
+            return "Today, " + date.formatted(date: .omitted, time: .shortened)
+        }
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 }
