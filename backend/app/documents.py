@@ -7,9 +7,12 @@ outside the app. Nothing reads the mirrors back except the explicit importer.
 
 from __future__ import annotations
 
+import atexit
+import logging
 import os
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -244,6 +247,68 @@ def write_mirror(document_id: str) -> None:
 
     db_path, notes_path = _paths()
     mirror_document(db_path, notes_path, document_id)
+
+
+# Mirrors of notes being edited are written in the background, coalesced: a
+# burst of keystrokes rewrites the file once. (Rendering a 2,000-block note's
+# Markdown took as long as the edit itself, on every transaction.)
+MIRROR_DELAY_S = 0.5
+_pending_mirrors: dict[tuple[Path, Path, str], float] = {}
+_pending_changed = threading.Condition()
+_mirror_worker: threading.Thread | None = None
+_log = logging.getLogger("fortress")
+
+
+def schedule_mirror(document_id: str) -> None:
+    """Rewrite one note's mirror soon (coalesced); ``flush_mirrors`` forces it."""
+
+    global _mirror_worker
+    db_path, notes_path = _paths()
+    with _pending_changed:
+        _pending_mirrors.setdefault((db_path, notes_path, document_id), time.monotonic())
+        if _mirror_worker is None or not _mirror_worker.is_alive():
+            _mirror_worker = threading.Thread(
+                target=_mirror_loop, name="fortress-mirrors", daemon=True
+            )
+            _mirror_worker.start()
+        _pending_changed.notify()
+
+
+def flush_mirrors() -> None:
+    """Write every scheduled mirror now (shutdown, restore, tests)."""
+
+    with _pending_changed:
+        due = list(_pending_mirrors)
+        _pending_mirrors.clear()
+    _write_mirrors(due)
+
+
+def _mirror_loop() -> None:
+    while True:
+        with _pending_changed:
+            while not _pending_mirrors:
+                _pending_changed.wait()
+            oldest = min(_pending_mirrors.values())
+            wait = oldest + MIRROR_DELAY_S - time.monotonic()
+            if wait > 0:
+                _pending_changed.wait(wait)
+                continue
+            due = list(_pending_mirrors)
+            _pending_mirrors.clear()
+        _write_mirrors(due)
+
+
+def _write_mirrors(due: list[tuple[Path, Path, str]]) -> None:
+    for db_path, notes_path, document_id in due:
+        if not db_path.exists():
+            continue  # the workspace went away (never recreate it from here)
+        try:
+            mirror_document(db_path, notes_path, document_id)
+        except Exception:  # pragma: no cover - logged, the next edit retries
+            _log.exception("mirror write failed for %s", document_id)
+
+
+atexit.register(flush_mirrors)
 
 
 # Read-then-write: without this, a writer that read an older tree could replace
