@@ -53,13 +53,11 @@ struct KeystrokeSample {
         sampler.arguments = [String(getpid()), "3", "1", "-mayDie", "-file", output.path]
         try sampler.run()
         Thread.sleep(forTimeInterval: 1)
-        var first = 0.0
-        var turns: [Double] = []
-        repeat {
-            turns.append(milliseconds { _ = RunLoop.main.run(mode: .default, before: Date()) })
-            if turns.count == 1 { first = turns[0] }
-        } while !editor.controller.pendingBlocks.isEmpty && turns.count < 1000
+        // Only the first turn after the open is sampled (the rest after the sampler ends).
+        let first = milliseconds { _ = RunLoop.main.run(mode: .default, before: Date()) }
+        Thread.sleep(forTimeInterval: 2.5)
         sampler.waitUntilExit()
-        print(String(format: "PROFILE settle first turn %.1f longest %.1f turns %d", first, turns.max() ?? 0, turns.count))
+        let rest = editor.settle()
+        print(String(format: "PROFILE settle first turn %.1f then longest %.1f turns %d", first, rest.longest, rest.turns))
     }
 }
