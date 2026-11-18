@@ -13,7 +13,6 @@ import os
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import frontmatter
@@ -63,7 +62,6 @@ def create(
         db_path,
         data.title or block_store.derive_title(data.body),
         data.status,
-        data.tags,
         data.body,
         folder_id=data.folder_id,
         created_at=created_at,
@@ -75,27 +73,18 @@ def create(
     return tree
 
 
-def update(document_id: str, data: NoteUpdate) -> None:
-    """Change title, status or tags; KeyError if missing."""
+def update(document_id: str, data: NoteUpdate) -> tuple[dict, tuple]:
+    """Change title and/or status; the metadata payload and validator. KeyError if missing.
+
+    The mirror is rewritten in the background (coalesced), not inline.
+    """
 
     db_path, _ = _paths()
-    current = block_store.document_tree(db_path, document_id)
-    if current is None:
-        raise KeyError("document not found")
-    # Clearing the title hands it back to the first line of the note.
-    clearing_title = data.title is not None and data.title.strip() in ("", "Untitled")
-    if clearing_title:
-        data = data.model_copy(update={"title": None})
-    title = data.title if data.title is not None else current["title"]
-    status = data.status if data.status is not None else current["status"]
-    tags = data.tags if data.tags is not None else current["tags"]
-    now = datetime.now(timezone.utc).isoformat()
-    block_store.update_document_metadata(
-        db_path, document_id, title, status, tags, now, title_chosen=data.title is not None
+    result = block_store.update_document_metadata(
+        db_path, document_id, title=data.title, status=data.status
     )
-    if clearing_title:
-        block_store.use_auto_title(db_path, document_id)
-    write_mirror(document_id)
+    schedule_mirror(document_id)
+    return result
 
 
 def trash(document_id: str) -> None:
@@ -153,7 +142,6 @@ def capture(text: str, extra_provenance: dict | None = None) -> dict[str, object
         db_path,
         block_store.derive_title(body)[:80],
         "rough",
-        [],
         body,
         folder_id=folder_id,
         provenance=source,
@@ -298,11 +286,11 @@ def _mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
             metadata = dict(frontmatter.loads(target.read_text(encoding="utf-8")).metadata)
         except Exception:  # A damaged mirror is simply rewritten.
             metadata = {}
+    metadata.pop("tags", None)  # retired; dropped from older mirrors too
     metadata.update(
         id=tree["id"],
         title=tree["title"],
         status=tree["status"],
-        tags=tree["tags"],
         created_at=tree["created_at"],
         updated_at=tree["updated_at"],
         images=images.collect_image_texts(body),

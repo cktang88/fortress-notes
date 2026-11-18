@@ -5,7 +5,6 @@ Trash keeps deleted documents recoverable until someone empties it. Saved search
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .block_store import (
@@ -24,7 +23,7 @@ def list_trash(path: Path) -> list[dict[str, object]]:
     initialize(path)
     with connection_scope(path) as connection:
         rows = connection.execute(
-            """SELECT id, title, status, tags_json, deleted_at,
+            """SELECT id, title, status, deleted_at,
                       COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
                                 ORDER BY parent_id, position, id LIMIT 1), '') AS snippet
                  FROM documents
@@ -36,7 +35,6 @@ def list_trash(path: Path) -> list[dict[str, object]]:
             "id": row["id"],
             "title": row["title"],
             "status": row["status"],
-            "tags": _tags(row["tags_json"]),
             "deleted_at": row["deleted_at"],
             "snippet": row["snippet"][:160],
         }
@@ -135,14 +133,6 @@ def _purge(connection, document_ids: list[str]) -> None:
         # Children reference parents with ON DELETE CASCADE, so removing the
         # document cascades through blocks, refs, history, and receipts.
         connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
-
-
-def _tags(raw: str) -> list[str]:
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError):
-        return []
-    return [str(tag) for tag in value] if isinstance(value, list) else []
 
 
 # --- Saved searches ----------------------------------------------------------

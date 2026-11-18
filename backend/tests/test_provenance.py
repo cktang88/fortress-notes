@@ -68,7 +68,7 @@ class ProvenanceStoreTests(unittest.TestCase):
     # --- Basic provenance --------------------------------------------------
 
     def test_new_documents_default_to_manual_and_blocks_inherit(self) -> None:
-        create_document(self.db, "doc", "Doc", "rough", [], "One\n\nTwo", "t", "t")
+        create_document(self.db, "doc", "Doc", "rough", "One\n\nTwo", "t", "t")
         tree = document_tree(self.db, "doc")
         self.assertEqual(tree["provenance"], {"source": "manual"})
         self.assertEqual(
@@ -78,7 +78,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertIsNone(tree["last_opened_at"])
 
     def test_editor_inserts_are_manual_or_what_the_client_says_and_survive_undo(self) -> None:
-        create_document(self.db, "doc", "Doc", "rough", [], "One", "t", "t",
+        create_document(self.db, "doc", "Doc", "rough", "One", "t", "t",
                         provenance={"source": "capture"})
         tree = apply_transaction(self.db, "doc", [
             BlockOperation(operation="insert", block_id="01J00000000000000000000001", text="typed"),
@@ -145,9 +145,9 @@ class ProvenanceStoreTests(unittest.TestCase):
     def test_move_into_keeps_each_blocks_source_and_records_the_old_note(self) -> None:
         from app import duplicates
 
-        create_document(self.db, "captured", "Captured", "rough", [], "Thought", "t", "t",
+        create_document(self.db, "captured", "Captured", "rough", "Thought", "t", "t",
                         provenance={"source": "capture"})
-        create_document(self.db, "target", "Target", "rough", [], "Body", "t", "t")
+        create_document(self.db, "target", "Target", "rough", "Body", "t", "t")
         duplicates.move_into(self.db, "captured", "target")
         tree = document_tree(self.db, "target")
         moved = tree["children"][1]
@@ -228,8 +228,8 @@ class ProvenanceStoreTests(unittest.TestCase):
     # --- Links follow renames ----------------------------------------------
 
     def test_note_links_show_the_current_title_after_a_rename(self) -> None:
-        create_document(self.db, "target", "Old title", "rough", [], "Target body", "t", "t")
-        create_document(self.db, "source", "Source", "rough", [], "", "t", "t")
+        create_document(self.db, "target", "Old title", "rough", "Target body", "t", "t")
+        create_document(self.db, "source", "Source", "rough", "", "t", "t")
         target_block = document_tree(self.db, "target")["children"][0]["id"]
         apply_transaction(self.db, "source", [
             BlockOperation(
@@ -318,7 +318,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         tree = document_tree(self.db, first.document_id)
         ids = {node["text"]: node["id"] for node in tree["children"]}
         # Another note links to the page and to one of its blocks.
-        create_document(self.db, "linker", "Linker", "rough", [], "", "t", "t")
+        create_document(self.db, "linker", "Linker", "rough", "", "t", "t")
         apply_transaction(self.db, "linker", [BlockOperation(
             operation="insert", block_id="01J00000000000000000000005",
             text=f"[[{first.document_id}|Meeting]] (( {ids['Old text']} ))",
@@ -508,8 +508,8 @@ class ProvenanceStoreTests(unittest.TestCase):
     # --- Metadata -------------------------------------------------------------
 
     def test_document_info_counts(self) -> None:
-        create_document(self.db, "a", "A", "rough", [], "Hello world, it's me.\n\nSecond block", "t", "t")
-        create_document(self.db, "b", "B", "rough", [], "", "t", "t")
+        create_document(self.db, "a", "A", "rough", "Hello world, it's me.\n\nSecond block", "t", "t")
+        create_document(self.db, "b", "B", "rough", "", "t", "t")
         a_block = document_tree(self.db, "a")["children"][0]["id"]
         apply_transaction(self.db, "b", [BlockOperation(
             operation="insert", block_id="01J00000000000000000000008",
@@ -537,9 +537,9 @@ class ProvenanceStoreTests(unittest.TestCase):
     def test_migration_backfills_capture_markdown_import_and_manual(self) -> None:
         initialize(self.db)
         folder = block_store.create_folder(self.db, "Uncategorized")
-        create_document(self.db, "captured", "C", "rough", [], "x", "t", "t", folder_id=folder["id"])
-        create_document(self.db, "imported", "I", "rough", [], "x", "t", "t")
-        create_document(self.db, "written", "W", "rough", [], "x", "t", "t")
+        create_document(self.db, "captured", "C", "rough", "x", "t", "t", folder_id=folder["id"])
+        create_document(self.db, "imported", "I", "rough", "x", "t", "t")
+        create_document(self.db, "written", "W", "rough", "x", "t", "t")
         backup = self.root / ".fortress-import-backups" / "20260101T000000000000Z"
         backup.mkdir(parents=True)
         (backup / "imported.md").write_text("x", encoding="utf-8")

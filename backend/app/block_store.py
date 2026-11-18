@@ -102,7 +102,6 @@ CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('rough', 'polished')),
-    tags_json TEXT NOT NULL DEFAULT '[]',
     folder_id TEXT REFERENCES folders(id) ON DELETE RESTRICT,
     position INTEGER NOT NULL DEFAULT 0,
     deleted_at TEXT,
@@ -216,21 +215,6 @@ CREATE TABLE IF NOT EXISTS transaction_receipts (
     created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS link_check_cache (
-    url TEXT PRIMARY KEY,
-    status TEXT NOT NULL,
-    checked_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS saved_searches (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    query TEXT NOT NULL,
-    mode TEXT NOT NULL DEFAULT 'text',
-    filters_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL
-);
-
 CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
     block_id UNINDEXED,
     document_id UNINDEXED,
@@ -308,25 +292,12 @@ _MIGRATIONS = {
         created_at TEXT NOT NULL
     );
     """,
-    10: """
-    CREATE TABLE IF NOT EXISTS link_check_cache (
-        url TEXT PRIMARY KEY,
-        status TEXT NOT NULL,
-        checked_at TEXT NOT NULL
-    );
-    """,
+    # 10 (link-check cache) and 11 (saved searches) made tables that were later
+    # retired; ``_drop_retired_schema`` removes them.
+    10: "",
     12: "",
     13: "",
-    11: """
-    CREATE TABLE IF NOT EXISTS saved_searches (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        query TEXT NOT NULL,
-        mode TEXT NOT NULL DEFAULT 'text',
-        filters_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-    );
-    """,
+    11: "",
 }
 
 _ready_paths: set[Path] = set()
@@ -525,6 +496,7 @@ def _initialize(path: Path) -> None:
                 WHERE source_external_id IS NOT NULL"""
         )
         connection.executescript(_PERFORMANCE_INDEXES)
+        _drop_retired_schema(connection)
         _ensure_change_tracking(connection)
         if not _fts_rowids_aligned(connection):
             _rebuild_fts(connection)
@@ -549,7 +521,7 @@ CREATE INDEX IF NOT EXISTS transaction_receipts_document ON transaction_receipts
 # changes when a backup is restored, so validators from before never match.
 # last_opened_at is deliberately not tracked: it is metadata of a read.
 _DOCUMENT_COLUMNS = (
-    "title, status, tags_json, folder_id, position, deleted_at, created_at, updated_at, "
+    "title, status, folder_id, position, deleted_at, created_at, updated_at, "
     "revision, title_auto, provenance_json, source_kind, source_external_id, sync_json"
 )
 
@@ -598,6 +570,22 @@ for _table, _column in (
             f"AFTER {_event.upper()} ON {_table}",
             _bump(f"SELECT document_id FROM blocks WHERE id = {_row}.{_column}"),
         )
+
+
+def _drop_retired_schema(connection: sqlite3.Connection) -> None:
+    """Remove what retired features stored: tags, saved searches, link checks.
+
+    Idempotent and version-free (runs on every initialize, a no-op once done).
+    The documents update trigger names ``tags_json``, so it is dropped first;
+    ``_ensure_change_tracking`` recreates it without the column.
+    """
+
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(documents)")}
+    if "tags_json" in columns:
+        connection.execute("DROP TRIGGER IF EXISTS documents_changed_update")
+        connection.execute("ALTER TABLE documents DROP COLUMN tags_json")
+    connection.execute("DROP TABLE IF EXISTS saved_searches")
+    connection.execute("DROP TABLE IF EXISTS link_check_cache")
 
 
 def _ensure_change_tracking(connection: sqlite3.Connection) -> None:
@@ -938,13 +926,11 @@ def bootstrap_markdown(notes_path: Path, path: Path) -> int:
             status = post.metadata.get("status", "rough")
             if status not in {"rough", "polished"}:
                 status = "rough"
-            tags = post.metadata.get("tags", []) or []
             _insert_document(
                 connection,
                 note_id,
                 title,
                 status,
-                tags,
                 post.content,
                 created_at,
                 updated_at,
@@ -994,7 +980,6 @@ def create_document(
     document_id: str,
     title: str,
     status: str,
-    tags: list[str],
     body: str,
     created_at: object,
     updated_at: object,
@@ -1016,7 +1001,6 @@ def create_document(
             document_id,
             title,
             status,
-            tags,
             body,
             _iso(created_at),
             _iso(updated_at),
@@ -1218,7 +1202,7 @@ def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, o
     only = "" if ids is None else f"AND id IN ({','.join('?' for _ in ids)})"
     with connection_scope(path) as connection:
         rows = connection.execute(
-            f"""SELECT id, title, status, tags_json, folder_id, position,
+            f"""SELECT id, title, status, folder_id, position,
                       created_at, updated_at, source_kind,
                       COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
                                 ORDER BY parent_id, position, id LIMIT 1), '') AS snippet
@@ -1231,7 +1215,7 @@ def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, o
 
 
 def create_block_document(
-    path: Path, title: str, status: str, tags: list[str], body: str,
+    path: Path, title: str, status: str, body: str,
     folder_id: str | None = None,
     created_at: object | None = None,
     title_auto: bool = False,
@@ -1242,7 +1226,7 @@ def create_block_document(
     document_id = _new_ulid()
     now = _now()
     create_document(
-        path, document_id, title, status, tags, body,
+        path, document_id, title, status, body,
         _iso(created_at) if created_at is not None else now, now,
         ensure_empty_paragraph=True,
         folder_id=folder_id,
@@ -1274,28 +1258,54 @@ def rename_document(path: Path, document_id: str, title: str) -> dict:
     return tree
 
 
+UNSET_TITLE = "Untitled"
+
+
 def update_document_metadata(
     path: Path,
     document_id: str,
-    title: str,
-    status: str,
-    tags: list[str],
-    updated_at: object,
-    title_chosen: bool = False,
-) -> None:
-    """Update metadata; ``title_chosen`` means a person named it (auto titles stop)."""
+    *,
+    title: str | None = None,
+    status: str | None = None,
+) -> tuple[dict, tuple]:
+    """Change a document's title and/or status; KeyError if it is missing.
+
+    A title of ``""`` or ``"Untitled"`` hands the title back to the first line
+    (``title_auto``); any other title is the person's choice. Reads and writes
+    only the document row (never the blocks' tree) and returns the document's
+    metadata payload (``children`` empty) with its validator, read in the same
+    transaction.
+    """
 
     initialize(path)
-    with connection_scope(path) as connection:
-        cursor = connection.execute(
-            """UPDATE documents
-               SET title = ?, status = ?, tags_json = ?, updated_at = ?,
-                   title_auto = CASE WHEN ? THEN 0 ELSE title_auto END
-               WHERE id = ? AND deleted_at IS NULL""",
-            (title, status, json.dumps(tags), _iso(updated_at), title_chosen, document_id),
-        )
-        if cursor.rowcount == 0:
+    with connection_scope(path, immediate=True) as connection:
+        row = connection.execute(
+            "SELECT title, status FROM documents WHERE id = ? AND deleted_at IS NULL",
+            (document_id,),
+        ).fetchone()
+        if row is None:
             raise KeyError("document not found")
+        clearing = title is not None and title.strip() in ("", UNSET_TITLE)
+        connection.execute(
+            """UPDATE documents
+                  SET title = ?, status = ?, updated_at = ?,
+                      title_auto = CASE WHEN ? THEN 1 WHEN ? THEN 0 ELSE title_auto END
+                WHERE id = ?""",
+            (
+                row["title"] if title is None or clearing else title,
+                status or row["status"],
+                _now(),
+                clearing,
+                title is not None,
+                document_id,
+            ),
+        )
+        if clearing:
+            _refresh_auto_title(connection, document_id)
+        meta = _document_tree(connection, document_id, include_children=False)
+        validator = _document_validator(connection, document_id)
+    assert meta is not None and validator is not None
+    return meta, validator
 
 
 def delete_document(path: Path, document_id: str) -> None:
@@ -1445,7 +1455,7 @@ def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
                 ORDER BY parent_id, position, id"""
         ).fetchall()
         documents = connection.execute(
-            """SELECT id, title, status, tags_json, folder_id, position,
+            """SELECT id, title, status, folder_id, position,
                       created_at, updated_at, source_kind,
                       COALESCE((
                           SELECT text FROM blocks
@@ -1457,7 +1467,7 @@ def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
                 ORDER BY folder_id, position, id"""
         ).fetchall()
         recent = connection.execute(
-            """SELECT id, title, status, tags_json, folder_id, position,
+            """SELECT id, title, status, folder_id, position,
                       created_at, updated_at, source_kind,
                       COALESCE((
                           SELECT text FROM blocks
@@ -1912,7 +1922,6 @@ def _insert_document(
     document_id: str,
     title: str,
     status: str,
-    tags: list[str],
     body: str,
     created_at: str,
     updated_at: str,
@@ -1926,10 +1935,10 @@ def _insert_document(
     ).fetchone()[0]
     connection.execute(
         """INSERT INTO documents(
-                   id, title, status, tags_json, folder_id, position, deleted_at,
+                   id, title, status, folder_id, position, deleted_at,
                    created_at, updated_at
-               ) VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?)""",
-        (document_id, title, status, json.dumps(tags), position, created_at, updated_at),
+               ) VALUES (?, ?, ?, NULL, ?, NULL, ?, ?)""",
+        (document_id, title, status, position, created_at, updated_at),
     )
     _set_document_provenance(
         connection, document_id, _unclaimed_source_key(connection, provenance or {"source": "manual"})
@@ -1985,7 +1994,6 @@ def _navigation_document(row: sqlite3.Row) -> dict[str, object]:
         "id": row["id"],
         "title": row["title"],
         "status": row["status"],
-        "tags": json.loads(row["tags_json"]),
         "folder_id": row["folder_id"],
         "position": row["position"],
         "created_at": row["created_at"],
@@ -2366,7 +2374,6 @@ def _document_tree(
         "id": document["id"],
         "title": document["title"],
         "status": document["status"],
-        "tags": json.loads(document["tags_json"]),
         "created_at": document["created_at"],
         "updated_at": document["updated_at"],
         "revision": document["revision"],
@@ -3801,18 +3808,6 @@ def _refresh_auto_title(connection: sqlite3.Connection, document_id: str) -> Non
     )
     if title != row["title"]:
         connection.execute("UPDATE documents SET title = ? WHERE id = ?", (title, document_id))
-
-
-def use_auto_title(path: Path, document_id: str) -> None:
-    """Let the title follow the first line again (after someone clears it)."""
-
-    initialize(path)
-    with connection_scope(path) as connection:
-        connection.execute(
-            "UPDATE documents SET title_auto = 1 WHERE id = ? AND deleted_at IS NULL",
-            (document_id,),
-        )
-        _refresh_auto_title(connection, document_id)
 
 
 def first_line_title(texts) -> str:

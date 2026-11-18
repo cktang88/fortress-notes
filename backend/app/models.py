@@ -15,7 +15,6 @@ class NoteSummary(BaseModel):
     id: str
     title: str
     status: NoteStatus
-    tags: list[str] = []
     updated_at: datetime
     snippet: str = ""
 
@@ -26,7 +25,6 @@ class NoteCreate(BaseModel):
     title: str = ""
     body: str = ""
     status: NoteStatus = "rough"
-    tags: list[str] = []
     folder_id: str | None = None
     # Where the note came from (see app/provenance.py), e.g.
     # {"source": "ai", "extra": {"question": "..."}} for a saved Ask answer or
@@ -40,7 +38,6 @@ class NoteUpdate(BaseModel):
 
     title: str | None = None
     status: NoteStatus | None = None
-    tags: list[str] | None = None
 
 
 class BlockOperation(BaseModel):

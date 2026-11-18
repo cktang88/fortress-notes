@@ -75,7 +75,7 @@ class BlockStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
 
-            document = create_block_document(database, "Blank", "rough", [], "")
+            document = create_block_document(database, "Blank", "rough", "")
 
             self.assertEqual(len(document["children"]), 1)
             block = document["children"][0]
@@ -111,7 +111,6 @@ class BlockStoreTests(unittest.TestCase):
                 "legacy-image-note",
                 "Legacy image",
                 "rough",
-                [],
                 f"![legacy](/media/{image.name})",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -146,7 +145,7 @@ class BlockStoreTests(unittest.TestCase):
             database = root / ".fortress.sqlite3"
             media = root / "01ARZ3NDEKTSV4RRFFQ69G5FAV.png"
             media.write_bytes(b"new image")
-            document = create_block_document(database, "Asset search", "rough", [], "")
+            document = create_block_document(database, "Asset search", "rough", "")
             image_hash = hashlib.sha256(b"new image").hexdigest()
             register_asset(database, media, image_hash, "image/png")
             inserted = apply_transaction(
@@ -232,7 +231,7 @@ class BlockStoreTests(unittest.TestCase):
             database = root / ".fortress.sqlite3"
             media = root / "01JABCDEF0123456789ABCDEFGH.png"
             media.write_bytes(b"image")
-            document = create_block_document(database, "Asset owner", "rough", [], "")
+            document = create_block_document(database, "Asset owner", "rough", "")
             register_asset(database, media, "a" * 64, "image/png")
 
             result = apply_transaction(
@@ -267,7 +266,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_document_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", ["work"], "Parent")
+            created = create_block_document(database, "Draft", "rough", "Parent")
             self.assertEqual(created["title"], "Draft")
             self.assertEqual([item["id"] for item in list_documents(database)], [created["id"]])
             parent = created["children"][0]
@@ -313,7 +312,7 @@ class BlockStoreTests(unittest.TestCase):
             self.assertIsNotNone(tree)
             assert tree is not None
             self.assertEqual(tree["title"], "One")
-            self.assertEqual(tree["tags"], ["demo"])
+            self.assertNotIn("tags", tree)  # retired: front matter tags are ignored
             self.assertEqual(
                 [block["type"] for block in tree["children"]],
                 ["heading", "paragraph", "list", "list", "code"],
@@ -374,7 +373,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_transaction_journal_survives_reopen_and_rolls_back_with_failed_batch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", [], "Start")
+            created = create_block_document(database, "Draft", "rough", "Start")
             block_id = created["children"][0]["id"]
 
             updated = apply_transaction(
@@ -420,7 +419,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_persistent_undo_redo_restores_block_state_and_invalidates_redo(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", [], "Start")
+            created = create_block_document(database, "Draft", "rough", "Start")
             block = created["children"][0]
             changed = apply_transaction(
                 database,
@@ -482,7 +481,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_undo_restores_nested_deleted_subtree_and_split_merge_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", [], "Parent")
+            created = create_block_document(database, "Draft", "rough", "Parent")
             parent = created["children"][0]
             nested = apply_transaction(
                 database,
@@ -503,7 +502,6 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "Reference",
                 "rough",
-                [],
                 f'Link (({parent["id"]} "Parent"))',
             )
             deleted = apply_transaction(
@@ -550,7 +548,7 @@ class BlockStoreTests(unittest.TestCase):
         # In JavaScript "😀" has length 2, so the editor's offset 2 is right after it.
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", [], "😀ab 😀c")
+            created = create_block_document(database, "Draft", "rough", "😀ab 😀c")
             block_id = created["children"][0]["id"]
             split = apply_transaction(
                 database,
@@ -572,7 +570,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_undo_redo_preserves_duplicate_ids_and_sibling_positions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", [], "A\n\nB\n\nC")
+            created = create_block_document(database, "Draft", "rough", "A\n\nB\n\nC")
             initial_ids = [node["id"] for node in created["children"]]
             duplicated = apply_transaction(
                 database,
@@ -615,7 +613,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_nested_move_undo_redo_restores_unique_sibling_positions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", [], "Parent")
+            created = create_block_document(database, "Draft", "rough", "Parent")
             parent_id = created["children"][0]["id"]
             inserted = apply_transaction(
                 database,
@@ -651,7 +649,6 @@ class BlockStoreTests(unittest.TestCase):
                 "user-attrs",
                 "User attributes",
                 "rough",
-                [],
                 "",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -709,7 +706,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_duplicate_preserves_subtree_shape_with_new_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            create_document(database, "one", "One", "rough", [], "Parent\n\nChild", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
+            create_document(database, "one", "One", "rough", "Parent\n\nChild", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
             before = document_tree(database, "one"); assert before is not None
             original = before["children"][0]
             nested = apply_transaction(database, "one", [BlockOperation(operation="insert", parent_id=original["id"], text="Child")], before["revision"])
@@ -722,7 +719,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_split_and_merge_preserve_first_id_and_refresh_search(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            create_document(database, "one", "One", "rough", [], "abcdef\n\nghijkl", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
+            create_document(database, "one", "One", "rough", "abcdef\n\nghijkl", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
             before = document_tree(database, "one"); assert before is not None
             first_id = before["children"][0]["id"]
             split = apply_transaction(database, "one", [BlockOperation(operation="split", block_id=first_id, split_at=3)], before["revision"])
@@ -736,7 +733,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_failed_structural_operation_rolls_back_the_whole_transaction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            create_document(database, "one", "One", "rough", [], "A\n\nB", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
+            create_document(database, "one", "One", "rough", "A\n\nB", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
             before = document_tree(database, "one"); assert before is not None
             with self.assertRaises(ValueError):
                 apply_transaction(database, "one", [BlockOperation(operation="insert", text="C"), BlockOperation(operation="split", block_id=before["children"][0]["id"], split_at=99)], before["revision"])
@@ -752,7 +749,6 @@ class BlockStoreTests(unittest.TestCase):
                 "one",
                 "One",
                 "rough",
-                [],
                 "A\n\nB",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -806,7 +802,6 @@ class BlockStoreTests(unittest.TestCase):
                 "one",
                 "One",
                 "rough",
-                [],
                 "A\n\nB\n\nC",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -850,7 +845,6 @@ class BlockStoreTests(unittest.TestCase):
                 "receipt-note",
                 "Receipt note",
                 "rough",
-                [],
                 "Original",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -897,7 +891,6 @@ class BlockStoreTests(unittest.TestCase):
                 "legacy-filename-id",
                 "Legacy",
                 "rough",
-                [],
                 "",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -973,7 +966,6 @@ class BlockStoreTests(unittest.TestCase):
                 "one",
                 "One",
                 "rough",
-                [],
                 "Indexed text",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -1030,7 +1022,6 @@ class BlockStoreTests(unittest.TestCase):
                 "target",
                 "Target",
                 "rough",
-                [],
                 "Target block",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -1043,7 +1034,6 @@ class BlockStoreTests(unittest.TestCase):
                 "source",
                 "Source",
                 "rough",
-                [],
                 f"(( {target_block_id} \"block label\" )) and [[target|document label]]",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -1107,6 +1097,15 @@ class BlockStoreTests(unittest.TestCase):
                 self.assertEqual(
                     [row["version"] for row in versions], [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
                 )
+                # Retired features leave nothing behind (tags, saved searches, link checks).
+                columns = {row["name"] for row in connection.execute("PRAGMA table_info(documents)")}
+                self.assertNotIn("tags_json", columns)
+                for retired in ("saved_searches", "link_check_cache"):
+                    self.assertIsNone(
+                        connection.execute(
+                            "SELECT 1 FROM sqlite_master WHERE name = ?", (retired,)
+                        ).fetchone()
+                    )
                 self.assertIsNotNone(
                     connection.execute(
                         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'document_refs'"
@@ -1160,7 +1159,6 @@ class BlockStoreTests(unittest.TestCase):
                 "one",
                 "One",
                 "rough",
-                [],
                 "First",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -1170,7 +1168,6 @@ class BlockStoreTests(unittest.TestCase):
                 "two",
                 "Two",
                 "polished",
-                ["demo"],
                 "Second",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-02T00:00:00+00:00",
@@ -1220,7 +1217,6 @@ class BlockStoreTests(unittest.TestCase):
                 "one",
                 "One",
                 "rough",
-                [],
                 "First",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -1230,7 +1226,6 @@ class BlockStoreTests(unittest.TestCase):
                 "two",
                 "Two",
                 "rough",
-                [],
                 "Second",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -1259,7 +1254,6 @@ class BlockStoreTests(unittest.TestCase):
                 "three",
                 "Three",
                 "rough",
-                [],
                 "Third",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -1328,7 +1322,6 @@ class BlockStoreTests(unittest.TestCase):
                 "one",
                 "One",
                 "rough",
-                ["demo"],
                 "First\n\nSecond",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",

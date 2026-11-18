@@ -18,7 +18,6 @@ class PortabilityTests(unittest.TestCase):
                 "guide",
                 "Guide",
                 "polished",
-                ["docs"],
                 "# Guide\n\n- Parent\n  - Child\n\nAfter",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-02T00:00:00+00:00",
@@ -42,7 +41,6 @@ class PortabilityTests(unittest.TestCase):
                 "round-trip",
                 "Round trip",
                 "polished",
-                ["portable", "notes"],
                 "# Heading\n\nParagraph with **formatting**.\n\n- First\n  - Nested\n- Second",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-02T00:00:00+00:00",
@@ -61,13 +59,13 @@ class PortabilityTests(unittest.TestCase):
             self.assertEqual(imported_tree["status"], source_tree["status"])
             # Tags were removed from the product: not exported, ignored on import.
             self.assertNotIn("tags:", markdown)
-            self.assertEqual(imported_tree["tags"], [])
+            self.assertNotIn("tags", imported_tree)
             self.assertEqual(
                 _block_shape(imported_tree["children"]),
                 _block_shape(source_tree["children"]),
             )
 
-    def test_empty_document_exports_and_imports_with_no_blocks(self) -> None:
+    def test_empty_document_imports_with_one_empty_paragraph(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source_database = root / "source.sqlite3"
@@ -77,7 +75,6 @@ class PortabilityTests(unittest.TestCase):
                 "empty",
                 "Empty",
                 "rough",
-                [],
                 "",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -92,7 +89,11 @@ class PortabilityTests(unittest.TestCase):
             imported_tree = document_tree(imported_database, "empty")
             assert imported_tree is not None
             self.assertEqual(imported_tree["title"], "Empty")
-            self.assertEqual(imported_tree["children"], [])
+            # Something to type into, created at import (reads never write).
+            self.assertEqual(
+                [(block["type"], block["text"]) for block in imported_tree["children"]],
+                [("paragraph", "")],
+            )
 
     def test_import_creates_backups_and_preserves_originals(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -111,7 +112,7 @@ class PortabilityTests(unittest.TestCase):
             tree = document_tree(database, "imported")
             assert tree is not None
             self.assertEqual(tree["title"], "Imported")
-            self.assertEqual(tree["tags"], [])
+            self.assertNotIn("tags", tree)
 
     def test_repeated_import_reports_existing_document_and_makes_new_backup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -182,7 +183,7 @@ class NestedBlockRoundTripTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             create_document(
-                root / "0.sqlite3", "doc", "Doc", "rough", [], body,
+                root / "0.sqlite3", "doc", "Doc", "rough", body,
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             first_tree = document_tree(root / "0.sqlite3", "doc")

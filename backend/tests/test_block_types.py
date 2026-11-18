@@ -103,7 +103,7 @@ class BlockTypeStoreTests(unittest.TestCase):
         self.addCleanup(self._directory.cleanup)
         self.root = Path(self._directory.name)
         self.db = self.root / ".fortress.sqlite3"
-        create_document(self.db, "doc", "Doc", "rough", [], "Intro", "t", "t")
+        create_document(self.db, "doc", "Doc", "rough", "Intro", "t", "t")
 
     def apply(self, *operations):
         tree = document_tree(self.db, "doc")
@@ -230,7 +230,7 @@ class BlockTypeStoreTests(unittest.TestCase):
 
     def test_gfm_tables_import_as_tables(self) -> None:
         body = "Intro\n\n| A | B |\n|:-:|---|\n| *x* | y \\| z |\n| <u>u</u> |  |\n"
-        create_document(self.db, "gfm", "G", "rough", [], body, "t", "t")
+        create_document(self.db, "gfm", "G", "rough", body, "t", "t")
         table = document_tree(self.db, "gfm")["children"][1]
         self.assertEqual(table["type"], "table")
         content = table["content"]["blocknote"]
@@ -275,7 +275,7 @@ class BlockTypeStoreTests(unittest.TestCase):
     # --- Columns --------------------------------------------------------------
 
     def columns_page(self):
-        create_document(self.db, "target", "Target", "rough", [], "Target body", "t", "t")
+        create_document(self.db, "target", "Target", "rough", "Target body", "t", "t")
         blocks = source_blocks([
             {"type": "heading", "level": 1, "text": "Top", "id": "h"},
             {"type": "columns", "id": "cols", "attrs": {"onenote_y": 3}, "columns": [
@@ -413,7 +413,7 @@ class BlockTypeStoreTests(unittest.TestCase):
         self.assertEqual(restored["children"][2]["attrs"]["size"], 48213)
 
     def test_old_raw_img_html_imports_as_an_image_block(self) -> None:
-        create_document(self.db, "old", "Old", "rough", [], '<img src="/media/01J.png" width=300>', "t", "t")
+        create_document(self.db, "old", "Old", "rough", '<img src="/media/01J.png" width=300>', "t", "t")
         image = document_tree(self.db, "old")["children"][0]
         self.assertEqual(image["type"], "image")
         self.assertEqual(image["attrs"], {"url": "/media/01J.png", "width": 300})

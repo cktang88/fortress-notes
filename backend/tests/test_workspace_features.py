@@ -166,7 +166,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in result["errors"]], ["bad.md"])
         trip_id = result["imported"][0]["id"]
         # Old files with tags still import; the tags are ignored (no longer a feature).
-        self.assertEqual(self.client.get(f"/api/block-documents/{trip_id}").json()["tags"], [])
+        self.assertNotIn("tags", self.client.get(f"/api/block-documents/{trip_id}").json())
         navigation = self.client.get("/api/navigation").json()
         self.assertEqual(len(navigation["items"][0]["children"]), 2)
 
@@ -259,7 +259,10 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.assertTrue(mirror.exists())
         self.assertEqual(self.client.get(f"/api/block-documents/{created['id']}").json()["title"], "Block doc")
 
+        from app import documents
+
         self.client.patch(f"/api/block-documents/{created['id']}", json={"status": "polished"})
+        documents.flush_mirrors()  # rewritten in the background after a metadata change
         self.assertIn("status: polished", mirror.read_text())
         self.assertEqual(
             [note["id"] for note in self.documents() if note["status"] == "polished"],

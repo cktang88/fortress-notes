@@ -113,10 +113,11 @@ def import_markdown_directory(database_path: Path, source_directory: Path) -> Im
                 document_id,
                 title,
                 status,
-                [],
                 post.content,
                 created_at,
                 updated_at,
+                # The editor always has a paragraph to type into, even in an empty file.
+                ensure_empty_paragraph=True,
                 provenance=_markdown_import_provenance(
                     post.metadata, source_path.name, datetime.now(timezone.utc).isoformat()
                 ),
