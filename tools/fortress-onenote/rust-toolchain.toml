@@ -1,0 +1,6 @@
+# The Rust toolchain is a dependency too: pinned to a release at least 7 days old
+# (docs/dependencies.md). 1.99.0 was released 2026-10-01.
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
