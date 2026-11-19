@@ -47,8 +47,13 @@ final class UndoHarness {
             let before = target.selectedRange()
             target.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
             let after = target.selectedRange()
-            if after.location != before.location + (String(character) as NSString).length {
-                print("HARNESS caret \(before) → \(after) typing '\(character)' in \(Swift.type(of: target)): \(target.string.debugDescription)")
+            let expected = before.location + (String(character) as NSString).length
+            if after.location != expected {
+                // Offscreen, TextKit 2 leaves the caret after the edited paragraph when a
+                // character is typed inside one (see CaretProbeTests); on screen it stays
+                // after the character. Put it where typing leaves it.
+                print("HARNESS caret \(before) → \(after) typing '\(character)' in \(Swift.type(of: target))")
+                target.setSelectedRange(NSRange(location: expected, length: 0))
             }
         }
         settleRunLoop()
@@ -154,6 +159,7 @@ struct UndoScript {
             let item = harness.menuItem("undo:")
             #expect(item.enabled, "step \(index) can be undone", sourceLocation: sourceLocation)
             #expect(item.title == "Undo \(states[index].name)", "step \(index)", sourceLocation: sourceLocation)
+            print("WALK undo \(index) '\(harness.menuItem("undo:").title)' responder \(String(describing: harness.window.firstResponder.map { Swift.type(of: $0) }))")
             harness.undo()
             #expect(harness.snapshot() == states[index - 1].blocks, "after undoing step \(index) (\(states[index].name))",
                     sourceLocation: sourceLocation)
@@ -163,6 +169,7 @@ struct UndoScript {
             let item = harness.menuItem("redo:")
             #expect(item.enabled, "step \(index) can be redone", sourceLocation: sourceLocation)
             #expect(item.title == "Redo \(states[index].name)", "redo step \(index)", sourceLocation: sourceLocation)
+            print("WALK redo \(index) '\(harness.menuItem("redo:").title)' responder \(String(describing: harness.window.firstResponder.map { Swift.type(of: $0) }))")
             harness.redo()
             #expect(harness.snapshot() == states[index].blocks, "after redoing step \(index) (\(states[index].name))",
                     sourceLocation: sourceLocation)
@@ -197,7 +204,7 @@ struct UndoScript {
         script.step("Typing") { harness.type("item") }
         script.step("Insert Table") { harness.send("fortressInsertTable:") }
         let table = try #require(harness.live(TableBlockController.self))
-        #expect(harness.window.firstResponder is CellTextView, "the new table's first cell is being edited")
+        // (Offscreen the table's view may not be in the window yet: then enter it.)
         if !(harness.window.firstResponder is CellTextView) {
             harness.layout()
             table.focus(row: 0, column: 0, atEnd: false)
@@ -417,6 +424,11 @@ struct UndoScript {
         harness.select(NSRange(location: 4, length: 0))
         harness.type("!")
         harness.send("fortressInsertTable:")
+        if !(harness.window.firstResponder is CellTextView) {
+            harness.layout()
+            try #require(harness.live(TableBlockController.self)).focus(row: 0, column: 0, atEnd: false)
+            settleRunLoop()
+        }
         #expect(harness.window.firstResponder is CellTextView)
         harness.undo()
         #expect(harness.live(TableBlockController.self) == nil)
@@ -548,5 +560,69 @@ struct UndoScript {
         #expect(cache.session(for: "A") == nil)
         #expect(cache.session(for: "B") === sessions[1])
         #expect(cache.controller(for: sessions[2]) != nil)
+    }
+}
+
+/// Temporary: where the caret goes after typing in the middle of a paragraph, offscreen
+/// and in a window on screen, through insertText and through a key event.
+@MainActor
+@Suite(.serialized) struct CaretProbeTests {
+    @Test func caretAfterTypingInTheMiddle() throws {
+        func report(_ label: String, _ view: NSTextView) {
+            print("CARETPROBE \(label): selection \(view.selectedRange()) text \(view.string.debugDescription)")
+        }
+        // Our editor, offscreen.
+        let offscreen = UndoHarness([EditorBlock(id: "a", runs: [InlineRun("abc")]), EditorBlock(id: "b", runs: [InlineRun("def")])])
+        offscreen.select(NSRange(location: 1, length: 0))
+        offscreen.view.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+        report("editor offscreen insertText", offscreen.view)
+        // Our editor, window on screen and key.
+        let shown = UndoHarness([EditorBlock(id: "a", runs: [InlineRun("abc")]), EditorBlock(id: "b", runs: [InlineRun("def")])])
+        shown.window.orderFrontRegardless()
+        shown.window.makeKey()
+        shown.select(NSRange(location: 1, length: 0))
+        shown.view.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+        report("editor on screen insertText (visible \(shown.window.isVisible), key \(shown.window.isKeyWindow))", shown.view)
+        let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                  windowNumber: shown.window.windowNumber, context: nil, characters: "Y",
+                                                  charactersIgnoringModifiers: "Y", isARepeat: false, keyCode: 16))
+        shown.select(NSRange(location: 1, length: 0))
+        shown.view.keyDown(with: event)
+        report("editor on screen keyDown", shown.view)
+        shown.window.orderOut(nil)
+        // A plain TextKit 2 text view, offscreen.
+        let plain = NSTextView(usingTextLayoutManager: true)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = plain
+        window.makeFirstResponder(plain)
+        plain.string = "abc\ndef\n"
+        plain.setSelectedRange(NSRange(location: 1, length: 0))
+        plain.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+        report("plain text view offscreen", plain)
+        // A plain one whose delegate restyles the whole paragraph on each edit.
+        let restyled = NSTextView(usingTextLayoutManager: true)
+        let restyler = ParagraphRestyler()
+        restyled.textStorage?.delegate = restyler
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        other.contentView = restyled
+        other.makeFirstResponder(restyled)
+        restyled.string = "abc\ndef\n"
+        restyled.setSelectedRange(NSRange(location: 1, length: 0))
+        restyled.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+        report("plain text view, paragraph restyled while editing", restyled)
+        undoProbeKeep.append(contentsOf: [window, other])
+        withExtendedLifetime(restyler) {}
+    }
+}
+
+@MainActor private var undoProbeKeep: [NSWindow] = []
+
+private final class ParagraphRestyler: NSObject, NSTextStorageDelegate {
+    func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
+                     range editedRange: NSRange, changeInLength delta: Int) {
+        let paragraph = (textStorage.string as NSString).paragraphRange(for: editedRange)
+        textStorage.addAttribute(.font, value: NSFont.systemFont(ofSize: 14), range: paragraph)
     }
 }

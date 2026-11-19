@@ -801,6 +801,9 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
     /// where it was, and the opposite step on the stack.
     private func restore(_ snapshot: TableContent, actionName: String, cell: CellPosition, selection: NSRange) {
         let current = table
+        #if DEBUG
+        print("RESTORE \(actionName) cell \(cell.row),\(cell.column): '\(current.cell(row: cell.row, column: cell.column)?.plainText ?? "-")' → '\(snapshot.cell(row: cell.row, column: cell.column)?.plainText ?? "-")' undoing \(undoManager?.isUndoing ?? false) redoing \(undoManager?.isRedoing ?? false) manager \(undoManager == nil ? "nil" : "ok")")
+        #endif
         var currentSelection = NSRange(location: selection.location, length: 0)
         if let editor, editor.row == cell.row, editor.column == cell.column { currentSelection = editor.selectedRange() }
         undoManager?.registerUndo(withTarget: self) { target in
