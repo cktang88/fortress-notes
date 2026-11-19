@@ -136,11 +136,18 @@ private struct AskRow: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.tint)
                     .frame(width: 20)
-                Text("Ask your notes: \(Text(verbatim: query).foregroundStyle(.primary))")
-                    .foregroundStyle(.themeSecondary)
-                    .font(.body)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                // Two texts: one concatenated Text dropped the whole query when it didn't
+                // fit the column, leaving "Ask your notes:" alone.
+                HStack(spacing: 4) {
+                    Text("Ask your notes:")
+                        .foregroundStyle(.themeSecondary)
+                        .fixedSize()
+                    Text(verbatim: query)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .font(.body)
                 Spacer(minLength: 8)
                 Text(verbatim: isSelected ? "↩" : "⌘↩")
                     .font(.caption.monospacedDigit().weight(.medium))
