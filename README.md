@@ -75,7 +75,7 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
   plus unified search), then one streamed model call answers, or asks for one more grep
   or a whole note within a 3-second budget. A sentence whose quote isn't really in the
   cited passage is dropped.
-- Runs over [OpenRouter](https://openrouter.ai); default model `inception/mercury-3`
+- Runs over [OpenRouter](https://openrouter.ai); default model `anthropic/claude-haiku-5.5`
   (`ASK_MODEL`). Needs `OPENROUTER_API_KEY`.
 
 **Text in pictures and PDFs**
@@ -90,6 +90,12 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
 
 Requirements: macOS 26 with Xcode 26 (Swift 6.2 or later), [uv](https://docs.astral.sh/uv/)
 (Python 3.11+), and Rust (stable) if you want to import OneNote.
+
+**Quick start:** `./start.sh` installs the backend's dependencies, creates `backend/.env`
+if it's missing, builds the OneNote converter when Rust is installed, then builds and
+opens the Mac app, which starts and stops the backend itself. `./start.sh --backend`
+runs only the backend at `http://127.0.0.1:8000`, for development. The steps below are
+what it does.
 
 ### 1. Backend
 
@@ -183,9 +189,9 @@ relative to `backend/`. See [`backend/.env.example`](backend/.env.example).
 | --- | --- | --- |
 | `NOTES_DIR` | `../notes` | Folder for the database, Markdown mirrors, pictures, backups and the embedding index |
 | `OPENROUTER_API_KEY` | — | Needed for Ask |
-| `ASK_MODEL` | `inception/mercury-3` | OpenRouter model Ask uses |
+| `ASK_MODEL` | `anthropic/claude-haiku-5.5` | OpenRouter model Ask uses |
 | `ASK_REASONING_EFFORT` | `none` | OpenRouter reasoning effort for `ASK_MODEL` (empty: the model's default) |
-| `OPENROUTER_MODEL` | `z-ai/glm-5.3-flash` | Fallback model for LLM calls that name none (Ask always names `ASK_MODEL`) |
+| `OPENROUTER_MODEL` | `anthropic/claude-haiku-5.5` | Fallback model for LLM calls that name none (Ask always names `ASK_MODEL`) |
 | `EMBEDDINGS_ENABLED` | `true` | ColBERT search and related notes (off: keyword matching) |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
 | `EMBEDDINGS_PRECISION` | `auto` | `auto` (bfloat16 where the CPU supports it), `float32` or `bfloat16` |
