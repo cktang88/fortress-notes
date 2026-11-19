@@ -66,17 +66,17 @@ final class UndoHarness {
 
     /// A menu command, sent as the menu sends it (to the first responder that takes it).
     func send(_ action: String) {
-        let item = NSMenuItem(title: "", action: Selector(action), keyEquivalent: "")
-        _ = (window.firstResponder ?? window).tryToPerform(Selector(action), with: item)
+        let item = NSMenuItem(title: "", action: NSSelectorFromString(action), keyEquivalent: "")
+        _ = (window.firstResponder ?? window).tryToPerform(NSSelectorFromString(action), with: item)
         settleRunLoop()
     }
 
     /// The menu item as it would show: its title and whether it is enabled.
     func menuItem(_ action: String) -> (title: String, enabled: Bool) {
-        let item = NSMenuItem(title: "", action: Selector(action), keyEquivalent: "")
+        let item = NSMenuItem(title: "", action: NSSelectorFromString(action), keyEquivalent: "")
         var responder: NSResponder? = window.firstResponder ?? window
         while let current = responder {
-            if current.responds(to: Selector(action)) {
+            if current.responds(to: NSSelectorFromString(action)) {
                 let enabled = (current as NSObject as? NSMenuItemValidation)?.validateMenuItem(item) ?? true
                 return (item.title, enabled)
             }
