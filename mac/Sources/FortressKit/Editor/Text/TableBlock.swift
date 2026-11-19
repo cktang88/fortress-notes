@@ -464,9 +464,6 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 
     private func cellTextDidChange(_ view: CellTextView) {
         guard let storage = view.textStorage else { return }
-        #if DEBUG
-        print("CELLCHANGE \(view.row),\(view.column) '\(storage.string)' editor \(editor === view)")
-        #endif
         let full = NSRange(location: 0, length: storage.length)
         table.setRuns(DocumentText.runs(in: storage, range: full), row: view.row, column: view.column)
         if texts.indices.contains(view.row), texts[view.row].indices.contains(view.column) {
@@ -774,9 +771,6 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         if typing, let run = typingRun, run.cell == position, run.deleting == deleting { return }
         let name = cell.pendingActionName ?? UndoNames.typing
         let before = table
-        #if DEBUG
-        print("CELLUNDO \(name) \(position.row),\(position.column) before '\(before.cell(row: position.row, column: position.column)?.plainText ?? "-")'")
-        #endif
         let selection = cell.selectedRange()
         isRegisteringCellUndo = true
         undoManager.registerUndo(withTarget: self) { target in
@@ -807,9 +801,6 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
     /// where it was, and the opposite step on the stack.
     private func restore(_ snapshot: TableContent, actionName: String, cell: CellPosition, selection: NSRange) {
         let current = table
-        #if DEBUG
-        print("RESTORE \(actionName) cell \(cell.row),\(cell.column): '\(current.cell(row: cell.row, column: cell.column)?.plainText ?? "-")' → '\(snapshot.cell(row: cell.row, column: cell.column)?.plainText ?? "-")' undoing \(undoManager?.isUndoing ?? false) redoing \(undoManager?.isRedoing ?? false) manager \(undoManager == nil ? "nil" : "ok")")
-        #endif
         var currentSelection = NSRange(location: selection.location, length: 0)
         if let editor, editor.row == cell.row, editor.column == cell.column { currentSelection = editor.selectedRange() }
         undoManager?.registerUndo(withTarget: self) { target in
@@ -967,11 +958,15 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 final class CellTextView: NSTextView {
     weak var table: TableBlockController?
 
+    /// None for the text view itself: a cell's edits are put on the note's stack by the
+    /// table (`registerCellUndo`). NSTextView registered its typing steps on whatever this
+    /// returned even with `allowsUndo` off, and undoing one emptied the cell before the
+    /// table's step could note what to redo, so redo lost the typing.
+    override var undoManager: UndoManager? { nil }
+
     /// The note's undo stack (see `FortressTextView.noteUndo`): ⌘Z in a cell walks back
-    /// through the note's edits. The cell's own edits are put there by the table.
-    override var undoManager: UndoManager? {
-        table?.context?.undoManager ?? noteUndoManager ?? super.undoManager
-    }
+    /// through the note's edits.
+    var noteStack: UndoManager? { table?.context?.undoManager ?? noteUndoManager }
     var row = 0
     var column = 0
     var cellTheme = EditorTheme()
@@ -1006,11 +1001,11 @@ final class CellTextView: NSTextView {
     override func delete(_ sender: Any?) { asAction("Delete") { super.delete(sender) } }
 
     // Edit ▸ Undo and Redo: the note's stack (see `FortressTextView.undoNoteEdit`).
-    @objc(undo:) func undoNoteEdit(_ sender: Any?) { NoteUndoActions.undo(undoManager, from: self) }
-    @objc(redo:) func redoNoteEdit(_ sender: Any?) { NoteUndoActions.redo(undoManager, from: self) }
+    @objc(undo:) func undoNoteEdit(_ sender: Any?) { NoteUndoActions.undo(noteStack, from: self) }
+    @objc(redo:) func redoNoteEdit(_ sender: Any?) { NoteUndoActions.redo(noteStack, from: self) }
 
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        NoteUndoActions.validate(menuItem, undoManager) ?? super.validateMenuItem(menuItem)
+        NoteUndoActions.validate(menuItem, noteStack) ?? super.validateMenuItem(menuItem)
     }
 
     static func make() -> CellTextView {
