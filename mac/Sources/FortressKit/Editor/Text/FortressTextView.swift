@@ -20,10 +20,28 @@ final class FortressTextView: NSTextView {
     private var headerHeight: CGFloat = 0
     /// The note's own undo stack. Text undo stays apart from the window's (where the
     /// list's Move to Trash, moves and renames are undone), so ⌘Z in the note undoes
-    /// typing and ⌘Z in the list undoes list actions; loading a note clears only this.
+    /// typing and ⌘Z in the list undoes list actions. One stack per note: the note's
+    /// text, its columns' text and its table cells all register here (UNDO_AUDIT.md).
     let noteUndo = UndoManager()
 
-    override var undoManager: UndoManager? { noteUndoManager ?? noteUndo }
+    /// The note's stack: the editor's (shared with the columns and tables inside it),
+    /// else the one of the note text view this view sits in, else its own. Not found by
+    /// walking up the views alone: TextKit takes a column's text view out of the window
+    /// and back as it lays out, and a view out of the window found no stack.
+    override var undoManager: UndoManager? {
+        controller?.context.undoManager ?? noteUndoManager ?? noteUndo
+    }
+
+    // Edit ▸ Undo and Redo (⌘Z, ⇧⌘Z) go up the responder chain to the window, which
+    // undoes on *its* undo manager (the list's Move to Trash and moves), not on the
+    // text view's: the note's stack was never reached from the menu. The note's text
+    // views (this, a column's, a table cell's) answer them first, with the note's stack.
+    @objc(undo:) func undoNoteEdit(_ sender: Any?) { NoteUndoActions.undo(undoManager, from: self) }
+    @objc(redo:) func redoNoteEdit(_ sender: Any?) { NoteUndoActions.redo(undoManager, from: self) }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        NoteUndoActions.validate(menuItem, undoManager) ?? super.validateMenuItem(menuItem)
+    }
 
     static func make() -> FortressTextView {
         let textView = FortressTextView(usingTextLayoutManager: true)
@@ -107,6 +125,9 @@ final class FortressTextView: NSTextView {
     override func resignFirstResponder() -> Bool {
         let accepted = super.resignFirstResponder()
         if accepted, isEmbedded { isContinuousSpellCheckingEnabled = false }
+        // Focus moving to a table cell, a column or the title ends this typing step, so
+        // what is typed there isn't merged into it.
+        if accepted { breakUndoCoalescing() }
         return accepted
     }
 
@@ -170,9 +191,15 @@ final class FortressTextView: NSTextView {
         if let controller, controller.pasteFiles(from: .general) { return }
         let before = controller?.blockIds() ?? []
         let start = selectedRange().location
-        super.paste(sender)
+        if controller?.pasteConvertingSeparators(from: .general, plain: false) != true { super.paste(sender) }
         controller?.markPasted(from: start, to: selectedRange().location, existing: before,
                                sourceURL: Self.sourceURL(in: .general))
+    }
+
+    /// Paste and Match Style.
+    override func pasteAsPlainText(_ sender: Any?) {
+        if controller?.pasteConvertingSeparators(from: .general, plain: true) == true { return }
+        super.pasteAsPlainText(sender)
     }
 
     /// The page web content was copied from, when the browser says.
@@ -286,6 +313,56 @@ extension NSView {
             if let text = current as? FortressTextView { outermost = text }
             view = current.superview
         }
-        return outermost?.noteUndo
+        if let outermost { return outermost.controller?.context.undoManager ?? outermost.noteUndo }
+        return nil
+    }
+}
+
+/// Edit ▸ Undo and Redo for the note's text views (see `FortressTextView.undoNoteEdit`).
+@MainActor
+enum NoteUndoActions {
+    static func undo(_ undoManager: UndoManager?, from view: NSView) {
+        guard let undoManager, undoManager.canUndo else { NSSound.beep(); return }
+        keepingFocus(in: view) { undoManager.undo() }
+    }
+
+    static func redo(_ undoManager: UndoManager?, from view: NSView) {
+        guard let undoManager, undoManager.canRedo else { NSSound.beep(); return }
+        keepingFocus(in: view) { undoManager.redo() }
+    }
+
+    /// Undoing the insertion of a table while typing in one of its cells takes the cell
+    /// out of the window, and the window itself would answer the next ⌘Z (with the
+    /// list's stack). Focus goes back to the note's text then.
+    private static func keepingFocus(in view: NSView, _ body: () -> Void) {
+        let window = view.window
+        var note: FortressTextView?
+        var current: NSView? = view
+        while let found = current {
+            if let text = found as? FortressTextView, !text.isEmbedded { note = text }
+            current = found.superview
+        }
+        body()
+        guard let window, let note, note.window === window else { return }
+        // Attachment views (the table) leave the window as the text is laid out.
+        note.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        let responder = window.firstResponder
+        if responder === window || responder == nil || (responder as? NSView)?.window !== window {
+            window.makeFirstResponder(note)
+        }
+    }
+
+    /// Enables Undo and Redo and names them ("Undo Paste", "Redo Move"); nil for other items.
+    static func validate(_ item: NSMenuItem, _ undoManager: UndoManager?) -> Bool? {
+        switch item.action {
+        case Selector(("undo:")):
+            item.title = undoManager?.undoMenuItemTitle ?? "Undo"
+            return undoManager?.canUndo ?? false
+        case Selector(("redo:")):
+            item.title = undoManager?.redoMenuItemTitle ?? "Redo"
+            return undoManager?.canRedo ?? false
+        default:
+            return nil
+        }
     }
 }

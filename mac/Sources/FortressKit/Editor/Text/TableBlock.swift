@@ -9,7 +9,10 @@ import SwiftUI
 ///
 /// Tab and ⇧Tab move between cells (Tab in the last cell adds a row), ↑/↓ at a cell's
 /// edge move to the cell above or below, Esc leaves the table. Rows and columns are
-/// added and removed from the context menu, as one undo step each. Nested cell blocks
+/// added and removed from the context menu, as one undo step each. Edits of a cell's
+/// text are undone on the table too (a step restores the table as it was, see
+/// `registerCellUndo`), so they stay on the note's stack in order with everything else
+/// however often the cell's editor comes and goes. Nested cell blocks
 /// (OneNote lists and pictures in cells) show read-only under the cell's text and are
 /// saved untouched. Accessibility sees rows of cells (`TableGridView`).
 @MainActor
@@ -41,9 +44,6 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
     private(set) var focusedCell: CellTextView?
     /// The one cell editor in the grid, if a cell is being edited.
     private(set) var editor: CellTextView?
-    /// Editors of cells typed in earlier, kept out of the view tree so ⌘Z still undoes
-    /// that typing (it edits their text, which writes back to the table).
-    private var retired: [CellPosition: CellTextView] = [:]
 
     struct CellPosition: Hashable {
         var row: Int
@@ -178,7 +178,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         if let editor, editor.row == row, editor.column == column { return editor }
         retireEditor()
         let position = CellPosition(row: row, column: column)
-        let view = retired.removeValue(forKey: position) ?? makeEditor(row: row, column: column)
+        let view = makeEditor(row: position.row, column: position.column)
         editor = view
         view.isHidden = false
         if view.superview !== grid { grid.addSubview(view) }
@@ -203,27 +203,20 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         return view
     }
 
-    /// Takes the editor out of the grid (the cell is drawn again). One that was typed in
-    /// is kept for undo.
+    /// Takes the editor out of the grid (the cell is drawn again). Its edits are undone
+    /// on the table, so nothing on the undo stack refers to it.
     private func retireEditor() {
         guard let view = editor else { return }
         editor = nil
+        typingRun = nil
         if focusedCell === view { focusedCell = nil }
-        if view.wasEdited {
-            // Hidden, not removed: a text view out of its window loses its undo steps.
-            view.isHidden = true
-            retired[CellPosition(row: view.row, column: view.column)] = view
-        } else {
-            view.removeFromSuperview()
-        }
+        view.removeFromSuperview()
         grid.setNeedsDisplay(cellFrame(row: view.row, column: view.column))
     }
 
-    /// Forgets every editor (the table's shape changed: their positions are stale).
+    /// Forgets the editor (the table's shape changed: its position is stale).
     private func dropEditors() {
         retireEditor()
-        for view in retired.values { view.removeFromSuperview() }
-        retired = [:]
         focusedCell = nil
     }
 
@@ -439,10 +432,10 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 
     private var isLoadingCell = false
 
-    /// The cell editor holding `storage` (the one in use, or one kept for undo).
+    /// The cell editor holding `storage`.
     private func cellView(for storage: NSTextStorage) -> CellTextView? {
         if let editor, editor.textStorage === storage { return editor }
-        return retired.values.first { $0.textStorage === storage }
+        return nil
     }
 
     /// Every change of a cell's text (typing, paste, and undo, which doesn't always
@@ -472,7 +465,6 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
     private func cellTextDidChange(_ view: CellTextView) {
         guard let storage = view.textStorage else { return }
         let full = NSRange(location: 0, length: storage.length)
-        view.wasEdited = true
         table.setRuns(DocumentText.runs(in: storage, range: full), row: view.row, column: view.column)
         if texts.indices.contains(view.row), texts[view.row].indices.contains(view.column) {
             let copy = NSAttributedString(attributedString: storage)
@@ -485,6 +477,9 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 
     func textViewDidChangeSelection(_ notification: Notification) {
         guard let view = notification.object as? CellTextView, let storage = view.textStorage else { return }
+        // The caret moved by a click or an arrow key (not by an edit just made): the next
+        // typing is a new step.
+        if !isEditingCell { typingRun = nil }
         let location = view.selectedRange().location
         guard view.selectedRange().length == 0 else { return }
         var marks = location > 0 && location <= storage.length ? storage.marks(at: location - 1) : InlineMarks()
@@ -498,6 +493,14 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
     }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+        if let cell = textView as? CellTextView {
+            if !isEditingCell {
+                // The caret moves after the edit, within this run loop pass.
+                isEditingCell = true
+                BlockEditorController.later { [weak self] in self?.isEditingCell = false }
+            }
+            registerCellUndo(for: cell, replacing: replacementString)
+        }
         guard let storage = textView.textStorage, let replacementString, !textView.hasMarkedText() else { return true }
         // A note link or block reference is changed whole, never inside its label.
         let whole = InlineNodes.wholeNodes(range, in: storage)
@@ -727,7 +730,8 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 
     private func replaceTable(with updated: TableContent, actionName: String) {
         let previous = table
-        let undoManager = grid.noteUndoManager ?? grid.window?.undoManager
+        let undoManager = self.undoManager
+        typingRun = nil
         table = updated
         focusedCell = nil
         isBuilt = true
@@ -737,6 +741,84 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
             MainActor.assumeIsolated { target.replaceTable(with: previous, actionName: actionName) }
         }
         undoManager?.setActionName(actionName)
+    }
+
+    // MARK: Undo of cell edits
+
+    /// The note's undo stack (the note's editor shares it with its tables).
+    private var undoManager: UndoManager? { context?.undoManager ?? grid.noteUndoManager }
+
+    /// Typing in a cell that the next keystrokes join, as NSTextView joins typing into one
+    /// step: same cell, same direction (typing or deleting), caret not moved meanwhile,
+    /// and nothing else registered on the stack since.
+    private var typingRun: (cell: CellPosition, deleting: Bool)?
+    private var isRegisteringCellUndo = false
+    /// A cell's text is being changed (this run loop pass).
+    private var isEditingCell = false
+    private weak var observedUndoManager: UndoManager?
+
+    /// Before a cell's text changes: one step restoring the table as it is now, unless the
+    /// change continues the typing step in progress. The cell editors don't keep undo
+    /// steps of their own (`allowsUndo` is off): an editor is made and dropped as cells
+    /// are entered and left, and a shape change rebuilds them, which left their steps
+    /// pointing at text no cell showed (⌘Z then did nothing, or lost the edit).
+    private func registerCellUndo(for cell: CellTextView, replacing replacement: String?) {
+        guard let undoManager, !undoManager.isUndoing, !undoManager.isRedoing else { return }
+        observe(undoManager)
+        let position = CellPosition(row: cell.row, column: cell.column)
+        let deleting = replacement?.isEmpty ?? false
+        let typing = cell.isTyping && cell.pendingActionName == nil
+        if typing, let run = typingRun, run.cell == position, run.deleting == deleting { return }
+        let name = cell.pendingActionName ?? UndoNames.typing
+        let before = table
+        let selection = cell.selectedRange()
+        isRegisteringCellUndo = true
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated { target.restore(before, actionName: name, cell: position, selection: selection) }
+        }
+        undoManager.setActionName(name)
+        isRegisteringCellUndo = false
+        typingRun = typing ? (position, deleting) : nil
+    }
+
+    /// Anything else put on the stack (an edit in the note, in another table, a status
+    /// change) ends the typing step.
+    private func observe(_ undoManager: UndoManager) {
+        guard observedUndoManager !== undoManager else { return }
+        if let observedUndoManager {
+            NotificationCenter.default.removeObserver(self, name: .NSUndoManagerDidOpenUndoGroup, object: observedUndoManager)
+        }
+        observedUndoManager = undoManager
+        NotificationCenter.default.addObserver(self, selector: #selector(undoGroupDidOpen(_:)),
+                                               name: .NSUndoManagerDidOpenUndoGroup, object: undoManager)
+    }
+
+    @objc private func undoGroupDidOpen(_ notification: Notification) {
+        if !isRegisteringCellUndo { typingRun = nil }
+    }
+
+    /// Undo (or redo) of a cell edit: the table as it was, the caret back in that cell
+    /// where it was, and the opposite step on the stack.
+    private func restore(_ snapshot: TableContent, actionName: String, cell: CellPosition, selection: NSRange) {
+        let current = table
+        var currentSelection = NSRange(location: selection.location, length: 0)
+        if let editor, editor.row == cell.row, editor.column == cell.column { currentSelection = editor.selectedRange() }
+        undoManager?.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated { target.restore(current, actionName: actionName, cell: cell, selection: currentSelection) }
+        }
+        undoManager?.setActionName(actionName)
+        typingRun = nil
+        table = snapshot
+        isBuilt = true
+        rebuild()
+        remeasureAfterShapeChange()
+        // Show the change, as undo in text does: the caret goes back into the cell.
+        guard grid.window != nil, table.rows.indices.contains(cell.row),
+              let view = editor(row: cell.row, column: min(cell.column, max(0, table.rows[cell.row].cells.count - 1))) else { return }
+        view.window?.makeFirstResponder(view)
+        let length = view.textStorage?.length ?? 0
+        let location = min(selection.location, length)
+        view.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
     }
 
     private func remeasureAfterShapeChange() {
@@ -764,6 +846,8 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         storage.enumerateAttribute(.fnMarks, in: selection, options: []) { value, _, stop in
             if (value as? MarksBox)?.marks[keyPath: keyPath] != true { allOn = false; stop.pointee = true }
         }
+        view.pendingActionName = UndoNames.mark(keyPath)
+        defer { view.pendingActionName = nil }
         guard view.shouldChangeText(in: selection, replacementString: nil) else { return }
         storage.beginEditing()
         storage.enumerateAttribute(.fnMarks, in: selection, options: []) { value, run, _ in
@@ -845,19 +929,58 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 final class CellTextView: NSTextView {
     weak var table: TableBlockController?
 
-    /// The note's undo stack (see `FortressTextView.noteUndo`).
-    override var undoManager: UndoManager? { noteUndoManager ?? super.undoManager }
+    /// The note's undo stack (see `FortressTextView.noteUndo`): ⌘Z in a cell walks back
+    /// through the note's edits. The cell's own edits are put there by the table.
+    override var undoManager: UndoManager? {
+        table?.context?.undoManager ?? noteUndoManager ?? super.undoManager
+    }
     var row = 0
     var column = 0
     var cellTheme = EditorTheme()
-    /// Typed in (its undo steps refer to it).
-    var wasEdited = false
+    /// A key is being typed (or deleted): such edits join one undo step.
+    private(set) var isTyping = false
+    /// What the edit under way is called on the undo stack (Paste, Cut, Bold…).
+    var pendingActionName: String?
+
+    private func typing<T>(_ body: () -> T) -> T {
+        let outer = isTyping
+        isTyping = true
+        defer { isTyping = outer }
+        return body()
+    }
+
+    private func action(_ name: String, _ body: () -> Void) {
+        let outer = pendingActionName
+        pendingActionName = outer ?? name
+        defer { pendingActionName = outer }
+        body()
+    }
+
+    override func keyDown(with event: NSEvent) { typing { super.keyDown(with: event) } }
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        typing { super.insertText(string, replacementRange: replacementRange) }
+    }
+    override func doCommand(by selector: Selector) { typing { super.doCommand(by: selector) } }
+    override func paste(_ sender: Any?) { action(UndoNames.paste) { super.paste(sender) } }
+    override func pasteAsPlainText(_ sender: Any?) { action(UndoNames.paste) { super.pasteAsPlainText(sender) } }
+    override func pasteAsRichText(_ sender: Any?) { action(UndoNames.paste) { super.pasteAsRichText(sender) } }
+    override func cut(_ sender: Any?) { action("Cut") { super.cut(sender) } }
+    override func delete(_ sender: Any?) { action("Delete") { super.delete(sender) } }
+
+    // Edit ▸ Undo and Redo: the note's stack (see `FortressTextView.undoNoteEdit`).
+    @objc(undo:) func undoNoteEdit(_ sender: Any?) { NoteUndoActions.undo(undoManager, from: self) }
+    @objc(redo:) func redoNoteEdit(_ sender: Any?) { NoteUndoActions.redo(undoManager, from: self) }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        NoteUndoActions.validate(menuItem, undoManager) ?? super.validateMenuItem(menuItem)
+    }
 
     static func make() -> CellTextView {
         let view = CellTextView(usingTextLayoutManager: true)
         view.isRichText = true
         view.importsGraphics = false
-        view.allowsUndo = true
+        // Undone on the table (`TableBlockController.registerCellUndo`), not by the view.
+        view.allowsUndo = false
         view.drawsBackground = false
         view.isVerticallyResizable = false
         view.isHorizontallyResizable = false
