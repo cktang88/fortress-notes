@@ -315,7 +315,7 @@ extension GallerySnapshotTests {
             controllers.append(controller)
         }
         var next = controllers.makeIterator()
-        try await both("finding-search-question", size: CGSize(width: 340, height: 520)) {
+        try await both("finding-search-question", size: CGSize(width: 280, height: 520)) {
             let model = FindingFixtures.model()
             model.query = question
             return SearchResultsView(controller: next.next()!)
