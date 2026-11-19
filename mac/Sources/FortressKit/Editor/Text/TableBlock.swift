@@ -464,6 +464,9 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
 
     private func cellTextDidChange(_ view: CellTextView) {
         guard let storage = view.textStorage else { return }
+        #if DEBUG
+        print("CELLCHANGE \(view.row),\(view.column) '\(storage.string)' editor \(editor === view)")
+        #endif
         let full = NSRange(location: 0, length: storage.length)
         table.setRuns(DocumentText.runs(in: storage, range: full), row: view.row, column: view.column)
         if texts.indices.contains(view.row), texts[view.row].indices.contains(view.column) {
@@ -771,6 +774,9 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         if typing, let run = typingRun, run.cell == position, run.deleting == deleting { return }
         let name = cell.pendingActionName ?? UndoNames.typing
         let before = table
+        #if DEBUG
+        print("CELLUNDO \(name) \(position.row),\(position.column) before '\(before.cell(row: position.row, column: position.column)?.plainText ?? "-")'")
+        #endif
         let selection = cell.selectedRange()
         isRegisteringCellUndo = true
         undoManager.registerUndo(withTarget: self) { target in

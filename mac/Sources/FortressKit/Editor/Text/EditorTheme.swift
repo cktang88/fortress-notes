@@ -293,7 +293,7 @@ struct EditorTheme: Sendable {
             if let attachment = attributes[.attachment] { updated[.attachment] = attachment }
             if foreign {
                 storage.setAttributes(updated, range: run)
-            } else {
+            } else if !Self.isStyled(attributes, as: updated) {
                 for key in Self.presentationKeys where updated[key] == nil && attributes[key] != nil {
                     storage.removeAttribute(key, range: run)
                 }
@@ -301,6 +301,25 @@ struct EditorTheme: Sendable {
                 storage.addAttributes(updated, range: run)
             }
         }
+    }
+
+    /// Whether a run already has the attributes restyling would give it. Then it is left
+    /// alone: setting equal attributes still marks the whole paragraph as edited, and
+    /// TextKit 2 then put the caret after the paragraph (typing "X" in the middle of
+    /// one moved the caret to the next line, and a Markdown shortcut typed before text
+    /// was never seen). Only what changed is edited.
+    private static func isStyled(_ current: [NSAttributedString.Key: Any], as updated: [NSAttributedString.Key: Any]) -> Bool {
+        // The paragraph's one block info, by identity (the editor tracks blocks by it).
+        guard (current[.fnBlock] as AnyObject?) === (updated[.fnBlock] as AnyObject?) else { return false }
+        for key in presentationKeys + [.fnMarks, .fnNode, .attachment] {
+            switch (current[key], updated[key]) {
+            case (nil, nil): continue
+            case (let found?, let wanted?):
+                if (found as AnyObject) !== (wanted as AnyObject) && !(found as AnyObject).isEqual(wanted) { return false }
+            default: return false
+            }
+        }
+        return true
     }
 
     /// Marks from text pasted in from elsewhere (a web page, another app).

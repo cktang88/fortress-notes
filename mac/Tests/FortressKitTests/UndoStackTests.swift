@@ -49,10 +49,7 @@ final class UndoHarness {
             let after = target.selectedRange()
             let expected = before.location + (String(character) as NSString).length
             if after.location != expected {
-                // Offscreen, TextKit 2 leaves the caret after the edited paragraph when a
-                // character is typed inside one (see CaretProbeTests); on screen it stays
-                // after the character. Put it where typing leaves it.
-                print("HARNESS caret \(before) → \(after) typing '\(character)' in \(Swift.type(of: target))")
+                Issue.record("the caret moved from \(before) to \(after) typing '\(character)' in \(Swift.type(of: target))")
                 target.setSelectedRange(NSRange(location: expected, length: 0))
             }
         }
@@ -563,66 +560,29 @@ struct UndoScript {
     }
 }
 
-/// Temporary: where the caret goes after typing in the middle of a paragraph, offscreen
-/// and in a window on screen, through insertText and through a key event.
+/// Typing inside a paragraph leaves the caret after the typed character, offscreen and
+/// in a window on screen, through insertText and through a key event. (Restyling set
+/// equal attributes over the whole paragraph on every keystroke, and TextKit 2 then put
+/// the caret after the paragraph.)
 @MainActor
-@Suite(.serialized) struct CaretProbeTests {
-    @Test func caretAfterTypingInTheMiddle() throws {
-        func report(_ label: String, _ view: NSTextView) {
-            print("CARETPROBE \(label): selection \(view.selectedRange()) text \(view.string.debugDescription)")
-        }
-        // Our editor, offscreen.
+@Suite(.serialized) struct CaretTests {
+    @Test func typingInsideAParagraphKeepsTheCaret() throws {
         let offscreen = UndoHarness([EditorBlock(id: "a", runs: [InlineRun("abc")]), EditorBlock(id: "b", runs: [InlineRun("def")])])
         offscreen.select(NSRange(location: 1, length: 0))
         offscreen.view.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
-        report("editor offscreen insertText", offscreen.view)
-        // Our editor, window on screen and key.
+        #expect(offscreen.view.selectedRange() == NSRange(location: 2, length: 0))
         let shown = UndoHarness([EditorBlock(id: "a", runs: [InlineRun("abc")]), EditorBlock(id: "b", runs: [InlineRun("def")])])
         shown.window.orderFrontRegardless()
-        shown.window.makeKey()
         shown.select(NSRange(location: 1, length: 0))
-        shown.view.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
-        report("editor on screen insertText (visible \(shown.window.isVisible), key \(shown.window.isKeyWindow))", shown.view)
         let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                                                   windowNumber: shown.window.windowNumber, context: nil, characters: "Y",
                                                   charactersIgnoringModifiers: "Y", isARepeat: false, keyCode: 16))
-        shown.select(NSRange(location: 1, length: 0))
         shown.view.keyDown(with: event)
-        report("editor on screen keyDown", shown.view)
+        #expect(shown.view.selectedRange() == NSRange(location: 2, length: 0))
+        shown.view.keyDown(with: event)
+        settleRunLoop()
+        #expect(shown.view.string == "aYYbc\ndef\n")
+        #expect(shown.view.selectedRange() == NSRange(location: 3, length: 0))
         shown.window.orderOut(nil)
-        // A plain TextKit 2 text view, offscreen.
-        let plain = NSTextView(usingTextLayoutManager: true)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = plain
-        window.makeFirstResponder(plain)
-        plain.string = "abc\ndef\n"
-        plain.setSelectedRange(NSRange(location: 1, length: 0))
-        plain.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
-        report("plain text view offscreen", plain)
-        // A plain one whose delegate restyles the whole paragraph on each edit.
-        let restyled = NSTextView(usingTextLayoutManager: true)
-        let restyler = ParagraphRestyler()
-        restyled.textStorage?.delegate = restyler
-        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
-        other.isReleasedWhenClosed = false
-        other.contentView = restyled
-        other.makeFirstResponder(restyled)
-        restyled.string = "abc\ndef\n"
-        restyled.setSelectedRange(NSRange(location: 1, length: 0))
-        restyled.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
-        report("plain text view, paragraph restyled while editing", restyled)
-        undoProbeKeep.append(contentsOf: [window, other])
-        withExtendedLifetime(restyler) {}
-    }
-}
-
-@MainActor private var undoProbeKeep: [NSWindow] = []
-
-private final class ParagraphRestyler: NSObject, NSTextStorageDelegate {
-    func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
-                     range editedRange: NSRange, changeInLength delta: Int) {
-        let paragraph = (textStorage.string as NSString).paragraphRange(for: editedRange)
-        textStorage.addAttribute(.font, value: NSFont.systemFont(ofSize: 14), range: paragraph)
     }
 }
