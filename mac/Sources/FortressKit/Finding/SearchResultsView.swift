@@ -143,7 +143,7 @@ private struct AskRow: View {
                         .foregroundStyle(.themeSecondary)
                         .fixedSize()
                     Text(verbatim: query)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(.themeText)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
