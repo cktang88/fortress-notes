@@ -199,9 +199,16 @@ def unified_search(
         blocks = corpus_store.snapshot(db_path)
         if allowed is not None:
             blocks = [block for block in blocks if block[0] in allowed]
+        scored = embeddings.available()
         scores = embeddings.score_documents(
             q, [(block_id, version, text) for block_id, _, version, text in blocks]
         )
+        if scored:
+            # Only paragraphs that clear a relevance cutoff: the nearest paragraphs
+            # to a query are not necessarily near it.
+            scores = relevance.relevant_model_scores(
+                scores, relevance.query_token_count(q), relevance.SEARCH_MIN_SCORE
+            )
         best = heapq.nlargest(_MEANING_CANDIDATES, scores.items(), key=lambda item: item[1])
         return [block_id for block_id, score in best if score > 0]
 

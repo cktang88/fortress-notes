@@ -78,3 +78,25 @@ class OneSearchableTextTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SimilarityLengthTests(unittest.TestCase):
+    """Similarity matching skips paragraphs under three non-space characters."""
+
+    def test_short_text_is_not_compared(self) -> None:
+        from app import textutil
+
+        for short in ["", "ok", " a ", "-\n-", "　x"]:
+            self.assertFalse(textutil.long_enough_to_compare(short), short)
+        for long in ["yes", "a b c", "東京都"]:
+            self.assertTrue(textutil.long_enough_to_compare(long), long)
+
+    def test_short_paragraphs_never_score(self) -> None:
+        from unittest.mock import patch
+
+        from app import embeddings, relevance
+
+        docs = [("a", "1", "ok"), ("b", "1", "ok then, the ryokan"), ("c", "1", "-")]
+        with patch.object(embeddings, "_get_model", return_value=None):
+            self.assertEqual(set(embeddings.score_documents("ok", docs)), {"b"})
+            self.assertEqual(relevance.related(docs, query="ok"), ({}, None))

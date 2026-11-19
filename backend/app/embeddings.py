@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-from . import background, block_query
+from . import background, block_query, textutil
 from . import corpus as corpus_store
 from .config import Settings, get_settings
 
@@ -953,6 +953,8 @@ def _sync(corpus) -> list[tuple[str, str, str]]:
         ]
     live: set[str] = set()
     for block_id, _document_id, version, text in rows:
+        if not textutil.long_enough_to_compare(text):
+            continue  # too short to match by meaning; dropped from the index below
         live.add(block_id)
         entry = index.where.get(block_id)
         if entry is not None and entry[3] == version:
@@ -1139,6 +1141,7 @@ def score_documents(
     threshold works for short and long queries alike. ``paragraph`` marks the
     query as a paragraph's text (cached apart from typed queries).
     """
+    docs = [doc for doc in docs if textutil.long_enough_to_compare(doc[2])]
     model = _get_model()
     if model is None:
         query_words = _tokens(query)
@@ -1249,8 +1252,10 @@ def _cluster(vectors, size: int):
 def score_note(texts: list[str], docs: list[tuple[str, str, str]]) -> tuple[dict[str, float], int]:
     """Raw MaxSim of a whole note (see ``note_query``) and its query token count."""
 
+    texts = [text for text in texts if textutil.long_enough_to_compare(text)]
+    docs = [doc for doc in docs if textutil.long_enough_to_compare(doc[2])]
     model = _get_model()
-    query = note_query(texts) if model is not None else None
+    query = note_query(texts) if model is not None and texts else None
     if query is None or not docs:
         return {}, 0
     vectors, weights, tokens = query

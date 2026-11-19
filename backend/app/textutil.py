@@ -119,6 +119,18 @@ def content_words(text: str, *, numbers: bool = True) -> list[str]:
 # --- What is searchable ------------------------------------------------------
 
 
+# Similarity matching (meaning search, related notes, "seen before") ignores
+# paragraphs shorter than this many non-space characters: "ok", "-", "a" match
+# everything a little and nothing well. Exact word search still finds them.
+MIN_SIMILARITY_CHARS = 3
+
+
+def long_enough_to_compare(text: str) -> bool:
+    """Whether ``text`` has enough to it for similarity matching (see above)."""
+
+    return len("".join(text.split())) >= MIN_SIMILARITY_CHARS
+
+
 def searchable_text(text: str, asset_text: str | Iterable[str] = "") -> str:
     """What full-text search, embeddings, related notes and Ask see of one block.
 
