@@ -292,7 +292,7 @@ shutdown stops them (and any converter) and writes pending mirrors.
 
 1. Candidates are gathered locally first (tens of ms): a literal grep for the
    question's key words and unified search, in parallel.
-2. One streamed OpenRouter call (`ASK_MODEL`, default `inception/mercury-3`,
+2. One streamed OpenRouter call (`ASK_MODEL`, default `anthropic/claude-haiku-5.5`,
    `ASK_REASONING_EFFORT`) sees those passages and answers, or asks for one more
    `grep` across every note or `read` of a whole note.
 3. Every sentence must cite a verbatim quote; a sentence whose quote isn't in the
