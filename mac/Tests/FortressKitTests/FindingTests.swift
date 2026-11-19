@@ -123,7 +123,7 @@ import Testing
 
     /// Waits (up to 60 s: snapshot tests may hold the main thread meanwhile) for a condition.
     private func wait(until condition: () -> Bool) async {
-        let deadline = Date.now.addingTimeInterval(60)
+        let deadline = Date.now.addingTimeInterval(180)  // A hang guard (see `eventually`).
         while !condition(), Date.now < deadline {
             try? await Task.sleep(for: .milliseconds(10))
         }

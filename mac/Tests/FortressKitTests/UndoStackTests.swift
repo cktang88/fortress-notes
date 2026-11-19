@@ -12,7 +12,7 @@ import Testing
 @MainActor private var undoWindows: [NSWindow] = []
 
 @MainActor
-func settleRunLoop(_ seconds: Double = 0.05) {
+func settleRunLoop(_ seconds: Double = 0.02) {
     RunLoop.main.run(until: Date().addingTimeInterval(seconds))
 }
 
