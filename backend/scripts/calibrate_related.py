@@ -73,7 +73,7 @@ NOTES: list[tuple[str, str, str]] = [
 
 
 def main() -> None:
-    model = embeddings._get_model()
+    model = embeddings.load_model()
     if model is None:
         sys.exit("ColBERT model unavailable (is it in the Hugging Face cache?)")
     started = time.monotonic()

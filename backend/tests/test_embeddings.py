@@ -462,6 +462,53 @@ class ModelLoadingTests(unittest.TestCase):
             self.assertTrue(embeddings.available())
 
 
+class ModelRevisionTests(unittest.TestCase):
+    """The default model loads at its pinned commit; the store key follows the revision."""
+
+    def test_default_model_is_pinned_to_a_commit(self) -> None:
+        import re
+        import sys
+        import types
+
+        from app import config
+
+        self.assertRegex(config.COLBERT_REVISION, re.compile(r"^[0-9a-f]{40}$"))
+        loaded = []
+
+        class RecordingColBERT:
+            def __init__(self, **kwargs) -> None:
+                loaded.append(kwargs)
+
+            def encode(self, texts, **_kwargs):
+                return [[[1.0]] for _ in texts]
+
+        fake_pylate = types.ModuleType("pylate")
+        fake_pylate.models = types.SimpleNamespace(ColBERT=RecordingColBERT)
+        settings = _scratch_settings(self, colbert_model=config.COLBERT_MODEL)
+        with patch.dict(sys.modules, {"pylate": fake_pylate}), patch.object(
+            embeddings, "_cache", embeddings._Cache()
+        ), use_settings(settings):
+            embeddings.load_model()
+            self.assertEqual(loaded[0]["model_name_or_path"], config.COLBERT_MODEL)
+            self.assertEqual(loaded[0]["revision"], config.COLBERT_REVISION)
+            self.assertIn(f"@{config.COLBERT_REVISION}|", embeddings._store_key())
+
+    def test_revision_setting(self) -> None:
+        from app import config
+
+        with tempfile.TemporaryDirectory() as directory:
+            notes = Path(directory)
+            pinned = make_settings(notes, colbert_model=config.COLBERT_MODEL)
+            self.assertEqual(pinned.colbert_model_revision, config.COLBERT_REVISION)
+            chosen = make_settings(notes, colbert_model=config.COLBERT_MODEL, colbert_revision="abc")
+            self.assertEqual(chosen.colbert_model_revision, "abc")
+            # Another model: unpinned unless COLBERT_REVISION names a commit of it.
+            other = make_settings(notes, colbert_model="someone/other-colbert")
+            self.assertIsNone(other.colbert_model_revision)
+            with use_settings(other), patch.object(embeddings, "_cache", embeddings._Cache()):
+                self.assertNotIn("@", embeddings._store_key())
+
+
 class NoteQueryClusteringTests(unittest.TestCase):
     def test_long_notes_are_bounded_and_keep_their_token_weight(self) -> None:
         import torch

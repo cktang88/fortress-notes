@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// How to start the Python backend from its folder: the project's own virtualenv when it
-/// has one, otherwise `uv run`.
+/// has one, otherwise `uv run --frozen` (the locked dependencies, never re-resolved).
 public struct BackendLaunch: Hashable, Sendable {
     public var executable: URL
     public var arguments: [String]
@@ -40,11 +40,11 @@ public struct BackendLaunch: Hashable, Sendable {
         }
         let uv = searchPath.prefix(4).map { URL(fileURLWithPath: "\($0)/uv") }.first { fileExists($0.path) }
         if let uv {
-            return BackendLaunch(executable: uv, arguments: ["run", "uvicorn"] + serve, workingDirectory: directory, path: path,
+            return BackendLaunch(executable: uv, arguments: ["run", "--frozen", "uvicorn"] + serve, workingDirectory: directory, path: path,
                                  onenoteConverter: converter)
         }
         return BackendLaunch(
-            executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: ["uv", "run", "uvicorn"] + serve,
+            executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: ["uv", "run", "--frozen", "uvicorn"] + serve,
             workingDirectory: directory, path: path, onenoteConverter: converter)
     }
 

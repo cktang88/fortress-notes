@@ -7,9 +7,15 @@ import unittest
 def _model_name() -> str:
     # The default model, not get_settings(): that would make (and cache) the process's
     # settings from backend/.env for every later test, and create its notes folder.
-    from app.config import Settings
+    from app.config import COLBERT_MODEL
 
-    return Settings.model_fields["colbert_model"].default
+    return COLBERT_MODEL
+
+
+def _revision() -> str:
+    from app.config import COLBERT_REVISION
+
+    return COLBERT_REVISION
 
 
 def _reference():
@@ -17,7 +23,9 @@ def _reference():
         import mlx.core  # noqa: F401
         from pylate import models
 
-        model = models.ColBERT(model_name_or_path=_model_name(), device="cpu")
+        model = models.ColBERT(
+            model_name_or_path=_model_name(), revision=_revision(), device="cpu"
+        )
     except Exception as error:  # noqa: BLE001 - no mlx, no cached model, offline
         raise unittest.SkipTest(f"MLX or the ColBERT model unavailable: {error}")
     model.eval()
@@ -30,7 +38,7 @@ class MlxColBERTTests(unittest.TestCase):
 
         from app import colbert_mlx
         reference = _reference()
-        encoder = colbert_mlx.load(reference, _model_name(), "float32")
+        encoder = colbert_mlx.load(reference, _model_name(), "float32", _revision())
         # A long paragraph (local attention windows) batched with short ones (padding
         # far from any real token), and queries.
         documents = [

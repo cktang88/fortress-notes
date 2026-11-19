@@ -41,6 +41,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from app.config import COLBERT_MODEL, COLBERT_REVISION  # noqa: E402
+
 # --- shared helpers -----------------------------------------------------------------------
 
 
@@ -453,7 +455,9 @@ def run_colbert(config: str, reps: int, out_dir: Path) -> dict:
         return result
     started = time.perf_counter()
     try:
-        model = models.ColBERT(model_name_or_path="lightonai/Agent-ModernColBERT", device=device)
+        model = models.ColBERT(
+            model_name_or_path=COLBERT_MODEL, revision=COLBERT_REVISION, device=device
+        )
         model.eval()
         if dtype != torch.float32:
             model = model.to(dtype)
@@ -547,10 +551,12 @@ def _run_mlx(result, precision, paragraphs, para_query, reps, out_dir) -> dict:
         return result
     started = time.perf_counter()
     try:
-        ref = models.ColBERT(model_name_or_path="lightonai/Agent-ModernColBERT", device="cpu")
+        ref = models.ColBERT(
+            model_name_or_path=COLBERT_MODEL, revision=COLBERT_REVISION, device="cpu"
+        )
         ref.eval()
         name = {"fp32": "float32", "fp16": "float16", "bf16": "bfloat16"}[precision]
-        model = colbert_mlx.load(ref, "lightonai/Agent-ModernColBERT", name)
+        model = colbert_mlx.load(ref, COLBERT_MODEL, name, COLBERT_REVISION)
     except Exception as error:  # noqa: BLE001
         result["error"] = f"mlx load: {type(error).__name__}: {error}"[:500]
         return result

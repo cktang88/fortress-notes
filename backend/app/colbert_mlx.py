@@ -37,17 +37,17 @@ def available() -> bool:
         return False
 
 
-def model_dir(name: str) -> Path:
-    """The local folder holding a model's config and transformer weights (a Hugging
-    Face model is in its cache already: PyLate loaded it)."""
+def model_dir(name: str, revision: str | None = None) -> Path:
+    """The local folder holding a model's config and transformer weights at
+    ``revision`` (a Hugging Face model is in its cache already: PyLate loaded it)."""
 
     path = Path(name).expanduser()
     if path.is_dir():
         return path
     from huggingface_hub import hf_hub_download
 
-    hf_hub_download(name, "config.json")
-    return Path(hf_hub_download(name, "model.safetensors")).parent
+    hf_hub_download(name, "config.json", revision=revision)
+    return Path(hf_hub_download(name, "model.safetensors", revision=revision)).parent
 
 
 class MlxColBERT:
@@ -185,5 +185,7 @@ def _dense_weight(reference):
     return linear.weight.detach().float().cpu().numpy()
 
 
-def load(reference, model_name: str, dtype: str = DEFAULT_DTYPE) -> MlxColBERT:
-    return MlxColBERT(reference, model_dir(model_name), dtype)
+def load(
+    reference, model_name: str, dtype: str = DEFAULT_DTYPE, revision: str | None = None
+) -> MlxColBERT:
+    return MlxColBERT(reference, model_dir(model_name, revision), dtype)

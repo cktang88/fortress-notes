@@ -31,7 +31,7 @@ OUT="$(realpath -m "${OUT:-$PWD/onenote-compare-report}")"
 CONVERTER="${FORTRESS_ONENOTE_BIN:-$REPO/tools/fortress-onenote/target/release/fortress-onenote}"
 if [[ -z "${FORTRESS_ONENOTE_BIN:-}" ]]; then
   echo "building fortress-onenote (release)…" >&2
-  (cd "$REPO/tools/fortress-onenote" && cargo build --release --quiet)
+  (cd "$REPO/tools/fortress-onenote" && cargo build --release --locked --quiet)
 fi
 
 # 2. one2html (reference renderer). Its default "backtrace" feature needs nightly Rust.

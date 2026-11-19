@@ -63,7 +63,7 @@ app) when it starts the backend.
 
 ```sh
 cd tools/fortress-onenote
-cargo build --release          # -> target/release/fortress-onenote
+cargo build --release --locked # -> target/release/fortress-onenote
 ```
 
 The macOS universal binary (arm64 + x86_64, built with `lipo`) is produced by
@@ -74,8 +74,8 @@ the `OneNote converter` GitHub Actions workflow
 ## Tests
 
 ```sh
-cargo test                     # unit tests + CLI tests with synthetic inputs
-cargo clippy --all-targets -- -D warnings
+cargo test --locked            # unit tests + CLI tests with synthetic inputs
+cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --check
 ```
 
