@@ -58,12 +58,14 @@ jobs:
         run: |
           uv run --frozen python -c "from app.config import COLBERT_MODEL as m, COLBERT_REVISION as r; print(f'name={m}'); print(f'revision={r}'); print('dir=models--' + m.replace('/', '--'))" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
+      # All of .hf/hub: huggingface_hub 2 keeps large files in a shared hub/blobs/ store
+      # that the model's own folder only links to.
       - name: Model cache
         id: model-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .hf/hub/${{ steps.model.outputs.dir }}
-          key: hf-model-${{ steps.model.outputs.dir }}-${{ steps.model.outputs.revision }}
+          path: .hf/hub
+          key: hf-hub-${{ steps.model.outputs.dir }}-${{ steps.model.outputs.revision }}
       - name: Download the model
         if: steps.model-cache.outputs.cache-hit != 'true'
         working-directory: backend
@@ -71,6 +73,21 @@ jobs:
           MODEL: ${{ steps.model.outputs.name }}
           REVISION: ${{ steps.model.outputs.revision }}
         run: uv run --frozen python -c "import os; from huggingface_hub import snapshot_download; print(snapshot_download(os.environ['MODEL'], revision=os.environ['REVISION']))"
+      - name: Check the model is complete (offline)
+        working-directory: backend
+        env:
+          HF_HUB_OFFLINE: "1"
+          MODEL: ${{ steps.model.outputs.name }}
+          REVISION: ${{ steps.model.outputs.revision }}
+        run: |
+          uv run --frozen python -c "
+          import os
+          from huggingface_hub import hf_hub_download
+          path = hf_hub_download(os.environ['MODEL'], 'model.safetensors', revision=os.environ['REVISION'])
+          size = os.path.getsize(path)
+          assert size > 100_000_000, (path, size)
+          print(path, size)
+          "
       - name: Unit tests (real model)
         working-directory: backend
         env:
