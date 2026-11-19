@@ -95,12 +95,12 @@ So 48 of the 82 items in scope failed or were only partly met. Of those, 37 are 
 
 | # | Status | Evidence |
 |---|---|---|
-| D1 [M] every toolbar item is in the menu bar | **Fixed** | Export → File ▸ Export as Markdown…; ⋯ menu (Move To, Move to Trash) → Note menu; inspector → View; New Note → File; Empty Trash… → Trash toolbar + context menu (Go ▸ Trash, then the button); Sort and Group was toolbar-only → added View ▸ Sort By ▸ / Group by Date; search → Edit ▸ Search All Notes ⌥⌘F (new). |
+| D1 [M] every toolbar item is in the menu bar | **Fixed** | Export → File ▸ Export as Markdown…; ⋯ menu (Move To, Move to Trash) → Note menu; inspector → View; New Note → File; Empty Trash… → Trash toolbar + context menu (Go ▸ Trash, then the button); Sort and Group was toolbar-only → added View ▸ Sort By ▸ / Group by Date; search → Edit ▸ Search All Notes ⌥⌘F (new); Ask (added 19 Nov, so Ask can be found without knowing a shortcut) → View ▸ Ask Your Notes… ⇧⌘A. |
 | D2 [M] Label plus `.help`, monochrome | Pass | Every toolbar item is a `Label(_:systemImage:)` with `.help`. The only text item (Empty Trash…) is alone in its scope. |
-| D3 [S] at most three groups | Pass | List group (sort, new), detail group (export, ⋯), `ToolbarSpacer(.fixed)` and the inspector toggle, then search. |
+| D3 [S] at most three groups | Pass | List group (sort, new) in the list column; in the detail column the note group (export, ⋯), the inspector toggle, and **Ask** (title and icon, beside the search field it shares questions with), each after a `ToolbarSpacer(.fixed)`, then search. |
 | D4 [M] hide the whole `ToolbarItem` | **Fixed** | `DetailToolbar` hid only the views inside the group, which left an empty capsule with no note open. The group is now conditional as a whole. |
 | D5 [S] customizable toolbar | Deferred | The toolbar is split across three columns' `.toolbar` modifiers. Giving them `toolbar(id:)` needs ids per item and a decision about which items are fixed. `ToolbarCommands` now provides View ▸ Show/Hide Toolbar. Low value for the size of the change. |
-| D6 [M] `.searchable` on the split view | Pass | `.searchable(text:placement: .toolbar, prompt: "Search notes")` is on the `NavigationSplitView`. |
+| D6 [M] `.searchable` on the split view | Pass | `.searchable(text:placement: .toolbar, prompt: "Search or ask a question")` is on the `NavigationSplitView`. A query that reads as a question (`QuestionHeuristic`) puts the Ask row first and highlights it, so ↩ asks; other queries highlight the top passage as before, and ⌘↩ always asks (DESIGN b.2). |
 | D7 [M] search as you type, no stale results | Pass | `SearchController` cancels per query, drops stale answers (`isStale`, `resultsQuery`), and dims stale rows. The empty state names the query (b.11). |
 | D8 [S] ⌘F finds in the note; ⌥⌘F goes to search | **Fixed** | With `TextEditingCommands`, ⌘F, ⌘G, ⇧⌘G and ⌘E reach the editor's find bar (`usesFindBar`). Edit ▸ Search All Notes ⌥⌘F puts the caret in the window's search field (`searchFocused`). Esc clears it (system). |
 

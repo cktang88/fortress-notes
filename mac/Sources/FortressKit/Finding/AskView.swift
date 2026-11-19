@@ -2,10 +2,15 @@ import SwiftUI
 
 /// "Ask your notes": a question answered from the notes, streamed sentence by sentence,
 /// every sentence with chips citing the passages it came from. Follow-ups stack below.
+///
+/// Opened without a question (the toolbar's Ask button, ⇧⌘A) it shows a short intro and
+/// waits in its question field; if the backend has no model key it says how to add one.
 struct AskView: View {
     @Environment(AppModel.self) private var model
     @State private var turns: [AskTurn]
     @State private var followUp = ""
+    /// Whether the backend has a model key (`ask_configured` in /api/health); nil until known.
+    @State private var askConfigured: Bool?
     @FocusState private var isComposerFocused: Bool
     private let question: String
     /// Preset turns are shown as they are (previews and snapshots); otherwise the
@@ -15,19 +20,24 @@ struct AskView: View {
     init(question: String) {
         self.question = question
         self.startsAsking = true
-        _turns = State(initialValue: [AskTurn(question: question)])
+        let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        _turns = State(initialValue: question.isEmpty ? [] : [AskTurn(question: question)])
     }
 
-    init(question: String, turns: [AskTurn]) {
+    init(question: String, turns: [AskTurn], askConfigured: Bool? = nil) {
         self.question = question
         self.startsAsking = false
         _turns = State(initialValue: turns)
+        _askConfigured = State(initialValue: askConfigured)
     }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 44) {
+                    if turns.isEmpty {
+                        AskIntro(askConfigured: askConfigured)
+                    }
                     ForEach(turns) { turn in
                         AskTurnView(turn: turn, retry: { retry(turn) })
                             .id(turn.id)
@@ -49,10 +59,27 @@ struct AskView: View {
         .navigationTitle("Ask")
         .environment(\.openURL, OpenURLAction { url in openCitation(url) })
         .task {
-            guard startsAsking, let first = turns.first, first.state.isStreaming else { return }
-            first.start(model.api.ask(first.question))
+            guard startsAsking else { return }
+            if let first = turns.first {
+                if first.state.isStreaming { first.start(model.api.ask(first.question)) }
+            } else if askConfigured == nil {
+                askConfigured = try? await model.api.health()["ask_configured"]?.boolValue
+            }
         }
+        // Opened empty, the caret waits in the question field; an answer asked from the
+        // search field leaves the caret where it was.
+        .onAppear { if turns.isEmpty { takeDraft() } }
+        .onChange(of: model.askFocusRequest) { _, _ in takeDraft() }
         .onDisappear { turns.forEach { $0.stop() } }
+    }
+
+    /// Puts the caret in the question field, with the text Ask was opened with (if any).
+    private func takeDraft() {
+        if !model.askDraft.isEmpty {
+            followUp = model.askDraft
+            model.askDraft = ""
+        }
+        if startsAsking { isComposerFocused = true }
     }
 
     // MARK: Follow-up composer (glass, floating above the bottom edge)
@@ -62,7 +89,8 @@ struct AskView: View {
         let canSend = !followUp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return GlassEffectContainer {
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Ask a follow-up", text: $followUp, axis: .vertical)
+                TextField(turns.isEmpty ? "Ask a question about your notes" : "Ask a follow-up",
+                          text: $followUp, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .lineLimit(1...5)
@@ -204,8 +232,8 @@ struct AskTurnView: View {
             calm("I couldn’t find anything in your notes about that.", detail: nil,
                  symbol: "text.magnifyingglass", action: ("Search Instead", { model.query = turn.question }))
         case .finished(.notConfigured):
-            calm("Answers need a language model.",
-                 detail: "Add an OpenRouter key in Settings to get written answers. Meanwhile, these passages look closest:",
+            calm("Answers need an OpenRouter API key.",
+                 detail: AskIntro.setupDetail + (state.sources.isEmpty ? "" : " Meanwhile, these passages look closest:"),
                  symbol: "key", action: nil)
             closestPassages(state.sources)
         case .finished(.timeout):
@@ -273,6 +301,61 @@ struct AskTurnView: View {
             }
         }
         .padding(.top, 10)
+    }
+}
+
+/// What Ask shows before the first question: what it does, how to ask, and (when the
+/// backend has no model key) how to set one up.
+struct AskIntro: View {
+    let askConfigured: Bool?
+
+    static let setupDetail = "Add the line OPENROUTER_API_KEY=your-key to backend/.env (that file stays on this Mac and is never committed), then quit and reopen Fortress Notes. Search works without a key."
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Ask Your Notes")
+                .font(.system(size: 22, weight: .semibold))
+            Text("Ask a question in your own words. The answer is written only from your notes, and every sentence links to the passage it came from.")
+                .font(.system(size: 15))
+                .foregroundStyle(.themeSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                tip("Type below and press Return, or type a question in the search field: one that ends in “?” or starts with who, what, when, how… is asked when you press Return.")
+                tip("From any search, ⌘↩ asks instead of searching. \(Shortcuts.askNotes.display) comes back here.")
+            }
+            .padding(.top, 4)
+            if askConfigured == false {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "key")
+                        .foregroundStyle(.themeSecondary)
+                        .font(.system(size: 14))
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Ask needs an OpenRouter API key")
+                            .font(.system(size: 15, weight: .medium))
+                        Text(Self.setupDetail)
+                            .font(.callout)
+                            .foregroundStyle(.themeSecondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(ThemeStyle(.surface), in: .rect(cornerRadius: 10, style: .continuous))
+                .padding(.top, 8)
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    private func tip(_ text: String) -> some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "sparkle.magnifyingglass").foregroundStyle(.tint)
+        }
+        .font(.callout)
+        .foregroundStyle(.themeSecondary)
     }
 }
 

@@ -430,7 +430,9 @@ async def _run(question: str, emit: Emit) -> dict[str, object]:
     steps: list[dict[str, str]] = []
     first = await _prefetch_parallel(question, sources)
     if not first:
-        return _result("not_found", [], sources, steps, started)
+        # Without a key, say so rather than "nothing found": the setup is what's missing.
+        status = "not_found" if get_settings().openrouter_api_key else "not_configured"
+        return _result(status, [], sources, steps, started)
 
     message = f"Question: {question}\n\nSources:\n{sources.payload(first)}"
     transcript = message

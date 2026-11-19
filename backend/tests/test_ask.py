@@ -134,9 +134,25 @@ class AskYourNotesTests(unittest.TestCase):
         ):
             result = self.client.post("/api/ask", json={"question": "hotel?"}).json()
         self.assertEqual(result["status"], "not_configured")
+        # Nothing matches and there is no key: the missing key is what to fix.
         result, fake = self.ask("zebracorn quantum", {"found": False, "sentences": []})
+        self.assertEqual(result["status"], "not_configured")
+        fake.assert_not_called()
+        from app.config import get_settings
+
+        with patch.object(get_settings(), "openrouter_api_key", "test-key"):
+            result, fake = self.ask("zebracorn quantum", {"found": False, "sentences": []})
         self.assertEqual(result["status"], "not_found")
         fake.assert_not_called()
+
+    def test_health_says_whether_ask_has_a_key_without_revealing_it(self) -> None:
+        from app.config import get_settings
+
+        self.assertIs(self.client.get("/api/health").json()["ask_configured"], False)
+        with patch.object(get_settings(), "openrouter_api_key", "sk-secret"):
+            health = self.client.get("/api/health")
+        self.assertIs(health.json()["ask_configured"], True)
+        self.assertNotIn("sk-secret", health.text)
 
     def test_grep_finds_paragraphs_whose_note_title_holds_the_word(self) -> None:
         # "Where are we staying in Kyoto?": only the note's title says Kyoto.

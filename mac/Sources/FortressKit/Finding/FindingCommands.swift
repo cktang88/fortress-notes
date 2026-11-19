@@ -18,16 +18,7 @@ public struct FindingCommands: Commands {
             .keyboardShortcut(Shortcuts.commandPalette)
             .disabled(model == nil)
 
-            Button(Shortcuts.askNotes.title) {
-                guard let model else { return }
-                let query = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
-                if query.isEmpty {
-                    model.paletteQuery = "? "
-                    model.isPaletteShown = true
-                } else {
-                    model.route = .ask(question: query)
-                }
-            }
+            Button(Shortcuts.askNotes.title) { model?.openAsk() }
             .keyboardShortcut(Shortcuts.askNotes)
             .disabled(model == nil)
 
@@ -37,6 +28,21 @@ public struct FindingCommands: Commands {
                 .keyboardShortcut(shortcut?.keyboardShortcut)
             Divider()
         }
+    }
+}
+
+extension AppModel {
+    /// Shows Ask with the caret in its question field, holding the search text if there is
+    /// any (the toolbar's Ask button and View ▸ Ask Your Notes…, ⇧⌘A). An answer already
+    /// on screen stays: the field is then its follow-up.
+    public func openAsk() {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        isPaletteShown = false
+        // The Trash shows trashed notes in the detail column, never an answer.
+        if scope == .trash { select(.all) }
+        askDraft = text
+        if case .ask = route {} else { route = .ask(question: "") }
+        askFocusRequest += 1
     }
 }
 

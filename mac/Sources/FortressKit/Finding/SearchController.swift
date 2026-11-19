@@ -13,6 +13,29 @@ enum SearchSelection: Hashable, Sendable {
     case result(String)
 }
 
+/// Whether what was typed in the search field reads as a question for Ask rather than
+/// words to find. English only, and deliberately simple: it ends with "?", or it is at
+/// least two words starting with a question word ("how did", "is the", "when does").
+enum QuestionHeuristic {
+    static let starters: Set<String> = [
+        "who", "what", "when", "where", "why", "how", "which",
+        "is", "are", "can", "do", "does", "did", "should", "could", "would", "will",
+    ]
+
+    static func looksLikeQuestion(_ text: String) -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasSuffix("?") || text.hasSuffix("？") { return true }
+        let words = text.split(whereSeparator: \.isWhitespace)
+        guard words.count >= 2, let first = words.first else { return false }
+        // "What's", "how's": the letters before the apostrophe.
+        let word = first.lowercased()
+        let lead = word.prefix { $0.isLetter }
+        let rest = word.dropFirst(lead.count)
+        guard rest.isEmpty || rest.first == "'" || rest.first == "’" else { return false }
+        return starters.contains(String(lead))
+    }
+}
+
 /// Debounced search as you type. Results always say which query they answer, so a
 /// stale list is never opened: pressing ↩ before the current query's results arrive
 /// waits for them and then opens the first.
@@ -31,6 +54,10 @@ final class SearchController {
     /// Requests sent so far (for tests and the debug HUD).
     @ObservationIgnored private(set) var requestCount = 0
     var selection: SearchSelection = .ask
+    /// Whether the query reads as a question: then the Ask row comes first and ↩ asks.
+    private(set) var isQuestion = false
+    /// False once ↑/↓ moved the highlight away from where the query put it.
+    @ObservationIgnored private var selectionIsDefault = true
 
     @ObservationIgnored private let debounce: Duration
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -61,8 +88,17 @@ final class SearchController {
     /// Whether the visible results answer an older query.
     var isStale: Bool { resultsQuery != query }
 
-    /// Rows in display order: the Ask row first, then passages.
-    var rows: [SearchSelection] { [.ask] + results.map { .result($0.id) } }
+    /// Rows in display order: for a question the Ask row first, then passages; otherwise
+    /// the passages, then the Ask row (⌘↩ asks from anywhere).
+    var rows: [SearchSelection] {
+        let passages = results.map { SearchSelection.result($0.id) }
+        return isQuestion ? [.ask] + passages : passages + [.ask]
+    }
+
+    /// The row a query highlights by itself: Ask for a question, else the top passage.
+    private var defaultSelection: SearchSelection {
+        isQuestion ? .ask : results.first.map { SearchSelection.result($0.id) } ?? .ask
+    }
 
     func update(query raw: String, fetch: @escaping Fetch) {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -73,6 +109,9 @@ final class SearchController {
         if query.isEmpty, self.query.isEmpty, resultsQuery == nil, task == nil { return }
         let previous = self.query
         self.query = query
+        isQuestion = QuestionHeuristic.looksLikeQuestion(query)
+        selectionIsDefault = true
+        selection = defaultSelection
         generation += 1
         task?.cancel()
         guard !query.isEmpty else {
@@ -119,7 +158,8 @@ final class SearchController {
             results = matches
             resultsQuery = query
             errorMessage = nil
-            selection = matches.first.map { .result($0.id) } ?? .ask
+            selectionIsDefault = true
+            selection = defaultSelection
             if let pending {
                 self.pending = nil
                 if let action = action(for: selection) { pending(action) }
@@ -136,13 +176,15 @@ final class SearchController {
         let rows = self.rows
         let index = rows.firstIndex(of: selection) ?? 0
         selection = rows[min(max(index + delta, 0), rows.count - 1)]
+        selectionIsDefault = false
     }
 
     /// ↩: runs the highlighted row, or (if the results are for an older query) the first
-    /// result of the current query as soon as it arrives.
+    /// result of the current query as soon as it arrives. The Ask row runs at once when it
+    /// is highlighted because the query is a question or because ↑/↓ chose it.
     func activate(perform: @escaping @MainActor (SearchAction) -> Void) {
         guard !query.isEmpty else { return }
-        if selection == .ask {
+        if selection == .ask, isQuestion || !selectionIsDefault || !isStale {
             perform(.ask(question: query))
         } else if isStale {
             pending = perform

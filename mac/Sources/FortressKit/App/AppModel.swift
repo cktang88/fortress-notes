@@ -50,6 +50,12 @@ public final class AppModel {
     public var isPaletteShown = false
     /// Bumped by Edit ▸ Search All Notes (⌥⌘F) to put the caret in the window's search field.
     public var searchFocusRequest = 0
+    /// Text waiting for Ask's question field (the search text when Ask was opened); the
+    /// Ask view takes it when it appears or when `askFocusRequest` changes.
+    public var askDraft = ""
+    /// Bumped by the toolbar's Ask button and View ▸ Ask Your Notes… (⇧⌘A) to put the
+    /// caret in Ask's question field.
+    public var askFocusRequest = 0
     /// The Empty Trash confirmation (Trash toolbar or File ▸ Empty Trash…).
     public var isEmptyTrashConfirmationShown = false
 

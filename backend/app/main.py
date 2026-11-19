@@ -292,6 +292,8 @@ def health() -> dict:
         "vision_enabled": get_settings().vision_enabled,
         "vision_loaded": ocr.loaded(),
         "block_db_ready": block_store.is_ready(_db()),
+        # Whether Ask can write answers (OPENROUTER_API_KEY is set). Never the key itself.
+        "ask_configured": bool(get_settings().openrouter_api_key),
     }
 
 

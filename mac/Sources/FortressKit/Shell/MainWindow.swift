@@ -83,7 +83,7 @@ public struct MainWindow: View {
         }
         .navigationTitle(model.windowTitle)
         .navigationSubtitle(model.windowSubtitle)
-        .searchable(text: $model.query, placement: .toolbar, prompt: "Search notes")
+        .searchable(text: $model.query, placement: .toolbar, prompt: "Search or ask a question")
         .searchFocused($isSearchFocused)
         .onChange(of: model.searchFocusRequest) { _, _ in isSearchFocused = true }
         .overlay(alignment: .top) {
@@ -243,18 +243,26 @@ struct DetailView: View {
     }
 }
 
-/// "No note selected", centered and quiet, like Notes.
+/// "No note selected", centered and quiet, like Notes, with where to ask a question.
 struct NoSelectionView: View {
     var body: some View {
-        Text("No Note Selected")
-            .font(.body)
-            .foregroundStyle(.themeTertiary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.themeBackground)
+        VStack(spacing: 6) {
+            Text("No Note Selected")
+                .font(.body)
+            Text("To ask your notes a question, click Ask in the toolbar or press \(Shortcuts.askNotes.display).")
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+        }
+        .foregroundStyle(.themeTertiary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.themeBackground)
     }
 }
 
-/// Toolbar items over the editor: export, the note's overflow menu and the inspector toggle.
+/// Toolbar items over the editor: export, the note's overflow menu, the inspector toggle,
+/// and Ask, beside the search field it shares questions with. Each is also in the menu bar
+/// (File ▸ Export, Note, View ▸ Show Inspector, View ▸ Ask Your Notes…).
 struct DetailToolbar: ToolbarContent {
     @Environment(AppModel.self) private var model
 
@@ -279,6 +287,23 @@ struct DetailToolbar: ToolbarContent {
             }
             .help("Show or hide the inspector (⌥⌘I)")
         }
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+        ToolbarItem(placement: .primaryAction) {
+            AskToolbarButton()
+        }
+    }
+}
+
+/// "Ask": opens Ask with the caret in its question field, holding the search text if any.
+struct AskToolbarButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Button { model.openAsk() } label: {
+            Label("Ask", systemImage: "sparkle.magnifyingglass")
+        }
+        .labelStyle(.titleAndIcon)
+        .help("Ask your notes a question (\(Shortcuts.askNotes.display))")
     }
 }
 

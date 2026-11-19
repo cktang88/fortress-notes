@@ -268,22 +268,24 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 - The title is a separate single-line field (28 bold). ↩ in the title moves to the body. A new note's title follows its first line until the person types one.
 - A meta line under the title (12 secondary) with the Rough/Polished status menu and "edited …".
 - The body is the TextKit 2 editor (section c).
-- Detail toolbar: **Export as Markdown** (`square.and.arrow.up`, ⇧⌘E) and the **⋯** menu (Move To ▸ folders, Export as Markdown…, Move to Trash), then `ToolbarSpacer(.fixed)` and the **Inspector** toggle (⌥⌘I). The system search field sits top trailing.
+- Detail toolbar: **Export as Markdown** (`square.and.arrow.up`, ⇧⌘E) and the **⋯** menu (Move To ▸ folders, Export as Markdown…, Move to Trash), then `ToolbarSpacer(.fixed)` and the **Inspector** toggle (⌥⌘I), then `ToolbarSpacer(.fixed)` and **Ask** (`sparkle.magnifyingglass`, title and icon, ⇧⌘A) right beside the system search field, which sits top trailing. Ask is always there, so the feature is visible without knowing a shortcut; it is also View ▸ Ask Your Notes… (HIG: every toolbar item is in the menu bar).
 
 ### b.2 Search (one box, unified results)
 
-- Placement: `.searchable(text:placement: .toolbar, prompt: "Search notes")` on the split view (top trailing). In the editor, ⌘F is in-note find.
+- Placement: `.searchable(text:placement: .toolbar, prompt: "Search or ask a question")` on the split view (top trailing). In the editor, ⌘F is in-note find.
 - **One box, no modes.** The backend fuses exact words (FTS5), meaning (ColBERT) and titles into one ranked list (`GET /api/unified-search`); there is no Words/Meaning toggle, no tokens and no saved searches.
 - Results replace the note-list column while the query is non-empty. Searching is debounced; results always say which query they answer, so ↩ never opens a stale result.
-  1. The first row is always **Ask your notes: "…"** (`sparkle.magnifyingglass`, ⌘↩).
-  2. Then one row per matching passage: note title above the passage with the matched words highlighted (`findHighlightColor`), and why it matched.
+  1. One row per matching passage: note title above the passage with the matched words highlighted (`findHighlightColor`), and why it matched. The top passage is highlighted, so ↩ opens it.
+  2. Then **Ask your notes: "…"** (`sparkle.magnifyingglass`, hint ⌘↩).
+  - **Questions ask.** When the text reads as a question (`QuestionHeuristic`, English, deliberately simple: it ends with "?", or it is two or more words starting with who/what/when/where/why/how/which/is/are/can/do/does/did/should/could/would/will), the Ask row moves first and is highlighted (hint ↩), so ↩ asks. ⌘↩ asks either way, and ↑/↓ reach every row.
 - Opening a passage opens the note at that block.
 - Keyboard: ↓/↑ move through the rows from the field, ↩ opens the highlighted row, ⌘↩ asks, esc clears.
-- No results: "No matches for "…"" with "Try other words, or ask your notes with ⌘↩."
+- No results: "No matches for "…"" with "Try other words, or ask your notes a question with ⌘↩."
 
 ### b.3 Ask your notes (streaming, cited answer)
 
-- Entry points: the Ask row in search results, ⌘↩ in the search field, `?` in the palette, and **Ask Your Notes…** (⇧⌘A; with an empty search field it opens the palette with `? `).
+- Entry points: the **Ask** toolbar button and **View ▸ Ask Your Notes…** (⇧⌘A), which open the Ask page with the caret in its question field, holding the search text if any (an answer already on screen stays and the field is its follow-up); a question typed in the search field and ↩ (b.2); ⌘↩ in the search field; the Ask row in search results; `?` in the palette. The empty detail column ("No Note Selected") and the seed note *Welcome to Fortress Notes* say where Ask is.
+- Before the first question the page shows "Ask Your Notes", one sentence on what it does and how to ask, and the composer reads "Ask a question about your notes". If `/api/health` reports `ask_configured: false` (no `OPENROUTER_API_KEY`), a card says how to add the key to `backend/.env` (never committed) instead of letting the first question fail.
 - Presentation: **the detail column shows an Answer page** in place of the editor (the window title reads "Ask"). It is not a modal, so the user can click citations and come back.
 - Layout (same measure as the editor):
   - **Question**: 22/28 semibold, `.primary`.
@@ -291,7 +293,7 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
   - **Answer**: 16/26 body, streamed sentence by sentence. Each sentence ends with numbered citation **chips** (capsule, accent foreground on accent at 12%). Clicking a chip opens the note at that block.
   - **Sources** section under the answer: numbered rows (number, note title, the cited passage) in the passage-card style.
   - **Follow-up composer**: a floating glass capsule at the bottom with "Ask a follow-up" and a send button (`arrow.up`). Follow-ups stack below the first answer; esc stops a running answer.
-- Failure, no key configured, or nothing found: an inline `.secondary` message (with the closest passages when Ask timed out). Never an alert.
+- Failure, no key configured, or nothing found: an inline `.secondary` message (with the closest passages when Ask timed out or has no key). Never an alert. Without a key the backend answers `not_configured` even when nothing matched, so the message names the fix rather than "nothing found".
 
 ### b.4 Command palette (Open Quickly…, ⇧⌘O)
 
@@ -364,10 +366,11 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 |---|---|---|---|---|
 | No notes at all (first launch) | `square.and.pencil` | "Write Your First Note" | – | [New Note] [Import Markdown…] |
 | Folder empty | `folder` | "No Notes in Ideas" | – | [New Note in Ideas] |
-| No selection | none (blank editor background with a centered `.tertiary` 13pt "No note selected", like Notes) | | | |
-| Search no results | – | "No matches for "…"" | "Try other words, or ask your notes with ⌘↩." | |
+| No selection | none (blank editor background with a centered `.tertiary` 13pt "No note selected", like Notes) | | "To ask your notes a question, click Ask in the toolbar or press ⇧⌘A." | |
+| Search no results | – | "No matches for "…"" | "Try other words, or ask your notes a question with ⌘↩." | |
 | Trash empty | `trash` | "Trash is empty" | "Deleted notes stay here until you empty the Trash." | – |
 | Inspector related empty | see b.6 | | | |
+| Ask: no model key | `key` | "Ask needs an OpenRouter API key" | "Add the line OPENROUTER_API_KEY=your-key to backend/.env …, then quit and reopen Fortress Notes." | – |
 | Ask: backend unreachable | `bolt.horizontal.circle` | "Ask isn't available" | "The local server isn't responding." | [Try Again] |
 
 ### b.12 Menu bar and the full shortcut map (`ShellCommands`, `FindingCommands`, `FormatCommands`, `Shell/Shortcuts.swift`)

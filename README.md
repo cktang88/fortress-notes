@@ -13,7 +13,7 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
 
 - **Native Mac UI.** Sidebar with nested folders, a date-grouped note list, a TextKit 2
   block editor (checklists, lists, links, highlights, tables, columns, math, pictures,
-  files), an inspector, a ⌘K command palette and a global Quick Capture panel.
+  files), an inspector, a ⇧⌘O command palette and a global Quick Capture panel.
 - **One search box.** Exact words (SQLite FTS5), meaning (ColBERT late interaction) and
   note titles in one ranked list. Each result shows the matching passage and opens the
   note at that paragraph.
@@ -38,7 +38,7 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
   </tr>
   <tr>
     <td><img src="docs/screenshots/ask.png" width="400" alt="Ask: an answer with numbered citations and its sources"><br><sub>Ask: every sentence cites its source</sub></td>
-    <td><img src="docs/screenshots/command-palette.png" width="400" alt="The command palette"><br><sub>⌘K command palette: jump to a note or run a command</sub></td>
+    <td><img src="docs/screenshots/command-palette.png" width="400" alt="The command palette"><br><sub>⇧⌘O command palette: jump to a note or run a command</sub></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/picture-text.png" width="200" alt="Inspector listing the text read from pictures and a PDF, including Russian"><br><sub>Inspector › Text in pictures (Apple Vision, incl. Russian)</sub></td>
@@ -68,9 +68,24 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
   fusion. Without the model, search and related notes fall back to keyword matching.
 - Inspector: *Seen before*, *Related notes*, *Backlinks*, *Info* (dates, counts,
   provenance, re-import conflicts) and *Text in pictures*.
-- ⌘K palette: jump to a note by title, run any command, `?` to ask.
+- ⇧⌘O palette (Open Quickly…): jump to a note by title, run any command, `?` to ask.
 
-**Ask** (⇧⌘A, or ⌘↩ in the search field)
+**Ask your notes**
+
+How to ask:
+- Click **Ask** in the toolbar (next to the search field) or press **⇧⌘A**
+  (View › Ask Your Notes…), type your question, press Return. Any text already in the
+  search field is filled in.
+- Or type a question into the search field (placeholder "Search or ask a question") and
+  press Return. Text that ends in `?`, or starts with who / what / when / where / why /
+  how / which / is / are / can / do / does / did / should / could / would / will, puts
+  the "Ask your notes" row first, so Return asks; anything else searches, and Return
+  opens the top result.
+- ⌘↩ in the search field always asks; `?` in the ⇧⌘O palette asks too.
+- Without `OPENROUTER_API_KEY` in `backend/.env`, Ask says how to add it (and shows the
+  closest passages) instead of failing; `GET /api/health` reports `ask_configured`.
+
+How it works:
 - Gathers candidate passages locally first (literal grep for the question's key words
   plus unified search), then one streamed model call answers, or asks for one more grep
   or a whole note within a 3-second budget. A sentence whose quote isn't really in the
@@ -166,7 +181,7 @@ No Microsoft sign-in is involved: you export the notebooks as files and import t
    (`.onepkg`) works too.
 2. Unlock password-protected sections in OneNote before exporting; locked sections are
    skipped and listed in the report.
-3. In Fortress: **File › Import › From OneNote…** (or ⌘K "Import from OneNote…"), drop
+3. In Fortress: **File › Import › From OneNote…** (or ⇧⌘O "Import from OneNote…"), drop
    the `.zip`, `.onepkg` or `.one` file, and choose where the notebooks go.
 
 Notebooks, section groups and sections become folders; pages become notes (subpages

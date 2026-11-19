@@ -294,6 +294,51 @@ extension GallerySnapshotTests {
         }
     }
 
+    /// The toolbar's Ask button beside the search field, and the empty detail column
+    /// saying where Ask is.
+    @Test func findingToolbarAsk() async throws {
+        try await both("finding-toolbar-ask") {
+            let model = FindingFixtures.model()
+            return MainWindow().environment(model)
+        }
+    }
+
+    /// A question typed in the search field: the Ask row is first and highlighted (↩ asks).
+    @Test func findingSearchQuestion() async throws {
+        let question = "Where did we stay in Kyoto?"
+        var controllers: [SearchController] = []
+        for _ in 0..<2 {
+            let controller = SearchController(debounce: .zero)
+            controller.update(query: question) { _ in FindingFixtures.search }
+            let deadline = Date.now.addingTimeInterval(10)
+            while controller.resultsQuery != question, Date.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            controllers.append(controller)
+        }
+        var next = controllers.makeIterator()
+        try await both("finding-search-question", size: CGSize(width: 340, height: 520)) {
+            let model = FindingFixtures.model()
+            model.query = question
+            return SearchResultsView(controller: next.next()!)
+                .environment(model)
+                .tint(.fortressEmber)
+        }
+        // The same in the whole window: toolbar field, Ask button, rows.
+        try await both("finding-search-question-window", seconds: 8) {
+            let model = FindingFixtures.model()
+            model.query = question
+            return MainWindow().environment(model)
+        }
+    }
+
+    /// Ask opened from the toolbar with no key configured: intro and setup card.
+    @Test func findingAskIntro() async throws {
+        try await both("finding-ask-intro", size: CGSize(width: 760, height: 560)) {
+            AskView(question: "", turns: [], askConfigured: false)
+                .environment(FindingFixtures.model())
+                .tint(.fortressEmber)
+        }
+    }
+
     @Test func findingAskAnswered() async throws {
         // The finished answer, deterministic.
         try await both("finding-ask-answered", size: CGSize(width: 760, height: 660)) {

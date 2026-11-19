@@ -4,7 +4,10 @@ import SwiftUI
 /// Unified search results (words, meaning and titles fused by the backend), shown in
 /// place of the note list while the toolbar search field has text.
 ///
-/// Keys while typing in the search field: ↑/↓ move, ↩ opens, ⌘↩ asks.
+/// Keys while typing in the search field: ↑/↓ move, ↩ opens the highlighted row, ⌘↩ asks.
+/// A query that reads as a question (`QuestionHeuristic`) puts the Ask row first and
+/// highlights it, so ↩ asks; otherwise the top passage is highlighted and the Ask row
+/// follows the passages.
 struct SearchResultsView: View {
     @Environment(AppModel.self) private var model
     @State private var controller: SearchController
@@ -17,11 +20,9 @@ struct SearchResultsView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    AskRow(query: controller.query, isSelected: controller.selection == .ask) {
-                        perform(.ask(question: controller.query))
+                    if controller.isQuestion {
+                        askRow.padding(.bottom, 6)
                     }
-                    .id(SearchSelection.ask)
-                    .padding(.bottom, 6)
 
                     ForEach(controller.results) { match in
                         PassageRow(match: match, isSelected: controller.selection == .result(match.id)) {
@@ -29,6 +30,10 @@ struct SearchResultsView: View {
                             perform(.open(documentId: match.documentId, blockId: match.blockId))
                         }
                         .id(SearchSelection.result(match.id))
+                    }
+
+                    if !controller.isQuestion {
+                        askRow.padding(.top, controller.results.isEmpty ? 0 : 6)
                     }
 
                     footer
@@ -52,6 +57,13 @@ struct SearchResultsView: View {
         .onLocalKeyDown(handleKey)
     }
 
+    private var askRow: some View {
+        AskRow(query: controller.query, isSelected: controller.selection == .ask) {
+            perform(.ask(question: controller.query))
+        }
+        .id(SearchSelection.ask)
+    }
+
     @ViewBuilder private var footer: some View {
         if let message = controller.errorMessage {
             Label(message, systemImage: "exclamationmark.triangle")
@@ -63,7 +75,7 @@ struct SearchResultsView: View {
                 Text("No matches for “\(controller.query)”")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.themeSecondary)
-                Text("Try other words, or ask your notes with ⌘↩.")
+                Text("Try other words, or ask your notes a question with ⌘↩.")
                     .font(.subheadline)
                     .foregroundStyle(.themeTertiary)
             }
@@ -111,7 +123,7 @@ struct SearchResultsView: View {
     }
 }
 
-/// "Ask your notes: <query>" — always the first row.
+/// "Ask your notes: <query>", with the key that asks: ↩ while it is highlighted, else ⌘↩.
 private struct AskRow: View {
     let query: String
     let isSelected: Bool
@@ -130,9 +142,10 @@ private struct AskRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 8)
-                Text("⌘↩")
+                Text(verbatim: isSelected ? "↩" : "⌘↩")
                     .font(.caption.monospacedDigit().weight(.medium))
                     .foregroundStyle(.themeTertiary)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 10)
             .frame(height: 36)
@@ -141,6 +154,7 @@ private struct AskRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Ask your notes: \(query)")
+        .accessibilityHint(isSelected ? "Return asks" : "Command-Return asks")
     }
 }
 

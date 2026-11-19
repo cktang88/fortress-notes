@@ -175,19 +175,65 @@ import Testing
         #expect(performed.actions == [.open(documentId: "new-doc", blockId: "b")])
     }
 
-    @Test func askRowAndMovement() async {
+    @Test func wordsListPassagesFirstAndAskLast() async {
         let controller = SearchController(debounce: .zero)
         controller.update(query: "  ryokan ") { _ in [searchMatch("a"), searchMatch("b")] }
         await wait { controller.resultsQuery == "ryokan" }
-        #expect(controller.rows == [.ask, .result("a"), .result("b")])
-        controller.move(by: 1)
+        #expect(!controller.isQuestion)
+        #expect(controller.rows == [.result("a"), .result("b"), .ask])
+        #expect(controller.selection == .result("a"))  // ↩ opens the top passage, as before.
         controller.move(by: 5)
-        #expect(controller.selection == .result("b"))
-        controller.move(by: -9)
         #expect(controller.selection == .ask)
+        controller.move(by: -9)
+        #expect(controller.selection == .result("a"))
+        controller.move(by: 2)
         let performed = Performed()
         controller.activate { performed.actions.append($0) }
-        #expect(performed.actions == [.ask(question: "ryokan")])
+        #expect(performed.actions == [.ask(question: "ryokan")])  // ↓ chose Ask: ↩ asks.
+    }
+
+    @Test func aQuestionPutsAskFirstAndReturnAsks() async {
+        let controller = SearchController(debounce: .zero)
+        controller.update(query: "where did we stay in Kyoto") { _ in [searchMatch("a"), searchMatch("b")] }
+        #expect(controller.isQuestion)
+        #expect(controller.selection == .ask)
+        await wait { controller.resultsQuery == "where did we stay in Kyoto" }
+        #expect(controller.rows == [.ask, .result("a"), .result("b")])
+        #expect(controller.selection == .ask)  // The answer arriving doesn't move the highlight.
+        let performed = Performed()
+        controller.activate { performed.actions.append($0) }
+        #expect(performed.actions == [.ask(question: "where did we stay in Kyoto")])
+        controller.move(by: 1)
+        #expect(controller.selection == .result("a"))
+    }
+
+    @Test func returnOnAQuestionAsksWithoutWaitingForResults() {
+        let controller = SearchController(debounce: .seconds(30))
+        controller.update(query: "kyoto hotel?") { _ in [searchMatch("a")] }
+        let performed = Performed()
+        controller.activate { performed.actions.append($0) }
+        #expect(performed.actions == [.ask(question: "kyoto hotel?")])
+    }
+
+    @Test func returnOnWordsWaitsForTheTopResultInsteadOfAsking() async {
+        let controller = SearchController(debounce: .milliseconds(40))
+        controller.update(query: "ryokan") { _ in [searchMatch("a", document: "kyoto")] }
+        let performed = Performed()
+        controller.activate { performed.actions.append($0) }
+        #expect(performed.actions.isEmpty)
+        await wait { !performed.actions.isEmpty }
+        #expect(performed.actions == [.open(documentId: "kyoto", blockId: "a")])
+    }
+
+    @Test func turningWordsIntoAQuestionMovesAskToTheTop() async {
+        let controller = SearchController(debounce: .zero)
+        controller.update(query: "passport") { _ in [searchMatch("a")] }
+        await wait { controller.resultsQuery == "passport" }
+        #expect(controller.selection == .result("a"))
+        controller.update(query: "passport?") { _ in [searchMatch("a")] }
+        #expect(controller.selection == .ask)
+        await wait { controller.resultsQuery == "passport?" }
+        #expect(controller.rows.first == .ask)
     }
 
     @Test func clearingTheQueryClearsResults() async {
@@ -197,6 +243,45 @@ import Testing
         controller.update(query: "") { _ in [searchMatch("x")] }
         #expect(controller.results.isEmpty)
         #expect(controller.selection == .ask)
+    }
+}
+
+// MARK: Questions typed in the search field
+
+@Suite struct QuestionHeuristicTests {
+    @Test(arguments: [
+        "When does my passport expire?",
+        "passport?",
+        "  kyoto hotel ?  ",
+        "how did we get to Gion",
+        "What's the wifi password",
+        "what’s the wifi password",
+        "Who recommended the ramen place",
+        "where is the spare key",
+        "Why did we pick Alfama",
+        "which ryokan",
+        "is the ferry booked",
+        "Are we staying two nights",
+        "can I bring the dog",
+        "do we need visas",
+        "does the hotel have parking",
+        "did Mei reply",
+        "should I renew it",
+        "could we go in May",
+        "would it rain",
+        "will the onsen be open",
+    ])
+    func questions(_ text: String) {
+        #expect(QuestionHeuristic.looksLikeQuestion(text))
+    }
+
+    @Test(arguments: [
+        "", "?x", "ryokan", "kyoto hotel", "how", "What", "island hopping", "dogs and cats",
+        "whatever happened", "issue tracker", "cannot reproduce", "doors open", "howto guide",
+        "hotel? nope", "Q3 plan",
+    ])
+    func notQuestions(_ text: String) {
+        #expect(!QuestionHeuristic.looksLikeQuestion(text))
     }
 }
 
@@ -330,4 +415,46 @@ private actor Calls {
 func findingFixture(_ name: String) throws -> Data {
     let url = try #require(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures"))
     return try Data(contentsOf: url)
+}
+
+// MARK: Opening Ask (toolbar button, ⇧⌘A)
+
+@MainActor
+@Suite struct OpenAskTests {
+    @Test func opensAnEmptyAskWithTheSearchTextReady() {
+        let model = AppModel()
+        model.connectsOnAppear = false
+        model.query = "  ryokan check-in  "
+        model.isPaletteShown = true
+        model.openAsk()
+        #expect(model.route == .ask(question: ""))
+        #expect(model.askDraft == "ryokan check-in")
+        #expect(model.askFocusRequest == 1)
+        #expect(!model.isPaletteShown)
+    }
+
+    @Test func leavesTheTrashToShowAsk() {
+        let model = AppModel()
+        model.connectsOnAppear = false
+        model.scope = .trash
+        model.openAsk()
+        #expect(model.scope == .all)
+        #expect(model.route == .ask(question: ""))
+    }
+
+    @Test func keepsAnAnswerOnScreenAndFocusesItsFollowUp() {
+        let model = AppModel()
+        model.connectsOnAppear = false
+        model.route = .ask(question: "Where are we staying?")
+        model.openAsk()
+        #expect(model.route == .ask(question: "Where are we staying?"))
+        #expect(model.askDraft == "")
+        #expect(model.askFocusRequest == 1)
+    }
+
+    @Test func theToolbarButtonIsAlsoInTheMenuBarWithAFreeShortcut() {
+        #expect(Shortcuts.askNotes.title == "Ask Your Notes…")
+        #expect(Shortcuts.askNotes.display == "⇧⌘A")
+        #expect(Shortcuts.systemReserved[Shortcuts.askNotes.chord] == nil)
+    }
 }
