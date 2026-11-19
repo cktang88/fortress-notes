@@ -17,6 +17,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 DB_FILENAME = ".fortress.sqlite3"
+# The ColBERT model and the exact commit of its Hugging Face repository we run: an
+# update to the repo can't change the weights, tokenizer or config under us. To move
+# to a newer commit, see docs/dependencies.md (the store re-indexes on its own).
+COLBERT_MODEL = "lightonai/Agent-ModernColBERT"
+COLBERT_REVISION = "10b5ec41b805bc1b64f6b2ee3d97c2b800f679ca"  # 2026-08-17
 EMBEDDINGS_FILENAME = ".fortress-embeddings.sqlite3"
 
 
@@ -38,7 +43,10 @@ class Settings(BaseSettings):
     # leaves the model's default). Reasoning models need "none" to stay fast.
     ask_reasoning_effort: str = "none"
     embeddings_enabled: bool = True
-    colbert_model: str = "lightonai/Agent-ModernColBERT"
+    colbert_model: str = COLBERT_MODEL
+    # A commit hash (or tag) of COLBERT_MODEL's repository. Empty: COLBERT_REVISION for
+    # the default model; for another model the repository's newest commit, unpinned.
+    colbert_revision: str = ""
     # "auto" runs ColBERT in bfloat16 on CPUs with native support (AVX512-BF16/AMX):
     # several times faster and within ~0.3% of float32 scores. Or "float32"/"bfloat16".
     embeddings_precision: str = "auto"
@@ -77,6 +85,17 @@ class Settings(BaseSettings):
         if self.onenote_bin.strip():
             binary = Path(self.onenote_bin.strip()).expanduser()
             self.onenote_bin = str(binary if binary.is_absolute() else BACKEND_DIR / binary)
+
+    @property
+    def colbert_model_revision(self) -> str | None:
+        """The revision to load COLBERT_MODEL at: None for a local folder (or an
+        unpinned other model), which Hugging Face then takes as it is."""
+
+        if self.colbert_revision.strip():
+            return self.colbert_revision.strip()
+        if self.colbert_model == COLBERT_MODEL:
+            return COLBERT_REVISION
+        return None
 
     # Derived paths (fixed once notes_dir is resolved).
     @property

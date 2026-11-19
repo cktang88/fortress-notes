@@ -487,9 +487,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.162.0" },
+    { name = "fastapi", specifier = ">=0.162.5" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "markdown-it-py", specifier = ">=4.2.0" },
+    { name = "markdown-it-py", specifier = ">=4.3.0" },
     { name = "mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.32.4" },
     { name = "onnxruntime", specifier = ">=1.24.0" },
     { name = "pillow", specifier = ">=13.0.0" },
@@ -501,8 +501,8 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.33" },
     { name = "python-ulid", specifier = ">=4.1.0" },
     { name = "rapidocr", specifier = ">=3.10.0" },
-    { name = "regex", specifier = ">=2026.9.29" },
-    { name = "transformers", specifier = ">=5.22.1" },
+    { name = "regex", specifier = ">=2026.11.9" },
+    { name = "transformers", specifier = ">=5.22.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
 
