@@ -949,7 +949,7 @@ final class CellTextView: NSTextView {
         return body()
     }
 
-    private func action(_ name: String, _ body: () -> Void) {
+    private func asAction(_ name: String, _ body: () -> Void) {
         let outer = pendingActionName
         pendingActionName = outer ?? name
         defer { pendingActionName = outer }
@@ -961,11 +961,11 @@ final class CellTextView: NSTextView {
         typing { super.insertText(string, replacementRange: replacementRange) }
     }
     override func doCommand(by selector: Selector) { typing { super.doCommand(by: selector) } }
-    override func paste(_ sender: Any?) { action(UndoNames.paste) { super.paste(sender) } }
-    override func pasteAsPlainText(_ sender: Any?) { action(UndoNames.paste) { super.pasteAsPlainText(sender) } }
-    override func pasteAsRichText(_ sender: Any?) { action(UndoNames.paste) { super.pasteAsRichText(sender) } }
-    override func cut(_ sender: Any?) { action("Cut") { super.cut(sender) } }
-    override func delete(_ sender: Any?) { action("Delete") { super.delete(sender) } }
+    override func paste(_ sender: Any?) { asAction(UndoNames.paste) { super.paste(sender) } }
+    override func pasteAsPlainText(_ sender: Any?) { asAction(UndoNames.paste) { super.pasteAsPlainText(sender) } }
+    override func pasteAsRichText(_ sender: Any?) { asAction(UndoNames.paste) { super.pasteAsRichText(sender) } }
+    override func cut(_ sender: Any?) { asAction("Cut") { super.cut(sender) } }
+    override func delete(_ sender: Any?) { asAction("Delete") { super.delete(sender) } }
 
     // Edit ▸ Undo and Redo: the note's stack (see `FortressTextView.undoNoteEdit`).
     @objc(undo:) func undoNoteEdit(_ sender: Any?) { NoteUndoActions.undo(undoManager, from: self) }

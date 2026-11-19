@@ -525,7 +525,7 @@ public final class EditorSession {
     }
 
     func setStatus(_ newStatus: NoteStatus) async {
-        await changeStatus(newStatus)?.value
+        if let task = changeStatus(newStatus) { await task.value }
     }
 
     /// Changes the status as one undo step ("Undo Status Change") and saves it.

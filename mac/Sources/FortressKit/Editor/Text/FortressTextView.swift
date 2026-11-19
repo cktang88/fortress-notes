@@ -354,15 +354,18 @@ enum NoteUndoActions {
 
     /// Enables Undo and Redo and names them ("Undo Paste", "Redo Move"); nil for other items.
     static func validate(_ item: NSMenuItem, _ undoManager: UndoManager?) -> Bool? {
-        switch item.action {
-        case Selector(("undo:")):
+        if item.action == undoAction {
             item.title = undoManager?.undoMenuItemTitle ?? "Undo"
             return undoManager?.canUndo ?? false
-        case Selector(("redo:")):
+        }
+        if item.action == redoAction {
             item.title = undoManager?.redoMenuItemTitle ?? "Redo"
             return undoManager?.canRedo ?? false
-        default:
-            return nil
         }
+        return nil
     }
+
+    /// The Edit menu's actions (AppKit declares no Swift name for them).
+    static let undoAction = NSSelectorFromString("undo:")
+    static let redoAction = NSSelectorFromString("redo:")
 }

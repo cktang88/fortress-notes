@@ -405,6 +405,36 @@ struct UndoScript {
         #expect(harness.controller.storage.string == "text\n")
     }
 
+    /// A pasted screenshot becomes a picture block once uploaded: one "Paste" step, and
+    /// Backspace removing a divider is a step that brings the same block back.
+    @Test func pastedPicturesAndDeletedAttachmentsAreSteps() throws {
+        let harness = UndoHarness([EditorBlock(id: "a", runs: [InlineRun("one")]), EditorBlock(id: "d", kind: .divider),
+                                   EditorBlock(id: "b", runs: [InlineRun("two")])])
+        harness.controller.uploadFile = { _, name, _ in ("/media/shot.png", name) }
+        var script = UndoScript(harness)
+        script.step("Typing") {
+            let two = harness.controller.range(ofBlock: "b")!
+            harness.select(NSRange(location: two.location, length: 0))
+            harness.command(#selector(NSResponder.deleteBackward(_:)))
+        }
+        #expect(!harness.controller.currentBlocks().contains { $0.kind == .divider })
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus()
+        NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: 4, height: 4).fill()
+        image.unlockFocus()
+        let png = try #require(image.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) })
+        script.step("Paste") {
+            harness.select(NSRange(location: 1, length: 0))
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setData(png, forType: .png)
+            harness.view.paste(nil)
+            for _ in 0..<40 where !harness.controller.currentBlocks().contains(where: { $0.kind == .image }) { settleRunLoop() }
+        }
+        #expect(harness.controller.currentBlocks().map(\.kind) == [.paragraph, .image, .paragraph])
+        script.walkBackAndForth()
+    }
+
     /// Title and status changes are steps on the note's stack too.
     @Test func titleAndStatusChangesAreUndoable() {
         let node = BlockNode.paragraph("p1", "Body")
