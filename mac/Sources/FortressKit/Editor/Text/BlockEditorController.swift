@@ -178,7 +178,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         replace(NSRange(location: min(at, string.length), length: 0), with: table,
                 selecting: NSRange(location: min(at, string.length), length: 0))
         if let attachment = storage.attribute(.attachment, at: min(at, storage.length - 1), effectiveRange: nil) as? BlockAttachment {
-            Self.later { [weak attachment] in attachment?.live?.focus(atEnd: false) }
+            Self.later { [weak self, weak attachment] in
+                // The table's view is in the text once it is laid out; then its first cell
+                // can take the caret.
+                self?.textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+                attachment?.live?.focus(atEnd: false)
+            }
         }
     }
 
@@ -885,6 +890,35 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                 let context = context
                 InlineNodes.separateCopies(in: storage, range: editedRange) { DocumentText.label(of: $0, context: context) }
             }
+        }
+    }
+
+    nonisolated func textStorage(
+        _ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+        range editedRange: NSRange, changeInLength delta: Int
+    ) {
+        MainActor.assumeIsolated {
+            guard !isLoading, let undoManager = textView.undoManager, undoManager.isUndoing || undoManager.isRedoing else { return }
+            undoDidEdit(at: editedRange.location)
+        }
+    }
+
+    /// Where undo or redo edited the text since the last report (nil: nothing pending).
+    private var undoEditLocation: Int?
+
+    /// Undo and redo of NSTextView's own steps (typing, paste, the editor's replacements)
+    /// edit the storage without always telling the delegate `textDidChange`: the change
+    /// was shown but never saved, and list numbers below it weren't redrawn. Reported
+    /// once per run loop turn, as an edit is.
+    private func undoDidEdit(at location: Int) {
+        let pending = undoEditLocation
+        undoEditLocation = min(pending ?? location, location)
+        guard pending == nil else { return }
+        Self.later { [weak self] in
+            guard let self, let location = self.undoEditLocation else { return }
+            self.undoEditLocation = nil
+            self.invalidateNumbering(around: min(location, max(0, self.string.length - 1)))
+            self.onChange?()
         }
     }
 

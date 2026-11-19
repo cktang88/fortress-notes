@@ -808,17 +808,46 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         }
         undoManager?.setActionName(actionName)
         typingRun = nil
-        table = snapshot
-        isBuilt = true
-        rebuild()
-        remeasureAfterShapeChange()
+        if !applyCellTexts(of: snapshot) {
+            table = snapshot
+            isBuilt = true
+            rebuild()
+            remeasureAfterShapeChange()
+        }
         // Show the change, as undo in text does: the caret goes back into the cell.
         guard grid.window != nil, table.rows.indices.contains(cell.row),
               let view = editor(row: cell.row, column: min(cell.column, max(0, table.rows[cell.row].cells.count - 1))) else { return }
-        view.window?.makeFirstResponder(view)
+        if view.window?.firstResponder !== view { view.window?.makeFirstResponder(view) }
         let length = view.textStorage?.length ?? 0
         let location = min(selection.location, length)
         view.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
+    }
+
+    /// `snapshot` when it has the table's shape (the same rows and cells): only the cells
+    /// whose content differs are set, in place, the one being edited included, so the
+    /// editor and the caret stay. False for a different shape (then it is rebuilt).
+    private func applyCellTexts(of snapshot: TableContent) -> Bool {
+        guard isBuilt, texts.count == table.rows.count, snapshot.rows.count == table.rows.count,
+              zip(snapshot.rows, table.rows).allSatisfy({ $0.id == $1.id && $0.cells.map(\.id) == $1.cells.map(\.id) }),
+              zip(texts, table.rows).allSatisfy({ $0.count == $1.cells.count }) else { return false }
+        let old = table
+        table = snapshot
+        for r in snapshot.rows.indices {
+            for c in snapshot.rows[r].cells.indices where snapshot.rows[r].cells[c] != old.rows[r].cells[c] {
+                let text = styledText(snapshot.rows[r].cells[c].runs, theme: cellTheme(row: r, column: c))
+                texts[r][c] = text
+                drawn[r][c] = Self.drawable(text)
+                if let editor, editor.row == r, editor.column == c, let storage = editor.textStorage {
+                    isLoadingCell = true
+                    storage.setAttributedString(text)
+                    isLoadingCell = false
+                }
+                remeasure(row: r, column: c)
+            }
+        }
+        grid.cellsDidChange()
+        context?.contentDidChange?()
+        return true
     }
 
     private func remeasureAfterShapeChange() {

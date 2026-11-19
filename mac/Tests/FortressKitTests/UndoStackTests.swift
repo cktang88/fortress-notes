@@ -40,9 +40,24 @@ final class UndoHarness {
     /// The text view with keyboard focus (the note's, a table cell's, a column's).
     var focused: NSTextView { (window.firstResponder as? NSTextView) ?? view }
 
+    /// Types as the keyboard does (at the selection, no replacement range).
     func type(_ text: String) {
         let target = focused
-        for character in text { target.insertText(String(character), replacementRange: target.selectedRange()) }
+        for character in text {
+            let before = target.selectedRange()
+            target.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            let after = target.selectedRange()
+            if after.location != before.location + (String(character) as NSString).length {
+                print("HARNESS caret \(before) → \(after) typing '\(character)' in \(Swift.type(of: target)): \(target.string.debugDescription)")
+            }
+        }
+        settleRunLoop()
+    }
+
+    /// Lays the note out, so tables and columns are in the window.
+    func layout() {
+        view.layoutSubtreeIfNeeded()
+        view.textLayoutManager?.textViewportLayoutController.layoutViewport()
         settleRunLoop()
     }
 
@@ -183,6 +198,11 @@ struct UndoScript {
         script.step("Insert Table") { harness.send("fortressInsertTable:") }
         let table = try #require(harness.live(TableBlockController.self))
         #expect(harness.window.firstResponder is CellTextView, "the new table's first cell is being edited")
+        if !(harness.window.firstResponder is CellTextView) {
+            harness.layout()
+            table.focus(row: 0, column: 0, atEnd: false)
+            settleRunLoop()
+        }
         script.step("Typing") { harness.type("cell") }
         script.step("Insert Row") { table.insertRowBelow(nil); settleRunLoop() }
         script.step("Bold") {
@@ -407,7 +427,7 @@ struct UndoScript {
 
     /// A pasted screenshot becomes a picture block once uploaded: one "Paste" step, and
     /// Backspace removing a divider is a step that brings the same block back.
-    @Test func pastedPicturesAndDeletedAttachmentsAreSteps() throws {
+    @Test func pastedPicturesAndDeletedAttachmentsAreSteps() async throws {
         let harness = UndoHarness([EditorBlock(id: "a", runs: [InlineRun("one")]), EditorBlock(id: "d", kind: .divider),
                                    EditorBlock(id: "b", runs: [InlineRun("two")])])
         harness.controller.uploadFile = { _, name, _ in ("/media/shot.png", name) }
@@ -424,13 +444,16 @@ struct UndoScript {
         NSRect(x: 0, y: 0, width: 4, height: 4).fill()
         image.unlockFocus()
         let png = try #require(image.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) })
-        script.step("Paste") {
-            harness.select(NSRange(location: 1, length: 0))
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setData(png, forType: .png)
-            harness.view.paste(nil)
-            for _ in 0..<40 where !harness.controller.currentBlocks().contains(where: { $0.kind == .image }) { settleRunLoop() }
+        harness.select(NSRange(location: 1, length: 0))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(png, forType: .png)
+        harness.view.paste(nil)
+        // The upload is a task on the main actor: let it run.
+        for _ in 0..<100 where !harness.controller.currentBlocks().contains(where: { $0.kind == .image }) {
+            try await Task.sleep(for: .milliseconds(20))
         }
+        settleRunLoop()
+        script.states.append(("Paste", harness.snapshot()))
         #expect(harness.controller.currentBlocks().map(\.kind) == [.paragraph, .image, .paragraph])
         script.walkBackAndForth()
     }

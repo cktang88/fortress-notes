@@ -225,8 +225,14 @@ struct IntegrationTests {
         steps += 1  // "- " typed, then the list item: two steps
         try await edit("typing in the list") { harness.type("item") }
         try await edit("insert table") { harness.send("fortressInsertTable:") }
-        try await edit("typing in a cell") { harness.type("cell") }
         let table = try #require(harness.live(TableBlockController.self))
+        if !(harness.window.firstResponder is CellTextView) {
+            harness.layout()
+            table.focus(row: 0, column: 0, atEnd: false)
+            settleRunLoop()
+        }
+        #expect(harness.window.firstResponder is CellTextView)
+        try await edit("typing in a cell") { harness.type("cell") }
         try await edit("insert row") { table.insertRowBelow(nil); settleRunLoop() }
         try await edit("bold") {
             harness.select(NSRange(location: 0, length: 5))
