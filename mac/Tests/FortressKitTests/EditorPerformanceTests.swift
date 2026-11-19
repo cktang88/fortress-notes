@@ -359,6 +359,15 @@ final class PerfEditor {
         PerfLog.record("keystroke.long50k.median", longSorted[longSorted.count / 2], budget: 8)
         PerfLog.record("keystroke.long50k.max", longSorted.last!)
 
+        // What long50k measured before the caret fix (UNDO_AUDIT.md): the first key went
+        // into the long paragraph and moved the caret past it, so the rest were typed at
+        // the start of the paragraph after it. Kept to compare like with like.
+        editor.controller.textView.setSelectedRange(NSRange(location: NSMaxRange(editor.range(ofBlock: "l0")), length: 0))
+        editor.layoutViewport()
+        times = []
+        for _ in 0..<20 { times.append(milliseconds { editor.type("b") }) }
+        PerfLog.record("keystroke.afterLong50k.median", times.sorted()[times.count / 2])
+
         // Return (splits a block: structure changes).
         editor.controller.textView.setSelectedRange(NSRange(location: editor.range(ofBlock: middleId).location + 5, length: 0))
         let newline = milliseconds {
