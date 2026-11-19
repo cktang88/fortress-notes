@@ -15,6 +15,8 @@ Evidence: code under `mac/Sources/FortressKit/Editor/` and the tests in `mac/Tes
 5. **The editor was rebuilt on every note switch.** `NoteEditorView` is `.id(noteId)`, so going to another note destroyed the text view, and with it the note's `UndoManager`. Coming back always started with an empty stack.
 6. **CRLF pastes changed length under NSTextView's undo step.** Normalizing turned "\r\n" into "\n" inside the edit. NSTextView's step still covered the pasted length. Undo removed one character too many, which normalizing happened to repair. Redo then added an empty paragraph (probe: `threea | b | ''`).
 7. **Title and status were not on the note's stack.** The title field's typing undoes on the window's stack and is dropped when editing ends. Status changes had no undo at all.
+8. **Undo and redo didn't always save.** NSTextView's undo of its own steps (typing, paste, the editor's replacements) edits the storage without always calling the delegate's `textDidChange`. The undone text was shown but never sent to the server. The integration test caught it: after each undo, the server was one step behind.
+9. **Typing inside a paragraph moved the caret past it.** Normalizing restyled the edited paragraph on every keystroke. It set attributes over the whole paragraph even when they were already equal, and TextKit 2 then put the selection after the paragraph. Typing "X" inside "abc" left the caret at the start of the next line, and the next key landed there. This was confirmed on screen through a key event (`CaretTests`). It also meant a Markdown shortcut typed before existing text (`# ` at the start of a line) was never seen, because the shortcut reads the caret. Undo steps came out fragmented as well.
 
 ## Fixes
 
@@ -24,6 +26,9 @@ Evidence: code under `mac/Sources/FortressKit/Editor/` and the tests in `mac/Tes
 - **Loading never touches a note's stack from inside.** Only the note's own `load` (opening a note, Load Latest after a conflict) starts the history over. A column's `load` doesn't.
 - **Each note keeps its editor while the window shows others** (`NoteEditorCache`, per window in `AppModel.noteEditors`). The last 8 notes keep their editor and session. Going back puts the same text view in place, with its stack, caret and scroll position. The note is checked against the server first (`EditorSession.refreshIfChangedElsewhere`). If it changed elsewhere meanwhile, the new version is shown and the history starts over, because the old steps can't apply to text that isn't there. A window's notes, and their stacks, close with the window, as documents do in other apps.
 - **Pastes with foreign line ends are pasted by the editor** (`pasteConvertingSeparators`). Text holding "\r" or U+2029 is converted before it goes in, as one "Paste" step, so normalizing no longer changes the length.
+- **Undo and redo are saved** (`BlockEditorController.textStorage(_:didProcessEditing:)`). A storage edit made while the note's stack is undoing or redoing is reported as a change once per run loop turn: it is saved, and list numbers below it are redrawn.
+- **Restyling leaves runs alone when they are already styled** (`EditorTheme.isStyled`). Only attributes that actually change are set, so the edit TextKit sees is the typed character and the caret stays after it. A side benefit: typing no longer re-attributes the whole paragraph.
+- **Cell text views have no undo manager of their own.** NSTextView registered its typing steps on a cell editor's `undoManager` even with `allowsUndo` off. Undoing one emptied the cell before the table's step could record what to redo. The cell's `undoManager` is now nil. Its `undo:`/`redo:` and menu validation use the note's stack (`noteStack`).
 - **Title and status are steps on the note's stack** ("Undo Title Change", "Undo Status Change"). Title typing joins one step until the title is saved. Undo restores and saves the old title, including handing it back to the first line if it was automatic.
 
 ## Audit table
@@ -35,6 +40,8 @@ Evidence: code under `mac/Sources/FortressKit/Editor/` and the tests in `mac/Tes
 | ⌘Z / ⇧⌘Z from the Edit menu or keyboard, in the note | ❌ went to the window's stack (library actions); the note's never reached | ✅ the note's stack, named | all `UndoStackTests` (menu path) |
 | Typing | step named "Typing" on the note's stack, but unreachable from the menu | ✅ NSTextView's grouping: one step until the caret moves, Return, or another command; words don't split (NSTextView default) | `typingStepsBreakAtCaretMovesAndReturn` |
 | Typing pause | NSTextView doesn't break on a pause | same (NSTextView default, as TextEdit) | — |
+| Typing inside a paragraph | ❌ caret moved past the paragraph after each key | ✅ caret stays; one step | `CaretTests`, `loadingTheRestOfALongNote…`, `columnEdits…` |
+| Undo/redo of anything, saved | ❌ often not saved (no `textDidChange`) | ✅ saved after each undo and redo | `IntegrationTests.undoAndRedoSaveWhatTheEditorShows` |
 | Return splitting a block | separate step, unnamed ("Undo") | ✅ "Typing", its own step | `everyEdit…`, `typingSteps…` |
 | Backspace/Delete merging blocks, removing a divider/image | unnamed, could join typing | ✅ "Typing", its own step; the block comes back with its id | `structuralKeys…`, `pastedPictures…` |
 | Paste (plain, rich, Markdown text, several paragraphs) | NSTextView "Paste" (menu unreachable) | ✅ "Paste", one step per paste; new blocks keep their ids on redo | `everyEdit…` |
@@ -44,7 +51,7 @@ Evidence: code under `mac/Sources/FortressKit/Editor/` and the tests in `mac/Tes
 | Pasted or dropped pictures and files | unnamed, one step per upload | ✅ "Paste" / "Drop", one step per block as each upload finishes | `pastedPictures…` |
 | Paste into a table cell | step on a throwaway editor, lost after a shape change | ✅ "Paste" on the note's stack | (cell step code; `cellEdits…` covers typing and marks) |
 | Cut | NSTextView "Cut" | ✅ "Cut" | `pasteAndMatchStyleAndCut` |
-| Markdown shortcuts (`- `, `1. `, `# `, `> `, `[ ]`, ```` ``` ````, `---`) | own step, unnamed | ✅ own step named after the style ("Bulleted List", "Heading 1", "Code Block", "Divider"); the next ⌘Z takes back the typed characters | `everyEdit…`, `structuralKeys…` |
+| Markdown shortcuts (`- `, `1. `, `# `, `> `, `[ ]`, ```` ``` ````, `---`) | own step, unnamed; ❌ not applied when typed before existing text (caret bug) | ✅ own step named after the style ("Bulleted List", "Heading 1", "Code Block", "Divider"); the next ⌘Z takes back the typed characters | `everyEdit…`, `structuralKeys…` |
 | Bold, italic, underline, strike, inline code, sup/sub | unnamed | ✅ "Bold", "Italic"… | `everyEdit…`, `cellEdits…` |
 | Highlight, text color, links (⌘K add/edit/remove) | unnamed | ✅ "Highlight", "Text Color", "Link", "Remove Link" | — (same step code) |
 | Paragraph styles (menu, ⌥⌘1…) | unnamed | ✅ named after the style | `everyEdit…` (Checklist), `columnEdits…` |
