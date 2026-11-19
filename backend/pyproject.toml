@@ -25,6 +25,12 @@ dependencies = [
 ]
 
 [tool.uv]
+# Supply-chain cooldown (docs/dependencies.md): `uv lock` never picks a file uploaded in
+# the last 7 days. uv resolves the span to a timestamp when it locks and records both in
+# uv.lock; `uv sync --frozen` installs exactly the lockfile. 0.12.12 is the first uv that
+# also drops wheels uploaded after the cutoff to an older release.
+required-version = ">=0.12.12"
+exclude-newer = "7 days"
 # pylate pulls torch + transformers; keep it optional-friendly by allowing CPU wheels.
 # pylate, fast-plaid, datasets and sympy pin old versions of these. We only use pylate's
 # ColBERT encoder, never its PLAID index, so lift the pins to stay on current releases.
