@@ -93,7 +93,7 @@ class GraphClient:
         self.requests = 0
 
     def get(self, url: str, accept: str = "application/json") -> Response:
-        if not url.startswith("https://"):
+        if url.startswith("/"):
             url = ONENOTE_ROOT + url
         if not is_graph_url(url):
             raise GraphError(0, "refused", f"not a Microsoft Graph URL: {url[:200]}", url)

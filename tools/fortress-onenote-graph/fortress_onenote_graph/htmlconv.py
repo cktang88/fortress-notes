@@ -47,10 +47,10 @@ TAG_SHAPES = {
     "address": "house", "phone-number": "phone", "highlight": "highlighter",
 }
 _GUID = r"\{?([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\}?"
-_ELEMENT_ID_RE = re.compile(r"^[a-z]+:\{([0-9A-Fa-f-]{36})\}\{(\d+)\}$")
+_ELEMENT_ID_RE = re.compile(r"^[a-z0-9]+:\{([0-9A-Fa-f-]{36})\}\{(\d+)\}$")
 _BLOCK_TAGS = frozenset({"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table", "div", "pre",
                          "blockquote", "img", "object", "iframe", "cite", "math", "tbody", "thead", "tfoot"})
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f￾￿]")
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f\ufffe\uffff]")
 _SOURCE_RE = re.compile(r"^(?:Pasted from|Clipped from:?|From)\s*<?\s*(https?://\S+?)\s*>?\s*$", re.IGNORECASE)
 _NAMED_COLORS = {"black": "#000000", "white": "#FFFFFF", "red": "#FF0000", "green": "#008000",
                  "blue": "#0000FF", "yellow": "#FFFF00", "gray": "#808080", "grey": "#808080",
@@ -82,7 +82,7 @@ def color(value: str | None) -> str | None:
 
 
 def clean_text(text: str) -> str:
-    return _CONTROL_RE.sub("�", text)
+    return _CONTROL_RE.sub("\ufffd", text)
 
 
 def guid(value: str) -> str:
@@ -163,7 +163,7 @@ def parse_tags(value: str | None) -> list[dict[str, Any]]:
 
 # --- rich text ------------------------------------------------------------------------------
 
-_HARD_BREAK = " "  # internal: <br>, never collapsed
+_HARD_BREAK = "\u2028"  # internal: <br>, never collapsed
 
 
 @dataclass
@@ -252,13 +252,14 @@ class RichText:
                 if out and out[-1][0] not in (" ", "\n"):
                     out.append((" ", style))
             else:
-                out.append((" " if ch == " " else ch, style))
+                out.append((ch, style))  # a no-break space is kept (code indentation)
         while out and out[-1][0] in (" ", "\n"):
             out.pop()
         start = 0
         while start < len(out) and out[start][0] in (" ", "\n"):
             start += 1
         out = out[start:]
+        out = [(" " if ch == "\u00a0" else ch, style) for ch, style in out]
         text = clean_text("".join(ch for ch, _ in out))
         marks: list[dict[str, Any]] = []
         keys = ["bold", "italic", "underline", "strikethrough", "superscript", "subscript", "highlight",
@@ -501,19 +502,19 @@ class PageConverter:
             else:
                 checkable = next((tag for tag in tags if tag["checkable"]), None)
                 is_cite = node.tag == "cite" or (_only_child_tag(node) == "cite")
+                source = None if heading else _SOURCE_RE.match(text)
                 if checkable is not None:
                     block = {"type": "check_item", "indent": indent, "checked": checkable["completed"],
                              "checked_at": None, "list": None, "text": text}
+                elif source:
+                    block = {"type": "paragraph", "indent": indent, "text": text, "is_source_citation": True}
+                    self.source_url = self.source_url or source.group(1)
                 elif heading:
                     block = {"type": "heading", "indent": indent, "level": int(heading.group(1)), "text": text}
                 elif is_cite:
                     block = {"type": "quote", "indent": indent, "variant": "cite", "text": text}
                 else:
                     block = {"type": "paragraph", "indent": indent, "text": text}
-                    source = _SOURCE_RE.match(text)
-                    if source:
-                        block["is_source_citation"] = True
-                        self.source_url = self.source_url or source.group(1)
                 if marks:
                     block["marks"] = _clip_marks(marks, len(text))
                 blocks.append(self._common(block, node, tags))
