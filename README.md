@@ -28,8 +28,9 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
   tables, columns, pictures, attachments, equations (as LaTeX code) and links between
   pages. Fortress has no math or ink: ink drawings are skipped and counted in the
   import report.
-  Every note and block records where it came from, and importing the same export
-  again updates the notes in place and keeps your edits.
+  Every note records where it came from. Importing the same export again refreshes
+  the pages that changed (same notes, links into them kept) and leaves alone the ones
+  you edited here.
 
 ## Screenshots
 
@@ -76,8 +77,8 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
 - Unified search: FTS5 words, ColBERT meaning (`lightonai/Agent-ModernColBERT` via
   [PyLate](https://github.com/lightonai/pylate)) and titles fused with reciprocal rank
   fusion. Without the model, search and related notes fall back to keyword matching.
-- Inspector: *Seen before*, *Related notes*, *Backlinks*, *Info* (dates, counts,
-  provenance, re-import conflicts) and *Text in pictures*.
+- Inspector: *Seen before*, *Related notes*, *Backlinks*, *Info* (how the note came
+  in, dates, counts) and *Text in pictures*.
 - Find a note by title: press ⌥⌘F (Edit › Search All Notes) and type part of its title;
   title matches rank first. Every command is in the menu bar.
 
@@ -215,8 +216,9 @@ Notebooks, section groups and sections become folders; pages become notes (subpa
 stay next to their parent, which gets a *Subpages* list). The report lists counts per
 notebook, sections that failed, pages whose text coverage is below 98 %, links that
 couldn't be resolved, and pages removed in OneNote since the last import (never deleted
-here). Importing the same export again updates the notes in place and keeps your edits;
-where both sides changed a paragraph, the inspector shows the conflict.
+here). Importing the same export again refreshes each page that changed in OneNote:
+the note keeps its place and id, and links to its paragraphs keep working. A page you
+edited in Fortress since the last import is not refreshed; the report lists it.
 
 Details: [spec.md §7b](spec.md#7b-onenote-import-onenote_importpy) and
 [docs/onenote-import.md](docs/onenote-import.md).
@@ -291,7 +293,7 @@ flowchart LR
 - **Local auth** (`backend/app/auth.py`): browser requests are refused; with
   `FORTRESS_TOKEN` set every request needs it.
 - **OneNote**: the Rust converter turns an export into `manifest.json` + content-addressed
-  assets; `backend/app/onenote_import.py` imports it as living documents.
+  assets; `backend/app/onenote_import.py` imports it (re-imports refresh changed pages).
 
 ## FAQ
 
@@ -359,13 +361,13 @@ tools/
   fortress-onenote/   Rust OneNote converter (manifest format: SCHEMA.md)
 docs/                 block model, OneNote research, screenshots
 notes/                default NOTES_DIR (gitignored except the welcome note)
-spec.md               backend spec: data model, API, OCR, provenance, OneNote import
+spec.md               backend spec: data model, API, OCR, re-imports, OneNote import
 ```
 
 ## Documentation
 
 - [spec.md](spec.md): data model, API, caching, search, OCR, backups, provenance and
-  living documents, OneNote import jobs.
+  re-imports, OneNote import jobs.
 - [docs/block-model.md](docs/block-model.md): the block model contract (types, inline
   content, transactions, Markdown form).
 - [docs/open-standards.md](docs/open-standards.md): the open-standards policy and the

@@ -24,7 +24,6 @@ final class BlockHover: NSObject {
     let plus: NSButton
     let indicator = BlockDropIndicator()
     private(set) var target: HandleTarget?
-    private var popover: NSPopover?
     private(set) var isMenuOpen = false
     var isDragging = false
 
@@ -69,10 +68,6 @@ final class BlockHover: NSObject {
     func show(_ target: HandleTarget) {
         guard let controller else { return }
         install(in: controller.textView)
-        if self.target?.blockId != target.blockId {
-            popover?.close()
-            popover = nil
-        }
         self.target = target
         let size: CGFloat = 18
         let line = min(target.frame.height, 26)
@@ -115,28 +110,7 @@ final class BlockHover: NSObject {
         } else {
             editor.selectBlocks(anchor: target.blockId, head: target.blockId)
         }
-        return BlockMenu.make(for: editor, at: range, hover: self)
-    }
-
-    /// The block's provenance (spec §7a): edited, where it came from, created.
-    @objc func showInfo() {
-        guard let target, let editor = target.editor, let range = editor.range(ofBlock: target.blockId),
-              let info = editor.storage.blockInfo(at: range.location) else { return }
-        popover?.close()
-        let popover = NSPopover()
-        popover.behavior = .transient
-        let view = BlockInfoView(details: BlockDetails(info: info, newlyTyped: info.origin == nil)) { url in
-            editor.open(url)
-        }
-        let hosting = NSHostingController(rootView: view)
-        hosting.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = hosting
-        if grip.isHidden || grip.window == nil {
-            popover.show(relativeTo: editor.caretRect(), of: editor.textView, preferredEdge: .maxY)
-        } else {
-            popover.show(relativeTo: grip.bounds, of: grip, preferredEdge: .minX)
-        }
-        self.popover = popover
+        return BlockMenu.make(for: editor, at: range)
     }
 
     // MARK: Dragging
@@ -337,8 +311,8 @@ enum BlockMenu {
         }
     }
 
-    static func make(for editor: BlockEditorController, at range: NSRange, hover: BlockHover?) -> NSMenu {
-        let actions = BlockMenuActions(editor: editor, hover: hover)
+    static func make(for editor: BlockEditorController, at range: NSRange) -> NSMenu {
+        let actions = BlockMenuActions(editor: editor)
         let menu = BlockActionsMenu(title: String(localized: "Block"))
         menu.blockActions = actions
         menu.autoenablesItems = false
@@ -373,11 +347,10 @@ enum BlockMenu {
         menu.addItem(turnItem)
         menu.addItem(.separator())
 
-        func add(_ title: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = [], enabled: Bool = true) {
+        func add(_ title: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = []) {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
             item.keyEquivalentModifierMask = modifiers
             item.target = actions
-            item.isEnabled = enabled
             menu.addItem(item)
         }
         add(String(localized: "Duplicate"), #selector(BlockMenuActions.duplicate(_:)), key: "d", modifiers: .command)
@@ -394,8 +367,6 @@ enum BlockMenu {
             add(String(localized: "Remove Column"), #selector(BlockMenuActions.removeColumn(_:)))
             add(String(localized: "Unwrap Columns"), #selector(BlockMenuActions.unwrapColumns(_:)))
         }
-        menu.addItem(.separator())
-        add(String(localized: "Info…"), #selector(BlockMenuActions.info(_:)), enabled: hover != nil)
         return menu
     }
 }
@@ -414,11 +385,9 @@ final class TurnIntoBox: NSObject {
 @MainActor
 final class BlockMenuActions: NSObject {
     weak var editor: BlockEditorController?
-    weak var hover: BlockHover?
 
-    init(editor: BlockEditorController, hover: BlockHover?) {
+    init(editor: BlockEditorController) {
         self.editor = editor
-        self.hover = hover
     }
 
     @objc func turnInto(_ sender: NSMenuItem) {
@@ -434,96 +403,4 @@ final class BlockMenuActions: NSObject {
     @objc func addColumn(_ sender: Any?) { editor?.addColumn() }
     @objc func removeColumn(_ sender: Any?) { editor?.removeColumn() }
     @objc func unwrapColumns(_ sender: Any?) { editor?.unwrapColumns() }
-    @objc func info(_ sender: Any?) { hover?.showInfo() }
-}
-
-/// What the info popover says about a block.
-struct BlockDetails: Equatable {
-    var edited: Date?
-    var created: Date?
-    var source: String?
-    var sourceURL: URL?
-    var inherited = false
-    var newlyTyped = false
-
-    init(info: BlockInfo, newlyTyped: Bool) {
-        self.newlyTyped = newlyTyped
-        let origin = info.origin?.origin
-        edited = origin.flatMap { Timestamp.date($0.updatedAt) }
-        created = origin.flatMap { Timestamp.date($0.createdAt) }
-        let provenance = origin?.provenance ?? info.newProvenance
-        inherited = provenance?["inherited"]?.boolValue ?? false
-        source = Self.describe(provenance)
-        if let string = provenance?["source_url"]?.stringValue { sourceURL = URL(string: string) }
-        if let sourceCreated = provenance?["source_created_at"]?.stringValue.flatMap(Timestamp.date) {
-            created = sourceCreated
-        }
-    }
-
-    /// "Imported from OneNote › Work › Standups", "Pasted from example.com", "Folded in from Plans".
-    static func describe(_ provenance: JSONValue?) -> String? {
-        guard let provenance else { return nil }
-        if let origin = provenance["origin"], let operation = origin["operation"]?.stringValue {
-            let title = origin["document_title"]?.stringValue ?? String(localized: "another note", comment: "Block provenance: a note whose title is unknown")
-            switch operation {
-            case "move_into": return String(localized: "Folded in from \(title)")
-            case "duplicate": return String(localized: "Duplicated from \(title)")
-            case "split": return String(localized: "Split from \(title)")
-            default: break
-            }
-        }
-        let path = provenance["source_path"]?.stringValue
-        let host = provenance["source_url"]?.stringValue.flatMap { URL(string: $0)?.host() }
-        func with(_ base: String) -> String {
-            guard let path, !path.isEmpty else { return base }
-            return String(localized: "\(base) › \(path)", comment: "Block provenance: source, then the path inside it")
-        }
-        let kind = provenance["source"]?.stringValue ?? ""
-        switch (kind, host) {
-        case ("capture", let site?): return String(localized: "Captured from \(site)")
-        case ("paste", let site?): return String(localized: "Pasted from \(site)")
-        case ("web", let site?): return String(localized: "From \(site)")
-        default: return with(NoteProvenance.label(for: kind))
-        }
-    }
-}
-
-private struct BlockInfoView: View {
-    let details: BlockDetails
-    let open: (URL) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if details.newlyTyped && details.edited == nil {
-                row("pencil", String(localized: "Written just now"))
-            }
-            if let edited = details.edited {
-                row("pencil", EditorDates.edited(edited, now: Date()))
-            }
-            if let source = details.source {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.down.forward.circle").frame(width: 14)
-                    Text(source)
-                    if let url = details.sourceURL {
-                        Button { open(url) } label: { Image(systemName: "arrow.up.forward.square") }
-                            .buttonStyle(.plain).foregroundStyle(.tint).help(url.absoluteString)
-                    }
-                }
-            }
-            if let created = details.created {
-                row("calendar", String(localized: "Created \(created.formatted(.dateTime.month(.abbreviated).year()))"))
-            }
-        }
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .padding(12)
-        .fixedSize()
-    }
-
-    private func row(_ symbol: String, _ text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol).frame(width: 14)
-            Text(text)
-        }
-    }
 }

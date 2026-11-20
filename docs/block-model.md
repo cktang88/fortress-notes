@@ -41,7 +41,6 @@ document order):
   "payload": null,                        // structured data: html only, else null
   "text": "Hello world",                 // derived plain text (read-only)
   "user_attrs": {},                       // the person's own key/values (see §5)
-  "provenance": {"source": "manual"},     // where it came from (spec §7a)
   "revision": 41,                         // document revision that last changed it (null: never)
   "created_at": "2026-11-18T09:00:00+00:00",
   "updated_at": "2026-11-18T09:05:00+00:00",
@@ -50,7 +49,8 @@ document order):
 ```
 
 The document payload around the blocks is unchanged (`id`, `title`, `revision`,
-`provenance`, `resolved_links`, `children`, ...).
+`provenance` (the note's: where it came from, spec §7a), `resolved_links`,
+`children`, ...). Blocks have no provenance of their own.
 `resolved_links` gives the current title of every linked note and the current
 text of every referenced block, so clients render `docLink`/`blockRef` labels
 from it (labels are never stored).
@@ -126,8 +126,8 @@ columns
    └─ ordinary blocks
 ```
 
-Cell contents are ordinary blocks: they have ids, can be linked to, carry
-provenance and are searched and embedded like any other block. A one-line cell
+Cell contents are ordinary blocks: they have ids, can be linked to, and are
+searched and embedded like any other block. A one-line cell
 is a cell with one paragraph.
 
 ### Quotes and callouts
@@ -183,8 +183,8 @@ serves):
 
 | operation | fields |
 |---|---|
-| `insert` | `block_id`? (ULID/UUID; server generates one if omitted), placement (below), `type` (required), `attrs`?, `content`?, `payload`?, `user_attrs`?, `provenance`? |
-| `update` | `block_id`, and at least one of: `type`, `attrs` (PATCH), `content` (replaces the inline content), `payload` (replaces it), `user_attrs` (PATCH), `provenance` (merge); an update naming none of them is refused (422) |
+| `insert` | `block_id`? (ULID/UUID; server generates one if omitted), placement (below), `type` (required), `attrs`?, `content`?, `payload`?, `user_attrs`? |
+| `update` | `block_id`, and at least one of: `type`, `attrs` (PATCH), `content` (replaces the inline content), `payload` (replaces it), `user_attrs` (PATCH); an update naming none of them is refused (422) |
 | `move` | `block_id`, placement |
 | `delete` | `block_id` (deletes the whole subtree) |
 
@@ -199,11 +199,6 @@ order key; clients never send one.
 key set to `null` is deleted, keys not mentioned are kept. On insert, `attrs` is
 the full set (null values are ignored). Defaults (`heading.level = 1`,
 `check_item.checked = false`) are filled in by the server.
-
-**provenance** on insert says where new content came from (`paste`, `web`,
-`ai`, ...; default `manual`); on update its fields are merged into the block's
-provenance (nothing is removed). Server-maintained fields (re-import state) are
-never accepted from clients (§6).
 
 **Atomicity and conflicts.** A transaction applies all of its operations or
 none. It is accepted only when `base_revision` equals the document's current
@@ -235,35 +230,23 @@ operation with a field not listed above is refused (422).
 | full-text index, ColBERT input, Ask corpus | `text` plus the text read from the images and PDFs a block shows (`assets.text`, filled by the OCR queue, `backend/app/ocr.py`; never part of `text` or the visible content; listed per block as `picture_text` in `…/info`) |
 | asset links | `/media/...` URLs in attrs |
 | `revision`, `created_at`, `updated_at` | the transaction that wrote the block |
-| re-import state | the importer (block_sync table, §6) |
+| re-import state | the importer (the note's `sync_json`, §6) |
 
 `user_attrs` are the person's own key/value pairs on a block (due dates, ...);
 they are not part of the content and don't affect `text`.
 
-## 6. Provenance and re-import state
+## 6. Re-import state
 
-`provenance` (spec §7a) records where a block came from: `source`,
-`external_id`, `source_path`, `source_url`, timestamps, `importer`, `origin`,
-`extra`. It's set at insert and only ever merged into afterwards, so ordinary
-edits can't clobber it.
-
-Re-import (sync) state lives in its own `block_sync` table, never in
-provenance: `source_hash` (hash of the canonical block the source last wrote),
-`dismissed_hash`, `conflict` (the source's version of a locally edited block)
-and `source_removed`. Re-imports compare canonical content (type, attrs,
-content, payload), never Markdown. A note's own sync state (the source's title
-and folder, the external ids it last listed, `source_removed_at` when the page
-disappeared from its source) lives in `documents.sync_json`.
-
-`GET /api/block-documents/{id}/info` reports it: `sync` (with
-`source_removed_at`, `blocks_edited_here`, `blocks_removed_in_source`) and
-`conflicts`, where a block conflict is
-`{"kind": "block", "block_id", "local_text", "source_text", "source": {type,
-attrs, content, payload}, "detected_at", "source_modified_at"}` (`source_text`
-is the derived text of the source's version). `POST
-.../blocks/{block_id}/source-conflict` with `{"keep": "source"|"local"}`
-settles one: `source` applies the source's version, `local` silences that
-source version (a later, different one is reported again).
+A note imported from a source (OneNote) is found again by its source key
+(`documents.source_kind`, `source_external_id`). Re-importing it is a refresh
+(spec §7a): unchanged source, nothing happens; changed source, the note's blocks
+are replaced by the source's; edited here since the last import, the note is
+left alone and reported. What a refresh needs lives in the note's
+`documents.sync_json`: the note's revision after the last import (a later
+revision means "edited here"), a hash of what the source had, and which block
+each source id became (`blocks`, plus `anchors` for other ids, such as those
+links name). Matching blocks keep their ids, so links and references into them
+survive. Nothing is kept per block.
 
 ## 7. Markdown
 
@@ -271,7 +254,7 @@ Markdown is an interchange format, rendered from the canonical blocks; it is
 never stored. It is CommonMark + GFM + Obsidian Flavored Markdown, chosen per
 [open-standards.md](open-standards.md): the vault mirror and exports read well in
 Obsidian, GitHub, VS Code or Pandoc, and import of our own Markdown restores the
-model (ids of referenced blocks, links, references, provenance, attributes). The
+model (ids of referenced blocks, links, references, the note's provenance, attributes). The
 mirror is written from the database and never read back into it.
 
 Writing (`render_markdown`, with `RenderLinks` naming notes and blocks):
@@ -300,14 +283,14 @@ Writing (`render_markdown`, with `RenderLinks` naming notes and blocks):
   and ids Obsidian can't hold (`_`) go in the comment.
 - The comment, `<!-- fortress:block {...} -->` (trailing on a text block's line,
   otherwise on the line before the block), carries only what no syntax can say:
-  `provenance` when it differs from the note's, extension `attrs` (and image
+  extension `attrs` (and image
   `name`, file `size`/`caption`, callout `icon`/`color`), `indent` for a block
   nested under a paragraph or heading (its children follow it, `"indent": 1`,
   `2`, ...), and `id` as above. A block with nothing to say has no comment.
 - Tables: a GFM table when the table has one header row, every cell holds one
   paragraph (or nothing) and there are no spans, colours or widths, and nothing
-  inside is referred to (per-cell paragraph provenance goes in the table's
-  comment as `"rows"`); otherwise an HTML `<table>` whose rows, cells and cell
+  inside is referred to, and no cell paragraph has attributes Markdown can't
+  say; otherwise an HTML `<table>` whose rows, cells and cell
   blocks carry their metadata in a `data-block` attribute.
 - Columns (no Markdown dialect has them): the contents in order between
   `<!-- fortress:columns -->`, `<!-- fortress:column {…} -->` …
@@ -417,3 +400,9 @@ retires math and ink, losing no content:
 - re-import conflicts holding such blocks are converted the same way, and the
   re-import hash of an unedited imported block follows its new
   shape (so a re-import doesn't report it as edited).
+
+Then, once, whatever the version (`_retire_block_sync` in
+`backend/app/block_store.py`): re-imports became refreshes, so each imported
+note's per-block state (`block_sync`, block provenance) becomes its `sync_json`
+(§6; a note with a block edited, added or deleted here counts as edited) and the
+`block_sync` table and `blocks.provenance_json` column are dropped.

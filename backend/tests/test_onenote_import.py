@@ -317,29 +317,32 @@ class ImportManifestTests(_Base):
         documents.flush_mirrors()  # Markdown mirrors follow in the background
         self.assertTrue(mirror_file(self.notes, ids[P1]).is_file())
 
-    def test_local_edit_survives_reimport_and_source_change_is_a_conflict(self) -> None:
+    def test_a_page_edited_here_is_not_refreshed_and_is_reported(self) -> None:
         self.run_import()
         tree = self.tree(P1)
         block = _find(tree["children"], lambda node: node["text"] == "Editable paragraph")
         apply_transaction(self.db, tree["id"], [BlockOperation(
             operation="update", block_id=block["id"],
             content=[{"type": "text", "text": "Edited in Fortress"}])], tree["revision"])
+        # The source did not change: nothing to refresh, nothing to report.
+        same = self.run_import()["notebooks"][0]
+        self.assertEqual((same["pages_unchanged"], same["pages_not_refreshed"]), (4, []))
         changed = copy.deepcopy(self.manifest)
         page = changed["notebooks"][0]["children"][0]["children"][0]["pages"][0]
         page["items"][0]["blocks"][0]["text"] = "Plan heading v2"
         result = self.run_import(changed)["notebooks"][0]
-        self.assertEqual(result["pages_updated"], 1)
-        self.assertEqual(result["pages_unchanged"], 3)
-        tree = self.tree(P1)
-        texts = [node["text"] for node in _walk(tree["children"])]
+        self.assertEqual((result["pages_updated"], result["pages_unchanged"]), (0, 3))
+        self.assertEqual(result["pages_not_refreshed"],
+                         [{"page": "Work › Projects › Alpha › Plan", "document_id": tree["id"]}])
+        self.assertIn("Work › Projects › Alpha › Plan: edited here since the last import, not refreshed",
+                      result["warnings"])
+        texts = [node["text"] for node in _walk(self.tree(P1)["children"])]
         self.assertIn("Edited in Fortress", texts)
-        self.assertNotIn("Editable paragraph", texts)
-        self.assertIn("Plan heading v2", texts)
-        self.assertNotIn("Plan heading", texts)
-        # Unchanged source again: still unchanged, the local edit stays.
+        self.assertIn("Plan heading", texts)
+        self.assertNotIn("Plan heading v2", texts)
+        # Still edited here next time: still not refreshed.
         again = self.run_import(changed)["notebooks"][0]
-        self.assertEqual(again["pages_unchanged"], 4)
-        self.assertIn("Edited in Fortress", [node["text"] for node in _walk(self.tree(P1)["children"])])
+        self.assertEqual(len(again["pages_not_refreshed"]), 1)
 
     def test_columns_tables_and_marks(self) -> None:
         self.run_import()
@@ -449,7 +452,6 @@ class ImportManifestTests(_Base):
         self.assertIn("Standup notes", paragraph["text"])
         self.assertNotIn("elsewhere", json.dumps([n for n in paragraph["content"] if n["type"] != "text"]))
         self.assertIn("elsewhere", paragraph["text"])
-        self.assertIn(UNKNOWN, paragraph["provenance"]["extra"]["unresolved_links"][0])
         backlinks = block_store.document_backlinks(self.db, self.doc_id(P3))
         self.assertTrue(backlinks)
         # The second run resolves everything in one pass: nothing changes.
@@ -700,9 +702,10 @@ class LivingDocumentTests(_Base):
     def test_paragraph_edited_in_source_updates_the_same_block(self) -> None:
         self.run_import()
         before = self.block(P1, "Editable paragraph")
-        self.assertEqual(before["provenance"]["external_id"], f"{P1}/obj:{oid(0x1B)}")
-        self.assertEqual(before["provenance"]["extra"]["onenote"],
-                         {"object_id": oid(0x1B), "element_id": oid(0x1A)})
+        state = sources.sync_state(self.db, self.doc_id(P1))
+        self.assertEqual(state["blocks"][f"{P1}/obj:{oid(0x1B)}"], before["id"])
+        self.assertEqual((state["anchors"][oid(0x1A)], state["anchors"][oid(0x1B)]),
+                         (before["id"], before["id"]))
         # Another note references the paragraph.
         other = block_store.create_block_document(self.db, "Elsewhere", f"See (( {before['id']} ))")
 
@@ -721,22 +724,6 @@ class LivingDocumentTests(_Base):
         self.assertNotIn("Editable paragraph", [node["text"] for node in _walk(self.tree(P1)["children"])])
         self.assertEqual(references(), [(other["id"], before["id"])])
 
-    def test_local_edit_wins_and_source_edit_becomes_a_conflict(self) -> None:
-        self.run_import()
-        tree = self.tree(P1)
-        block = self.block(P1, "Editable paragraph")
-        apply_transaction(self.db, tree["id"], [BlockOperation(
-            operation="update", block_id=block["id"],
-            content=[{"type": "text", "text": "Edited in Fortress"}])], tree["revision"])
-        changed = copy.deepcopy(self.manifest)
-        _pages(changed)[P1]["items"][0]["blocks"][5]["text"] = "Edited in OneNote"
-        result = self.run_import(changed)["notebooks"][0]
-        self.assertEqual(result["conflicts"], 1)
-        kept = self.block(P1, "Edited in Fortress")
-        self.assertEqual(kept["id"], block["id"])
-        [conflict] = sources.document_info(self.db, tree["id"])["conflicts"]
-        self.assertEqual((conflict["block_id"], conflict["source_text"]), (block["id"], "Edited in OneNote"))
-
     def test_notes_imported_with_hash_ids_migrate_in_place(self) -> None:
         self.run_import(build_manifest())  # an old, format-1 style manifest
         before = {node["text"]: node["id"] for node in _walk(self.tree(P1)["children"]) if node["text"]}
@@ -750,7 +737,8 @@ class LivingDocumentTests(_Base):
         self.assertEqual(sorted(after.values()), sorted(before.values()))
         self.assertEqual([node["id"] for node in tree["children"] if node["type"] == "columns"], columns_before)
         migrated = self.block(P1, "Editable paragraph")
-        self.assertEqual(migrated["provenance"]["external_id"], f"{P1}/obj:{oid(0x1B)}")
+        self.assertEqual(
+            sources.sync_state(self.db, tree["id"])["blocks"][f"{P1}/obj:{oid(0x1B)}"], migrated["id"])
         # Now keyed by object id: an edit in OneNote keeps the block.
         changed = copy.deepcopy(self.manifest)
         _pages(changed)[P1]["items"][0]["blocks"][5]["text"] = "Edited later"
@@ -812,8 +800,8 @@ class LivingDocumentTests(_Base):
         self.assertEqual(result["sections_removed_in_source"][0]["path"], "Work › Meetings")
         for guid in (P2B, P3):
             self.assertIsNotNone(self.tree(guid))  # still there
-            self.assertTrue(sources.document_info(self.db, ids[guid])["sync"]["source_removed_at"])
-        self.assertIsNone(sources.document_info(self.db, ids[P1])["sync"]["source_removed_at"])
+            self.assertTrue(sources.sync_state(self.db, ids[guid])["source_removed_at"])
+        self.assertNotIn("source_removed_at", sources.sync_state(self.db, ids[P1]))
         # Still listed next time, with the first date.
         again = self.run_import(changed)["notebooks"][0]
         self.assertEqual({item["document_id"] for item in again["pages_removed_in_source"]}, {ids[P2B], ids[P3]})
@@ -822,7 +810,7 @@ class LivingDocumentTests(_Base):
         restored = self.run_import(self.manifest)["notebooks"][0]
         self.assertEqual(restored["pages_removed_in_source"], [])
         self.assertEqual(restored["sections_removed_in_source"], [])
-        self.assertIsNone(sources.document_info(self.db, ids[P3])["sync"]["source_removed_at"])
+        self.assertNotIn("source_removed_at", sources.sync_state(self.db, ids[P3]))
 
     def test_unreadable_sections_and_other_notebooks_are_not_removed(self) -> None:
         self.run_import()
@@ -969,7 +957,8 @@ class ImportJobLifecycleTests(_Base):
             calls.append(args[0]["id"])
             state = original(importer, *args, **kwargs)
             if len(calls) == 2:
-                self.jobs.cancel(job_id, self.notes)
+                # The job may run before the request that queued it returns its id.
+                self.jobs.cancel(self.jobs.list(self.notes)[0]["job_id"], self.notes)
             return state
 
         with patch.object(onenote_import._Importer, "_import_page", import_page):
@@ -1156,7 +1145,6 @@ class CompareFindingsTests(_Base):
         hrefs = [run["href"] for run in first if run["type"] == "link"]
         self.assertEqual(hrefs, ["https://example.com/ok"])
         self.assertEqual(links["text"], text)  # the words stay
-        self.assertEqual(len(links["provenance"]["extra"]["dropped_links"]), len(bad))
         self.assertEqual(tree["children"][1]["text"], "nul and esc here")
         image = tree["children"][2]
         self.assertNotIn("link", image["attrs"])

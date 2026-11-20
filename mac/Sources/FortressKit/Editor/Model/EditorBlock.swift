@@ -167,8 +167,6 @@ public struct BlockOrigin: Hashable, Sendable {
     public var updatedAt: String
     /// Children of a block that keeps them to itself (an embed); never flattened.
     public var children: [BlockNode]
-    /// Where the block came from (spec §7a). Read-only here: never sent on update.
-    public var provenance: JSONValue?
     /// Note revision that last changed the block.
     public var revision: Int?
 
@@ -176,9 +174,8 @@ public struct BlockOrigin: Hashable, Sendable {
         type: String, attrs: [String: JSONValue] = [:], userAttrs: [String: JSONValue] = [:],
         content: JSONValue = .null, payload: JSONValue? = nil, text: String = "", kind: BlockKind,
         createdAt: String = "", updatedAt: String = "", children: [BlockNode] = [],
-        provenance: JSONValue? = nil, revision: Int? = nil
+        revision: Int? = nil
     ) {
-        self.provenance = provenance
         self.revision = revision
         self.type = type
         self.attrs = attrs
@@ -196,7 +193,7 @@ public struct BlockOrigin: Hashable, Sendable {
         self.init(type: node.type, attrs: node.attrs, userAttrs: node.userAttrs, content: node.content,
                   payload: node.payload, text: node.text, kind: kind, createdAt: node.createdAt,
                   updatedAt: node.updatedAt, children: keepingChildren ? node.children : [],
-                  provenance: node.provenance, revision: node.revision)
+                  revision: node.revision)
     }
 }
 
@@ -223,8 +220,6 @@ public struct EditorBlock: Hashable, Sendable {
     public var language: String?
     public var runs: [InlineRun]
     public var origin: BlockOrigin?
-    /// Provenance to record when this block is first saved (e.g. pasted from a web page).
-    public var newProvenance: JSONValue?
     /// A table's rows and cells (kind `.table`).
     public var table: TableContent?
     /// A columns block's columns, each with its blocks (kind `.columns`).
@@ -236,13 +231,12 @@ public struct EditorBlock: Hashable, Sendable {
     public init(
         id: String = EditorBlock.newId(), kind: BlockKind = .paragraph, depth: Int = 0,
         checked: Bool = false, language: String? = nil, runs: [InlineRun] = [],
-        origin: BlockOrigin? = nil, newProvenance: JSONValue? = nil, table: TableContent? = nil,
+        origin: BlockOrigin? = nil, table: TableContent? = nil,
         columns: [EditorColumn]? = nil, container: QuoteContainer? = nil
     ) {
         self.container = container
         self.table = table
         self.columns = columns
-        self.newProvenance = newProvenance
         self.id = id
         self.kind = kind
         self.depth = depth

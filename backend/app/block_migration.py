@@ -118,8 +118,18 @@ def migrate(connection: sqlite3.Connection) -> None:
         "DELETE FROM block_assets",
     ):
         connection.execute(statement)
-    for block_id, sync in syncs:
-        block_store.write_block_sync(connection, block_id, sync)
+    # Read by block_store._retire_block_sync once the migrations are done.
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS block_sync (
+               block_id TEXT PRIMARY KEY, source_hash TEXT, dismissed_hash TEXT,
+               conflict_json TEXT, source_removed INTEGER NOT NULL DEFAULT 0)"""
+    )
+    connection.executemany(
+        """INSERT OR REPLACE INTO block_sync(block_id, source_hash, dismissed_hash, conflict_json,
+               source_removed) VALUES (?, ?, ?, ?, ?)""",
+        [(block_id, sync.get("source_hash"), sync.get("dismissed_hash"), sync.get("conflict_json"),
+          int(bool(sync.get("source_removed")))) for block_id, sync in syncs],
+    )
     for (document_id,) in connection.execute("SELECT id FROM documents").fetchall():
         block_store.refresh_derived(
             connection, document_id,

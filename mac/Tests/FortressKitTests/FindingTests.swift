@@ -328,23 +328,13 @@ private actor Calls {
 
 @MainActor @Test func noteInfoFromTheRealInfoEndpoint() throws {
     let imported = NoteInfo(try JSONDecoder().decode(DocumentInfo.self, from: try findingFixture("info-imported.json")))
-    let provenance = try #require(imported.provenance)
-    #expect(provenance.label == "Imported from OneNote")
-    #expect(provenance.path == "Travel notebook › Japan › Kyoto")
-    #expect(provenance.importer == "onenote 1.0")
-    #expect(provenance.isNotable)
+    #expect(imported.sourceLabel == "Imported from OneNote")
     #expect(imported.words == 14 && imported.blocks == 2)
-    #expect(InfoSection.sourceDates(provenance)?.hasPrefix("Written ") == true)
-    #expect(imported.mixedSources == nil)
 
     let manual = NoteInfo(try JSONDecoder().decode(DocumentInfo.self, from: try findingFixture("info.json")))
     #expect(manual.folderPath == ["Travel"])
-    #expect(manual.provenance?.isNotable == false)
+    #expect(manual.sourceLabel == nil)
     #expect(manual.backlinksIn == 0)
-
-    var mixed = manual
-    mixed.blocksBySource = ["onenote_import": 12, "manual": 3]
-    #expect(mixed.mixedSources == "12 from OneNote · 3 written here")
 }
 
 func findingFixture(_ name: String) throws -> Data {

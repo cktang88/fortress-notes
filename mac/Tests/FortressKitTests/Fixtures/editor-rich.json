@@ -56,10 +56,6 @@
       "payload": null,
       "text": "Three slow days in Kyoto, mostly on foot. The plan is loose on purpose: one temple a morning, long lunches, and the rest of the time for wandering.",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -84,10 +80,6 @@
       "payload": null,
       "text": "Before we go",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -112,10 +104,6 @@
       "payload": null,
       "text": "Book the ryokan in Gion",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -140,10 +128,6 @@
       "payload": null,
       "text": "Buy a 7-day JR pass",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -176,10 +160,6 @@
       "payload": null,
       "text": "Print the Packing list and check the weather",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -204,10 +184,6 @@
       "payload": null,
       "text": "Days",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -230,10 +206,6 @@
       "payload": null,
       "text": "Fushimi Inari at dawn, before the crowds",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -266,10 +238,6 @@
           "payload": null,
           "text": "Take the JR Nara line two stops from Kyoto Station",
           "user_attrs": {},
-          "provenance": {
-            "source": "manual",
-            "inherited": true
-          },
           "revision": null,
           "created_at": "2026-03-02T09:00:00+00:00",
           "updated_at": "2026-11-16T09:00:00+00:00",
@@ -295,10 +263,6 @@
           "payload": null,
           "text": "The upper trail is quiet after the Yotsutsuji crossing",
           "user_attrs": {},
-          "provenance": {
-            "source": "manual",
-            "inherited": true
-          },
           "revision": null,
           "created_at": "2026-03-02T09:00:00+00:00",
           "updated_at": "2026-11-16T09:00:00+00:00",
@@ -330,10 +294,6 @@
       "payload": null,
       "text": "Arashiyama bamboo grove, then the Okochi Sanso villa",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -366,10 +326,6 @@
       "payload": null,
       "text": "Philosopher's Path, coffee at Weekenders",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -391,10 +347,6 @@
       "payload": null,
       "text": "",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -412,16 +364,12 @@
       "payload": null,
       "text": "",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
       "children": [
         {
-          "id": "01M7PN9DJETH0MA9DZTD47TESN",
+          "id": "01M7XFNGJM9TP7ZGDQ8H4P9XX3",
           "document_id": "01M7RICHDOC000000000000000",
           "parent_id": "01M7RICH000000000000000013",
           "order": "a0",
@@ -440,10 +388,6 @@
           "payload": null,
           "text": "The best plan for Kyoto is the one you are willing to abandon.",
           "user_attrs": {},
-          "provenance": {
-            "source": "manual",
-            "inherited": true
-          },
           "revision": null,
           "created_at": "2026-03-02T09:00:00+00:00",
           "updated_at": "2026-11-16T09:00:00+00:00",
@@ -458,9 +402,7 @@
       "order": "aB",
       "position": 11,
       "type": "code",
-      "attrs": {
-        "language": "text"
-      },
+      "attrs": {},
       "content": [
         {
           "type": "text",
@@ -470,10 +412,6 @@
       "payload": null,
       "text": "Shinkansen  Tokyo 07:03  →  Kyoto 09:15\nNozomi 3    Car 7, seats 12A–12B",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -491,10 +429,6 @@
       "payload": null,
       "text": "",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -512,16 +446,12 @@
       "payload": null,
       "text": "",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
       "children": [
         {
-          "id": "01M7PN9DJETH0MA9DZTD47TESP",
+          "id": "01M7XFNGJM9TP7ZGDQ8H4P9XX4",
           "document_id": "01M7RICHDOC000000000000000",
           "parent_id": "01M7RICH000000000000000016",
           "order": "a0",
@@ -532,18 +462,14 @@
           "payload": null,
           "text": "",
           "user_attrs": {},
-          "provenance": {
-            "source": "manual",
-            "inherited": true
-          },
           "revision": null,
           "created_at": "2026-03-02T09:00:00+00:00",
           "updated_at": "2026-11-16T09:00:00+00:00",
           "children": [
             {
-              "id": "01M7PN9DJETH0MA9DZTD47TESQ",
+              "id": "01M7XFNGJM9TP7ZGDQ8H4P9XX5",
               "document_id": "01M7RICHDOC000000000000000",
-              "parent_id": "01M7PN9DJETH0MA9DZTD47TESP",
+              "parent_id": "01M7XFNGJM9TP7ZGDQ8H4P9XX4",
               "order": "a0",
               "position": 0,
               "type": "table_cell",
@@ -552,18 +478,14 @@
               "payload": null,
               "text": "",
               "user_attrs": {},
-              "provenance": {
-                "source": "manual",
-                "inherited": true
-              },
               "revision": null,
               "created_at": "2026-03-02T09:00:00+00:00",
               "updated_at": "2026-11-16T09:00:00+00:00",
               "children": [
                 {
-                  "id": "01M7PN9DJETH0MA9DZTD47TESR",
+                  "id": "01M7XFNGJM9TP7ZGDQ8H4P9XX6",
                   "document_id": "01M7RICHDOC000000000000000",
-                  "parent_id": "01M7PN9DJETH0MA9DZTD47TESQ",
+                  "parent_id": "01M7XFNGJM9TP7ZGDQ8H4P9XX5",
                   "order": "a0",
                   "position": 0,
                   "type": "paragraph",
@@ -577,10 +499,6 @@
                   "payload": null,
                   "text": "Day",
                   "user_attrs": {},
-                  "provenance": {
-                    "source": "manual",
-                    "inherited": true
-                  },
                   "revision": null,
                   "created_at": "2026-03-02T09:00:00+00:00",
                   "updated_at": "2026-11-16T09:00:00+00:00",
@@ -589,9 +507,9 @@
               ]
             },
             {
-              "id": "01M7PN9DJETH0MA9DZTD47TESS",
+              "id": "01M7XFNGJNWM5E5HVB7TJB2R07",
               "document_id": "01M7RICHDOC000000000000000",
-              "parent_id": "01M7PN9DJETH0MA9DZTD47TESP",
+              "parent_id": "01M7XFNGJM9TP7ZGDQ8H4P9XX4",
               "order": "a1",
               "position": 1,
               "type": "table_cell",
@@ -600,18 +518,14 @@
               "payload": null,
               "text": "",
               "user_attrs": {},
-              "provenance": {
-                "source": "manual",
-                "inherited": true
-              },
               "revision": null,
               "created_at": "2026-03-02T09:00:00+00:00",
               "updated_at": "2026-11-16T09:00:00+00:00",
               "children": [
                 {
-                  "id": "01M7PN9DJETH0MA9DZTD47TEST",
+                  "id": "01M7XFNGJNWM5E5HVB7TJB2R08",
                   "document_id": "01M7RICHDOC000000000000000",
-                  "parent_id": "01M7PN9DJETH0MA9DZTD47TESS",
+                  "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R07",
                   "order": "a0",
                   "position": 0,
                   "type": "paragraph",
@@ -625,10 +539,6 @@
                   "payload": null,
                   "text": "Area",
                   "user_attrs": {},
-                  "provenance": {
-                    "source": "manual",
-                    "inherited": true
-                  },
                   "revision": null,
                   "created_at": "2026-03-02T09:00:00+00:00",
                   "updated_at": "2026-11-16T09:00:00+00:00",
@@ -637,9 +547,9 @@
               ]
             },
             {
-              "id": "01M7PN9DJETH0MA9DZTD47TESV",
+              "id": "01M7XFNGJNWM5E5HVB7TJB2R09",
               "document_id": "01M7RICHDOC000000000000000",
-              "parent_id": "01M7PN9DJETH0MA9DZTD47TESP",
+              "parent_id": "01M7XFNGJM9TP7ZGDQ8H4P9XX4",
               "order": "a2",
               "position": 2,
               "type": "table_cell",
@@ -648,18 +558,14 @@
               "payload": null,
               "text": "",
               "user_attrs": {},
-              "provenance": {
-                "source": "manual",
-                "inherited": true
-              },
               "revision": null,
               "created_at": "2026-03-02T09:00:00+00:00",
               "updated_at": "2026-11-16T09:00:00+00:00",
               "children": [
                 {
-                  "id": "01M7PN9DJETH0MA9DZTD47TESW",
+                  "id": "01M7XFNGJNWM5E5HVB7TJB2R0A",
                   "document_id": "01M7RICHDOC000000000000000",
-                  "parent_id": "01M7PN9DJETH0MA9DZTD47TESV",
+                  "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R09",
                   "order": "a0",
                   "position": 0,
                   "type": "paragraph",
@@ -673,10 +579,6 @@
                   "payload": null,
                   "text": "Dinner",
                   "user_attrs": {},
-                  "provenance": {
-                    "source": "manual",
-                    "inherited": true
-                  },
                   "revision": null,
                   "created_at": "2026-03-02T09:00:00+00:00",
                   "updated_at": "2026-11-16T09:00:00+00:00",
@@ -687,7 +589,7 @@
           ]
         },
         {
-          "id": "01M7PN9DJETH0MA9DZTD47TESX",
+          "id": "01M7XFNGJNWM5E5HVB7TJB2R0B",
           "document_id": "01M7RICHDOC000000000000000",
           "parent_id": "01M7RICH000000000000000016",
           "order": "a1",
@@ -698,18 +600,14 @@
           "payload": null,
           "text": "",
           "user_attrs": {},
-          "provenance": {
-            "source": "manual",
-            "inherited": true
-          },
           "revision": null,
           "created_at": "2026-03-02T09:00:00+00:00",
           "updated_at": "2026-11-16T09:00:00+00:00",
           "children": [
             {
-              "id": "01M7PN9DJETH0MA9DZTD47TESY",
+              "id": "01M7XFNGJNWM5E5HVB7TJB2R0C",
               "document_id": "01M7RICHDOC000000000000000",
-              "parent_id": "01M7PN9DJETH0MA9DZTD47TESX",
+              "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0B",
               "order": "a0",
               "position": 0,
               "type": "table_cell",
@@ -718,18 +616,14 @@
               "payload": null,
               "text": "",
               "user_attrs": {},
-              "provenance": {
-                "source": "manual",
-                "inherited": true
-              },
               "revision": null,
               "created_at": "2026-03-02T09:00:00+00:00",
               "updated_at": "2026-11-16T09:00:00+00:00",
               "children": [
                 {
-                  "id": "01M7PN9DJETH0MA9DZTD47TESZ",
+                  "id": "01M7XFNGJNWM5E5HVB7TJB2R0D",
                   "document_id": "01M7RICHDOC000000000000000",
-                  "parent_id": "01M7PN9DJETH0MA9DZTD47TESY",
+                  "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0C",
                   "order": "a0",
                   "position": 0,
                   "type": "paragraph",
@@ -743,10 +637,6 @@
                   "payload": null,
                   "text": "Fri",
                   "user_attrs": {},
-                  "provenance": {
-                    "source": "manual",
-                    "inherited": true
-                  },
                   "revision": null,
                   "created_at": "2026-03-02T09:00:00+00:00",
                   "updated_at": "2026-11-16T09:00:00+00:00",
@@ -755,9 +645,9 @@
               ]
             },
             {
-              "id": "01M7PN9DJETH0MA9DZTD47TET0",
+              "id": "01M7XFNGJNWM5E5HVB7TJB2R0E",
               "document_id": "01M7RICHDOC000000000000000",
-              "parent_id": "01M7PN9DJETH0MA9DZTD47TESX",
+              "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0B",
               "order": "a1",
               "position": 1,
               "type": "table_cell",
@@ -766,18 +656,14 @@
               "payload": null,
               "text": "",
               "user_attrs": {},
-              "provenance": {
-                "source": "manual",
-                "inherited": true
-              },
               "revision": null,
               "created_at": "2026-03-02T09:00:00+00:00",
               "updated_at": "2026-11-16T09:00:00+00:00",
               "children": [
                 {
-                  "id": "01M7PN9DJETH0MA9DZTD47TET1",
+                  "id": "01M7XFNGJNWM5E5HVB7TJB2R0F",
                   "document_id": "01M7RICHDOC000000000000000",
-                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET0",
+                  "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0E",
                   "order": "a0",
                   "position": 0,
                   "type": "paragraph",
@@ -791,10 +677,6 @@
                   "payload": null,
                   "text": "Fushimi",
                   "user_attrs": {},
-                  "provenance": {
-                    "source": "manual",
-                    "inherited": true
-                  },
                   "revision": null,
                   "created_at": "2026-03-02T09:00:00+00:00",
                   "updated_at": "2026-11-16T09:00:00+00:00",
@@ -803,9 +685,9 @@
               ]
             },
             {
-              "id": "01M7PN9DJETH0MA9DZTD47TET2",
+              "id": "01M7XFNGJNWM5E5HVB7TJB2R0G",
               "document_id": "01M7RICHDOC000000000000000",
-              "parent_id": "01M7PN9DJETH0MA9DZTD47TESX",
+              "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0B",
               "order": "a2",
               "position": 2,
               "type": "table_cell",
@@ -814,18 +696,14 @@
               "payload": null,
               "text": "",
               "user_attrs": {},
-              "provenance": {
-                "source": "manual",
-                "inherited": true
-              },
               "revision": null,
               "created_at": "2026-03-02T09:00:00+00:00",
               "updated_at": "2026-11-16T09:00:00+00:00",
               "children": [
                 {
-                  "id": "01M7PN9DJETH0MA9DZTD47TET3",
+                  "id": "01M7XFNGJNWM5E5HVB7TJB2R0H",
                   "document_id": "01M7RICHDOC000000000000000",
-                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET2",
+                  "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0G",
                   "order": "a0",
                   "position": 0,
                   "type": "paragraph",
@@ -839,10 +717,6 @@
                   "payload": null,
                   "text": "Izakaya near the station",
                   "user_attrs": {},
-                  "provenance": {
-                    "source": "manual",
-                    "inherited": true
-                  },
                   "revision": null,
                   "created_at": "2026-03-02T09:00:00+00:00",
                   "updated_at": "2026-11-16T09:00:00+00:00",
@@ -853,7 +727,7 @@
           ]
         },
         {
-          "id": "01M7PN9DJETH0MA9DZTD47TET4",
+          "id": "01M7XFNGJNWM5E5HVB7TJB2R0J",
           "document_id": "01M7RICHDOC000000000000000",
           "parent_id": "01M7RICH000000000000000016",
           "order": "a2",
@@ -864,18 +738,14 @@
           "payload": null,
           "text": "",
           "user_attrs": {},
-          "provenance": {
-            "source": "manual",
-            "inherited": true
-          },
           "revision": null,
           "created_at": "2026-03-02T09:00:00+00:00",
           "updated_at": "2026-11-16T09:00:00+00:00",
           "children": [
             {
-              "id": "01M7PN9DJETH0MA9DZTD47TET5",
+              "id": "01M7XFNGJNWM5E5HVB7TJB2R0K",
               "document_id": "01M7RICHDOC000000000000000",
-              "parent_id": "01M7PN9DJETH0MA9DZTD47TET4",
+              "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0J",
               "order": "a0",
               "position": 0,
               "type": "table_cell",
@@ -884,18 +754,14 @@
               "payload": null,
               "text": "",
               "user_attrs": {},
-              "provenance": {
-                "source": "manual",
-                "inherited": true
-              },
               "revision": null,
               "created_at": "2026-03-02T09:00:00+00:00",
               "updated_at": "2026-11-16T09:00:00+00:00",
               "children": [
                 {
-                  "id": "01M7PN9DJETH0MA9DZTD47TET6",
+                  "id": "01M7XFNGJNWM5E5HVB7TJB2R0M",
                   "document_id": "01M7RICHDOC000000000000000",
-                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET5",
+                  "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0K",
                   "order": "a0",
                   "position": 0,
                   "type": "paragraph",
@@ -909,10 +775,6 @@
                   "payload": null,
                   "text": "Sat",
                   "user_attrs": {},
-                  "provenance": {
-                    "source": "manual",
-                    "inherited": true
-                  },
                   "revision": null,
                   "created_at": "2026-03-02T09:00:00+00:00",
                   "updated_at": "2026-11-16T09:00:00+00:00",
@@ -921,9 +783,9 @@
               ]
             },
             {
-              "id": "01M7PN9DJETH0MA9DZTD47TET7",
+              "id": "01M7XFNGJNWM5E5HVB7TJB2R0N",
               "document_id": "01M7RICHDOC000000000000000",
-              "parent_id": "01M7PN9DJETH0MA9DZTD47TET4",
+              "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0J",
               "order": "a1",
               "position": 1,
               "type": "table_cell",
@@ -932,18 +794,14 @@
               "payload": null,
               "text": "",
               "user_attrs": {},
-              "provenance": {
-                "source": "manual",
-                "inherited": true
-              },
               "revision": null,
               "created_at": "2026-03-02T09:00:00+00:00",
               "updated_at": "2026-11-16T09:00:00+00:00",
               "children": [
                 {
-                  "id": "01M7PN9DJETH0MA9DZTD47TET8",
+                  "id": "01M7XFNGJNWM5E5HVB7TJB2R0P",
                   "document_id": "01M7RICHDOC000000000000000",
-                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET7",
+                  "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0N",
                   "order": "a0",
                   "position": 0,
                   "type": "paragraph",
@@ -957,10 +815,6 @@
                   "payload": null,
                   "text": "Arashiyama",
                   "user_attrs": {},
-                  "provenance": {
-                    "source": "manual",
-                    "inherited": true
-                  },
                   "revision": null,
                   "created_at": "2026-03-02T09:00:00+00:00",
                   "updated_at": "2026-11-16T09:00:00+00:00",
@@ -969,9 +823,9 @@
               ]
             },
             {
-              "id": "01M7PN9DJETH0MA9DZTD47TET9",
+              "id": "01M7XFNGJNWM5E5HVB7TJB2R0Q",
               "document_id": "01M7RICHDOC000000000000000",
-              "parent_id": "01M7PN9DJETH0MA9DZTD47TET4",
+              "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0J",
               "order": "a2",
               "position": 2,
               "type": "table_cell",
@@ -980,18 +834,14 @@
               "payload": null,
               "text": "",
               "user_attrs": {},
-              "provenance": {
-                "source": "manual",
-                "inherited": true
-              },
               "revision": null,
               "created_at": "2026-03-02T09:00:00+00:00",
               "updated_at": "2026-11-16T09:00:00+00:00",
               "children": [
                 {
-                  "id": "01M7PN9DJETH0MA9DZTD47TETA",
+                  "id": "01M7XFNGJNWM5E5HVB7TJB2R0R",
                   "document_id": "01M7RICHDOC000000000000000",
-                  "parent_id": "01M7PN9DJETH0MA9DZTD47TET9",
+                  "parent_id": "01M7XFNGJNWM5E5HVB7TJB2R0Q",
                   "order": "a0",
                   "position": 0,
                   "type": "paragraph",
@@ -1005,10 +855,6 @@
                   "payload": null,
                   "text": "Tofu kaiseki",
                   "user_attrs": {},
-                  "provenance": {
-                    "source": "manual",
-                    "inherited": true
-                  },
                   "revision": null,
                   "created_at": "2026-03-02T09:00:00+00:00",
                   "updated_at": "2026-11-16T09:00:00+00:00",
@@ -1035,10 +881,6 @@
       "payload": null,
       "text": "Kyoto itinerary.pdf",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",
@@ -1095,10 +937,6 @@
       "payload": null,
       "text": "Budget is ¥180,000 for two, not counting the rail pass.",
       "user_attrs": {},
-      "provenance": {
-        "source": "manual",
-        "inherited": true
-      },
       "revision": null,
       "created_at": "2026-03-02T09:00:00+00:00",
       "updated_at": "2026-11-16T09:00:00+00:00",

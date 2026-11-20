@@ -312,7 +312,7 @@ private struct MetaLine: View {
     }
 }
 
-/// Dates on the meta line and in the block popover.
+/// Dates on the meta line.
 enum EditorDates {
     /// "Edited just now", "Edited 5 min. ago": one localizable sentence, the relative
     /// date from a format style (no formatter made per render).

@@ -53,14 +53,14 @@ delete the old `<id>.md` files.
 | Note links | `[[<document id>]]` | Obsidian wikilink by file name | `[[Title]]`, `[[Folder/Title]]` when the name isn't unique (Obsidian's "shortest path"), `[[Name\|Title]]` when the file name differs from the title. A link to a trashed/unknown note stays `[[<id>]]`. |
 | Block references | `((<block id>))` | Obsidian `[[Note#^id]]`, `[[Note#Heading]]` | `[[Note#^id\|first line]]`; a reference to a heading is `[[Note#Heading]]`; within the note `[[#^id]]`. |
 | Block ids | a `<!-- fortress:block {"id":…} -->` comment on **every** block | Obsidian `^id` at the end of the block (structured blocks: on its own line after) | `^id` **only on blocks something refers to**; headings (Obsidian links them by text) keep their id in their comment. See "Why ids only on referenced blocks". |
-| Other block metadata | the same comment | none exists | still the comment, only when needed: provenance that differs from the note's, extension attributes, nesting under a paragraph (`"indent"`), callout icon/colour. |
+| Other block metadata | the same comment | none exists | still the comment, only when needed: extension attributes, nesting under a paragraph (`"indent"`), callout icon/colour. |
 | Callouts | a blockquote with `"type":"callout"` in a comment | Obsidian callouts `> [!type] Title`, `+`/`-` folding (also GitHub alerts for 5 types) | `> [!note]` (type, fold and title kept in `callout_type`/`callout_fold`/`callout_title` attributes) |
 | Highlight | `<mark style="background:…">` | Obsidian `==text==` | `==text==` for the default highlight; other colours stay `<mark style>` (no standard for colour) |
 | Text colour, underline | `<span style="color">`, `<u>` | none in Markdown; inline HTML is allowed by CommonMark | unchanged |
 | Super/subscript | `<sup>`, `<sub>` | Pandoc `^x^`/`~x~` (not read by Obsidian/GFM) | unchanged: HTML, which CommonMark, GFM and Obsidian all render |
 | Math | `$$…$$` blocks | `$`/`$$` (Obsidian, GitHub, Pandoc, MathJax/KaTeX) | Fortress has no math (product decision): a `$$…$$` block reads as a `latex` code block (written as a ```` ```latex ```` fence) so its source is kept; inline `$…$` stays typed text |
 | Task lists | `- [ ]` / `- [x]` | GFM task lists | unchanged |
-| Tables | GFM, or HTML with `data-block` on every row/cell | GFM tables | GFM whenever the table fits (one header row, one paragraph per cell, no spans/colours/widths, nothing inside referred to); per-cell provenance in the table's comment. Otherwise an HTML `<table>` (standard HTML, `data-block` attributes only where needed). |
+| Tables | GFM, or HTML with `data-block` on every row/cell | GFM tables | GFM whenever the table fits (one header row, one paragraph per cell, no spans/colours/widths, nothing inside referred to, no cell paragraph with attributes Markdown can't say). Otherwise an HTML `<table>` (standard HTML, `data-block` attributes only where needed). |
 | Images | `<img src="/media/x.png" width=…>` | CommonMark `![alt](path "title")`, Obsidian `![alt\|300](path)` for size | `![alt\|300](assets/x.png "caption")` with a path relative to the note (`../assets/…` in folders) |
 | Attachments (files) | a comment with the file's attributes + `[name](/media/x)` + size text | CommonMark link; Obsidian embeds PDFs/audio/video with `![…](…)` | `![name](assets/x.pdf)` for PDF/audio/video (Obsidian shows them in place), `[name](assets/x.zip)` otherwise; size in the comment |
 | Attachment folder | `NOTES_DIR/assets/` | Obsidian: any folder ("Files and links › Default location for new attachments") | unchanged (`assets/`); embeds are relative, so Obsidian, VS Code and GitHub resolve them |
@@ -83,7 +83,7 @@ id when something links to it. Ids everywhere would put a 26-character ULID at t
 end of every line in GitHub, VS Code, Bear, Typora and every other non-Obsidian
 viewer (Obsidian hides them). What a round trip of our own model must keep is what
 the ids *carry*: links and backlinks (kept, since every referenced block has its
-id), provenance and extension attributes (kept in the comment), and the note id
+id), extension attributes (kept in the comment), and the note id and provenance
 (front matter). Ids of blocks nothing refers to are not observable in the model, so
 they are not written; a re-import gives those blocks new ids. Re-import of an
 Obsidian vault maps Obsidian's short ids (`^abc123`, unique only per note) to new

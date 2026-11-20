@@ -114,12 +114,11 @@ class DocumentValidatorTests(ApiCase):
         )
         tag = response.headers["etag"]
 
-        # A write that bumps no revision (e.g. settling a source conflict as
-        # "keep local" rewrites provenance only) still changes the validator.
+        # A write that bumps no revision still changes the validator.
         with block_store.connection_scope(self.db) as connection:
             connection.execute(
-                "UPDATE blocks SET provenance_json = ? WHERE document_id = ?",
-                ('{"source": "paste"}', source["id"]),
+                "UPDATE blocks SET attrs_json = ? WHERE document_id = ?",
+                ('{"text_alignment": "center"}', source["id"]),
             )
         self.assertEqual(self.revalidate(url, tag), 200)
 
