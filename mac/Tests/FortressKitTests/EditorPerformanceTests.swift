@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import Darwin
 import Testing
 
@@ -409,6 +410,53 @@ final class PerfEditor {
             editor.layoutViewport()
         }
         PerfLog.record("keystroke.return", newline, budget: 8)
+    }
+
+    /// Where laying out a 50,000-character paragraph spends its time (diagnostic numbers
+    /// for the long-paragraph keystroke): CoreText alone, a bare TextKit 2 stack, and the
+    /// line break strategies.
+    @Test func longParagraphLayoutCosts() throws {
+        let long = String(String(repeating: LongNote.sentence, count: 50_000 / LongNote.sentence.count + 1).prefix(50_000))
+        let font = EditorTheme().bodyFont()
+        let width: CGFloat = 650
+        func median(_ body: () -> Void) -> Double {
+            var samples: [Double] = []
+            for _ in 0..<5 { samples.append(milliseconds(body)) }
+            return samples.sorted()[2]
+        }
+        // CoreText: break and make every line.
+        let plain = NSAttributedString(string: long, attributes: [.font: font])
+        PerfLog.record("diag.long50k.coreTextLines", median {
+            let typesetter = CTTypesetterCreateWithAttributedString(plain)
+            var start = 0
+            while start < plain.length {
+                let count = CTTypesetterSuggestLineBreak(typesetter, start, Double(width))
+                _ = CTTypesetterCreateLine(typesetter, CFRange(location: start, length: count))
+                start += max(1, count)
+            }
+        })
+        func textKit(_ strategy: NSParagraphStyle.LineBreakStrategy?) -> Double {
+            let style = NSMutableParagraphStyle()
+            if let strategy { style.lineBreakStrategy = strategy }
+            let text = NSAttributedString(string: long, attributes: [.font: font, .paragraphStyle: style])
+            let content = NSTextContentStorage()
+            let manager = NSTextLayoutManager()
+            content.addTextLayoutManager(manager)
+            let container = NSTextContainer(size: CGSize(width: width, height: 0))
+            container.lineFragmentPadding = 0
+            manager.textContainer = container
+            content.textStorage?.setAttributedString(text)
+            manager.ensureLayout(for: manager.documentRange)
+            return median {
+                manager.invalidateLayout(for: manager.documentRange)
+                manager.ensureLayout(for: manager.documentRange)
+            }
+        }
+        PerfLog.record("diag.long50k.textKit.defaultStrategy", textKit(nil))
+        PerfLog.record("diag.long50k.textKit.noStrategy", textKit([]))
+        PerfLog.record("diag.long50k.textKit.standardStrategy", textKit(.standard))
+        PerfLog.record("diag.long50k.defaultStrategyRaw", Double(NSMutableParagraphStyle().lineBreakStrategy.rawValue), unit: "")
+        PerfLog.record("diag.themeStrategyRaw", Double(EditorTheme().paragraphStyle(for: BlockInfo()).lineBreakStrategy.rawValue), unit: "")
     }
 
     @Test func richBlockLayout() throws {
