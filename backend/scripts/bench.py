@@ -175,7 +175,7 @@ def main() -> None:
         results["unified_search"] = _stats([_timed(search.unified_search, q) for q in UNIFIED_QUERIES])
         results["ask_prefetch"] = _stats(
             [
-                _timed(ask.prefetch, question, ask._Sources())
+                _timed(lambda q: asyncio.run(ask._prefetch_parallel(q, ask._Sources())), question)
                 for question, _expected in bench_workspace.QUESTIONS
             ]
         )
