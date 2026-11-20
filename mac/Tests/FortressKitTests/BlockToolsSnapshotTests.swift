@@ -98,10 +98,13 @@ struct BlockToolsSnapshotTests {
             let menu = try #require(hover.prepareMenu())
             pumpRunLoop(0.3)
             let name = "blocks-menu-\(suffix)"
+            // The menu tracks on the main thread; the timer fires there, during tracking.
+            nonisolated(unsafe) let tracked = menu
+            nonisolated(unsafe) let shown = window
             let timer = Timer(timeInterval: 0.8, repeats: false) { _ in
                 MainActor.assumeIsolated {
-                    try? BlockGallery.capture(window, name, screenArea: true)
-                    menu.cancelTracking()
+                    try? BlockGallery.capture(shown, name, screenArea: true)
+                    tracked.cancelTracking()
                 }
             }
             RunLoop.main.add(timer, forMode: .common)
