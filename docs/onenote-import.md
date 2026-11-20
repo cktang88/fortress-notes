@@ -233,7 +233,7 @@ Keep raw geometry in each column's attrs (`onenote_x/y/w`) so we can re-run with
 1. **Table block** — done (structured `table`/`table_row`/`table_cell`, nested blocks in cells, GFM or HTML in Markdown).
 2. **Inline marks: underline, highlight, text colour, super/subscript** — done (search and Ask index plain text only).
 3. **Attachments** — done (`file` blocks; the Mac app shows file chips).
-4. **Columns layout block** — done (`columns`/`column`; Markdown round-trips via `<!-- fortress:columns -->` comments).
+4. **Columns layout block** — done (`columns`/`column`; the Markdown export writes the contents in reading order).
 5. **Page hierarchy / subpages** — partial: subpages sit next to their parent with a *Subpages* link list; nested notes are not built.
 6. **Image alt/OCR text + width** — done (OneNote's OCR text in `alt`, plus the app's own OCR: RapidOCR in the backend and Apple Vision in the Mac app).
 7. **Note tags** — kept as `attrs.onenote_tags` labels only; Fortress deliberately has no tags or tag views.

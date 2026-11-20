@@ -2,9 +2,8 @@
 
 **Principle.** Fortress Notes supports open standards rather than inventing its own
 formats. Wherever people or other tools can see what we write — files on disk,
-exports, imports, the API — we use the open or de-facto standard, and add our own
-syntax only where no standard can say the thing, namespaced and invisible to
-other readers. A user should be able to point Obsidian, VS Code, GitHub, Pandoc,
+exports, imports, the API — we use the open or de-facto standard, and what no
+standard can say stays in the app. A user should be able to point Obsidian, VS Code, GitHub, Pandoc,
 `grep` or Spotlight at their notes and get sensible results without knowing that
 Fortress exists.
 
@@ -15,13 +14,14 @@ Rules of thumb:
 2. **Prefer the most widely read form** when standards compete (CommonMark/GFM
    before Obsidian extensions, Obsidian extensions before Pandoc ones, plain HTML
    only where Markdown has nothing).
-3. **Custom data goes under a namespace and stays invisible**: a `fortress:` key in
-   YAML front matter, a `<!-- fortress:block {...} -->` HTML comment (hidden by every
-   Markdown renderer), `data-*` attributes in HTML. Never a bespoke inline syntax.
+3. **The Markdown copy is a one-way export.** The vault mirror and the per-note
+   export are written for other tools to read and are never read back as Fortress
+   notes, so they carry nothing Fortress-only: no metadata comments, no provenance,
+   no `data-*` round-trip attributes, no bespoke syntax. What Markdown can't say
+   (extension attributes, nesting under a paragraph, column layouts, where a note
+   came from) lives only in the database.
 4. **Read more than we write.** Importers accept the common variants (Obsidian,
-   older Fortress forms, other tools' front-matter keys) and normalise them.
-5. **Lossless round trip of our own model** is a requirement, not a nice-to-have:
-   export → import → export must be identical, so the namespaced extras stay.
+   other tools' front-matter keys) and normalise them.
 
 **Companion principle: least surprise.** Things behave like they do in Apple's apps
 and Obsidian. Standard Mac behaviour — ⌘C/⌘V and the pasteboard types other apps
@@ -38,33 +38,34 @@ the end for effort estimates).
 
 ### The notes folder (the Markdown mirror) — done
 
-Every note is mirrored to a Markdown file in `NOTES_DIR` (default `../notes`),
-written by the `mirrors` background lane (`documents.MirrorWriter`, `vault.py`).
-The folder is now a valid **Obsidian vault** of plain **CommonMark + GFM + Obsidian
-Flavored Markdown (OFM)**. Vault format version: `vault.FORMAT_VERSION = 2`; a
-mirror state without it (format 1) makes the lane rewrite every mirror once and
-delete the old `<id>.md` files.
+Every note is exported, one way, to a Markdown file in `NOTES_DIR` (default
+`../notes`), written by the `mirrors` background lane (`documents.MirrorWriter`,
+`vault.py`); a file is overwritten whenever its note changes (edits made in the
+folder are not kept or read). The folder is a valid **Obsidian vault** of plain
+**CommonMark + GFM + Obsidian Flavored Markdown (OFM)**. Vault format version:
+`vault.FORMAT_VERSION = 3`; a mirror state with another version makes the lane
+rewrite every mirror once.
 
-| Aspect | Before (format 1) | Standard | Now (format 2) |
+| Aspect | Before | Standard | Now (format 3) |
 |---|---|---|---|
 | File naming | `NOTES_DIR/<ULID>.md`, flat | Obsidian/Bear/iA Writer: the note's title is the file name; folders are folders | `<Folder>/<Subfolder>/<Title>.md`. Characters no OS or Obsidian accepts (`\ / : * ? " < > \| # ^ [ ]`) become spaces; clashes (case-insensitive, as on macOS) get ` 2`, ` 3` in creation order; a top-level folder may not be called `assets`. A file in the folder that isn't ours is never overwritten. Renames/moves rename the file and rewrite the links to it. |
-| Front matter keys | `id`, `title`, `status`, `created_at`, `updated_at`, `images`, `provenance` | YAML front matter; `title`, `aliases` (Obsidian), `created`/`updated` (most common pair; Dublin Core has `created`/`modified`), `source` (Obsidian Web Clipper, Dublin Core) | `title`, `aliases` (only when the file name differs from the title), `created`, `updated`, `id`, `status`, `source` (when the note came from a URL), then `fortress: {provenance, picture_text}`. Hand-added keys are kept. |
+| Front matter keys | `id`, `title`, `status`, `created_at`, `updated_at`, `images`, `provenance` | YAML front matter; `title`, `aliases` (Obsidian), `created`/`updated` (most common pair; Dublin Core has `created`/`modified`), `source` (Obsidian Web Clipper, Dublin Core) | `title`, `aliases` (only when the file name differs from the title), `created`, `updated`, `id`, `status`, `source` (when the note came from a URL), `picture_text` (text read from its pictures and PDFs). Nothing else. |
 | Dates | ISO 8601 with offset | ISO 8601 / RFC 3339 | unchanged (ISO 8601, UTC offset) |
 | Note links | `[[<document id>]]` | Obsidian wikilink by file name | `[[Title]]`, `[[Folder/Title]]` when the name isn't unique (Obsidian's "shortest path"), `[[Name\|Title]]` when the file name differs from the title. A link to a trashed/unknown note stays `[[<id>]]`. |
 | Block references | `((<block id>))` | Obsidian `[[Note#^id]]`, `[[Note#Heading]]` | `[[Note#^id\|first line]]`; a reference to a heading is `[[Note#Heading]]`; within the note `[[#^id]]`. |
-| Block ids | a `<!-- fortress:block {"id":…} -->` comment on **every** block | Obsidian `^id` at the end of the block (structured blocks: on its own line after) | `^id` **only on blocks something refers to**; headings (Obsidian links them by text) keep their id in their comment. See "Why ids only on referenced blocks". |
-| Other block metadata | the same comment | none exists | still the comment, only when needed: extension attributes, nesting under a paragraph (`"indent"`), callout icon/colour. |
+| Block ids | a `<!-- fortress:block {"id":…} -->` comment on **every** block | Obsidian `^id` at the end of the block (structured blocks: on its own line after) | `^id` **only on blocks something refers to**; headings are linked by their text. See "Why ids only on referenced blocks". |
+| Other block metadata | the same comment | none exists | not written (extension attributes, callout icon/colour, provenance); a block nested under a paragraph or heading follows it. |
 | Callouts | a blockquote with `"type":"callout"` in a comment | Obsidian callouts `> [!type] Title`, `+`/`-` folding (also GitHub alerts for 5 types) | `> [!note]` (type, fold and title kept in `callout_type`/`callout_fold`/`callout_title` attributes) |
 | Highlight | `<mark style="background:…">` | Obsidian `==text==` | `==text==` for the default highlight; other colours stay `<mark style>` (no standard for colour) |
 | Text colour, underline | `<span style="color">`, `<u>` | none in Markdown; inline HTML is allowed by CommonMark | unchanged |
 | Super/subscript | `<sup>`, `<sub>` | Pandoc `^x^`/`~x~` (not read by Obsidian/GFM) | unchanged: HTML, which CommonMark, GFM and Obsidian all render |
 | Math | `$$…$$` blocks | `$`/`$$` (Obsidian, GitHub, Pandoc, MathJax/KaTeX) | Fortress has no math (product decision): a `$$…$$` block reads as a `latex` code block (written as a ```` ```latex ```` fence) so its source is kept; inline `$…$` stays typed text |
 | Task lists | `- [ ]` / `- [x]` | GFM task lists | unchanged |
-| Tables | GFM, or HTML with `data-block` on every row/cell | GFM tables | GFM whenever the table fits (one header row, one paragraph per cell, no spans/colours/widths, nothing inside referred to, no cell paragraph with attributes Markdown can't say). Otherwise an HTML `<table>` (standard HTML, `data-block` attributes only where needed). |
+| Tables | GFM, or HTML with `data-block` on every row/cell | GFM tables | GFM whenever the table fits (one header row, at most one paragraph per cell, no spans/colours/widths). Otherwise a plain HTML `<table>`. |
 | Images | `<img src="/media/x.png" width=…>` | CommonMark `![alt](path "title")`, Obsidian `![alt\|300](path)` for size | `![alt\|300](assets/x.png "caption")` with a path relative to the note (`../assets/…` in folders) |
-| Attachments (files) | a comment with the file's attributes + `[name](/media/x)` + size text | CommonMark link; Obsidian embeds PDFs/audio/video with `![…](…)` | `![name](assets/x.pdf)` for PDF/audio/video (Obsidian shows them in place), `[name](assets/x.zip)` otherwise; size in the comment |
+| Attachments (files) | a comment with the file's attributes + `[name](/media/x)` + size text | CommonMark link; Obsidian embeds PDFs/audio/video with `![…](…)` | `![name](assets/x.pdf)` for PDF/audio/video (Obsidian shows them in place), `[name](assets/x.zip)` otherwise |
 | Attachment folder | `NOTES_DIR/assets/` | Obsidian: any folder ("Files and links › Default location for new attachments") | unchanged (`assets/`); embeds are relative, so Obsidian, VS Code and GitHub resolve them |
-| Columns | `<!-- fortress:columns -->`, `<!-- fortress:column {…} -->`, `<!-- /fortress:columns -->` around the contents | none (see below) | unchanged, without ids |
+| Columns | `<!-- fortress:columns -->`, `<!-- fortress:column {…} -->`, `<!-- /fortress:columns -->` around the contents | none (see below) | the contents in reading order, no markers |
 | Comments, escapes | — | Obsidian `%%comment%%`, `#tag`, `^id`, `==` | our text escapes `==`, `%%`, a `^word` after a space, `[[`, so it never turns into Obsidian syntax by accident |
 
 **Columns.** No Markdown dialect has columns. Candidates: Obsidian plugins —
@@ -74,45 +75,36 @@ delete the old `<id>.md` files.
 the plugin or snippet; without it the first renders as rules and stray text, the
 second as a code block (the content disappears into code), the third as nested
 quotes with a visible `[!multi-column]` on GitHub and in every non-Obsidian tool.
-**Decision:** keep the contents in reading order with invisible comment markers. Every
-tool shows the text, top to bottom, as a phone would; Fortress restores the layout.
-Revisit if one plugin syntax becomes a de-facto standard.
+**Decision:** write the contents in reading order. Every tool shows the text, top
+to bottom, as a phone would; the layout stays in Fortress. Revisit if one plugin
+syntax becomes a de-facto standard.
 
 **Why ids only on referenced blocks.** Obsidian's model is the same: a block gets an
 id when something links to it. Ids everywhere would put a 26-character ULID at the
 end of every line in GitHub, VS Code, Bear, Typora and every other non-Obsidian
-viewer (Obsidian hides them). What a round trip of our own model must keep is what
-the ids *carry*: links and backlinks (kept, since every referenced block has its
-id), extension attributes (kept in the comment), and the note id and provenance
-(front matter). Ids of blocks nothing refers to are not observable in the model, so
-they are not written; a re-import gives those blocks new ids. Re-import of an
-Obsidian vault maps Obsidian's short ids (`^abc123`, unique only per note) to new
-workspace-unique ids, consistently for every link to them. If we ever need every
-id (e.g. a sync that edits mirrors and reads them back), the switch is one argument
-(`RenderLinks.anchors=None`) — at the cost of the noise above.
+viewer (Obsidian hides them); links to a block only need its id where the block
+is. Import of an Obsidian vault maps Obsidian's short ids (`^abc123`, unique only
+per note) to new workspace-unique ids, consistently for every link to them.
 
-### Markdown import (files, folders, Obsidian vaults) — done
+### Markdown import (files) — done
 
-Reads everything the mirror writes, every older Fortress form (`[[id]]`,
-`((id))`, `<!-- fortress:block -->` with ids, `<img>`, `<!-- fortress:file -->`), and
-what Obsidian writes: wikilinks by file name, path, title or alias (`aliases`),
+A plain CommonMark/GFM/Obsidian reader (also for Quick Capture and new notes
+created with a body); an imported file is always a new note (`markdown_import`).
+It reads what Obsidian writes: wikilinks by file name, path, title or alias (`aliases`),
 `[[Note#Heading]]`, `[[Note#^id]]`, `![[image.png|300]]`, `![[file.pdf]]`, callouts
 with titles and folding, `==highlight==`, task lists, `$$` formulas (as `latex`
 code blocks: Fortress has no math), block ids
-(`^id`, also on a line of its own after a list/quote/table). A folder import
-recreates the folder tree, skips hidden folders (`.obsidian`, `.trash`) and
-`assets/`, and resolves links across all the files and to notes already in the
-workspace; files uploaded together (File › Import) link to each other the same
-way. Front matter: `created`/`created_at`/`date`, `updated`/`updated_at`/`modified`,
+(`^id`, also on a line of its own after a list/quote/table), HTML tables and
+images. Files uploaded together (File › Import) link to each other and to notes
+already in the workspace; an HTML block that is only a comment is dropped. Front matter: `created`/`created_at`/`date`, `updated`/`updated_at`/`modified`,
 `aliases`/`alias`, `source` (a URL becomes the note's `source_url`). Not yet: Obsidian
-attachments are not copied in (an upload has only the `.md` files; the folder import
-leaves `![[x.png]]` pointing at `x.png`), `#tags` stay text (tags are not a feature),
+attachments are not copied in (an upload has only the `.md` files), `#tags` stay text (tags are not a feature),
 `%%comments%%` stay visible text, inline `$…$` stays text, transclusion
 `![[Note]]` becomes a note link.
 
 ### Single-note export — done
 
-`GET /api/block-documents/{id}/markdown` (⇧⌘E) returns the same Markdown as the
+`GET /api/block-documents/{id}/markdown` (⇧⌘E) returns the same one-way Markdown as the
 mirror (front matter + OFM body, wikilinks named as in the vault). Stored files keep
 their `/media/…` URL, since a single file has no `assets/` beside it — a folder export
 would fix that (below).
@@ -141,8 +133,8 @@ would fix that (below).
 | Search | plain words, all must match (FTS5, operators not exposed) + embeddings | no query language needed; if one is added, the de-facto web/GitHub one: `"phrase"`, `-word`, `OR` | **keep**; adopt that syntax if a query language is ever added |
 | Quick capture inbox | an `Uncategorized` folder, newest first | no standard (Things/OmniFocus "Inbox") | **keep**; it is a plain folder in the vault |
 | Themes | (another change adopts Base16/Base24) | Base16/Base24 | out of scope here |
-| Provenance | our JSON (`provenance.py`), `fortress.provenance` in front matter | W3C PROV (too heavy), Dublin Core `source`/`created`/`modified` | **keep** our object under the namespace; map `source_url` → `source` (done); a Dublin Core / PROV-O export is not worth it |
-| Text read from pictures | `fortress.picture_text` in front matter (was `images`) | none (Spotlight indexes file contents) | **keep**, namespaced |
+| Provenance | our JSON (`provenance.py`), in the database only | W3C PROV (too heavy), Dublin Core `source`/`created`/`modified` | only `source_url` → `source` goes into front matter (done); a Dublin Core / PROV-O export is not worth it |
+| Text read from pictures | `picture_text` in front matter | none (Spotlight indexes file contents) | **keep**, so other tools find it |
 
 ## Not done yet: high-value moves, with effort
 

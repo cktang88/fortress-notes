@@ -29,8 +29,8 @@ sheet) is never overridden. The policy and the decision for every format are in
 
 SQLite (`NOTES_DIR/.fortress.sqlite3`) is the only source of truth: documents,
 folders, nested blocks with stable IDs, references, assets, OCR text and the
-FTS index. Every write goes to SQLite first. Each active note also gets a read-only
-Markdown mirror, so notes stay readable outside the app: the notes folder is an
+FTS index. Every write goes to SQLite first. Each active note is also exported, one
+way, to a Markdown mirror, so notes stay readable outside the app: the notes folder is an
 **Obsidian vault** of plain CommonMark/GFM/Obsidian Markdown (`vault.py`,
 docs/open-standards.md). A note is `NOTES_DIR/<folder>/<subfolder>/<Title>.md`
 (its Fortress folders; names other tools can't use are cleaned, clashes get " 2");
@@ -38,8 +38,9 @@ renames and moves rename the file and rewrite the wikilinks to it. Writers never
 touch mirrors: the `mirrors` background lane (`documents.MirrorWriter`) follows
 SQLite's change log, rewrites a changed note's mirror atomically (coalesced, about
 0.5 s after the edit) and removes it when the note is trashed. The app never reads
-the mirrors back; only the explicit Markdown importer reads `.md` files. A mirror
-looks like this (extra front-matter keys added by hand are preserved):
+the mirrors back, and a mirror is overwritten whenever its note changes, so it
+carries nothing Fortress-only (no provenance, block metadata or comments). A
+mirror looks like this:
 
 ```markdown
 ---
@@ -50,11 +51,8 @@ updated: '2026-06-20T10:05:00+00:00'
 id: 01HZX...             # ULID
 status: rough            # "rough" | "polished"
 source: https://...      # only for a note that came from a web page
-fortress:
-  provenance:            # where the note came from (§7a)
-    source: manual
-  picture_text:          # text read from each picture/PDF it shows (see §6)
-    01J....png: "Q1 revenue"
+picture_text:            # text read from each picture/PDF it shows (see §6)
+  01J....png: "Q1 revenue"
 ---
 
 The note body: see [[Other note]], [[Other note#^01J...|that paragraph]].
@@ -65,7 +63,7 @@ The note body: see [[Other note]], [[Other note#^01J...|that paragraph]].
 `.fortress-mirrors.json` (change-log position and vault format version) and
 `.fortress-mirror-files.json` (each note's path, link name and referenced blocks)
 let a restart rewrite only what changed; a new `vault.FORMAT_VERSION` rewrites every
-mirror once (format 1, `NOTES_DIR/<id>.md`, is removed then).
+mirror once.
 
 Pasted images are stored as files in `NOTES_DIR/assets/<id>.<ext>` (imported ones as
 `<sha256>.<ext>`); the API serves them at `/media/…`, and Markdown embeds them as
@@ -77,9 +75,8 @@ Pasted images are stored as files in `NOTES_DIR/assets/<id>.<ext>` (imported one
 - **title**: if empty, derived from the first heading/line of the body.
 - Timestamps are UTC ISO-8601. `updated_at` is set on every save.
 
-On first start an empty database imports the Markdown files of `NOTES_DIR` once
-(subfolders become folders; a note keeps its front-matter `id`), copying the
-originals to a timestamped backup folder first.
+A new workspace (no database yet) starts with the Welcome note, read from
+`backend/app/welcome.md` (`WELCOME_NOTE=false` turns it off).
 
 ## 2a. Block shapes
 
@@ -111,11 +108,12 @@ with **422**.
 - `order_keys.py` — fractional sibling order keys.
 - `block_markdown.py` — Markdown (CommonMark/GFM/Obsidian) in and out of canonical blocks.
 - `vault.py` — the notes folder as an Obsidian vault: file names, front matter,
-  wikilink resolution across an import.
+  wikilink resolution across files uploaded together.
 - `documents.py` — note lifecycle (create/update/trash/restore/purge/capture)
   and the Markdown mirror writer.
 - `workspace.py` — the Trash listing. `backups.py` — snapshots and restore.
-- `portability.py` — Markdown import (files, uploads, first-start import) and export.
+- `portability.py` — one-way Markdown export of a note, reading uploaded Markdown
+  files, and the Welcome note of a new workspace.
 - `background.py` — the one owner of background work (lanes, below).
 - `corpus.py` — the incremental search corpus every search reader shares.
 - `textutil.py` — shared text rules (words, stopwords, case/accent folding, which
@@ -198,8 +196,8 @@ with **422**.
   `Cache-Control: no-cache` unless they set their own (the Ask stream: `no-store`).
 - **Reads never write.** `GET /api/block-documents/{id}` and the batch read change
   nothing (no `last_opened_at`, no repair): the app records an open with
-  `POST .../opened`, and the empty paragraph an empty note needs is made at create,
-  import and restore (and once at startup for older data). A write's
+  `POST .../opened`, and the empty paragraph an empty note needs is made when the
+  note is created. A write's
   `X-Document-ETag` is the ETag the next GET of that note answers 304 to.
 - **Server caches.** Rendered bodies are cached per validator (documents: 256 entries
   / 64 MB; others: 256 / 32 MB), so repeated GETs skip SQLite and JSON encoding.

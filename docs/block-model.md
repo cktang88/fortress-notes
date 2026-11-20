@@ -253,9 +253,10 @@ survive. Nothing is kept per block.
 Markdown is an interchange format, rendered from the canonical blocks; it is
 never stored. It is CommonMark + GFM + Obsidian Flavored Markdown, chosen per
 [open-standards.md](open-standards.md): the vault mirror and exports read well in
-Obsidian, GitHub, VS Code or Pandoc, and import of our own Markdown restores the
-model (ids of referenced blocks, links, references, the note's provenance, attributes). The
-mirror is written from the database and never read back into it.
+Obsidian, GitHub, VS Code or Pandoc. Writing is one way: the mirror and exports
+are never read back as Fortress notes, so they carry nothing Fortress-only (no
+metadata comments, provenance or round-trip attributes); what Markdown can't say
+stays in the database.
 
 Writing (`render_markdown`, with `RenderLinks` naming notes and blocks):
 
@@ -277,24 +278,16 @@ Writing (`render_markdown`, with `RenderLinks` naming notes and blocks):
   Block references: `[[Note#^<block id>|first line]]` (`[[#^id]]` within the
   note), a heading `[[Note#Heading text]]`.
 - Block ids: written only for blocks something refers to (`RenderLinks.anchors`;
-  all blocks when no `RenderLinks` is given). Obsidian's `^id` at the end of a
+  none when no `RenderLinks` is given). Obsidian's `^id` at the end of a
   text block's line, or on its own line after a quote, callout, table, code,
-  divider or HTML block; a heading's id (Obsidian links headings by text)
-  and ids Obsidian can't hold (`_`) go in the comment.
-- The comment, `<!-- fortress:block {...} -->` (trailing on a text block's line,
-  otherwise on the line before the block), carries only what no syntax can say:
-  extension `attrs` (and image
-  `name`, file `size`/`caption`, callout `icon`/`color`), `indent` for a block
-  nested under a paragraph or heading (its children follow it, `"indent": 1`,
-  `2`, ...), and `id` as above. A block with nothing to say has no comment.
+  divider or HTML block; headings (Obsidian links them by text) and ids Obsidian
+  can't hold (`_`) get none.
+- Children of a paragraph or heading (Markdown can't nest under them) follow it.
+  Extension attributes and provenance are not written.
 - Tables: a GFM table when the table has one header row, every cell holds one
-  paragraph (or nothing) and there are no spans, colours or widths, and nothing
-  inside is referred to, and no cell paragraph has attributes Markdown can't
-  say; otherwise an HTML `<table>` whose rows, cells and cell
-  blocks carry their metadata in a `data-block` attribute.
-- Columns (no Markdown dialect has them): the contents in order between
-  `<!-- fortress:columns -->`, `<!-- fortress:column {…} -->` …
-  `<!-- /fortress:columns -->`.
+  paragraph (or nothing) and there are no spans, colours or widths; otherwise a
+  plain HTML `<table>`.
+- Columns (no Markdown dialect has them): the contents in order.
 - Images: `![alt|width(xheight)](url "caption")` (Obsidian's size syntax);
   files: `[name](url)`, or `![name](url)` for PDF, audio and video. In the vault,
   `/media/<name>` is written as a path relative to the note (`assets/<name>`,
@@ -302,17 +295,17 @@ Writing (`render_markdown`, with `RenderLinks` naming notes and blocks):
 - An empty paragraph (no content, no children) is written as nothing: Markdown
   has no empty paragraph, and a blank line is just spacing.
 
-Reading Markdown (import, uploads, capture, new notes created with a body,
-importer sources) produces canonical blocks directly (`parse_markdown`, with
-`ParseLinks` resolving names). It reads everything above and what Obsidian writes:
+Reading Markdown (uploads, capture, new notes created with a body, importer
+sources) produces canonical blocks directly (`parse_markdown`, with
+`ParseLinks` resolving names). It is a plain CommonMark/GFM/Obsidian reader:
 wikilinks by file name, path, title or alias, `[[Note#Heading]]`,
 `[[Note#^id]]`, embeds `![[file.png|300]]` / `![[file.pdf]]`, callouts,
 `==highlight==`, a `$$ … $$` formula (a `code` block, `language: "latex"`, so
 its source is kept verbatim), block ids (Obsidian's short ids become new workspace-unique ids,
 consistently for every reference in the import), and Markdown links/images to
 `assets/<name>` (read as `/media/<name>`). An unresolved wikilink stays text.
-Only `<table>`, `<img>` and Fortress `div[data-type]` HTML is read structurally;
-any other HTML block becomes an `html` block. An id is reused when it isn't
+Only `<table>` and `<img>` HTML is read structurally; an HTML block that is only
+a comment is dropped and any other becomes an `html` block. An id is reused when it isn't
 already taken by another block in the workspace; otherwise a new id is made.
 
 ## 8. Order keys

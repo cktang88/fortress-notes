@@ -2,8 +2,8 @@
 
 A fast, local notes app for the Mac. A native macOS app (`mac/`, SwiftUI + TextKit 2,
 Liquid Glass on macOS 26) over a local Python backend (`backend/`, FastAPI + SQLite).
-Your notes live in one SQLite database on your Mac; every note is also mirrored to a
-plain Markdown file, and the notes folder opens as an Obsidian vault. Fortress uses
+Your notes live in one SQLite database on your Mac; every note is also exported, one
+way, to a plain Markdown file, and the notes folder opens as an Obsidian vault. Fortress uses
 open standards (CommonMark, GFM, Obsidian Markdown, YAML front matter) rather than
 formats of its own: [docs/open-standards.md](docs/open-standards.md).
 
@@ -313,7 +313,7 @@ identity. It still writes every note out as Markdown, so the files stay open.
 | **Rich content** | Tables whose cells hold blocks, columns, callouts and OneNote layout are kept without loss | No faithful Markdown form; each round trip loses some of it |
 | **Pictures** | Stored once by content hash, with cached OCR text | A git repo grows forever unless you add Git LFS |
 | **Open format, no lock-in** | ✅ via the Markdown mirror (an Obsidian vault in `NOTES_DIR`) | ✅ natively |
-| **Edit with any editor** | ⚠️ The mirror is write-only; changes made there are not read back | ✅ |
+| **Edit with any editor** | ⚠️ The mirror is a one-way export, overwritten when the note changes; edits made there are not read back | ✅ |
 | **History and diffs** | Undo/redo while editing; daily database snapshots (last 7 kept); no per-note version history yet | ✅ free with git, plus push to any remote |
 | **Sync** | Not built in (local-first, one Mac) | ✅ through any git remote |
 | **Simplicity** | A server process and a database | Just files |
