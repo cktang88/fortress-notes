@@ -170,8 +170,8 @@ final class FortressTextView: NSTextView {
     }
 
     /// File ▸ Print…: the whole note, from the note's text or a column's.
-    override func print(_ sender: Any?) {
-        guard let controller else { return super.print(sender) }
+    override func printView(_ sender: Any?) {
+        guard let controller else { return super.printView(sender) }
         controller.printNote()
     }
 

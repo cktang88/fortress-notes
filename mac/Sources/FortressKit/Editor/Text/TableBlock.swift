@@ -1007,7 +1007,7 @@ final class CellTextView: NSTextView {
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if let undo = NoteUndoActions.validate(menuItem, noteStack) { return undo }
         // Find and Print are the note's (NotePrinting.swift).
-        if [#selector(performTextFinderAction(_:)), #selector(performFindPanelAction(_:)), #selector(NSView.print(_:))]
+        if [#selector(performTextFinderAction(_:)), #selector(performFindPanelAction(_:)), #selector(NSView.printView(_:))]
             .contains(menuItem.action), enclosingNoteTextView != nil {
             return true
         }
@@ -1024,8 +1024,8 @@ final class CellTextView: NSTextView {
     }
 
     /// File ▸ Print…: the whole note, not this cell.
-    override func print(_ sender: Any?) {
-        guard let note = enclosingNoteTextView?.controller else { return super.print(sender) }
+    override func printView(_ sender: Any?) {
+        guard let note = enclosingNoteTextView?.controller else { return super.printView(sender) }
         note.printNote()
     }
 
