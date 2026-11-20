@@ -605,7 +605,9 @@ extension AppModel {
     public func restoreBackup(_ backup: Backup) async -> Bool {
         do {
             try await api.restoreBackup(name: backup.name)
-            route = .empty
+            // Every window lets go of the note it showed (restored from Settings, the
+            // windows would otherwise keep showing the notes as they were before).
+            for window in library.windowModels + [self] { window.route = .empty }
             await refreshNavigation()
             await refreshBackups()
             show(Toast(message: "Restored the backup"))

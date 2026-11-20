@@ -68,6 +68,9 @@ public final class Library {
         windows.removeAll { $0.model == nil || $0.model === model }
     }
 
+    /// Every open main window's model.
+    var windowModels: [AppModel] { windows.compactMap(\.model) }
+
     /// The main window most recently in front that is still open.
     public var activeWindowModel: AppModel? {
         windows.last { $0.model != nil }?.model
