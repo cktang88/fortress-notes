@@ -486,7 +486,8 @@ folder follow the source unless changed locally; trashed notes are skipped.
 ## 7b. OneNote import (`onenote_import.py`)
 
 Background: `docs/onenote-import.md` (F1–F5). The user exports notebooks from
-OneNote (web *Export notebook* .zip, OneDrive *Download* .zip, `.onepkg`, `.one`);
+OneNote (`.onepkg`/`.one` from OneNote for Windows; older web *Export notebook* and
+OneDrive *Download* zips), or downloads them with Microsoft Graph (below);
 the Rust converter `tools/fortress-onenote` turns the export into
 `manifest.json` + `assets/<sha256>.<ext>` (contract:
 `tools/fortress-onenote/SCHEMA.md`, format version 1; any other version is
@@ -495,6 +496,24 @@ refused). Binary lookup: `FORTRESS_ONENOTE_BIN`, else
 running Python (`./fortress-onenote`, `../Resources/bin/fortress-onenote` in an
 app bundle), else `PATH`. Converter timeout: `FORTRESS_ONENOTE_TIMEOUT_S`
 (default 3600).
+
+**Ready-made manifests (Microsoft Graph route).** OneNote for the web lost
+*Export notebook* in 2026 and OneNote for Mac cannot export `.one` files, so Mac
+users download notebooks with the optional, standalone
+`tools/fortress-onenote-graph` (delegated MSAL sign-in with the user's own Entra
+app, read-only `Notes.Read`/`Notes.Read.All`; throttled under Graph's 120/min,
+400/h; resumable cache). It writes the same manifest + assets itself, as a folder
+or a zip. `manifest_input` recognises that input (a folder whose `manifest.json`
+starts with the `fortress-onenote-manifest` format, or a `.zip` with such a
+`manifest.json` at its root) and imports it without the converter; a zip is
+unpacked into the job's work folder taking only `manifest.json` and
+`assets/<sha256>.<ext>` entries (32 GB limit), a folder is read in place. Graph
+pages are keyed `graph:<Graph page id>` (notebooks/groups/sections likewise), so
+they never collide with `.one` imports; their `link_target_id` is the page GUID
+of `onenote:` links, and when a page's key is not that GUID it is stored as
+`extra.onenote.link_target_id` so links to it resolve on later imports. What
+Graph cannot give (ink, custom tags, equations as math, TOC order): the tool's
+README.
 
 **Mapping** (all through `sources.upsert_document_from_source`, source
 `onenote_import`, §7a — re-imports update in place, keep local edits, report
