@@ -1404,7 +1404,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     /// Indents paragraphs and the children that follow them, keeping depths valid.
-    private func indent(paragraphs: [NSRange], by delta: Int) {
+    func indent(paragraphs: [NSRange], by delta: Int) {
         guard let first = paragraphs.first, var last = paragraphs.last else { return }
         let firstInfo = storage.blockInfo(at: first.location) ?? BlockInfo()
         // Take the children along.

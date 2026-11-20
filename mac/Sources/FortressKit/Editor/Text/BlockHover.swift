@@ -203,7 +203,7 @@ final class BlockGripView: NSView, NSDraggingSource {
     }
 
     /// Six dots in two columns, centered in `rect` (also drawn by Show Blocks).
-    static func drawDots(in rect: CGRect, color: NSColor) {
+    nonisolated static func drawDots(in rect: CGRect, color: NSColor) {
         color.setFill()
         let dot: CGFloat = 2.6
         let gap: CGFloat = 2.4
