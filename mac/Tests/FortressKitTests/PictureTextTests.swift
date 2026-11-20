@@ -117,27 +117,27 @@ final class FakeRecognizer: TextRecognizer, Sendable {
         }
     }
 
+    /// The reader's loop on its own, so not a moment on the main actor: on CI a single
+    /// wait for it can take a minute. (The tests below check the reader shows the loop's
+    /// progress.)
     @Test func readsTheBacklogWithBoundedConcurrencyAndStoresEachReading() async {
         let started = ContinuousClock.now
         let backend = FakeOCRBackend()
         await backend.add((0..<11).map { ("h\($0)", Data("text \($0)".utf8)) })
         let recognizer = FakeRecognizer()
-        let (reader, loop) = await MainActor.run {
-            let reader = PictureTextReader(recognizer: recognizer, concurrency: 3, batchSize: 4,
-                                           idleDelay: .seconds(60), retryDelay: .seconds(60))
-            reader.start(backend: backend, key: "test")
-            return (reader, reader.loop)
-        }
+        let published = Published()
+        let loop = PictureTextLoop(
+            settings: .init(recognizer: recognizer, concurrency: 3, batchSize: 4,
+                            idleDelay: .seconds(60), retryDelay: .seconds(60)),
+            state: .init(), publish: { state, version in published.append(state, version) })
+        let run = Task.detached { await loop.run(backend: backend) }
         // The whole backlog is read (three batches) and the next ask finds nothing.
         await Self.poll {
             let state = await loop.state
             return state.remaining == 0 && !state.isWorking
         }
-        let read = ContinuousClock.now - started
-        // ...and the reader shows it.
-        let shown = await Self.shown(reader) { $0.remaining == 0 && !$0.isWorking }
-        await reader.stop()
-        print("PictureText backlog: read in \(read), shown after \(ContinuousClock.now - started)")
+        run.cancel()
+        print("PictureText backlog: read in \(ContinuousClock.now - started)")
 
         let stored = await backend.stored
         #expect(stored.count == 11)
@@ -147,10 +147,23 @@ final class FakeRecognizer: TextRecognizer, Sendable {
         #expect(stored.values.allSatisfy { $0.durationMs != nil })
         #expect(recognizer.calls == 11, "each file is read once")
         #expect(recognizer.peak <= 3)
-        #expect(shown.peakConcurrency <= 3)
-        #expect(shown.peakConcurrency >= 2, "reads overlap")
-        #expect(shown.storedCount == 11)
-        #expect(shown.reading.isEmpty)
+        let state = await loop.state
+        #expect(state.peakConcurrency <= 3)
+        #expect(state.peakConcurrency >= 2, "reads overlap")
+        #expect(state.storedCount == 11)
+        #expect(state.reading.isEmpty)
+        // Every change was published, in order, the last being the final state.
+        let (states, versions) = published.all
+        #expect(versions == Array(1..<versions.count + 1))
+        #expect(states.last == state)
+        #expect(states.map(\.storedCount) == states.map(\.storedCount).sorted())
+    }
+
+    /// What a loop published (it may publish from any thread).
+    final class Published: Sendable {
+        private let list = Mutex<[(PictureTextLoop.State, Int)]>([])
+        func append(_ state: PictureTextLoop.State, _ version: Int) { list.withLock { $0.append((state, version)) } }
+        var all: ([PictureTextLoop.State], [Int]) { list.withLock { ($0.map(\.0), $0.map(\.1)) } }
     }
 
     @Test func anUnreadableFileIsStoredAsFailedAndTheRestGoOn() async {
