@@ -18,13 +18,15 @@ import AppKit
 /// - one character stands for one character: offsets, the caret, selection, undo and
 ///   block anchors are the same as with the space, and the caret steps over it as over
 ///   the space where a line wraps;
-/// - copied and dragged text has the space (`FortressTextView.writeSelection`), and so
-///   does the text view's `string` (Find, Services, accessibility);
+/// - copied and dragged text has the space (`FortressTextView.writeSelection`);
 /// - soft paragraphs share their block's look: no paragraph spacing between them
 ///   (`Role`), and only `.paragraph` blocks have them (nothing is drawn per paragraph).
 ///
 /// What shows: a long paragraph's line ends early where a soft paragraph ends (after a
-/// sentence), about every 1,500 characters.
+/// sentence), about every 1,500 characters. What doesn't work: Find (and the text view's
+/// `string`, which Services and accessibility read) sees the U+2029, so a phrase typed
+/// with the space doesn't match across that one place. (Overriding `string` copied the
+/// whole note on every keystroke: NSTextView reads it a lot.)
 ///
 /// Soft separators are put in when a block's text is built (`DocumentText.paragraph`) and
 /// kept right as the text is edited (`repair`, from normalizing): one too close to a

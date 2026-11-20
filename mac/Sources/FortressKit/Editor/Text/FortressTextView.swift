@@ -316,27 +316,6 @@ final class FortressTextView: NSTextView {
         return true
     }
 
-    // MARK: Find (NSTextFinderClient): the text with soft separators as spaces
-
-    /// Find reads the note a block at a time, each soft separator (`SoftBreaks`) the space
-    /// it stands for, so a phrase is found across the end of a soft paragraph. (Overriding
-    /// `string` instead copied the whole note on every keystroke: NSTextView reads it a lot.)
-    @objc(stringAtIndex:effectiveRange:endsWithSearchBoundary:)
-    func findString(at characterIndex: Int, effectiveRange outRange: NSRangePointer,
-                    endsWithSearchBoundary outFlag: UnsafeMutablePointer<ObjCBool>) -> String {
-        outFlag.pointee = false
-        guard let storage = textStorage, storage.length > 0 else {
-            outRange.pointee = NSRange(location: 0, length: 0)
-            return ""
-        }
-        let range = storage.nsString.paragraphRange(at: characterIndex)
-        outRange.pointee = range
-        return SoftBreaks.plain(storage.nsString.substring(with: range))
-    }
-
-    @objc(stringLength)
-    var findStringLength: Int { textStorage?.length ?? 0 }
-
     // MARK: Dragging blocks by their handle (the note's editor places them, for columns too)
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
