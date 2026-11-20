@@ -11,7 +11,7 @@ Research date: 18 November 2026. This spec covers the native SwiftUI app in `mac
 1. **The note is the hero.** Chrome recedes, as in Linear's 2026 refresh: "parts central to the user's task should stay in focus, ones that support orientation and navigation should recede." Linear dimmed its sidebar "a few notches" and softened its separators ([Linear, Mar 2026](https://linear.app/now/behind-the-latest-design-refresh)).
 2. **Standard components first, glass only on the navigation layer.** Apple says "Don't use Liquid Glass in the content layer" and "use Liquid Glass effects sparingly" ([HIG: Materials](https://developer.apple.com/design/human-interface-guidelines/materials)). Standard bars, sidebars, sheets and popovers adopt glass on their own. Custom backgrounds on them should be removed ([Adopting Liquid Glass](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)).
 3. **One accent, used for state only.** No color for decoration. Status (rough or polished) is shown by glyph shape, not by hue.
-4. **Keyboard-complete.** Every action is in the menu bar (frequent ones with a shortcut), in the palette (Open Quickly…, ⇧⌘O), and in context menus. Raycast's rule: "every action has a keyboard shortcut, and every shortcut has visual confirmation" ([Raycast teardown, third-party](https://blakecrosley.com/guides/design/raycast)).
+4. **Keyboard-complete.** Every action is in the menu bar (frequent ones with a shortcut) and in context menus. Notes are found in one place, the search field (⌥⌘F, b.2); there is no separate command palette. Raycast's rule: "every action has a keyboard shortcut, and every shortcut has visual confirmation" ([Raycast teardown, third-party](https://blakecrosley.com/guides/design/raycast)).
 5. **Instant and local.** No spinners for local work. Bear's approach: "no spinners, skeleton screens, or toasts… sync runs in the background" ([Bear teardown, third-party](https://blakecrosley.com/guides/design/bear)). Progress UI appears only for network or LLM work, and only after 300 ms.
 6. **Calm motion.** Critically damped springs, no bounce, everything under 300 ms. Reduce Motion is respected everywhere.
 7. **Least surprise: the Mac's keys and menus are never overridden.** ⌘C/⌘V/⌘Z, ⌘F/⌘G/⌘E, ⌘B/⌘I/⌘U, ⌘K (Add Link), ⌘T, ⌥⌘T, ⌥⌘C/⌥⌘V, ⌃⌘Space and the rest of the HIG's standard table keep their system meaning. App shortcuts live in one table (`Shell/Shortcuts.swift`) that `UXAuditTests` checks against the system's; the full map is in b.12.
@@ -97,8 +97,7 @@ All type is **SF Pro** (system). Monospace is **SF Mono**. Use semantic `Font.Te
 | Toolbar title (note title in window title) | system | – | – | system |
 | Inspector section header | `.subheadline` | 11/14 | Semibold, sentence case (no uppercase) | `.secondary` |
 | Inspector body | `.callout` | 12/15 | Regular | `.primary` / `.secondary` |
-| Palette / capture input | system 20 | 20/24 | Regular | `.primary` |
-| Palette rows | `.body` | 13/16 (row height 36) | Regular, match highlight Semibold | `.primary` |
+| Capture input | system 20 | 20/24 | Regular | `.primary` |
 | Shortcut hints | `.caption` monospaced digits | 10/13 | Medium | `.tertiary` |
 
 **Editor (base M = 16):**
@@ -165,7 +164,7 @@ Content colours come from **one semantic palette** (`App/Theme/Palette.swift`); 
   - Code block, image, passage card: 8.
   - Search-result passage highlight: 3.
   - Chips/tokens: capsule.
-  - Palette and capture panels: **22**. This is an approximation of Tahoe's large window radius. Use `ConcentricRectangle` for the inner list so it nests.
+  - Capture panel: **22**. This is an approximation of Tahoe's large window radius. Use `ConcentricRectangle` for the inner list so it nests.
 - Buttons: system capsule or rounded-rect by control size. Do not override.
 
 ### a.7 Materials and Liquid Glass usage (exhaustive list)
@@ -174,12 +173,11 @@ Content colours come from **one semantic palette** (`App/Theme/Palette.swift`); 
 |---|---|
 | Sidebar, toolbar, sheets, popovers, menus, alerts | **System glass, automatic.** No `.background()` on them |
 | Note list, editor, inspector content | Content layer: `textBackgroundColor` / system. **No glass** |
-| Command palette panel | `.glassEffect(.regular, in: .rect(cornerRadius: 22))` in a `GlassEffectContainer`. It is a transient navigation surface floating over content |
-| Quick Capture panel | Same as the palette (it floats over other apps' windows) |
+| Quick Capture panel | `.glassEffect(.regular, in: .rect(cornerRadius: 22))` in a `GlassEffectContainer` (it floats over other apps' windows) |
 | "Ask" composer at the bottom of the answer view | `GlassEffectContainer { TextField… Button(.glassProminent) }`, floating 16pt above the bottom edge, like Notes' floating toolbar |
 | Undo toast ("Moved to Trash · Undo") | `.glassEffect(.regular.interactive())` capsule, bottom center, auto-hides after 5s (the timer waits while the pointer is on it; its Undo is also Edit ▸ Undo) |
 
-All four custom surfaces go through `floatingGlass(in:)` (`Shell/FloatingGlass.swift`): under Reduce Transparency they become an opaque panel in the theme's surface color with a theme-border hairline, and under Increase Contrast the glass gets that border.
+All three custom surfaces go through `floatingGlass(in:)` (`Shell/FloatingGlass.swift`): under Reduce Transparency they become an opaque panel in the theme's surface color with a theme-border hairline, and under Increase Contrast the glass gets that border.
 | Editor floating format bar | **None.** Formatting lives in keyboard shortcuts, Markdown shortcuts and the editor's context menu (*Paragraph Style*). The `[[` note picker is a system popover (glass automatically) |
 
 Under Reduce Transparency, glass becomes opaque automatically. Our custom glass must still read correctly (test it).
@@ -193,7 +191,7 @@ Under Reduce Transparency, glass becomes opaque automatically. Our custom glass 
 | Polished | `checkmark.seal` |
 | Recent | `clock` |
 | Folder | `folder` (selected: `folder.fill`) |
-| New folder | `plus.circle` (sidebar footer), `folder.badge.plus` (palette) |
+| New folder | `plus.circle` (sidebar footer) |
 | Trash | `trash` |
 | New note | `square.and.pencil` |
 | Search | `magnifyingglass` |
@@ -217,7 +215,7 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 - Default: `.smooth(duration: 0.25)` (no bounce). Panels: `.snappy(duration: 0.18)`.
 - Reduce Motion: replace every move or scale with `.opacity` over 0.15s (`@Environment(\.accessibilityReduceMotion)`).
 - Specific moves:
-  - **Palette and capture appear** with scale 0.98 → 1 plus opacity 0 → 1 over 0.18s, anchored top. They disappear with opacity only over 0.12s.
+  - **Capture appears** with scale 0.98 → 1 plus opacity 0 → 1 over 0.18s, anchored top. They disappear with opacity only over 0.12s.
   - **Note selection:** no animated transition in the editor (instant swap). The list selection highlight is the system one.
   - **New note:** the row inserts at the top with `.move(edge:.top).combined(with:.opacity)`, and the caret lands in the title.
   - **Trash:** the row collapses (height → 0) over 0.2s, then the undo toast slides up 12pt.
@@ -274,6 +272,7 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 
 - Placement: `.searchable(text:placement: .toolbar, prompt: "Search or ask a question")` on the split view (top trailing). In the editor, ⌘F is in-note find.
 - **One box, no modes.** The backend fuses exact words (FTS5), meaning (ColBERT) and titles into one ranked list (`GET /api/unified-search`); there is no Words/Meaning toggle, no tokens and no saved searches.
+- **The one place to find a note.** Edit ▸ Search All Notes (⌥⌘F) puts the caret in the field from anywhere. Typing part of a title (word prefixes, case and accents ignored) brings that note up near the top, since a title naming every query word outranks passages; the first keystroke is sent at once, later ones debounced. (The ⇧⌘O command palette was removed: every command it offered is in the menu bar.)
 - Results replace the note-list column while the query is non-empty. Searching is debounced; results always say which query they answer, so ↩ never opens a stale result.
   1. One row per matching passage: note title above the passage with the matched words highlighted (`findHighlightColor`), and why it matched. The top passage is highlighted, so ↩ opens it.
   2. Then **Ask your notes: "…"** (`sparkle.magnifyingglass`, hint ⌘↩).
@@ -284,7 +283,7 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 
 ### b.3 Ask your notes (streaming, cited answer)
 
-- Entry points: the **Ask** toolbar button and **View ▸ Ask Your Notes…** (⇧⌘A), which open the Ask page with the caret in its question field, holding the search text if any (an answer already on screen stays and the field is its follow-up); a question typed in the search field and ↩ (b.2); ⌘↩ in the search field; the Ask row in search results; `?` in the palette. The empty detail column ("No Note Selected") and the seed note *Welcome to Fortress Notes* say where Ask is.
+- Entry points: the **Ask** toolbar button and **View ▸ Ask Your Notes…** (⇧⌘A), which open the Ask page with the caret in its question field, holding the search text if any (an answer already on screen stays and the field is its follow-up); a question typed in the search field and ↩ (b.2); ⌘↩ in the search field; the Ask row in search results. The empty detail column ("No Note Selected") and the seed note *Welcome to Fortress Notes* say where Ask is.
 - Before the first question the page shows "Ask Your Notes", one sentence on what it does and how to ask, and the composer reads "Ask a question about your notes". If `/api/health` reports `ask_configured: false` (no `OPENROUTER_API_KEY`), a card says how to add the key to `backend/.env` (never committed) instead of letting the first question fail.
 - Presentation: **the detail column shows an Answer page** in place of the editor (the window title reads "Ask"). It is not a modal, so the user can click citations and come back.
 - Layout (same measure as the editor):
@@ -295,16 +294,9 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
   - **Follow-up composer**: a floating glass capsule at the bottom with "Ask a follow-up" and a send button (`arrow.up`). Follow-ups stack below the first answer; esc stops a running answer.
 - Failure, no key configured, or nothing found: an inline `.secondary` message (with the closest passages when Ask timed out or has no key). Never an alert. Without a key the backend answers `not_configured` even when nothing matched, so the message names the fix rather than "nothing found".
 
-### b.4 Command palette (Open Quickly…, ⇧⌘O)
+### b.4 Command palette (removed)
 
-- *Why not ⌘K:* in Notes, Pages, Mail and TextEdit ⌘K is **Add Link**, and the editor keeps it. The palette takes ⇧⌘O, Xcode's Open Quickly, the Mac's own jump-anywhere key.
-
-- A window-anchored glass overlay, **560 wide**, near the top of the window. The rest of the window is not dimmed, matching Raycast and Spotlight.
-- Input: placeholder "Search notes and commands", `magnifyingglass` leading.
-  - Prefix `>` limits to commands, `?` asks your notes, `/` searches inside notes.
-- Result sections: **Notes** (fuzzy title match ranked locally from the sidebar tree, matched characters semibold; recent notes when empty), **Commands** (the menu bar's commands: New Note, New Folder, New Window, Quick Capture, Search Notes, Ask Your Notes, Show All Notes / Rough / Polished / Recent, Show Trash, Backups, Back Up Now, Toggle Inspector, Toggle Focus Mode, Reload Notes, Import Markdown Files…, Import from OneNote…, Export as Markdown…, Move Note to Trash, Open Note in New Window; each also matches synonyms such as "jot" or "migrate"; formatting stays in the Format menu, since it acts on the text selection).
-- Row: leading symbol (`.secondary`), title (13), trailing shortcut hint where one exists.
-- Keys: ↑/↓, ↩ runs the selected row, ⌘↩ asks your notes, esc closes.
+- There is none. Notes are found with the search field (b.2, ⌥⌘F); every command is in the menu bar with its shortcut (b.12). ⇧⌘O is unassigned.
 
 ### b.5 Quick Capture (⇧⌘Space by default, global, configurable)
 
@@ -343,7 +335,7 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 
 - **File → Import → Markdown Files…** (⇧⌘I) picks `.md` files, then a sheet: destination folder ("Into"), "Each file becomes a note named after the file. Front matter (title, status) is kept.", [Cancel] [Import], then the files that couldn't be imported with the reason.
 - Dropping `.md` files on a sidebar folder imports them into it.
-- **File → Import → From OneNote…** (also the palette's "Import from OneNote…" and Settings ▸ General). One sheet, 560 wide, three steps:
+- **File → Import → From OneNote…** (also Settings ▸ General). One sheet, 560 wide, three steps:
   1. The export how-to (onenote.com/notebooks → Export notebook, or Download on onedrive.com; unlock password-protected sections first), a dashed drop zone with [Choose File…] (.zip, .onepkg, .one), and "Put notebooks in" (top level or a folder).
   2. A step list (Uploading → Converting → Importing pages → Linking pages: done steps `checkmark.circle.fill` secondary, the current one a small spinner, later ones `.quaternary`), one linear progress bar (upload fraction, then pages_done/pages_total), and the current "Notebook › Section › Page" in secondary, truncated in the middle. Closing the sheet doesn't stop the import; a toast says when it's done.
   3. The report: headline + "147 pages · 36 images · 9 files · 12 tables · in 42 s", one card per notebook (`quaternarySystemFill` at 60%, radius 12) with created/updated/unchanged/skipped and images/files/tables/with-columns counts (zeros in `.tertiary`), failed sections with reason and hint, converter notes in a disclosure, unresolved links in a disclosure, [Show in Sidebar] per notebook, and the re-import promise ("Importing the same export again updates these notes; your edits are kept.").
@@ -412,7 +404,6 @@ Menus are in the standard order: App, File, Edit, Format, View, Note, Go, Window
 | View | Show/Hide Inspector | ⌥⌘I |
 | View | Enter/Exit Focus Mode | ⌃⌘↩ |
 | View | Show Blocks (faint outlines and handles on every block; off by default) | ⌥⌘B (free: not a standard or system key) |
-| View | Open Quickly… (palette) | ⇧⌘O |
 | View | Ask Your Notes… | ⇧⌘A |
 | View | Quick Capture | ⇧⌘Space (global, configurable) |
 | View | Reload Notes | ⌘R |
@@ -423,7 +414,7 @@ Menus are in the standard order: App, File, Edit, Format, View, Note, Go, Window
 | Window | Minimize, Zoom, Tile, Merge All Windows, Cycle Windows | ⌘M, ⌘` (system) |
 | Help | Search | ⇧⌘/ (system) |
 
-Inside surfaces: in the palette and the search field ↑/↓ move, ↩ opens, ⌘↩ asks, esc closes or clears; in Quick Capture ↩ saves, ⇧↩ adds a line, ⌘↩ saves and opens, esc puts it away; in a table cell Tab/⇧Tab move between cells; in the `/` menu ↑/↓ move, ↩ or ⇥ insert, esc closes and leaves the typed text; with blocks selected (Esc) ↑/↓ choose the block above or below, ⇧↑/⇧↓ extend by blocks, ⌥⇧↑/⌥⇧↓ move them (only then: in text ⌥⇧↑/↓ keep selecting to the paragraph's start or end), Tab/⇧Tab indent, ⌫ deletes, ⌘C/⌘X copy and cut them, ⌘D duplicates, ↩ or typing goes back to the caret, esc lets go. Esc in text is the editor's (Notion and Craft's block selection); NSTextView's word completion stays on ⌥Esc and F5. Text navigation and selection (⌥/⌘ arrows, ⇧ to extend, Emacs keys ⌃A/⌃E/⌃K/⌃Y…), Services, Look Up (⌃⌘D or force click), dictation, text replacements and smart quotes/dashes (from System Settings) are NSTextView's own and untouched.
+Inside surfaces: in the search field ↑/↓ move, ↩ opens, ⌘↩ asks, esc closes or clears; in Quick Capture ↩ saves, ⇧↩ adds a line, ⌘↩ saves and opens, esc puts it away; in a table cell Tab/⇧Tab move between cells; in the `/` menu ↑/↓ move, ↩ or ⇥ insert, esc closes and leaves the typed text; with blocks selected (Esc) ↑/↓ choose the block above or below, ⇧↑/⇧↓ extend by blocks, ⌥⇧↑/⌥⇧↓ move them (only then: in text ⌥⇧↑/↓ keep selecting to the paragraph's start or end), Tab/⇧Tab indent, ⌫ deletes, ⌘C/⌘X copy and cut them, ⌘D duplicates, ↩ or typing goes back to the caret, esc lets go. Esc in text is the editor's (Notion and Craft's block selection); NSTextView's word completion stays on ⌥Esc and F5. Text navigation and selection (⌥/⌘ arrows, ⇧ to extend, Emacs keys ⌃A/⌃E/⌃K/⌃Y…), Services, Look Up (⌃⌘D or force click), dictation, text replacements and smart quotes/dashes (from System Settings) are NSTextView's own and untouched.
 
 **Pasteboard.** Copying from a note puts the note's blocks (for pasting between notes with kinds and marks), Markdown (`net.daringfireball.markdown`, for Markdown editors and code tools), RTF and plain text on the pasteboard. Pasting takes the same: blocks, rich text (RTF/HTML from Safari, Pages, Word, Notes; marks the editor knows are kept, and the source page is recorded), plain text, and images (a screenshot copied with ⌃⇧⌘4, a PNG/TIFF) or files (a dragged screenshot thumbnail, PDFs, any file), which upload and become picture or file blocks. Paste and Match Style (⌥⇧⌘V) pastes plain text.
 
@@ -595,7 +586,7 @@ struct FortressNotesApp: App {
             TextEditingCommands()  // Find ⌘F/⌘G/⌘E, Spelling, Substitutions, Speech
             ToolbarCommands()
             ShellCommands(library: delegate.library)  // File, Edit, Format, View, Note, Go
-            FindingCommands()  // Open Quickly… (palette), Ask, Quick Capture
+            FindingCommands()  // Ask, Quick Capture
         }
 
         Settings {
@@ -605,6 +596,3 @@ struct FortressNotesApp: App {
     }
 }
 ```
-
-The command palette is a custom glass panel on the navigation layer only:
-`GlassEffectContainer { … }.glassEffect(.regular, in: .rect(cornerRadius: 22))`, 560 wide.

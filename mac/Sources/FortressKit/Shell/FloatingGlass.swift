@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Liquid Glass for the app's four floating surfaces (DESIGN a.7: the palette, Quick
-/// Capture, the Ask composer, the toast), with the HIG's fallbacks: an opaque window
+/// Liquid Glass for the app's floating surfaces (DESIGN a.7: Quick Capture, the Ask
+/// composer, the toast), with the HIG's fallbacks: an opaque window
 /// background with a hairline border under Reduce Transparency, and a border on the
 /// glass under Increase Contrast.
 struct FloatingGlass<S: Shape>: ViewModifier {

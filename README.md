@@ -13,7 +13,7 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
 
 - **Native Mac UI.** Sidebar with nested folders, a date-grouped note list, a TextKit 2
   block editor (checklists, lists, links, highlights, tables, columns, math, pictures,
-  files), an inspector, a ⇧⌘O command palette and a global Quick Capture panel.
+  files), an inspector and a global Quick Capture panel.
 - **One search box.** Exact words (SQLite FTS5), meaning (ColBERT late interaction) and
   note titles in one ranked list. Each result shows the matching passage and opens the
   note at that paragraph.
@@ -38,11 +38,10 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
   </tr>
   <tr>
     <td><img src="docs/screenshots/ask.png" width="400" alt="Ask: an answer with numbered citations and its sources"><br><sub>Ask: every sentence cites its source</sub></td>
-    <td><img src="docs/screenshots/command-palette.png" width="400" alt="The command palette"><br><sub>⇧⌘O command palette: jump to a note or run a command</sub></td>
+    <td><img src="docs/screenshots/picture-text.png" width="200" alt="Inspector listing the text read from pictures and a PDF, including Russian"><br><sub>Inspector › Text in pictures (Apple Vision, incl. Russian)</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/picture-text.png" width="200" alt="Inspector listing the text read from pictures and a PDF, including Russian"><br><sub>Inspector › Text in pictures (Apple Vision, incl. Russian)</sub></td>
-    <td><img src="docs/screenshots/onenote-import.png" width="300" alt="OneNote import report"><br><sub>OneNote import report</sub></td>
+    <td colspan="2"><img src="docs/screenshots/onenote-import.png" width="300" alt="OneNote import report"><br><sub>OneNote import report</sub></td>
   </tr>
 </table>
 
@@ -77,7 +76,8 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
   fusion. Without the model, search and related notes fall back to keyword matching.
 - Inspector: *Seen before*, *Related notes*, *Backlinks*, *Info* (dates, counts,
   provenance, re-import conflicts) and *Text in pictures*.
-- ⇧⌘O palette (Open Quickly…): jump to a note by title, run any command, `?` to ask.
+- Find a note by title: press ⌥⌘F (Edit › Search All Notes) and type part of its title;
+  title matches rank first. Every command is in the menu bar.
 
 **Ask your notes**
 
@@ -90,7 +90,7 @@ How to ask:
   how / which / is / are / can / do / does / did / should / could / would / will, puts
   the "Ask your notes" row first, so Return asks; anything else searches, and Return
   opens the top result.
-- ⌘↩ in the search field always asks; `?` in the ⇧⌘O palette asks too.
+- ⌘↩ in the search field always asks.
 - Without `OPENROUTER_API_KEY` in `backend/.env`, Ask says how to add it (and shows the
   closest passages) instead of failing; `GET /api/health` reports `ask_configured`.
 
@@ -205,7 +205,7 @@ download notebooks, and OneNote for Mac only saves PDFs. So there are two routes
   order and colours (full list in the tool's README). Fortress itself never signs in to
   Microsoft.
 
-Then in Fortress: **File › Import › From OneNote…** (or ⇧⌘O "Import from OneNote…"),
+Then in Fortress: **File › Import › From OneNote…** (or Settings › General),
 drop the `.onepkg`, `.one` or `.zip` (the Graph tool's zip is imported as it is, without
 the converter), and choose where the notebooks go.
 

@@ -9,29 +9,6 @@ import Testing
 // latency). Each test prints "PERF <name>: <value>" lines, collected from the CI log.
 
 enum PerfData {
-    static let words = ["Kyoto", "trip", "packing", "list", "ryokan", "onsen", "café", "budget", "ideas", "meeting",
-                        "notes", "garden", "recipe", "book", "東京", "旅館", "plan", "draft", "weekly", "review"]
-
-    /// A sidebar with `count` notes in 50 folders (titles of 2–5 words, some accented or CJK).
-    static func navigation(notes count: Int) -> NavigationResponse {
-        var generator = SplitMix(seed: 42)
-        var folders: [NavigationFolder] = (0..<50).map { index in
-            NavigationFolder(id: "f\(index)", parentId: nil, name: "Folder \(index)", position: index, children: [])
-        }
-        var recent: [NavigationDocument] = []
-        for index in 0..<count {
-            let length = 2 + Int(generator.next() % 4)
-            let title = (0..<length).map { _ in words[Int(generator.next() % UInt64(words.count))] }.joined(separator: " ")
-            let document = NavigationDocument(
-                id: String(format: "doc%05d", index), title: "\(title) \(index)", status: .rough,
-                updatedAt: "2026-11-01T10:00:00Z", createdAt: "2026-10-01T10:00:00Z", snippet: "",
-                folderId: "f\(index % 50)", position: index)
-            folders[index % 50].children.append(.document(document))
-            if index < 20 { recent.append(document) }
-        }
-        return NavigationResponse(items: folders.map(NavigationNode.folder), recent: recent)
-    }
-
     static func passages(_ count: Int) -> [SearchMatch] {
         (0..<count).map { index in
             let text = "…stayed two nights at a small ryokan near Arashiyama 🌿 — the kaiseki dinner (\(index)) was the best meal of the trip, and the 旅館 onsen opened at six. Café au lait in the morning."
@@ -68,19 +45,6 @@ enum PerfData {
 
     static func doneLine(answered: Bool = true) -> Data {
         ndjson(["type": "done", "result": ["status": answered ? "answered" : "not_found", "answer": [], "sources": [], "steps": [], "elapsed_ms": 900]])
-    }
-}
-
-/// Deterministic random numbers for fixtures.
-struct SplitMix {
-    var state: UInt64
-    init(seed: UInt64) { state = seed }
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
     }
 }
 

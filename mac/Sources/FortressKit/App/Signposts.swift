@@ -1,8 +1,8 @@
 import Foundation
 import os
 
-/// Signpost intervals for the moments the app is judged by (open a note, first palette
-/// result, first Ask token, save), visible in Instruments' Points of Interest and
+/// Signpost intervals for the moments the app is judged by (open a note, first Ask
+/// token, save), visible in Instruments' Points of Interest and
 /// os_signpost tracks under the subsystem `app.fortress.notes`.
 enum Signposts {
     static let signposter = OSSignposter(subsystem: "app.fortress.notes", category: .pointsOfInterest)

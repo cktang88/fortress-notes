@@ -84,15 +84,6 @@ import Testing
             }
         }
     }
-
-    @Test func fuzzyMatchingFoldsAccentsAndKeepsCJK() {
-        #expect(FuzzyMatch.match("ete", in: "Été à Kyoto")?.indices == [0, 1, 2])
-        #expect(FuzzyMatch.match("旅館", in: "京都の旅館")?.indices == [3, 4])
-        #expect(FuzzyMatch.match("ETE", in: "e\u{301}te\u{301}")?.indices == [0, 1, 2])
-        #expect(FuzzyMatch.match("👍", in: "Ideas 👍🏽 later") == nil || FuzzyMatch.match("👍", in: "Ideas 👍🏽 later")?.indices == [6])
-        let folded = FoldedText("Café 東京")
-        #expect(folded.count == "Café 東京".count)
-    }
 }
 
 // MARK: Ask

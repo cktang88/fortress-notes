@@ -89,11 +89,6 @@ public struct MainWindow: View {
         .searchable(text: $model.query, placement: .toolbar, prompt: "Search or ask a question")
         .searchFocused($isSearchFocused)
         .onChange(of: model.searchFocusRequest) { _, _ in isSearchFocused = true }
-        .overlay(alignment: .top) {
-            if model.isPaletteShown {
-                CommandPaletteView().padding(.top, 140)
-            }
-        }
         .modifier(ShellPresentations())
         .frame(minWidth: 900, minHeight: 560)
         .fortressTheme()

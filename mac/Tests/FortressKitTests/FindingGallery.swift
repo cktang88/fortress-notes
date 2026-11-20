@@ -382,22 +382,6 @@ extension GallerySnapshotTests {
         }
     }
 
-    @Test func findingPalette() async throws {
-        try await both("finding-palette") {
-            let model = FindingFixtures.model()
-            model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
-            model.isPaletteShown = true
-            return MainWindow().environment(model)
-        }
-        try await both("finding-palette-query") {
-            let model = FindingFixtures.model()
-            model.route = .note(id: FindingFixtures.kyoto, focusBlockId: nil)
-            model.isPaletteShown = true
-            model.paletteQuery = "tr"
-            return MainWindow().environment(model)
-        }
-    }
-
     @Test func findingInspector() async throws {
         try await both("finding-inspector", size: CGSize(width: 300, height: 660), seconds: 8) {
             let model = FindingFixtures.model()
