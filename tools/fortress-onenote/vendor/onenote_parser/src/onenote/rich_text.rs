@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P6, P9).
+// Modified by fortress-onenote (vendor/PATCHES.md: P6, P9, P10).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::charset::Charset;
@@ -10,7 +10,7 @@ use crate::one::property_set::{
     text_run_data,
 };
 use crate::onenote::ParserContext;
-use crate::onenote::ink::{Ink, InkBoundingBox, InkContent, parse_ink_data};
+use crate::onenote::ink::{Ink, parse_ink};
 use crate::onenote::math_inline_object::{MathInlineObject, parse_math_inline_object};
 use crate::onenote::note_tag::{NoteTag, parse_note_tags};
 use crate::onestore::ObjectSpace;
@@ -195,33 +195,14 @@ impl RichText {
 /// An object embedded in a rich text paragraph.
 #[derive(Clone, Debug)]
 pub enum EmbeddedObject {
-    /// An ink handwriting object container.
-    Ink(EmbeddedInkContainer),
+    /// An ink handwriting object (PATCH(fortress-onenote, P10): not parsed).
+    Ink(Ink),
 
     /// A space in the ink handwriting.
     InkSpace(EmbeddedInkSpace),
 
     /// A line break in the ink handwriting.
     InkLineBreak,
-}
-
-/// An ink handwriting object container.
-#[derive(Clone, Debug)]
-pub struct EmbeddedInkContainer {
-    pub(crate) ink: Ink,
-    pub(crate) bounding_box: Option<InkBoundingBox>,
-}
-
-impl EmbeddedInkContainer {
-    /// The ink data embedded in a paragraph.
-    pub fn ink(&self) -> &Ink {
-        &self.ink
-    }
-
-    /// The ink object's bounding box.
-    pub fn bounding_box(&self) -> Option<&InkBoundingBox> {
-        self.bounding_box.as_ref()
-    }
 }
 
 /// A space in an embedded ink handwriting object.
@@ -596,8 +577,7 @@ pub(crate) fn parse_rich_text(
                     .map(|space_obj| Some(EmbeddedObject::InkSpace(space_obj))),
                 None => {
                     if let Some(object_ref) = object_ref {
-                        return parse_embedded_ink_data(*object_ref, space, embedded_data, ctx)
-                            .map(|container| Some(EmbeddedObject::Ink(container)));
+                        return parse_ink(*object_ref, space).map(|ink| Some(EmbeddedObject::Ink(ink)));
                     }
 
                     Ok(None)
@@ -643,39 +623,6 @@ pub(crate) fn parse_rich_text(
     };
 
     Ok(text)
-}
-
-fn parse_embedded_ink_data(
-    embedded_id: ExGuid,
-    space: &(impl ObjectSpace + ?Sized),
-    data: embedded_ink_container::Data,
-    ctx: &mut ParserContext,
-) -> Result<EmbeddedInkContainer> {
-    let (strokes, bb) = parse_ink_data(embedded_id, space, None, None, ctx)?;
-
-    let display_bb = data
-        .start_x
-        .zip(data.start_y)
-        .zip(data.height)
-        .zip(data.width)
-        .map(|(((x, y), height), width)| InkBoundingBox {
-            x,
-            y,
-            height,
-            width,
-        });
-
-    let data = EmbeddedInkContainer {
-        ink: Ink {
-            content: InkContent::Strokes(strokes),
-            bounding_box: bb,
-            offset_horizontal: data.offset_horiz,
-            offset_vertical: data.offset_vert,
-        },
-        bounding_box: display_bb,
-    };
-
-    Ok(data)
 }
 
 fn parse_embedded_ink_space(data: embedded_ink_container::Data) -> Result<EmbeddedInkSpace> {

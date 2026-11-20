@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P10).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property_set::PropertySetId;
@@ -68,7 +69,7 @@ impl Content {
         }
     }
 
-    /// Return the ink data if it's an ink content.
+    /// Return the ink marker if it's an ink content (PATCH(fortress-onenote, P10): not parsed).
     pub fn ink(&self) -> Option<&Ink> {
         if let Content::Ink(ink) = self {
             Some(ink)
@@ -101,7 +102,7 @@ pub(crate) fn parse_content(
         }
         PropertySetId::RichTextNode => Content::RichText(parse_rich_text(content_id, space, ctx)?),
         PropertySetId::TableNode => Content::Table(parse_table(content_id, space, ctx)?),
-        PropertySetId::InkContainer => Content::Ink(parse_ink(content_id, space, ctx)?),
+        PropertySetId::InkContainer => Content::Ink(parse_ink(content_id, space)?),
         _ => Content::Unknown,
     };
 

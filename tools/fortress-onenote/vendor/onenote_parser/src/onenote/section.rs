@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P10).
 use crate::errors::{ErrorKind, Result};
 use crate::one::property::color::Color;
 use crate::one::property_set::{section_metadata_node, section_node};
@@ -86,7 +87,6 @@ pub(crate) fn parse_section(store: &(impl OneStore + ?Sized), filename: String) 
     let mut ctx = ParserContext {
         page: None,
         report: Report::new(),
-        recognized_words: Default::default(),
     };
 
     let metadata = parse_metadata(store.data_root())?;
