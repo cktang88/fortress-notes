@@ -191,15 +191,15 @@ import Testing
     }
 
     @Test func diagVariants() {
-        variant("noterow") { NoteRow(note: $0, folderName: nil) }
-        variant("noterow-drag") { NoteRow(note: $0, folderName: nil).draggable(NoteDrag.payload(for: $0.id)) }
-        variant("noterow-menu") { NoteRow(note: $0, folderName: nil).contextMenu { Button("X") {} } }
-        variant("noterow-hover") { NoteRow(note: $0, folderName: nil).onHover { _ in } }
-        variant("reserves") { Text($0.snippet).lineLimit(2, reservesSpace: true) }
-        variant("linelimit") { Text($0.snippet).lineLimit(2) }
-        variant("wrapping") { Text($0.snippet) }
-        variant("two-texts") { VStack(alignment: .leading) { Text($0.title).font(.headline); Text("one\ntwo") } }
-        variant("access") { VStack(alignment: .leading) { Text($0.title); Text("one\ntwo") }.accessibilityElement(children: .combine) }
+        variant("noterow") { note in NoteRow(note: note, folderName: nil) }
+        variant("noterow-drag") { note in NoteRow(note: note, folderName: nil).draggable(NoteDrag.payload(for: note.id)) }
+        variant("noterow-menu") { note in NoteRow(note: note, folderName: nil).contextMenu { Button("X") {} } }
+        variant("noterow-hover") { note in NoteRow(note: note, folderName: nil).onHover { _ in } }
+        variant("reserves") { note in Text(note.snippet).lineLimit(2, reservesSpace: true) }
+        variant("linelimit") { note in Text(note.snippet).lineLimit(2) }
+        variant("wrapping") { note in Text(note.snippet) }
+        variant("two-texts") { note in VStack(alignment: .leading) { Text(note.title).font(.headline); Text("one\ntwo") } }
+        variant("access") { note in VStack(alignment: .leading) { Text(note.title); Text("one\ntwo") }.accessibilityElement(children: .combine) }
     }
 
     @Test func selectedRow() throws {
