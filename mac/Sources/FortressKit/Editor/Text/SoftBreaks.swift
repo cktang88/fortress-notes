@@ -197,18 +197,26 @@ enum SoftBreaks {
             checked = paragraph
         }
         if checked.length > 0 {
+            // Every U+2029 left is marked (normalizing made the others "\n"): the marked
+            // runs are where they are.
             var stray: [NSRange] = []
+            var separators: [Int] = []
             text.enumerateAttribute(.fnSoft, in: checked, options: []) { value, run, _ in
-                guard value != nil, run.length != 1 || string.character(at: run.location) != character else { return }
-                stray.append(run)
+                guard value != nil else { return }
+                if run.length == 1, string.character(at: run.location) == character {
+                    separators.append(run.location)
+                } else {
+                    stray.append(run)
+                }
             }
             for run in stray {
                 text.removeAttribute(.fnSoft, range: run)
                 for index in run.location..<NSMaxRange(run) where string.character(at: index) == character {
                     text.addAttribute(.fnSoft, value: true, range: NSRange(location: index, length: 1))
+                    separators.append(index)
                 }
             }
-            for index in checked.location..<NSMaxRange(checked) where string.character(at: index) == character {
+            for index in separators.sorted() {
                 if !eligible(kind) || !canSeparate(at: index, in: string, content: content, strict: false) {
                     let range = NSRange(location: index, length: 1)
                     text.replaceCharacters(in: range, with: " ")
