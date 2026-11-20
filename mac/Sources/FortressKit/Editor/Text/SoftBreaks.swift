@@ -5,7 +5,7 @@ import AppKit
 ///
 /// TextKit 2 makes one layout fragment per paragraph and lays it out whole: every key
 /// typed in a 50,000-character paragraph laid all of it out again (~15 ms in a bare
-/// TextKit 2 view, `keystroke.long50k.part.bareTextKitRelayout`; UNDO_AUDIT.md). Neither
+/// TextKit 2 view, `keystroke.long50k.part.bareTextKitRelayout`). Neither
 /// its layout manager's settings nor serving the paragraph in pieces through the content
 /// manager's delegate split that work, so the text splits it: in a long paragraph block,
 /// a space every ~1,500 characters (after a sentence where there is one) is stored as

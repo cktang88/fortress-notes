@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds "Fortress Notes.app" from the Swift package: release build, bundle layout,
 # the String Catalog compiled into the app's resources, and a Hardened Runtime signature
-# (CODE_AUDIT.md O1/O2: Developer ID, not sandboxed, no runtime exceptions).
+# (Developer ID, not sandboxed, no runtime exceptions: see Packaging/FortressNotes.entitlements).
 #
 #   Scripts/package_app.sh [output-dir]
 #

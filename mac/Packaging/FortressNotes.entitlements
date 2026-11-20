@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Fortress Notes: Developer ID, Hardened Runtime, NOT sandboxed (CODE_AUDIT.md, O1/O2).
+  Fortress Notes: Developer ID, Hardened Runtime, NOT sandboxed.
 
   Deliberately empty. The Hardened Runtime is on (codesign option "runtime") with no
   runtime exceptions:

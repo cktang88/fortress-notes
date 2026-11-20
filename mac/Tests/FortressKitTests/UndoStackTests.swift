@@ -4,7 +4,7 @@ import Testing
 
 @testable import FortressKit
 
-// The note's undo stack as a person uses it (UNDO_AUDIT.md): edits made with keys,
+// The note's undo stack as a person uses it (mac/DESIGN.md, Undo): edits made with keys,
 // Paste and menu commands, then ⌘Z and ⇧⌘Z through Edit ▸ Undo and Redo (the action
 // goes up the responder chain from the window's first responder, as the menu sends it),
 // checking the text, the blocks (ids included) and the menu's titles at every step.

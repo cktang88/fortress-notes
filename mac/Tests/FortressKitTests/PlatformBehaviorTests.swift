@@ -3,7 +3,8 @@ import Testing
 
 @testable import FortressKit
 
-// One test per fix from the code audit (mac/CODE_AUDIT.md).
+// Platform behaviour: Swift 6 isolation, TextKit 2, localization, system text settings,
+// Writing Tools and how the note list and editor avoid needless work.
 
 private func note(_ id: String, updated: String) -> NavigationDocument {
     NavigationDocument(id: id, title: id, status: .rough, updatedAt: updated, createdAt: updated, snippet: "",
@@ -11,8 +12,8 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
 }
 
 @MainActor
-@Suite struct CodeAuditTests {
-    // L3: the note list sorts and groups when its inputs change, not on every render
+@Suite struct PlatformBehaviorTests {
+    // The note list sorts and groups when its inputs change, not on every render
     // (a selection change re-renders the list).
     @Test func noteListIsRemadeOnlyWhenItsInputsChange() {
         let navigation = NavigationResponse(items: [
@@ -39,7 +40,7 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
         #expect(tomorrow.sections.first?.title == "Yesterday")
     }
 
-    // N2: sentences with a date are one localizable string, not concatenations.
+    // Sentences with a date are one localizable string, not concatenations.
     @Test func relativeDatesAreOneSentence() {
         let now = Date()
         #expect(EditorDates.edited(now.addingTimeInterval(-20), now: now) == "Edited just now")
@@ -50,7 +51,7 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
         #expect(NoteListing.deletedLabel("not a date", now: now) == "Deleted")
     }
 
-    // I4: smart quotes and dashes follow System Settings instead of being forced on.
+    // Smart quotes and dashes follow System Settings instead of being forced on.
     @Test func substitutionsFollowTheSystemSetting() {
         let view = FortressTextView.make()
         #expect(view.isAutomaticQuoteSubstitutionEnabled == NSSpellChecker.isAutomaticQuoteSubstitutionEnabled)
@@ -59,7 +60,7 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
         #expect(cell.isAutomaticQuoteSubstitutionEnabled == NSSpellChecker.isAutomaticQuoteSubstitutionEnabled)
     }
 
-    // I1: a note with tables, columns and pictures stays on TextKit 2 everywhere (touching
+    // A note with tables, columns and pictures stays on TextKit 2 everywhere (touching
     // `layoutManager` or inserting an NSTextTable would drop a view to TextKit 1).
     @Test func richNoteStaysOnTextKit2() throws {
         let editor = PerfEditor(document: LongNote.document(blocks: 300))
@@ -87,7 +88,7 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
         }
     }
 
-    // A1: the pending-edits folder is behind a lock, not a `nonisolated(unsafe)` global.
+    // The pending-edits folder is behind a lock, not a `nonisolated(unsafe)` global.
     @Test func pendingEditsDirectoryRoundTrips() {
         let original = PendingEdits.directory
         defer { PendingEdits.directory = original }
@@ -96,7 +97,7 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
         #expect(PendingEdits.url(for: "doc/1").deletingLastPathComponent().path == other.path)
     }
 
-    // I5: Writing Tools leaves links, inline code and code blocks alone.
+    // Writing Tools leaves links, inline code and code blocks alone.
     @Test func writingToolsSkipsExactText() {
         let controller = BlockEditorController(baseURL: URL(string: "http://127.0.0.1:9")!)
         controller.load([
@@ -114,7 +115,7 @@ private func note(_ id: String, updated: String) -> NavigationDocument {
         #expect(!words.contains { $0.contains("Read") || $0.contains("and run") })
     }
 
-    // I3: the editor reads its text storage without the whole-note copy that bridging
+    // The editor reads its text storage without the whole-note copy that bridging
     // `NSTextStorage.string` to Swift makes.
     @Test func textIsReadWithoutCopying() {
         let storage = NSTextStorage(string: "First paragraph\nSecond\n")

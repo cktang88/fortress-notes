@@ -14,7 +14,7 @@ Research date: 18 November 2026. This spec covers the native SwiftUI app in `mac
 4. **Keyboard-complete.** Every action is in the menu bar (frequent ones with a shortcut), in the palette (Open Quickly…, ⇧⌘O), and in context menus. Raycast's rule: "every action has a keyboard shortcut, and every shortcut has visual confirmation" ([Raycast teardown, third-party](https://blakecrosley.com/guides/design/raycast)).
 5. **Instant and local.** No spinners for local work. Bear's approach: "no spinners, skeleton screens, or toasts… sync runs in the background" ([Bear teardown, third-party](https://blakecrosley.com/guides/design/bear)). Progress UI appears only for network or LLM work, and only after 300 ms.
 6. **Calm motion.** Critically damped springs, no bounce, everything under 300 ms. Reduce Motion is respected everywhere.
-7. **Least surprise: the Mac's keys and menus are never overridden.** ⌘C/⌘V/⌘Z, ⌘F/⌘G/⌘E, ⌘B/⌘I/⌘U, ⌘K (Add Link), ⌘T, ⌥⌘T, ⌥⌘C/⌥⌘V, ⌃⌘Space and the rest of the HIG's standard table keep their system meaning. App shortcuts live in one table (`Shell/Shortcuts.swift`) that `UXAuditTests` checks against the system's; the full map is in b.12.
+7. **Least surprise: the Mac's keys and menus are never overridden.** ⌘C/⌘V/⌘Z, ⌘F/⌘G/⌘E, ⌘B/⌘I/⌘U, ⌘K (Add Link), ⌘T, ⌥⌘T, ⌥⌘C/⌥⌘V, ⌃⌘Space and the rest of the HIG's standard table keep their system meaning. App shortcuts live in one table (`Shell/Shortcuts.swift`) that `MacConventionsTests` checks against the system's; the full map is in b.12.
 
 ---
 
@@ -475,6 +475,10 @@ BlockEditorController + FortressTextView : NSTextView (TextKit 2)  ← NSViewRep
   - Block references are `blockRef` nodes showing the referenced block's current text, with a subtle underline.
 - **Images and files.** Paste or drop uploads through `POST /api/files`; the image is inserted as an attachment with a view provider (stored `width`/`height`, drag handle for width). The text in pictures comes from OCR (backend and Apple Vision) and is shown in the inspector, never in the note.
 - **Undo.** NSTextView's `undoManager` with `allowsUndo = true`; structural operations (indent, move block ⌃⌘↑/↓, checkbox toggle, table edits) register as text-system undo, all in one stack per note (`FortressTextView.noteUndo`, shared by columns and table cells), separate from the window's stack where list actions are undone.
+  - The note's text views, column editors and table cell editors answer `undo:`/`redo:` (and name the menu items) before the window does, finding the stack through the editor's `AttachmentContext.undoManager`, not by walking views. Cell editors have no undo manager of their own; the table registers one step per cell edit (`TableBlockController.registerCellUndo`).
+  - Each editor command is one named step (`BlockEditorController.undoStep`, `UndoNames`); typing in progress ends first. NSTextView groups and names typing, Paste and Cut, as in TextEdit.
+  - Only a note's own `load` (open, Load Latest) clears its stack; a column's never does. Each window keeps the last 8 notes' editors (`NoteEditorCache`), so switching back keeps the stack unless the note changed elsewhere.
+  - Undo and redo are ordinary edits: storage changes during undo/redo are reported once per run-loop turn and saved as a diff transaction (`IntegrationTests.undoAndRedoSaveWhatTheEditorShows`). There is no server-side undo.
 - **Performance.**
   - TextKit 2 lays out only the viewport.
   - Never touch `textView.layoutManager`. Accessing it silently drops the view back to TextKit 1.

@@ -2,7 +2,7 @@
 import PackageDescription
 
 // Swift 6 language mode (complete concurrency checking) and no warnings: a warning is a
-// build error, so data-race diagnostics can't pile up unseen (CODE_AUDIT.md A1).
+// build error, so data-race diagnostics can't pile up unseen.
 let strict: [SwiftSetting] = [.treatAllWarnings(as: .error)]
 
 let package = Package(
