@@ -272,7 +272,8 @@ shutdown stops them (and any converter) and writes pending mirrors.
   via PyLate, one multi-vector document per paragraph, scored with exact **MaxSim**
   (brute force, one matrix multiply per padded length bucket). Embeddings persist in
   `NOTES_DIR/.fortress-embeddings.sqlite3` (keyed by block id and a hash of the text),
-  bfloat16 where the CPU supports it (`EMBEDDINGS_PRECISION`). The `index` lane loads
+  float32. On Apple Silicon the model runs on the GPU with MLX (`EMBEDDINGS_DEVICE`),
+  falling back to the CPU on any error. The `index` lane loads
   the model and encodes changed paragraphs every `REINDEX_INTERVAL_S` (default 5 s);
   until the model is loaded every scorer falls back to keyword overlap.
 - **Unified search** (`GET /api/unified-search`): FTS5 words, ColBERT meaning and note

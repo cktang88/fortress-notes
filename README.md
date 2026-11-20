@@ -219,7 +219,7 @@ relative to `backend/`. See [`backend/.env.example`](backend/.env.example).
 | `EMBEDDINGS_ENABLED` | `true` | ColBERT search and related notes (off: keyword matching) |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
 | `COLBERT_REVISION` | pinned commit | Commit of the model's Hugging Face repository (default: the one in `app/config.py` for the default model; see [docs/dependencies.md](docs/dependencies.md)) |
-| `EMBEDDINGS_PRECISION` | `auto` | `auto` (bfloat16 where the CPU supports it), `float32` or `bfloat16` |
+| `EMBEDDINGS_DEVICE` | `auto` | `auto` (MLX on the GPU on Apple Silicon when installed, else the CPU), `mlx` or `cpu` |
 | `EMBEDDINGS_THREADS` | `0` | Torch threads (0 = half the cores, at most 4) |
 | `REINDEX_INTERVAL_S` | `5` | How often changed paragraphs are re-encoded |
 | `VISION_ENABLED` | `true` | The backend's own OCR of pictures and PDFs |
