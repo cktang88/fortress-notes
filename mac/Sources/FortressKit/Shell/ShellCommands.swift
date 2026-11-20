@@ -58,11 +58,17 @@ public struct ShellCommands: Commands {
                 .disabled(model == nil)
             Divider()
             Button("Empty Trash…") {
-                model?.query = ""
-                model?.select(.trash)
-                model?.isEmptyTrashConfirmationShown = true
+                guard let model else { return }
+                model.query = ""
+                model.select(.trash)
+                // Asks only once the Trash is known to hold something (never "Permanently
+                // delete 0 notes?"); an empty Trash just shows "Trash Is Empty".
+                Task {
+                    await model.refreshTrash()
+                    if !model.trash.isEmpty { model.isEmptyTrashConfirmationShown = true }
+                }
             }
-            .disabled(model == nil || library.trash.isEmpty && model?.scope == .trash)
+            .disabled(model == nil || !library.isConnected || library.trash.isEmpty && model?.scope == .trash)
         }
 
         CommandGroup(after: .textEditing) {
