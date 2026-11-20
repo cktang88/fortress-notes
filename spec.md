@@ -112,10 +112,9 @@ with **422**.
   wikilink resolution across an import.
 - `block_legacy.py`, `block_migration.py` — the schema-14 migration of stored
   data in older block shapes (the API accepts canonical shapes only).
-- `documents.py` — note lifecycle (create/update/trash/restore/purge/capture/move-into)
+- `documents.py` — note lifecycle (create/update/trash/restore/purge/capture)
   and the Markdown mirror writer.
-- `workspace.py` — the Trash listing. `duplicates.py` — notes that repeat each other
-  (`/similar`, move-into). `backups.py` — snapshots and restore.
+- `workspace.py` — the Trash listing. `backups.py` — snapshots and restore.
 - `portability.py` — Markdown import (files, uploads, first-start import) and export.
 - `background.py` — the one owner of background work (lanes, below).
 - `corpus.py` — the incremental search corpus every search reader shares.
@@ -152,8 +151,7 @@ with **422**.
 | `POST` | `/api/block-documents/{id}/opened` | — | `204`; records `last_opened_at` (debounced, skipped while a writer is busy; not in the ETag) |
 | `POST` | `/api/block-documents/{id}/undo` · `/redo` | `{base_revision}` | document tree; header `X-Document-ETag` |
 | `GET` | `/api/block-documents/{id}/related` | `?k=5&block_id=` | `RelatedResult[]` |
-| `GET` | `/api/block-documents/{id}/backlinks` · `/similar` | — | backlinks · notes repeating this one |
-| `POST` | `/api/block-documents/{id}/move-into/{target_id}` | — | `{moved, document_id}` |
+| `GET` | `/api/block-documents/{id}/backlinks` | — | backlinks |
 | `GET` | `/api/block-link-targets` | `?q=&limit=` | link autocomplete |
 | `GET` | `/api/unified-search` | `?q=&limit=` + filters | ranked blocks (words, meaning, titles) |
 | `POST` | `/api/ask` | `{question}` (`Accept: application/x-ndjson` streams) | cited answer |
@@ -408,8 +406,8 @@ was created with). Provenance is never part of block text, FTS or embeddings.
   for a saved Ask answer), `CaptureRequest.provenance` (e.g. `source_url`), and
   `BlockOperation.provenance` on `insert` (default `{"source": "manual"}`) and
   `update` (omitted keeps it). Client input is validated (422/409) and cannot set the
-  server-maintained keys. Move-into (`POST …/move-into/{target_id}`) stamps
-  `origin.operation = "move_into"` on every moved block.
+  server-maintained keys. Blocks folded in by the former move-into keep
+  `origin.operation = "move_into"`.
 - **Markdown**: export and mirror front matter carry `fortress: {provenance: …}`
   (and `source:` for a `source_url`); a block whose provenance differs from the
   note's carries it in an invisible comment, e.g.

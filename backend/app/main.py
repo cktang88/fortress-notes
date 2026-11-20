@@ -25,7 +25,6 @@ from . import (
     embeddings,
     documents,
     document_service,
-    duplicates,
     http_cache,
     llm,
     media,
@@ -723,29 +722,6 @@ def capture(data: CaptureRequest):
         return documents.capture(data.text, data.provenance)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-
-
-@app.get("/api/block-documents/{document_id}/similar")
-def similar_documents(document_id: str):
-    """Other notes containing most of this note's distinctive words."""
-
-    try:
-        return duplicates.similar_documents(_db(), document_id)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-
-
-@app.post("/api/block-documents/{document_id}/move-into/{target_id}")
-def move_document_into(document_id: str, target_id: str):
-    """Append this note's paragraphs to another note and trash the emptied one."""
-
-    try:
-        moved = documents.move_into(document_id, target_id)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    return {"moved": moved, "document_id": target_id}
 
 
 # --- Trash ---------------------------------------------------------------------

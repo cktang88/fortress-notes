@@ -20,7 +20,7 @@ from pathlib import Path
 
 import frontmatter
 
-from . import background, block_store, duplicates, images, provenance, vault, workspace
+from . import background, block_store, images, provenance, vault, workspace
 from .config import get_settings
 from .models import NoteCreate, NoteSummary, NoteUpdate
 
@@ -110,7 +110,7 @@ def trash(document_id: str) -> None:
 def restore(document_id: str) -> dict[str, object]:
     db_path, _ = _paths()
     result = workspace.restore_document(db_path, document_id)
-    # A note emptied by move-into comes back with no blocks; give it one to type in.
+    # A note trashed with no blocks (emptied by the former move-into) gets one to type in.
     block_store.ensure_editable_block(db_path, document_id)
     return result
 
@@ -169,15 +169,6 @@ def _uncategorized_folder(db_path: Path) -> str:
             if item.get("kind") == "folder" and item.get("name") == UNCATEGORIZED:
                 return str(item["id"])
         return str(block_store.create_folder(db_path, UNCATEGORIZED, None, position=0)["id"])
-
-
-def move_into(source_id: str, target_id: str) -> int:
-    """Fold one note into another (keeping block IDs) and trash the emptied note."""
-
-    db_path, _ = _paths()
-    moved = duplicates.move_into(db_path, source_id, target_id)
-    trash(source_id)
-    return moved
 
 
 # --- Living documents --------------------------------------------------------

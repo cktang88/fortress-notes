@@ -212,7 +212,7 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
             let hasBlock = query.contains { $0.name == "block_id" }
             return encoded(hasBlock ? FindingFixtures.seenBefore : FindingFixtures.related)
         }
-        if path.contains("/api/block-documents/"), !path.hasSuffix("/similar") {
+        if path.contains("/api/block-documents/") {
             return (try? findingFixture("document.json")) ?? Data()
         }
         return Data("[]".utf8)

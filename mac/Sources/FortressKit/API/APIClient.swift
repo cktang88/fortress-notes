@@ -209,10 +209,6 @@ public struct APIClient: Sendable {
         try await get("api/block-documents/\(documentId)/backlinks")
     }
 
-    public func similar(documentId: String) async throws -> [SimilarDocument] {
-        try await get("api/block-documents/\(documentId)/similar", kind: .search)
-    }
-
     public func related(documentId: String, blockId: String? = nil, count: Int = 5) async throws -> [RelatedResult] {
         var query = ["k": "\(count)"]
         if let blockId { query["block_id"] = blockId }

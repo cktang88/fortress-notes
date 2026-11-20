@@ -7,7 +7,7 @@ and keeps the derived data in step: text, links, asset links and full-text
 search.
 
 Other modules that write documents with SQL of their own (sources, workspace,
-duplicates, migrations) use only the public names here, mostly
+migrations) use only the public names here, mostly
 :func:`document_write`. Everything that must follow a write follows from it:
 
 * derived rows (text, links, asset links, the FTS row) of the documents a

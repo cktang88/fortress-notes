@@ -129,24 +129,6 @@ class ProvenanceStoreTests(unittest.TestCase):
             {"source": "paste"},
         )
 
-
-    def test_move_into_keeps_each_blocks_source_and_records_the_old_note(self) -> None:
-        from app import duplicates
-
-        create_document(self.db, "captured", "Captured", "rough", "Thought", "t", "t",
-                        provenance={"source": "capture"})
-        create_document(self.db, "target", "Target", "rough", "Body", "t", "t")
-        duplicates.move_into(self.db, "captured", "target")
-        tree = document_tree(self.db, "target")
-        moved = tree["children"][1]
-        self.assertEqual(moved["provenance"]["source"], "capture")
-        self.assertNotIn("inherited", moved["provenance"])
-        self.assertEqual(moved["provenance"]["origin"]["operation"], "move_into")
-        self.assertEqual(moved["provenance"]["origin"]["document_id"], "captured")
-        self.assertEqual(moved["provenance"]["origin"]["document_title"], "Captured")
-        self.assertEqual(moved["revision"], tree["revision"])
-        self.assertEqual(tree["children"][0]["provenance"]["inherited"], True)
-
     def test_provenance_is_not_searchable_text(self) -> None:
         self.page([SourceBlock("Plain words", external_id="{A}")],
                   provenance={"source_path": "Zebraword › Section"})

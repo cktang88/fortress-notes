@@ -65,15 +65,6 @@ class EmptyDocumentTests(unittest.TestCase):
         ).json()
         self.open_and_type(result["imported"][0]["id"], "Typed after import")
 
-    def test_a_note_emptied_by_move_into_and_restored_can_be_typed_into(self) -> None:
-        source = self.client.post("/api/block-documents", json={"title": "Source", "body": "Moved away"}).json()
-        target = self.client.post("/api/block-documents", json={"title": "Target", "body": "Stays"}).json()
-        moved = self.client.post(f"/api/block-documents/{source['id']}/move-into/{target['id']}")
-        self.assertEqual(moved.status_code, 200, moved.text)
-        restored = self.client.post(f"/api/trash/{source['id']}/restore")
-        self.assertEqual(restored.status_code, 200, restored.text)
-        self.open_and_type(source["id"], "Fresh start")
-
     def test_older_empty_notes_get_their_paragraph_at_startup_not_on_read(self) -> None:
         from app import block_store, main
 
