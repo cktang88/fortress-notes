@@ -347,7 +347,11 @@ extension AppModel {
     }
 
     public func moveNote(id: String, toFolder folderId: String?) async {
-        let previous = NoteListing.allDocuments(in: navigation.items).first { $0.id == id }?.folderId
+        let note = NoteListing.allDocuments(in: navigation.items).first { $0.id == id }
+        let previous = note?.folderId
+        // Dropped back on its own folder: nothing to do (the server would stamp it as
+        // edited now and it would jump to the top of the list).
+        if note != nil, previous == folderId { return }
         do {
             try await api.moveDocument(id: id, folderId: folderId)
             if previous != folderId {

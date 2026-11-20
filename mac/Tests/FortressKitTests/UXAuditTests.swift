@@ -255,3 +255,14 @@ import Testing
     await model.trashNote(id: "n5")
     #expect(model.openNoteId == "n4")
 }
+
+@Test @MainActor func droppingANoteOnItsOwnFolderChangesNothing() async {
+    let stub = FindingStub { _ in FindingStub.Reply(body: Data("{}".utf8)) }
+    let model = AppModel(api: stub.api)
+    model.connectsOnAppear = false
+    model.navigation = ShellFixtures.navigation
+    let before = model.navigation
+    await model.moveNote(id: "n1", toFolder: "travel")  // already in Travel
+    #expect(stub.started.isEmpty)
+    #expect(model.navigation == before)
+}
