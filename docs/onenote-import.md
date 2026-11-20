@@ -178,7 +178,7 @@ is specified in [tools/fortress-onenote/SCHEMA.md](../tools/fortress-onenote/SCH
 usage and tests in [its README](../tools/fortress-onenote/README.md).
 
 ### Python side: `backend/app/onenote_import.py` + `POST /api/import/onenote` (upload zip/onepkg; job id; progress via polling)
-**Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, two-pass link rewrite) and the job API. Update (Nov 2026): blocks are keyed by OneNote object ids (ExGUIDs, stable across edits; `onenote_parser` 2.1 keeps them internal, so the converter reads them from `Parser::dump_onestore` and matches them to content — tools/fortress-onenote/SCHEMA.md "Object ids"), paragraph links become block references, pages deleted in OneNote are marked `source_removed`, jobs persist/cancel, and each page gets a text-coverage check.
+**Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, two-pass link rewrite) and the job API. Update (Nov 2026): blocks are keyed by OneNote object ids (ExGUIDs, stable across edits; the vendored `onenote_parser` exposes them — tools/fortress-onenote/SCHEMA.md "Object ids"), paragraph links become block references, pages deleted in OneNote are marked `source_removed`, jobs persist/cancel, and each page gets a text-coverage check.
 Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff against mapping table) → apply in one transaction per page (existing block transaction machinery) → second pass link rewrite → report.
 
 **Mapping** (as built; the authoritative list is spec.md §7b)
@@ -206,7 +206,7 @@ Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff a
 | Video iframes | paragraph with a link to the video |
 | Audio/video recordings | `file` block |
 | Ink | not imported: Fortress does not support ink or handwriting (decision, Nov 2026). The converter skips ink and counts it (`ink_skipped`, a warning per page) so nothing disappears silently |
-| Math | Fortress does not support math (same decision): a paragraph that is only an equation becomes a `code` block with its LaTeX (`language: "latex"`; its linear text when it can't be converted); inline equations become inline code `$<LaTeX>$` |
+| Math | Fortress does not support math (same decision): a paragraph that is only an equation becomes a `code` block with OneNote's plain linear text (`language: "text"`); inline equations stay plain text; each page with equations gets a report warning |
 | `onenote:` links | rewritten in a second pass: page links → `docLink`; paragraph links (`object-id`) → `blockRef` when the paragraph is found, else a page link; unresolved → plain text, URL in provenance, listed in the report |
 | "Pasted from <url>" | `source_url` in the note's provenance |
 
@@ -237,7 +237,7 @@ Keep raw geometry in each column's attrs (`onenote_x/y/w`) so we can re-run with
 5. **Page hierarchy / subpages** — partial: subpages sit next to their parent with a *Subpages* link list; nested notes are not built.
 6. **Image alt/OCR text + width** — done (OneNote's OCR text in `alt`, plus the app's own OCR: RapidOCR in the backend and Apple Vision in the Mac app).
 7. **Note tags** — kept as `attrs.onenote_tags` labels only; Fortress deliberately has no tags or tag views.
-8. **Math** — not supported, by decision: equations are kept as LaTeX code (stored math blocks were converted by schema 15).
+8. **Math** — not supported, by decision: equations are kept as their plain linear text (stored math blocks were converted by schema 15).
 9. **Ink** — not supported, by decision: skipped and counted in the report (images imported from ink earlier stay plain images).
 10. **Source URL on notes** — done (provenance `source_url`); folder colours and embedded video players are not built.
 

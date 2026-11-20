@@ -101,7 +101,7 @@ pub fn parse_onenote_link(href: &str) -> Option<OneNoteLink> {
         let after = &fragment[start + "object-id=".len() + v.len()..];
         let suffix = after.strip_prefix('&')?;
         let suffix = &suffix[..suffix.find('&').unwrap_or(suffix.len())];
-        crate::objectids::object_ref(&decode(v), Some(suffix))
+        object_ref(&decode(v), suffix)
     });
 
     let lower = fragment.to_ascii_lowercase();
@@ -133,9 +133,34 @@ pub fn parse_onenote_link(href: &str) -> Option<OneNoteLink> {
     })
 }
 
+/// Canonical object id (the form of block `object_id`, `{GUID}&<n as
+/// upper-case hex>`) from a link's `object-id={GUID}` value and the bare
+/// hexadecimal parameter that follows it (`&3C`).
+fn object_ref(guid: &str, suffix: &str) -> Option<String> {
+    let g = normalize_guid(guid)?;
+    let s = suffix.trim();
+    if s.is_empty() || s.len() > 8 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let n = u32::from_str_radix(s, 16).ok()?;
+    Some(format!("{g}&{n:X}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_object_ref_is_canonical() {
+        const G: &str = "072D2464-6721-4399-AD2D-12367E397AFD";
+        assert_eq!(
+            object_ref(&format!("{{{}}}", G.to_lowercase()), "01f").as_deref(),
+            Some(format!("{{{G}}}&1F").as_str())
+        );
+        assert_eq!(object_ref("{nope}", "1F"), None);
+        assert_eq!(object_ref(&format!("{{{G}}}"), "end"), None);
+        assert_eq!(object_ref(&format!("{{{G}}}"), ""), None);
+    }
 
     #[test]
     fn guid_normalisation() {

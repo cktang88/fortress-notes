@@ -159,8 +159,8 @@ def build_manifest() -> dict:
         {"type": "paragraph", "indent": 0, "text": "Standup notes"},
         {"type": "code", "indent": 0, "text": "print('hi')\nprint('there')"},
         {"type": "quote", "indent": 0, "variant": "quote", "text": "A wise quote"},
-        # An equation: the converter writes its LaTeX as a code block (Fortress has no math).
-        {"type": "code", "indent": 0, "text": "a=b", "language": "latex"},
+        # An equation: the converter writes its linear text as a code block (Fortress has no math).
+        {"type": "code", "indent": 0, "text": "a=b", "language": "text"},
         {"type": "file", "indent": 0, "asset": PDF_NAME, "filename": "Contract.pdf", "extension": "pdf",
          "mime": "application/pdf", "size": len(PDF), "data_status": "available", "media_kind": "other",
          "icon_asset": None},
@@ -421,7 +421,7 @@ class ImportManifestTests(_Base):
         self.assertNotIn("url", files[2]["attrs"])
         code, equation = (node for node in nodes if node["type"] == "code")
         self.assertEqual(code["text"], "print('hi')\nprint('there')")
-        self.assertEqual((equation["attrs"], equation["text"]), ({"language": "latex"}, "a=b"))
+        self.assertEqual((equation["attrs"], equation["text"]), ({"language": "text"}, "a=b"))
         self.assertTrue(any(node["type"] == "quote" for node in nodes))
         embed = next(node for node in nodes if "youtube" in node["text"])
         self.assertEqual(embed["content"][0]["type"], "link")
@@ -1343,8 +1343,8 @@ class CompareFindingsTests(_Base):
         # The colour is kept too (it used to be stripped from code runs).
         self.assertIn({"type": "text", "text": "ls -la", "marks": {"code": True, "color": "#C00000"}}, runs)
 
-    def test_inline_equations_arrive_as_latex_code(self) -> None:
-        # The converter writes an inline equation's LaTeX as code (Fortress has no math).
+    def test_inline_code_marks_arrive_as_code(self) -> None:
+        # Older converters (0.3.0) wrote an inline equation's LaTeX as `$…$` with a code mark.
         text = "Pythagoras: $a^{2}+b^{2}=c^{2}$ holds"
         start = text.index("$")
         tree = self.import_blocks([

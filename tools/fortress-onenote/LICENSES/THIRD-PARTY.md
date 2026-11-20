@@ -1,7 +1,7 @@
 # Third-party software in fortress-onenote
 
 The `fortress-onenote` source code (everything under `tools/fortress-onenote`
-except `src/math/`) is part of Fortress Notes and is covered by the Fortress
+except `vendor/`) is part of Fortress Notes and is covered by the Fortress
 Notes repository's terms.
 
 ## onenote_parser (MPL-2.0)
@@ -24,12 +24,6 @@ otherwise third-party.
 `cab` 0.6.0, <https://github.com/mdsteele/rust-cab>, Copyright Matthew D.
 Steele, MIT licence (`vendor/cab/LICENSE`); vendored with the fixes listed
 in `vendor/PATCHES.md`. Reads `.onepkg` packages (CAB archives).
-
-## one2html (MIT)
-
-`src/math/` (the OneNote equation parser and its LaTeX renderer) is
-adapted from one2html 2.0.1, <https://github.com/msiemens/one2html>,
-Copyright 2020 Markus Siemens, MIT licence: see `one2html-MIT.txt`.
 
 ## Other Rust crates
 

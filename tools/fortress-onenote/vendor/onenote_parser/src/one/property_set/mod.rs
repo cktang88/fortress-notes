@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P1).
+// Modified by fortress-onenote (vendor/PATCHES.md: P1, P10).
 //! The property sets describing OneNote objects we can parse.
 //!
 //! See [\[MS-ONE\] 2.1.13] for the list of properties the OneNote file format specifies.
@@ -26,9 +26,6 @@ pub(crate) mod embedded_file_node;
 pub(crate) mod embedded_ink_container;
 pub(crate) mod iframe_node;
 pub(crate) mod image_node;
-pub(crate) mod ink_container;
-pub(crate) mod ink_data_node;
-pub(crate) mod ink_stroke_node;
 pub(crate) mod math_inline_object;
 pub(crate) mod note_tag_container;
 pub(crate) mod note_tag_shared_definition_container;
@@ -42,11 +39,9 @@ pub(crate) mod page_node;
 pub(crate) mod page_series_node;
 pub(crate) mod paragraph_style_object;
 pub(crate) mod picture_container;
-pub(crate) mod recognized_text_node;
 pub(crate) mod rich_text_node;
 pub(crate) mod section_metadata_node;
 pub(crate) mod section_node;
-pub(crate) mod stroke_properties_node;
 pub(crate) mod table_cell_node;
 pub(crate) mod table_node;
 pub(crate) mod table_row_node;

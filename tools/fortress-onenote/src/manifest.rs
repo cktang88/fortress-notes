@@ -210,8 +210,6 @@ pub enum MarkKind {
     Strikethrough,
     Superscript,
     Subscript,
-    /// Inline code (an equation's LaTeX, `$…$`).
-    Code,
     Highlight {
         color: String,
     },
@@ -351,7 +349,7 @@ pub enum Block {
         #[serde(flatten)]
         common: BlockCommon,
         text: String,
-        /// `latex` for an equation (its LaTeX); none for code.
+        /// `text` for an equation (OneNote's linear form); none for code.
         #[serde(skip_serializing_if = "Option::is_none")]
         language: Option<String>,
     },

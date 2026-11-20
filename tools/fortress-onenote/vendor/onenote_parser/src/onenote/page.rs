@@ -1,11 +1,10 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P2, P7).
+// Modified by fortress-onenote (vendor/PATCHES.md: P2, P7, P10).
 use crate::contents::RichText;
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::layout_alignment::LayoutAlignment;
 use crate::one::property_set::{page_manifest_node, page_metadata, page_node, title_node};
 use crate::onenote::{ParserContext, skip_damaged};
-use crate::onenote::ink_recognition::{InkRecognition, parse_ink_recognition};
 use crate::onenote::outline::{Outline, parse_outline};
 use crate::onenote::page_content::{PageContent, parse_page_content};
 use crate::onestore::ObjectSpace;
@@ -28,7 +27,6 @@ pub struct Page {
     author: Option<String>,
     height: Option<f32>,
     contents: Vec<PageContent>,
-    ink_recognition: Option<InkRecognition>,
 }
 
 impl Page {
@@ -84,14 +82,6 @@ impl Page {
     /// The page contents.
     pub fn contents(&self) -> &[PageContent] {
         &self.contents
-    }
-
-    /// The page's handwriting recognition (OCR) result, if present.
-    ///
-    /// Returns `Some` only when the page's ink has been recognized by OneNote
-    /// for Windows; pages without recognized handwriting return `None`.
-    pub fn ink_recognition(&self) -> Option<&InkRecognition> {
-        self.ink_recognition.as_ref()
     }
 
     /// The page's title text.
@@ -193,23 +183,12 @@ pub(crate) fn parse_page(
             .unwrap_or_else(|| "<Unknown title>".to_owned()),
     ));
 
-    // Parse recognition before content: it populates `ctx.recognized_words`,
-    // which `parse_page_content` reads to attach each stroke's word.
-    let ink_recognition = match data.recognized_text {
-        Some(root_id) => {
-            let rec = parse_ink_recognition(root_id, page_space, ctx);
-            skip_damaged(ctx, "handwriting recognition", rec)?.flatten()
-        }
-        None => None,
-    };
-
+    // PATCH(fortress-onenote, P10): handwriting recognition is not parsed.
     let mut contents: Vec<PageContent> = Vec::new();
     for content_id in data.content {
         let content = parse_page_content(content_id, page_space, ctx);
         contents.extend(skip_damaged(ctx, "page element", content)?);
     }
-
-    ctx.recognized_words.clear();
 
     let link_target_id = format!("{}", metadata.entity_guid);
 
@@ -240,7 +219,6 @@ pub(crate) fn parse_page(
         author: data.author.map(|author| author.into_value()),
         height: data.page_height,
         contents,
-        ink_recognition,
     })
 }
 

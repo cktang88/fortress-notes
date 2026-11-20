@@ -5,11 +5,10 @@ use crate::input::{self, NotebookSource};
 use crate::layout::{self, LBox};
 use crate::links::normalize_guid;
 use crate::manifest::*;
-use crate::objectids::{Ids, PageIds, SectionIds};
 use crate::richtext::{self, color_hex};
 use onenote_parser::Parser;
 use onenote_parser::contents::{
-    Content, EmbeddedFile, EmbeddedObject, FileDataStatus, Image, List, NoteTag, Outline,
+    Content, EmbeddedFile, EmbeddedObject, ExGuid, FileDataStatus, Image, List, NoteTag, Outline,
     OutlineElement, OutlineItem, RichText, Table,
 };
 use onenote_parser::page::{Page as OnePage, PageContent};
@@ -18,7 +17,7 @@ use onenote_parser::property::embedded_file::FileType;
 use onenote_parser::property::rich_text::ParagraphAlignment;
 use onenote_parser::section::Section as OneSection;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 use typed_path::TypedPath;
@@ -90,20 +89,42 @@ struct PageCtx<'a, 'b> {
     page_title: String,
     section_path: Vec<String>,
     source_url: Option<String>,
-    /// Object ids of this page, when the section file could be indexed.
-    ids: Option<PageIds>,
+    /// Object ids already given to a block of this page (ids are unique per page).
+    used_ids: HashSet<String>,
+    /// The outline element (paragraph) whose contents are being converted.
+    element: Option<String>,
     /// Ink drawings on this page, not converted (Fortress has no ink).
     ink_skipped: usize,
+    /// Equations on this page, imported as their linear text (Fortress has no math).
+    equations: usize,
 }
 
-fn set_ids(common: &mut BlockCommon, ids: Ids) {
-    common.object_id = ids.object_id;
-    common.element_id = ids.element_id;
+/// Canonical object id, the shape OneNote uses in `object-id={GUID}&N`
+/// links: `{GUID}&<n as upper-case hex>`.
+fn canonical_id(id: ExGuid) -> String {
+    format!("{}&{:X}", id.guid, id.value)
+}
+
+/// Object ids of one piece of content.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Ids {
+    /// The content node (rich text, table, image, file).
+    object_id: Option<String>,
+    /// The outline element (paragraph) containing it; what paragraph links name.
+    element_id: Option<String>,
 }
 
 impl PageCtx<'_, '_> {
-    fn ids_with(&mut self, f: impl FnOnce(&mut PageIds) -> Ids) -> Ids {
-        self.ids.as_mut().map(f).unwrap_or_default()
+    /// Ids of a content node; none if the node was already converted on this page.
+    fn ids(&mut self, id: ExGuid) -> Ids {
+        let object_id = canonical_id(id);
+        if !self.used_ids.insert(object_id.clone()) {
+            return Ids::default();
+        }
+        Ids {
+            object_id: Some(object_id),
+            element_id: self.element.clone(),
+        }
     }
 
     fn warn(&mut self, message: String) {
@@ -183,6 +204,7 @@ impl PageCtx<'_, '_> {
     }
 
     fn element(&mut self, el: &OutlineElement, indent: u32, out: &mut Vec<Block>) {
+        let outer = self.element.replace(canonical_id(el.id()));
         let list = el.list_contents().first();
         let mut list_used = false;
         for content in el.contents() {
@@ -205,6 +227,7 @@ impl PageCtx<'_, '_> {
                 Content::Unknown => self.warn("unsupported content element skipped".into()),
             }
         }
+        self.element = outer;
         if !el.children().is_empty() {
             let step = (el.child_level() as u32).clamp(1, 8);
             self.outline_items(el.children(), indent + step, out);
@@ -213,7 +236,7 @@ impl PageCtx<'_, '_> {
 
     fn rich_text(&mut self, rt: &RichText, list: Option<&List>, indent: u32, out: &mut Vec<Block>) {
         let tags = self.tags(rt.note_tags());
-        let ids = self.ids_with(|p| p.rich_text(rt.text()));
+        let ids = self.ids(rt.id());
 
         // Handwriting embedded in the paragraph is not converted.
         let inline_ink = rt
@@ -248,6 +271,7 @@ impl PageCtx<'_, '_> {
             c.links_web += conv.links_web;
             c.links_onenote += conv.links_onenote;
         }
+        self.equations += conv.equations;
         for n in &conv.notes {
             self.warn(n.clone());
         }
@@ -272,16 +296,13 @@ impl PageCtx<'_, '_> {
         let list_info = list.map(list_info);
         let check = common.tags.iter().find(|t| t.checkable).cloned();
 
-        if is_display_equation(conv.all_math, list_info.is_some(), check.is_some())
-            && let Some((text, latex)) = conv.equation
-        {
-            // Fortress has no math blocks: the equation's LaTeX (or, when it could
-            // not be converted, its linear text) becomes a code block.
-            let language = latex.is_some().then(|| "latex".to_string());
+        if is_display_equation(conv.all_math, list_info.is_some(), check.is_some()) {
+            // Fortress has no math blocks: the equation's linear text becomes a
+            // code block (language `text`, so it is not merged with code around it).
             out.push(Block::Code {
                 common,
-                text: latex.unwrap_or(text),
-                language,
+                text: rich.text,
+                language: Some("text".to_string()),
             });
             return;
         }
@@ -343,7 +364,7 @@ impl PageCtx<'_, '_> {
     fn table(&mut self, t: &Table, indent: u32) -> Block {
         let tags = self.tags(t.note_tags());
         let (row_count, col_count) = (t.rows(), t.cols());
-        let ids = self.ids_with(|p| p.table(row_count, col_count));
+        let ids = self.ids(t.id());
         let rows = t
             .contents()
             .iter()
@@ -383,7 +404,7 @@ impl PageCtx<'_, '_> {
 
     fn image(&mut self, img: &Image, indent: u32, out: &mut Vec<Block>) {
         let tags = self.tags(img.note_tags());
-        let ids = self.ids_with(|p| p.image(img.alt_text(), img.image_filename()));
+        let ids = self.ids(img.id());
         let status = img.data_status();
         let original = img.image_filename().map(assets::display_name);
         let mut asset = None;
@@ -477,7 +498,8 @@ impl PageCtx<'_, '_> {
                 self.nb.report.counts.embeds += 1;
                 let mut common = common.clone();
                 if i > 0 {
-                    set_ids(&mut common, Ids::default());
+                    common.object_id = None;
+                    common.element_id = None;
                 }
                 out.push(Block::Embed {
                     common,
@@ -509,7 +531,7 @@ impl PageCtx<'_, '_> {
 
     fn file(&mut self, f: &EmbeddedFile, indent: u32) -> Block {
         let tags = self.tags(f.note_tags());
-        let ids = self.ids_with(|p| p.file(f.filename()));
+        let ids = self.ids(f.id());
         let filename = assets::display_name(f.filename());
         let ext = assets::ext_of_name(f.filename());
         let status = f.data_status();
@@ -804,7 +826,6 @@ fn convert_page(
     page: &OnePage,
     order: usize,
     section_path: &[String],
-    section_ids: Option<&mut SectionIds>,
 ) -> Page {
     let id = page.link_target_id().to_string();
     let raw_title = page
@@ -824,8 +845,10 @@ fn convert_page(
         page_title: raw_title.clone().unwrap_or_default(),
         section_path: section_path.to_vec(),
         source_url: None,
-        ids: section_ids.and_then(|s| s.page(&id)),
+        used_ids: HashSet::new(),
+        element: None,
         ink_skipped: 0,
+        equations: 0,
     };
 
     let mut items: Vec<Item> = Vec::new();
@@ -892,6 +915,12 @@ fn convert_page(
         let n = ctx.ink_skipped;
         ctx.warn(format!(
             "{n} ink drawing(s) not imported (Fortress does not support ink)"
+        ));
+    }
+    if ctx.equations > 0 {
+        let n = ctx.equations;
+        ctx.warn(format!(
+            "{n} equation(s) imported as plain linear text (Fortress does not support math)"
         ));
     }
     let page_source_url = ctx.source_url.take();
@@ -1013,7 +1042,6 @@ fn convert_section(
     file_identity: Option<String>,
     rel_file: Option<&str>,
     in_toc: bool,
-    mut ids: Option<SectionIds>,
 ) -> Section {
     let mut path = parent_path.to_vec();
     path.push(s.display_name().to_string());
@@ -1021,7 +1049,7 @@ fn convert_section(
     for series in s.page_series() {
         for p in series.pages() {
             let order = pages.len();
-            pages.push(convert_page(nb, p, order, &path, ids.as_mut()));
+            pages.push(convert_page(nb, p, order, &path));
         }
     }
     // Subpage parents.
@@ -1308,17 +1336,12 @@ fn guard<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, Stri
     })
 }
 
-fn parse_section_file(
-    parser: &Parser,
-    f: &Path,
-) -> Result<(OneSection, Option<SectionIds>), String> {
-    let section = guard("section", || {
+fn parse_section_file(parser: &Parser, f: &Path) -> Result<OneSection, String> {
+    guard("section", || {
         parser
             .parse_section(TypedPath::derive(&typed(f)))
             .map_err(|e| e.to_string())
-    })?;
-    let ids = guard("section", || Ok(SectionIds::from_file(parser, f))).unwrap_or(None);
-    Ok((section, ids))
+    })
 }
 
 /// A section parsed from a file on disk, waiting to be placed in the tree.
@@ -1649,14 +1672,13 @@ pub fn convert_notebook(
             for f in sections {
                 let frel = input_root.rel(f);
                 match parse_section_file(&parser, f) {
-                    Ok((s, ids)) => children.push(Entry::Section(convert_section(
+                    Ok(s) => children.push(Entry::Section(convert_section(
                         &mut nb,
                         &s,
                         &base,
                         None,
                         Some(&frel),
                         false,
-                        ids,
                     ))),
                     Err(e) => nb.report.failed_sections.push(failed(
                         {
@@ -1774,17 +1796,10 @@ pub fn convert_notebook(
                         .map(|c| c.as_os_str().to_string_lossy().into_owned()),
                 );
                 match parse_section_file(&parser, &f) {
-                    Ok((s, ids)) => {
+                    Ok(s) => {
                         let ident = s.file_identity().to_string();
-                        let sec = convert_section(
-                            &mut nb,
-                            &s,
-                            &parent,
-                            Some(ident),
-                            Some(&frel),
-                            true,
-                            ids,
-                        );
+                        let sec =
+                            convert_section(&mut nb, &s, &parent, Some(ident), Some(&frel), true);
                         parsed.insert(f, Parsed { dir, section: sec });
                     }
                     Err(e) => {
@@ -2010,7 +2025,7 @@ pub fn dedupe_ids(nbs: &mut [Notebook]) {
     }
 }
 
-/// Whether a paragraph becomes a LaTeX code block. An equation alone in a list item
+/// Whether a paragraph becomes an equation code block. An equation alone in a list item
 /// or to-do stays a list item (with its LaTeX as inline code), so the bullet / box survives.
 fn is_display_equation(all_math: bool, in_list: bool, checkable: bool) -> bool {
     all_math && !in_list && !checkable
@@ -2111,13 +2126,13 @@ mod tests {
         merge_code(&mut blocks);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].plain_text(), "a\nb");
-        // An equation (LaTeX) is never merged into the code around it.
-        let latex = Block::Code {
+        // An equation (language `text`) is never merged into the code around it.
+        let equation = Block::Code {
             common: BlockCommon::default(),
             text: "x^2".into(),
-            language: Some("latex".into()),
+            language: Some("text".into()),
         };
-        let mut blocks = vec![code("a", 0), latex, code("b", 0)];
+        let mut blocks = vec![code("a", 0), equation, code("b", 0)];
         merge_code(&mut blocks);
         assert_eq!(blocks.len(), 3);
     }

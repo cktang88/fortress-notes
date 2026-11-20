@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P10).
 use crate::errors::{ErrorKind, Result};
 use crate::one::property::PropertyType;
 use crate::onestore::Object;
@@ -108,19 +109,6 @@ pub(crate) fn parse_vec_u32(prop_type: PropertyType, object: &Object) -> Result<
     let vec = data
         .chunks_exact(4)
         .map(|v| u32::from_le_bytes([v[0], v[1], v[2], v[3]]))
-        .collect();
-
-    Ok(Some(vec))
-}
-
-pub(crate) fn parse_vec_i32(prop_type: PropertyType, object: &Object) -> Result<Option<Vec<i32>>> {
-    let Some(data) = parse_vec(prop_type, object)? else {
-        return Ok(None);
-    };
-
-    let vec = data
-        .chunks_exact(4)
-        .map(|v| i32::from_le_bytes([v[0], v[1], v[2], v[3]]))
         .collect();
 
     Ok(Some(vec))

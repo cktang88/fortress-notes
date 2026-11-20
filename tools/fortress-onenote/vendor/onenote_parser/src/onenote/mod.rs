@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P3, P7).
+// Modified by fortress-onenote (vendor/PATCHES.md: P3, P7, P10).
 #![deny(clippy::disallowed_macros)]
 
 use crate::FileSystem;
@@ -7,10 +7,8 @@ use crate::fs::FileSource;
 use crate::fs::file_source::BytesSource;
 #[cfg(feature = "native-fs")]
 use crate::fs::native_fs::NativeFs;
-use crate::fsshttpb::data::exguid::ExGuid;
 use crate::fsshttpb::packaging::{OneStorePackaging, embedded_packaging_offset};
 use crate::onenote::file_identity::FileIdentity;
-use crate::onenote::ink_recognition::InkRecognizedWord;
 use crate::onenote::notebook::{Notebook, TableOfContents};
 use crate::onenote::section::{Section, SectionEntry, SectionGroup};
 use crate::onestore::desktop::one_store_file::RevisionStore;
@@ -21,7 +19,6 @@ use crate::reader::Reader;
 use crate::shared::guid::Guid;
 use crate::warn::Report;
 use bytes::Bytes;
-use std::collections::HashMap;
 use std::sync::Arc;
 use typed_path::{
     PathType, TypedComponent, TypedPath, TypedPathBuf, UnixComponent, WindowsComponent,
@@ -34,7 +31,6 @@ pub(crate) mod file_identity;
 pub(crate) mod iframe;
 pub(crate) mod image;
 pub(crate) mod ink;
-pub(crate) mod ink_recognition;
 pub(crate) mod list;
 pub(crate) mod math_inline_object;
 pub(crate) mod note_tag;
@@ -51,14 +47,6 @@ pub(crate) mod table;
 pub(crate) struct ParserContext {
     pub(crate) page: Option<(Uuid, String)>,
     pub(crate) report: Report,
-
-    /// Maps an ink stroke's `ExGuid` to the handwriting-recognition word it
-    /// belongs to, for the page currently being parsed.
-    ///
-    /// Populated from the recognition tree before the page's content is walked
-    /// and consumed when ink strokes are parsed, filling
-    /// [`InkStroke::recognized_word`](ink::InkStroke::recognized_word).
-    pub(crate) recognized_words: HashMap<ExGuid, InkRecognizedWord>,
 }
 
 /// PATCH(fortress-onenote, P7): keep the result of parsing one child object
