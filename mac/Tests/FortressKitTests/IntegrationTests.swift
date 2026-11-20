@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -169,6 +170,93 @@ struct IntegrationTests {
         blocks[blocks.count - 1].origin = nil
         try await save()
         try await api.trashDocument(id: document.id)
+    }
+
+    /// Undo and redo save what the editor shows (UNDO_AUDIT.md): a note edited through
+    /// the real editor (typing, a paste of several paragraphs, Return, a list by Markdown
+    /// shortcut, a table with a cell typed in and a row added, bold, a block moved), each
+    /// step saved by the session's diff; then undone step by step to the start and redone
+    /// to the end, saving after each. The server's note reads back as exactly what is
+    /// shown every time, block ids included.
+    @Test func undoAndRedoSaveWhatTheEditorShows() async throws {
+        let api = client(APIStore.Options())
+        let created = try await api.createDocument(title: "Undo round trip")
+        let session = EditorSession(documentId: created.id, api: api)
+        session.persistsPendingEdits = false
+        session.saveDelay = .milliseconds(1)
+        await session.load()
+        let harness = UndoHarness([])
+        let controller = harness.controller
+        controller.load(session.initialBlocks)
+        session.resetBase(to: controller.currentBlocks())
+        session.currentBlocks = { controller.currentBlocks() }
+        controller.onChange = { session.textDidChange() }
+        harness.window.makeFirstResponder(controller.textView)
+
+        var checks = 0
+        func saveAndCompare(_ label: String) async throws {
+            for _ in 0..<100 {
+                await session.flush()
+                if !session.hasUnsavedChanges { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(session.saveState == .saved, "\(label): \(session.saveState)")
+            let server = try await api.reloadDocument(id: created.id)
+            let stored = BlockCodec.flatten(server.children, resolved: server.resolvedLinks)
+            let shown = controller.currentBlocks()
+            let missing = BlockDiff.operations(from: SyncedTree(stored), to: shown).operations
+            #expect(missing.isEmpty, "\(label): the server lacks \(missing.map { "\($0.operation) \($0.type ?? "") \($0.blockId ?? "")" })")
+            #expect(stored.map(\.id) == shown.map(\.id), "\(label): block ids")
+            checks += 1
+        }
+
+        try await saveAndCompare("opened")
+        let start = controller.currentBlocks()
+        var steps = 0
+        func edit(_ label: String, _ body: () -> Void) async throws {
+            body()
+            steps += 1
+            try await saveAndCompare(label)
+        }
+        try await edit("typing") { harness.type("Hello world") }
+        try await edit("paste") { harness.paste(" one\ntwo\nthree") }
+        try await edit("return") { harness.command(#selector(NSResponder.insertNewline(_:))) }
+        try await edit("list shortcut") { harness.type("- ") }
+        steps += 1  // "- " typed, then the list item: two steps
+        try await edit("typing in the list") { harness.type("item") }
+        try await edit("insert table") { harness.send("fortressInsertTable:") }
+        let table = try #require(harness.live(TableBlockController.self))
+        if !(harness.window.firstResponder is CellTextView) {
+            harness.layout()
+            table.focus(row: 0, column: 0, atEnd: false)
+            settleRunLoop()
+        }
+        #expect(harness.window.firstResponder is CellTextView)
+        try await edit("typing in a cell") { harness.type("cell") }
+        try await edit("insert row") { table.insertRowBelow(nil); settleRunLoop() }
+        try await edit("bold") {
+            harness.select(NSRange(location: 0, length: 5))
+            harness.send("fortressToggleBold:")
+        }
+        try await edit("move") {
+            harness.select(NSRange(location: 1, length: 0))
+            harness.send("fortressMoveBlockDown:")
+        }
+        let final = controller.currentBlocks()
+
+        for index in 0..<steps {
+            harness.undo()
+            try await saveAndCompare("undo \(index + 1)")
+        }
+        #expect(controller.currentBlocks() == start, "undone to the start")
+        #expect(!(controller.textView.undoManager?.canUndo ?? true))
+        for index in 0..<steps {
+            harness.redo()
+            try await saveAndCompare("redo \(index + 1)")
+        }
+        #expect(controller.currentBlocks() == final, "redone to the end")
+        print("[undo] \(steps) steps undone and redone, \(checks) saves compared with the server")
+        try await api.trashDocument(id: created.id)
     }
 
     /// Rename then reopen: the save's answer is the note, so reopening is free.

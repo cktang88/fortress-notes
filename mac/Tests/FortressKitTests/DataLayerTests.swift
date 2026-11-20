@@ -508,7 +508,7 @@ final class Counter: Sendable {
 /// and the snapshot suites can keep the main actor busy for over 10 s on CI.
 @MainActor
 func waitUntil(_ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(60)
+    let deadline = ContinuousClock.now + .seconds(180)  // A hang guard: the main actor is shared with every suite.
     while !condition() {
         try #require(ContinuousClock.now < deadline, "timed out waiting")
         try await Task.sleep(for: .milliseconds(5))

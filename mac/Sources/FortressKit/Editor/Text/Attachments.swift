@@ -32,6 +32,8 @@ final class AttachmentContext {
     @ObservationIgnored var leaveAttachment: ((BlockAttachment, _ forward: Bool) -> Void)?
     /// Sets up the editor of a column like the editor that holds it.
     @ObservationIgnored var configureNested: ((BlockEditorController) -> Void)?
+    /// The note's undo stack (the note's text, its columns and tables register here).
+    @ObservationIgnored weak var undoManager: UndoManager?
 
     init(baseURL: URL) {
         self.baseURL = baseURL

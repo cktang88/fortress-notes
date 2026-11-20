@@ -160,7 +160,7 @@ private func nodes(_ block: EditorBlock) -> Int { block.runs.filter { $0.node !=
         // Undo while the cell is being edited.
         cell.insertText(" x", replacementRange: cell.selectedRange())
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        let manager = cell.undoManager
+        let manager = cell.noteStack  // ⌘Z in the cell: the note's stack
         let canUndo = manager?.canUndo ?? false
         manager?.undo()
         #expect(live.table.cell(row: 0, column: 0)?.plainText == "R0C0",

@@ -285,7 +285,7 @@ private func startStandIn(_ backend: BackendController, folder: URL, trapTerm: B
     #expect(backend.serverURL.absoluteString == "http://127.0.0.1:1")
     #expect(!backend.accepts(instance: "someone-else") && backend.accepts(instance: BackendAuth.instanceID))
     // Generous: on CI the snapshot suites can keep the main actor busy for many seconds.
-    let deadline = Date().addingTimeInterval(60)
+    let deadline = Date().addingTimeInterval(180)
     var child: pid_t?
     while child == nil, Date() < deadline {
         child = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }

@@ -43,6 +43,12 @@ struct NoteEditorView: View {
         .foregroundStyle(.themeText)
         .task(id: documentId) {
             guard session?.document == nil else { return }
+            if self.session == nil, let kept = model.noteEditors.session(for: documentId) {
+                // Back to a note opened earlier in this window: its editor and undo history.
+                self.session = kept
+                await kept.refreshIfChangedElsewhere()
+                return
+            }
             let session = self.session ?? EditorSession(documentId: documentId, api: model.api)
             self.session = session
             await session.load(debounce: .milliseconds(40))
@@ -109,14 +115,22 @@ struct BlockTextEditor: NSViewRepresentable {
 
     final class Coordinator {
         let controller: BlockEditorController
+        /// The editor was kept from an earlier visit (its text and undo stack as they were).
+        let isKept: Bool
         var documentId = ""
         var focusedRequest: String?
         var focusRequest = 0
-        init(controller: BlockEditorController) { self.controller = controller }
+        init(controller: BlockEditorController, isKept: Bool) {
+            self.controller = controller
+            self.isKept = isKept
+        }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(controller: BlockEditorController(baseURL: session.api.baseURL))
+        if let kept = model.noteEditors.controller(for: session) {
+            return Coordinator(controller: kept, isKept: true)
+        }
+        return Coordinator(controller: BlockEditorController(baseURL: session.api.baseURL), isKept: false)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -134,15 +148,22 @@ struct BlockTextEditor: NSViewRepresentable {
 
         context.coordinator.focusRequest = focusRequest
         context.coordinator.documentId = session.documentId
+        controller.host = context.coordinator
         // Pictures come through the media cache's session (disk URL cache, one download per URL).
         controller.context.session = MediaCache.shared.session
         controller.context.adoptResolvedLinks(session.document?.resolvedLinks)
-        controller.load(session.initialBlocks)
-        session.resetBase(to: controller.currentBlocks())
+        if !context.coordinator.isKept {
+            controller.load(session.initialBlocks)
+            session.resetBase(to: controller.currentBlocks())
+        }
         session.currentBlocks = { controller.currentBlocks() }
+        session.undoManager = controller.context.undoManager
+        let editors = model.noteEditors
+        editors.keep(session, controller)
         session.showBlocks = { blocks in
             controller.context.adoptResolvedLinks(session.document?.resolvedLinks)
             controller.load(blocks)
+            editors.keep(session, controller)
         }
         session.onDocumentChange = { document in model.noteDidChange(document) }
         session.onSaveError = { error in model.report(error) }
@@ -199,6 +220,8 @@ struct BlockTextEditor: NSViewRepresentable {
         if let anchor = coordinator.controller.selectionAnchor() {
             EditorSelectionMemory.anchors[coordinator.documentId] = anchor
         }
+        // A kept editor may already be shown again by a newer view: leave it wired.
+        guard coordinator.controller.host === coordinator else { return }
         coordinator.controller.onChange = nil
         coordinator.controller.onFocusBlock = nil
     }

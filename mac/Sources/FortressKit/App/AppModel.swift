@@ -39,6 +39,9 @@ public final class AppModel {
     @ObservationIgnored public weak var undoManager: UndoManager?
     /// Above zero while an undo or redo runs (its work must not register again).
     @ObservationIgnored var undoSuppression = 0
+    /// The notes this window opened lately, editor and all, so each keeps its undo
+    /// history when the window shows another note and comes back.
+    @ObservationIgnored let noteEditors = NoteEditorCache()
 
     public var scope: LibraryScope = .all
     public var route: Route = .empty {

@@ -37,6 +37,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     var onLeave: ((Bool) -> Void)?
     /// A column's editor inside a columns block, not the note's own text.
     let isEmbedded: Bool
+    /// The view showing this editor now (an editor kept for a note outlives its views).
+    weak var host: AnyObject?
 
     private var isNormalizing = false
     private var isLoading = false
@@ -67,6 +69,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         scrollView.backgroundColor = .themeBackground
         scrollView.contentView.postsBoundsChangedNotifications = false
         textView.controller = self
+        // The note's stack; a column's editor gets its note's (`configure(nested:)`).
+        if !embedded { context.undoManager = textView.noteUndo }
         textView.delegate = self
         textView.textStorage?.delegate = self
         textView.textLayoutManager?.delegate = fragments
@@ -105,6 +109,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         child.context.referenceText = context.referenceText
         child.context.documentTitles = context.documentTitles
         child.context.session = context.session
+        child.context.undoManager = context.undoManager
     }
 
     // MARK: Tables and columns
@@ -134,6 +139,10 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// Esc, Tab or an arrow at the edge of a table or columns: the caret goes to the
     /// text after (or before) the block, making an empty paragraph if there is none.
     private func leave(_ attachment: BlockAttachment, forward: Bool) {
+        undoStep(UndoNames.typing) { leaveUnnamed(attachment, forward: forward) }
+    }
+
+    private func leaveUnnamed(_ attachment: BlockAttachment, forward: Bool) {
         guard let range = range(of: attachment) else { return }
         let paragraph = paragraph(at: range.location)
         textView.window?.makeFirstResponder(textView)
@@ -159,13 +168,22 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     /// Inserts an empty 3 × 3 table (with a header row) after the current block.
     func insertTable() {
+        undoStep(UndoNames.insertTable) { insertTableUnnamed() }
+    }
+
+    private func insertTableUnnamed() {
         let at = NSMaxRange(paragraph(at: textView.selectedRange().location))
         let depth = info(at: textView.selectedRange().location).depth
         let table = DocumentText.paragraph(EditorBlock(kind: .table, depth: depth, table: .blank()), context: context)
         replace(NSRange(location: min(at, string.length), length: 0), with: table,
                 selecting: NSRange(location: min(at, string.length), length: 0))
         if let attachment = storage.attribute(.attachment, at: min(at, storage.length - 1), effectiveRange: nil) as? BlockAttachment {
-            Self.later { [weak attachment] in attachment?.live?.focus(atEnd: false) }
+            Self.later { [weak self, weak attachment] in
+                // The table's view is in the text once it is laid out; then its first cell
+                // can take the caret.
+                self?.textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+                attachment?.live?.focus(atEnd: false)
+            }
         }
     }
 
@@ -212,7 +230,10 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         dirtyBlocks.removeAll()
         dirtyInfos.removeAll()
         pendingBlocks = headCount < all.count ? all[headCount...].map { Self.readBack($0, context: context) } : []
-        textView.undoManager?.removeAllActions()
+        // The old text's undo steps don't apply to the new text. (A column's editor
+        // loads its column once, into the note's stack: that must stay.)
+        textView.breakUndoCoalescing()
+        if !isEmbedded { textView.undoManager?.removeAllActions() }
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         syncTypingAttributes()
         if !pendingBlocks.isEmpty {
@@ -748,13 +769,59 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     private var isApplyingEdit = false
 
+    /// The undo step the editor's own edits are part of (see `undoStep`).
+    private struct UndoStep {
+        let name: String
+        var changed = false
+    }
+    private var currentStep: UndoStep?
+
+    /// Runs `body` (one command: Return, a Markdown shortcut, Bold, Move…) as one undo
+    /// step named `name`: what it changes is its own step on the note's stack, never
+    /// merged into the typing before or after it (as NSTextView does for Paste). A
+    /// command that changes nothing (Backspace in the middle of a line, left to
+    /// NSTextView) doesn't interrupt the typing step. Nested steps join the outer one.
+    @discardableResult
+    func undoStep<T>(_ name: String, _ body: () -> T) -> T {
+        guard currentStep == nil else { return body() }
+        currentStep = UndoStep(name: name)
+        defer {
+            if currentStep?.changed == true { textView.breakUndoCoalescing() }
+            currentStep = nil
+        }
+        return body()
+    }
+
+    /// Names the current step after what the command turned out to do (Return that
+    /// makes a code block is "Code Block", not typing).
+    private func renameStep(_ name: String) {
+        guard let step = currentStep else { return }
+        currentStep = UndoStep(name: name, changed: step.changed)
+    }
+
+    /// Before an edit of the current step: the typing in progress ends first.
+    private func stepWillChange() {
+        guard let step = currentStep, !step.changed else { return }
+        textView.breakUndoCoalescing()
+        currentStep?.changed = true
+    }
+
+    /// After an edit of the current step: the step's name on the stack.
+    private func stepDidChange() {
+        guard let name = currentStep?.name, let undoManager = textView.undoManager,
+              !undoManager.isUndoing, !undoManager.isRedoing else { return }
+        undoManager.setActionName(name)
+    }
+
     /// Replaces text through the text view so it is one undo step and the session sees it.
     func replace(_ range: NSRange, with replacement: NSAttributedString, selecting selection: NSRange? = nil) {
         isApplyingEdit = true
         defer { isApplyingEdit = false }
+        stepWillChange()
         guard textView.shouldChangeText(in: range, replacementString: replacement.string) else { return }
         storage.replaceCharacters(in: range, with: replacement)
         textView.didChangeText()
+        stepDidChange()
         if let selection { textView.setSelectedRange(selection) }
     }
 
@@ -762,11 +829,13 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     private func changeAttributes(in range: NSRange, _ body: (NSTextStorage) -> Void) {
         isApplyingEdit = true
         defer { isApplyingEdit = false }
+        stepWillChange()
         guard textView.shouldChangeText(in: range, replacementString: nil) else { return }
         storage.beginEditing()
         body(storage)
         storage.endEditing()
         textView.didChangeText()
+        stepDidChange()
     }
 
     /// Gives paragraphs new block infos (kind, depth, checked) as one undo step.
@@ -821,6 +890,35 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                 let context = context
                 InlineNodes.separateCopies(in: storage, range: editedRange) { DocumentText.label(of: $0, context: context) }
             }
+        }
+    }
+
+    nonisolated func textStorage(
+        _ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+        range editedRange: NSRange, changeInLength delta: Int
+    ) {
+        MainActor.assumeIsolated {
+            guard !isLoading, let undoManager = textView.undoManager, undoManager.isUndoing || undoManager.isRedoing else { return }
+            undoDidEdit(at: editedRange.location)
+        }
+    }
+
+    /// Where undo or redo edited the text since the last report (nil: nothing pending).
+    private var undoEditLocation: Int?
+
+    /// Undo and redo of NSTextView's own steps (typing, paste, the editor's replacements)
+    /// edit the storage without always telling the delegate `textDidChange`: the change
+    /// was shown but never saved, and list numbers below it weren't redrawn. Reported
+    /// once per run loop turn, as an edit is.
+    private func undoDidEdit(at location: Int) {
+        let pending = undoEditLocation
+        undoEditLocation = min(pending ?? location, location)
+        guard pending == nil else { return }
+        Self.later { [weak self] in
+            guard let self, let location = self.undoEditLocation else { return }
+            self.undoEditLocation = nil
+            self.invalidateNumbering(around: min(location, max(0, self.string.length - 1)))
+            self.onChange?()
         }
     }
 
@@ -949,7 +1047,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             let whole = InlineNodes.wholeNodes(affectedCharRange, in: storage)
             if whole != affectedCharRange {
                 let typed = NSAttributedString(string: replacementString, attributes: textView.typingAttributes)
-                replace(whole, with: typed, selecting: NSRange(location: whole.location + typed.length, length: 0))
+                undoStep(UndoNames.typing) {
+                    replace(whole, with: typed, selecting: NSRange(location: whole.location + typed.length, length: 0))
+                }
                 return false
             }
         }
@@ -961,12 +1061,14 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             let typed = attributed(replacementString, info: BlockInfo(depth: info.depth))
             let fresh = NSMutableAttributedString(attributedString: typed)
             fresh.append(attributed("\n", info: fresh.blockInfo(at: 0)!))
-            if affectedCharRange.location == paragraph.location {
-                replace(NSRange(location: paragraph.location, length: 0), with: fresh,
-                        selecting: NSRange(location: paragraph.location + typed.length, length: 0))
-            } else {
-                replace(NSRange(location: NSMaxRange(paragraph), length: 0), with: fresh,
-                        selecting: NSRange(location: NSMaxRange(paragraph) + typed.length, length: 0))
+            undoStep(UndoNames.typing) {
+                if affectedCharRange.location == paragraph.location {
+                    replace(NSRange(location: paragraph.location, length: 0), with: fresh,
+                            selecting: NSRange(location: paragraph.location + typed.length, length: 0))
+                } else {
+                    replace(NSRange(location: NSMaxRange(paragraph), length: 0), with: fresh,
+                            selecting: NSRange(location: NSMaxRange(paragraph) + typed.length, length: 0))
+                }
             }
             return false
         }
@@ -1040,11 +1142,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if completion.isActive, completion.handle(commandSelector) { return true }
         switch commandSelector {
-        case #selector(NSResponder.insertNewline(_:)): return insertNewline()
+        // Return, Tab and Backspace across blocks: a step of their own, named as typing.
+        case #selector(NSResponder.insertNewline(_:)): return undoStep(UndoNames.typing) { insertNewline() }
         case #selector(NSResponder.insertTab(_:)): return insertTab(outdent: false)
         case #selector(NSResponder.insertBacktab(_:)): return insertTab(outdent: true)
-        case #selector(NSResponder.deleteBackward(_:)): return deleteBackward()
-        case #selector(NSResponder.deleteForward(_:)): return deleteForward()
+        case #selector(NSResponder.deleteBackward(_:)): return undoStep(UndoNames.typing) { deleteBackward() }
+        case #selector(NSResponder.deleteForward(_:)): return undoStep(UndoNames.typing) { deleteForward() }
         case #selector(NSResponder.moveUp(_:)), #selector(NSResponder.moveDown(_:)):
             return moveIntoBlock(forward: commandSelector == #selector(NSResponder.moveDown(_:)))
         default: return false
@@ -1194,12 +1297,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         if caret == NSMaxRange(content), fence.hasPrefix("```"), !fence.dropFirst(3).contains("`"), !fence.contains(" ") {
             let language = String(fence.dropFirst(3))
             let code = BlockInfo(id: info.id, kind: .code, depth: info.depth, language: language.isEmpty ? nil : language, origin: info.origin)
-            textView.breakUndoCoalescing()
+            renameStep(UndoNames.kind(.code))
             replace(paragraph, with: attributed("\n", info: code), selecting: NSRange(location: paragraph.location, length: 0))
             return true
         }
         if caret == NSMaxRange(content), ["---", "***", "___"].contains(fence), info.kind == .paragraph {
-            textView.breakUndoCoalescing()
+            renameStep(UndoNames.divider)
             let divider = BlockInfo(kind: .divider, depth: info.depth)
             let replacement = NSMutableAttributedString(attributedString: NSAttributedString(
                 string: objectReplacement, attributes: [.fnBlock: divider, .attachment: BlockAttachment(info: divider, context: context)]))
@@ -1233,16 +1336,20 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let selection = textView.selectedRange()
         let paragraphs = paragraphs(in: selection)
         if !outdent, paragraphs.count == 1, info(at: selection.location).kind == .code {
-            replace(selection, with: attributed("    ", info: info(at: selection.location)),
-                    selecting: NSRange(location: selection.location + 4, length: 0))
+            undoStep(UndoNames.typing) {
+                replace(selection, with: attributed("    ", info: info(at: selection.location)),
+                        selecting: NSRange(location: selection.location + 4, length: 0))
+            }
             return true
         }
-        indent(paragraphs: paragraphs, by: outdent ? -1 : 1)
+        undoStep(outdent ? UndoNames.outdent : UndoNames.indent) { indent(paragraphs: paragraphs, by: outdent ? -1 : 1) }
         return true
     }
 
     func indent(by delta: Int) {
-        indent(paragraphs: paragraphs(in: textView.selectedRange()), by: delta)
+        undoStep(delta < 0 ? UndoNames.outdent : UndoNames.indent) {
+            indent(paragraphs: paragraphs(in: textView.selectedRange()), by: delta)
+        }
     }
 
     /// Indents paragraphs and the children that follow them, keeping depths valid.
@@ -1371,14 +1478,14 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             guard now.location == paragraph.location, NSMaxRange(now) >= paragraph.location + prefix.utf16.count,
                   self.string.substring(with: NSRange(location: now.location, length: prefix.utf16.count)) == prefix
             else { return }
-            self.textView.breakUndoCoalescing()
             let current = self.storage.blockInfo(at: now.location) ?? info
             let updated = current.with(kind: kind.kind, checked: kind.checked)
             let rest = NSRange(location: now.location + prefix.utf16.count, length: NSMaxRange(now) - now.location - prefix.utf16.count)
             let replacement = self.retagged(rest, info: updated)
             let caretOffset = max(0, self.textView.selectedRange().location - now.location - prefix.utf16.count)
-            self.replace(now, with: replacement, selecting: NSRange(location: now.location + caretOffset, length: 0))
-            self.textView.breakUndoCoalescing()
+            self.undoStep(UndoNames.kind(kind.kind)) {
+                self.replace(now, with: replacement, selecting: NSRange(location: now.location + caretOffset, length: 0))
+            }
         }
     }
 
@@ -1443,20 +1550,20 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             if string.substring(with: range).allSatisfy({ $0 == "\n" }) { return }
             if (value as? MarksBox)?.marks[keyPath: keyPath] != true { allOn = false; stop.pointee = true }
         }
-        updateMarks(in: selection) { $0[keyPath: keyPath] = !allOn }
+        undoStep(UndoNames.mark(keyPath)) { updateMarks(in: selection) { $0[keyPath: keyPath] = !allOn } }
     }
 
     func toggleHighlight(_ color: String) {
         let selection = textView.selectedRange()
         guard selection.length > 0 else { return }
         let on = storage.marks(at: selection.location).highlight == color
-        updateMarks(in: selection) { $0.highlight = on ? nil : color }
+        undoStep(UndoNames.highlight) { updateMarks(in: selection) { $0.highlight = on ? nil : color } }
     }
 
     func setTextColor(_ color: String?) {
         let selection = textView.selectedRange()
         guard selection.length > 0 else { return }
-        updateMarks(in: selection) { $0.textColor = color }
+        undoStep(UndoNames.textColor) { updateMarks(in: selection) { $0.textColor = color } }
     }
 
     private func updateMarks(in range: NSRange, _ change: @escaping (inout InlineMarks) -> Void) {
@@ -1480,19 +1587,25 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let textual = paragraphs.filter { storage.blockInfo(at: $0.location)?.kind.hasInlineText ?? false }
         let allAlready = textual.allSatisfy { storage.blockInfo(at: $0.location)?.kind == kind }
         let target: BlockKind = allAlready && kind != .paragraph ? .paragraph : kind
-        updateBlocks(textual) { $0.with(kind: target, checked: target == .check ? $0.checked : false) }
+        undoStep(UndoNames.kind(target)) {
+            updateBlocks(textual) { $0.with(kind: target, checked: target == .check ? $0.checked : false) }
+        }
     }
 
     func toggleChecked() {
         let paragraphs = paragraphs(in: textView.selectedRange()).filter { storage.blockInfo(at: $0.location)?.kind == .check }
         guard !paragraphs.isEmpty else { setKind(.check); return }
         let allChecked = paragraphs.allSatisfy { storage.blockInfo(at: $0.location)?.checked == true }
-        updateBlocks(paragraphs) { $0.with(checked: !allChecked) }
+        undoStep(UndoNames.checkbox) { updateBlocks(paragraphs) { $0.with(checked: !allChecked) } }
     }
 
     /// Moves the selected blocks (with their children) above the previous or below the
     /// next block.
     func moveBlocks(by direction: Int) {
+        undoStep(UndoNames.move) { moveBlocksUnnamed(by: direction) }
+    }
+
+    private func moveBlocksUnnamed(by direction: Int) {
         let selection = textView.selectedRange()
         let selected = paragraphs(in: selection)
         guard let first = selected.first, let last = selected.last else { return }
@@ -1533,17 +1646,19 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             case .cancel: self.textView.setSelectedRange(selection)
             case .remove:
                 let range = selection.length > 0 ? selection : self.linkRange(at: selection.location) ?? selection
-                self.updateMarks(in: range) { $0.link = nil }
+                self.undoStep(UndoNames.removeLink) { self.updateMarks(in: range) { $0.link = nil } }
             case .apply(let raw):
                 let href = Self.normalizedLink(raw)
-                if selection.length > 0 {
-                    self.updateMarks(in: selection) { $0.link = href }
-                } else if let range = self.linkRange(at: selection.location) {
-                    self.updateMarks(in: range) { $0.link = href }
-                } else {
-                    let info = self.info(at: selection.location)
-                    self.replace(selection, with: self.attributed(raw, info: info, marks: InlineMarks(link: href)),
-                                 selecting: NSRange(location: selection.location + (raw as NSString).length, length: 0))
+                self.undoStep(UndoNames.link) {
+                    if selection.length > 0 {
+                        self.updateMarks(in: selection) { $0.link = href }
+                    } else if let range = self.linkRange(at: selection.location) {
+                        self.updateMarks(in: range) { $0.link = href }
+                    } else {
+                        let info = self.info(at: selection.location)
+                        self.replace(selection, with: self.attributed(raw, info: info, marks: InlineMarks(link: href)),
+                                     selecting: NSRange(location: selection.location + (raw as NSString).length, length: 0))
+                    }
                 }
             }
         }
@@ -1614,8 +1729,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let node = NoteLinks.documentNode(id: suggestion.documentId)
         let replacement = NSMutableAttributedString(attributedString: DocumentText.inline([.atomic(node)], info: info, context: context, theme: theme))
         replacement.append(attributed(" ", info: info))
-        textView.breakUndoCoalescing()
-        replace(range, with: replacement, selecting: NSRange(location: range.location + replacement.length, length: 0))
+        undoStep(UndoNames.noteLink) {
+            replace(range, with: replacement, selecting: NSRange(location: range.location + replacement.length, length: 0))
+        }
     }
 
     // MARK: Keys and clicks
@@ -1673,7 +1789,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard box.contains(inFragment) else { return false }
         let offset = contentManager.offset(from: contentManager.documentRange.location, to: fragment.rangeInElement.location)
         let paragraph = paragraph(at: offset)
-        updateBlocks([paragraph]) { $0.with(checked: !$0.checked) }
+        undoStep(UndoNames.checkbox) { updateBlocks([paragraph]) { $0.with(checked: !$0.checked) } }
         return true
     }
 
@@ -1726,6 +1842,40 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         }
     }
 
+    // MARK: Pasting text with foreign line ends
+
+    /// Pastes text holding Windows line ends or paragraph separators (Word, Outlook,
+    /// some web pages) itself, with the separators made "\n" first, as one "Paste" step.
+    /// NSTextView's paste put them in as they were and normalizing turned "\r\n" into
+    /// "\n" during the edit, changing its length under NSTextView's undo step: undo took
+    /// one character too many and redo added an empty paragraph. False when there are no
+    /// such separators (NSTextView pastes, as usual) or the note's own blocks are there.
+    func pasteConvertingSeparators(from pasteboard: NSPasteboard, plain: Bool) -> Bool {
+        guard pasteboard.availableType(from: [Self.blocksPasteboardType]) == nil,
+              let string = pasteboard.string(forType: .string), Self.hasForeignSeparators(string) else { return false }
+        var rich: NSAttributedString?
+        if !plain {
+            if let data = pasteboard.data(forType: .rtf) {
+                rich = NSAttributedString(rtf: data, documentAttributes: nil)
+            } else if let data = pasteboard.data(forType: .html) {
+                rich = NSAttributedString(html: data, documentAttributes: nil)
+            }
+        }
+        let text = NSMutableAttributedString(attributedString: rich ?? NSAttributedString(string: string, attributes: textView.typingAttributes))
+        for separator in ["\r\n", "\r", "\u{2029}"] {
+            text.mutableString.replaceOccurrences(of: separator, with: "\n", options: .literal, range: NSRange(location: 0, length: text.length))
+        }
+        let selection = textView.selectedRange()
+        undoStep(UndoNames.paste) {
+            replace(selection, with: text, selecting: NSRange(location: selection.location + text.length, length: 0))
+        }
+        return true
+    }
+
+    static func hasForeignSeparators(_ string: String) -> Bool {
+        string.utf16.contains { $0 == 0x0D || $0 == 0x2029 }
+    }
+
     // MARK: Pasting and dropping files
 
     /// Images and files from the pasteboard upload to the server and become blocks, in
@@ -1771,8 +1921,11 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                     let block = EditorBlock(kind: kind, depth: depth, origin: origin)
                     let paragraph = DocumentText.paragraph(block, context: context)
                     let insertAt = min(anchorId.flatMap { range(ofBlock: $0) }.map(NSMaxRange) ?? string.length, string.length)
-                    replace(NSRange(location: insertAt, length: 0), with: paragraph,
-                            selecting: NSRange(location: insertAt + paragraph.length, length: 0))
+                    // Uploads finish one by one, after the paste: each block is a step.
+                    undoStep(location == nil ? UndoNames.paste : UndoNames.drop) {
+                        replace(NSRange(location: insertAt, length: 0), with: paragraph,
+                                selecting: NSRange(location: insertAt + paragraph.length, length: 0))
+                    }
                     anchorId = block.id
                 } catch {
                     NSSound.beep()
@@ -1836,6 +1989,10 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     /// Pastes blocks copied from a note, keeping kinds and marks (with new ids).
     func pasteBlocks(from pasteboard: NSPasteboard) -> Bool {
+        undoStep(UndoNames.paste) { pasteBlocksUnnamed(from: pasteboard) }
+    }
+
+    private func pasteBlocksUnnamed(from pasteboard: NSPasteboard) -> Bool {
         guard let data = pasteboard.data(forType: Self.blocksPasteboardType),
               let payload = try? JSONDecoder().decode([[String: JSONValue]].self, from: data), !payload.isEmpty else { return false }
         let selection = textView.selectedRange()

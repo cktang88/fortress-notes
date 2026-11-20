@@ -43,6 +43,14 @@ public final class EditorSession {
     @ObservationIgnored var showBlocks: (([EditorBlock]) -> Void)?
     /// Told when a save can't reach the server (the app notices lost connections).
     @ObservationIgnored var onSaveError: ((Error) -> Void)?
+    /// The note's undo stack (the editor's): title and status changes go on it too.
+    @ObservationIgnored weak var undoManager: UndoManager?
+    /// Bumped whenever the note's content is replaced from the server (a load, Load
+    /// Latest, a change made elsewhere): an editor kept from earlier then shows the new
+    /// content (and starts its undo history over) instead of its own.
+    @ObservationIgnored private(set) var contentGeneration = 0
+    /// The title's undo step in progress (title typing joins it until it is saved).
+    @ObservationIgnored private var titleStepOpen = false
 
     /// What the server holds, as the last diff left it. Built when first needed (the
     /// baseline of a note just opened is made after the note is on screen).
@@ -165,6 +173,7 @@ public final class EditorSession {
     }
 
     private func adopt(_ document: BlockDocument, decoded blocks: [EditorBlock], replaceText: Bool, pending: PendingEdits.Record? = nil) {
+        contentGeneration += 1
         self.document = document
         revision = document.revision
         titleAuto = document.titleAuto ?? false
@@ -220,6 +229,18 @@ public final class EditorSession {
         RunLoop.main.perform(inModes: [.default]) { [weak self] in
             MainActor.assumeIsolated { _ = self?.base }
         }
+    }
+
+    /// Back to a note kept open from earlier in this window (its editor and undo history
+    /// kept too): the server's version replaces the text only if the note changed
+    /// elsewhere meanwhile. Edits of its own still unsaved win (a conflict, if any, shows
+    /// when they are sent).
+    func refreshIfChangedElsewhere() async {
+        guard document != nil, !hasUnsavedChanges, saveState != .conflict,
+              let latest = try? await api.document(id: documentId), latest.revision > revision else { return }
+        let decoded = await Self.decode(latest)
+        guard !hasUnsavedChanges, latest.revision > revision else { return }
+        adopt(latest, decoded: decoded, replaceText: true)
     }
 
     /// Lets go of the editor once the note is closed. What it shows last stays readable,
@@ -433,6 +454,7 @@ public final class EditorSession {
     /// The title as the person types it. Empty hands the title back to the first line.
     func titleDidChange(_ newTitle: String) {
         guard newTitle != title else { return }
+        registerTitleUndo()
         title = newTitle
         titleAuto = false
         titleTask?.cancel()
@@ -446,8 +468,10 @@ public final class EditorSession {
     func commitTitle() async {
         titleTask?.cancel()
         titleTask = nil
+        titleStepOpen = false
         guard let document, title != document.title || (titleAuto != (document.titleAuto ?? false)) else { return }
-        let chosen = title.trimmingCharacters(in: .whitespaces)
+        // An automatic title (restored by undo) is handed back to the first line.
+        let chosen = titleAuto ? "" : title.trimmingCharacters(in: .whitespaces)
         do {
             let updated = try await api.updateDocument(id: documentId, title: chosen)
             self.document?.title = updated.title
@@ -474,10 +498,50 @@ public final class EditorSession {
         if derived != title { title = derived }
     }
 
+    /// One undo step for the title typed since it was last saved ("Undo Title Change").
+    private func registerTitleUndo() {
+        guard !titleStepOpen, let undoManager, !undoManager.isUndoing, !undoManager.isRedoing else { return }
+        titleStepOpen = true
+        let previous = (title: title, auto: titleAuto)
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated { target.restoreTitle(previous.title, auto: previous.auto) }
+        }
+        undoManager.setActionName(UndoNames.title)
+    }
+
+    /// Undo (or redo) of a title change: the title as it was, saved now.
+    private func restoreTitle(_ restored: String, auto: Bool) {
+        let current = (title: title, auto: titleAuto)
+        undoManager?.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated { target.restoreTitle(current.title, auto: current.auto) }
+        }
+        undoManager?.setActionName(UndoNames.title)
+        titleStepOpen = false
+        titleTask?.cancel()
+        titleTask = nil
+        title = restored
+        titleAuto = auto
+        Task { [weak self] in await self?.commitTitle() }
+    }
+
     func setStatus(_ newStatus: NoteStatus) async {
-        guard newStatus != status else { return }
+        if let task = changeStatus(newStatus) { await task.value }
+    }
+
+    /// Changes the status as one undo step ("Undo Status Change") and saves it.
+    @discardableResult
+    func changeStatus(_ newStatus: NoteStatus) -> Task<Void, Never>? {
+        guard newStatus != status else { return nil }
         let previous = status
+        undoManager?.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated { _ = target.changeStatus(previous) }
+        }
+        undoManager?.setActionName(UndoNames.status)
         status = newStatus
+        return Task { [weak self] in await self?.saveStatus(newStatus, previous: previous) }
+    }
+
+    private func saveStatus(_ newStatus: NoteStatus, previous: NoteStatus) async {
         do {
             let updated = try await api.updateDocument(id: documentId, status: newStatus)
             status = updated.status
