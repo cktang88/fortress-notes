@@ -257,6 +257,37 @@ struct UndoScript {
         script.walkBackAndForth()
     }
 
+    /// A Markdown shortcut runs a run loop pass after the space; the undo manager ends
+    /// the keystroke's group only when the run loop starts a pass in the default mode.
+    /// Here the shortcut runs in a pass of another common mode (as while the run loop
+    /// tracks an event, or when one pass runs the shortcut and returns, as on a busy
+    /// main thread) and the next word is typed before any default pass: still three
+    /// steps. (The list and the word after it were one step, the CI flake of
+    /// `everyEditUndoesAndRedoesOneStepAtATime`.)
+    @Test func theMarkdownShortcutIsItsOwnStepWhateverTheRunLoopDoes() {
+        let harness = UndoHarness([EditorBlock(id: "a", runs: [InlineRun("")])])
+        harness.select(NSRange(location: 0, length: 0))
+        let mode = RunLoop.Mode("FortressUndoStackTests")
+        CFRunLoopAddCommonMode(CFRunLoopGetMain(), CFRunLoopMode(mode.rawValue as CFString))
+        // Keystrokes with no run loop pass in between (`type` settles the run loop).
+        func keys(_ text: String) {
+            for character in text {
+                harness.view.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+        }
+        var script = UndoScript(harness)
+        script.step("Typing") { keys("- ") }
+        script.step("Bulleted List") {
+            for _ in 0..<50 where harness.controller.currentBlocks().first?.kind != .bullet {
+                RunLoop.main.run(mode: mode, before: Date().addingTimeInterval(0.01))
+            }
+        }
+        #expect(harness.controller.currentBlocks().first?.kind == .bullet)
+        script.step("Typing") { keys("item") }
+        #expect(script.states.map { $0.blocks } == [["a paragraph d0 "], ["a paragraph d0 - "], ["a bullet d0 "], ["a bullet d0 item"]])
+        script.walkBackAndForth()
+    }
+
     /// Block structure edits from the keyboard: Backspace merging blocks, Delete at the
     /// end of a block, Return on an empty list item, and Markdown shortcuts.
     @Test func structuralKeysAreStepsOfTheirOwn() {
