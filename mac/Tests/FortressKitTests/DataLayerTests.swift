@@ -143,12 +143,16 @@ import Testing
 
     /// One of two readers going away doesn't cancel the other's request.
     @Test func cancellingOneReaderKeepsTheSharedRequest() async throws {
-        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 0.5) }
+        // Held open until both readers wait on it (a delay a busy runner can outlast).
+        let answer = StubGate()
+        SpyProtocol.reset { _ in .json(SpyJSON.encoded(SpyJSON.document("d1")), gate: answer) }
         let api = SpyProtocol.client()
         let leaving = Task { try await api.document(id: "d1") }
         let staying = Task { try await api.document(id: "d1") }
         try await waitUntil { api.store.waiters("GET document d1 @\(api.store.epoch)") >= 2 }
         leaving.cancel()
+        try await waitUntil { api.store.waiters("GET document d1 @\(api.store.epoch)") == 1 }
+        answer.open()
         #expect(try await staying.value.id == "d1")
         #expect(SpyProtocol.count("GET", "/api/block-documents/d1") == 1)
     }
