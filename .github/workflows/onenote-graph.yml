@@ -1,0 +1,47 @@
+name: OneNote Graph tool
+
+# tools/fortress-onenote-graph: unit tests (HTML conversion, layout, throttling,
+# pagination, cache/resume, sign-in configuration) with a fake Graph and a fake clock;
+# no network, no Microsoft account. The end-to-end import test is in the backend suite
+# (backend/tests/test_onenote_graph_import.py, workflow "Backend").
+on:
+  push:
+    paths: ["tools/fortress-onenote-graph/**", ".github/workflows/onenote-graph.yml"]
+  pull_request:
+    paths: ["tools/fortress-onenote-graph/**", ".github/workflows/onenote-graph.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/fortress-onenote-graph
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          # uv itself is pinned too (docs/dependencies.md): a release at least 7 days old.
+          version: "0.13.7"
+      - name: Install
+        run: uv sync --frozen --python 3.11
+      - name: Unit tests
+        run: uv run --frozen python -m unittest discover -s tests -t . -v
+      - name: Command line
+        run: |
+          ./fortress-onenote-graph --version
+          ./fortress-onenote-graph download --help > /dev/null
+          # No client id: a clear error, exit 1.
+          if FORTRESS_ONENOTE_CLIENT_ID= ./fortress-onenote-graph download 2> err.txt; then exit 1; fi
+          grep -q "client id" err.txt

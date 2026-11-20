@@ -11,7 +11,7 @@ The rule is enforced by tooling, not by memory:
 
 | What | Pinned in | Cooldown enforced by |
 |---|---|---|
-| Python packages | `backend/uv.lock` (hashes, upload times), installed with `uv sync --frozen` / `uv run --frozen` everywhere (CI, `start.sh`, the Mac app's `uv run --frozen` fallback) | `[tool.uv] exclude-newer = "7 days"` in `backend/pyproject.toml`: `uv lock` never considers a file uploaded in the last 7 days. CI re-checks every sdist and wheel. |
+| Python packages | `backend/uv.lock` and `tools/fortress-onenote-graph/uv.lock` (hashes, upload times), installed with `uv sync --frozen` / `uv run --frozen` everywhere (CI, `start.sh`, the Mac app's `uv run --frozen` fallback) | `[tool.uv] exclude-newer = "7 days"` in each `pyproject.toml`: `uv lock` never considers a file uploaded in the last 7 days. CI re-checks every sdist and wheel. |
 | OCR models (PP-OCRv6) | inside the `rapidocr` wheel, whose hash is in `uv.lock`; rapidocr checks each model file's SHA-256 | as Python packages |
 | ColBERT model | `COLBERT_REVISION` (a commit of `lightonai/Agent-ModernColBERT`) in `backend/app/config.py`; PyLate, the tokenizer and the MLX encoder load that commit | CI checks the commit exists and its date |
 | Rust crates | `tools/fortress-onenote/Cargo.lock`, built with `--locked` everywhere | CI checks every crate version's publish time (crates.io index `pubtime`) and checksum |
