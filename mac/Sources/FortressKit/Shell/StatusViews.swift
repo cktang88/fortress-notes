@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Shows `AppModel.toast` (or else the latest notice) as a glass capsule at the bottom
@@ -126,9 +127,14 @@ struct ConnectionUnavailableView: View {
                         }
                         Button("Retry") { Task { await model.retryConnection() } }
                     }
-                    Button("Open Settings…") { openSettings() }
-                        .buttonStyle(.link)
-                        .font(.callout)
+                    HStack(spacing: 12) {
+                        Button("Open Settings…") { openSettings() }
+                        if case .failed = backend.state, FileManager.default.fileExists(atPath: backend.logURL.path) {
+                            Button("Show Log") { NSWorkspace.shared.open(backend.logURL) }
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .font(.callout)
                 }
             }
         }

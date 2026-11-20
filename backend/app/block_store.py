@@ -590,6 +590,17 @@ for _event, _row in (("insert", "NEW"), ("update", "NEW")):
             f" WHERE block_assets.content_hash = {_row}.content_hash"
         ),
     )
+# Text read from a picture (OCR) shows in the mirror and info of every note showing
+# it. It lands after the ocr_results row that bumped them: bump them again.
+_CHANGE_TRIGGERS["assets_text_changed_update"] = (
+    "AFTER UPDATE OF text ON assets",
+    _bump(
+        "SELECT blocks.document_id FROM block_assets"
+        " JOIN blocks ON blocks.id = block_assets.block_id"
+        " WHERE block_assets.content_hash = NEW.content_hash"
+        " AND block_assets.media_name = NEW.media_name"
+    ),
+)
 for _table, _column in (
     ("block_user_attrs", "block_id"),
     ("block_sync", "block_id"),

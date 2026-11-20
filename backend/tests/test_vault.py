@@ -70,6 +70,18 @@ class _Workspace(unittest.TestCase):
 
 
 class VaultMirrorTests(_Workspace):
+    def test_long_titles_in_other_scripts_fit_a_file_name(self) -> None:
+        # 100 CJK characters are 300 bytes, over the 255-byte file name limit: the
+        # mirror pass used to fail on that note, and with it every other mirror.
+        long_title = documents.create(NoteCreate(title="会議" * 60, body="内容"))
+        emoji = documents.create(NoteCreate(title="🎉" * 80, body="party"))
+        plain = documents.create(NoteCreate(title="Plain", body="still mirrored"))
+        self.assertIn("still mirrored", self.mirror(plain["id"]))
+        for note in (long_title, emoji):
+            path = mirror_file(self.notes, note["id"])
+            self.assertTrue(path.is_file(), path)
+            self.assertLessEqual(len(path.name.encode("utf-8")), 255)
+
     def make_linked_notes(self):
         target = documents.create(NoteCreate(title="Roadmap", body="# Q3 goals\n\nShip the beta.\n\nOther"))
         heading, goal, _other = target["children"]

@@ -239,3 +239,30 @@ import Testing
     #expect(readable.contains { rtf.contains($0.rawValue) })
     #expect(readable.contains { plain.contains($0.rawValue) })
 }
+
+// MARK: Trashing the open note opens the one below it, in the list's own order
+
+@Test @MainActor func trashingTheOpenNoteOpensItsNeighbourInTheListsSortOrder() async throws {
+    let stub = FindingStub { _ in FindingStub.Reply(body: Data("{}".utf8)) }
+    let model = AppModel(api: stub.api)
+    model.connectsOnAppear = false
+    model.navigation = ShellFixtures.navigation
+    let defaults = try #require(UserDefaults(suiteName: "trash-neighbour-\(UUID().uuidString)"))
+    defaults.set(NoteSort.title.rawValue, forKey: "noteSort")
+    model.listDefaults = defaults
+    // By title: … "Kyoto trip", "Packing list", "Q4 planning", … (by date edited, Sourdough is next).
+    model.open(noteId: "n5")
+    await model.trashNote(id: "n5")
+    #expect(model.openNoteId == "n4")
+}
+
+@Test @MainActor func droppingANoteOnItsOwnFolderChangesNothing() async {
+    let stub = FindingStub { _ in FindingStub.Reply(body: Data("{}".utf8)) }
+    let model = AppModel(api: stub.api)
+    model.connectsOnAppear = false
+    model.navigation = ShellFixtures.navigation
+    let before = model.navigation
+    await model.moveNote(id: "n1", toFolder: "travel")  // already in Travel
+    #expect(stub.started.isEmpty)
+    #expect(model.navigation == before)
+}

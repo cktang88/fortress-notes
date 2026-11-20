@@ -36,9 +36,12 @@ public struct ShellCommands: Commands {
                 if let model { Task { await model.newNote() } } else { library.pendingNewNote = true; openWindow(id: MainWindowScene.id) }
             }
             .keyboardShortcut(Shortcuts.newNote)
+            // Like the toolbar's New Note button: off while the backend can't be reached
+            // (pressed then, it did nothing at all). With no window it opens one.
+            .disabled(model != nil && !library.isConnected)
             Button(Shortcuts.newFolder.title) { if let model { Task { await model.newFolder() } } }
                 .keyboardShortcut(Shortcuts.newFolder)
-                .disabled(model == nil)
+                .disabled(model == nil || !library.isConnected)
             Button("New Window") { openWindow(id: MainWindowScene.id) }
         }
 
@@ -59,11 +62,17 @@ public struct ShellCommands: Commands {
                 .disabled(model == nil)
             Divider()
             Button("Empty Trash…") {
-                model?.query = ""
-                model?.select(.trash)
-                model?.isEmptyTrashConfirmationShown = true
+                guard let model else { return }
+                model.query = ""
+                model.select(.trash)
+                // Asks only once the Trash is known to hold something (never "Permanently
+                // delete 0 notes?"); an empty Trash just shows "Trash Is Empty".
+                Task {
+                    await model.refreshTrash()
+                    if !model.trash.isEmpty { model.isEmptyTrashConfirmationShown = true }
+                }
             }
-            .disabled(model == nil || library.trash.isEmpty && model?.scope == .trash)
+            .disabled(model == nil || !library.isConnected || library.trash.isEmpty && model?.scope == .trash)
         }
 
         CommandGroup(after: .textEditing) {

@@ -211,6 +211,27 @@ class ExternalReaderTests(_Workspace):
         with patch.object(ocr, "read_asset", return_value=ocr.Result(text, "ocr")):
             return self.drain()
 
+    def test_mirror_written_between_reading_and_text_still_gets_the_text(self) -> None:
+        # The reading is recorded (bumping the note) before the asset gets its text.
+        # A mirror pass in between used to write the note without the picture's
+        # text, and nothing bumped the note again, so it never got it.
+        from app import documents
+
+        self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
+        document_id, _blocks = self.note_with("Receipt", ["01JAAAAAAAAAAAAAAAAAAAAAAA.png"])
+        documents.flush_mirrors()
+        store = block_store.store_asset_text
+
+        def mirror_pass_first(*args, **kwargs):
+            documents.flush_mirrors()
+            return store(*args, **kwargs)
+
+        with patch.object(block_store, "store_asset_text", mirror_pass_first):
+            self.cpu_reads("flamingo total 12")
+        documents.flush_mirrors()
+        mirror = documents.mirrors.path(self.root, document_id)
+        self.assertIn("flamingo total 12", mirror.read_text(encoding="utf-8"))
+
     def test_vision_text_wins_whichever_reader_finishes_first(self) -> None:
         _p, first = self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"one", "image/png")
         _p, second = self.asset("01JBBBBBBBBBBBBBBBBBBBBBBB.png", b"two", "image/png")
