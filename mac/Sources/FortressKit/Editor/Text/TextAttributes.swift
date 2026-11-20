@@ -13,6 +13,9 @@ extension NSAttributedString.Key {
     static let fnNode = NSAttributedString.Key("fortress.node")
     /// Set by `restyle`; text without it came from outside (a paste) and is cleaned up.
     static let fnStyled = NSAttributedString.Key("fortress.styled")
+    /// On a U+2029 that stands for a space of a long block (`SoftBreaks`): the block goes
+    /// on past it. A U+2029 without it came from outside and becomes a "\n".
+    static let fnSoft = NSAttributedString.Key("fortress.soft")
 }
 
 /// Identity and kind of one paragraph's block. Immutable; replace it to change a block.
@@ -135,8 +138,16 @@ extension NSAttributedString {
 }
 
 extension NSString {
-    /// The paragraph range containing `index`, terminator included.
+    /// The block's paragraph containing `index`, its "\n" included: the text's paragraph
+    /// with the soft paragraphs before and after it (`SoftBreaks`).
     func paragraphRange(at index: Int) -> NSRange {
-        paragraphRange(for: NSRange(location: min(max(0, index), max(0, length - 1)), length: 0))
+        var range = paragraphRange(for: NSRange(location: min(max(0, index), max(0, length - 1)), length: 0))
+        while range.location > 0, character(at: range.location - 1) == SoftBreaks.character {
+            range = NSUnionRange(paragraphRange(for: NSRange(location: range.location - 1, length: 0)), range)
+        }
+        while range.length > 0, NSMaxRange(range) < length, character(at: NSMaxRange(range) - 1) == SoftBreaks.character {
+            range = NSUnionRange(range, paragraphRange(for: NSRange(location: NSMaxRange(range), length: 0)))
+        }
+        return range
     }
 }

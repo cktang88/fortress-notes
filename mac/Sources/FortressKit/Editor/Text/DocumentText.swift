@@ -2,7 +2,8 @@ import AppKit
 
 /// Editor blocks ⇄ attributed text. Each block is one paragraph ending in "\n" (the last
 /// one too: the final "\n" is never selectable, so every paragraph has a character to
-/// carry its `BlockInfo`). Soft line breaks inside a block are U+2028.
+/// carry its `BlockInfo`). Soft line breaks inside a block are U+2028. A long paragraph
+/// block is several soft paragraphs, some of its spaces stored as U+2029 (`SoftBreaks`).
 @MainActor
 enum DocumentText {
     /// The note's text, styled as it is built (one pass, with attributes shared per
@@ -22,8 +23,10 @@ enum DocumentText {
     static func paragraph(_ block: EditorBlock, context: AttachmentContext, theme: EditorTheme? = nil) -> NSAttributedString {
         let info = BlockInfo(block)
         let output = NSMutableAttributedString()
+        var split = false
         if block.kind.hasInlineText {
             output.append(inline(block.runs, info: info, context: context, theme: theme))
+            split = SoftBreaks.eligible(block.kind) && SoftBreaks.split(output, content: NSRange(location: 0, length: output.length))
         } else {
             let attachment = BlockAttachment(info: info, context: context, block: block)
             var attributes = base(info: info, marks: InlineMarks(), theme: theme)
@@ -31,6 +34,14 @@ enum DocumentText {
             output.append(NSAttributedString(string: objectReplacement, attributes: attributes))
         }
         output.append(NSAttributedString(string: "\n", attributes: base(info: info, marks: InlineMarks(), theme: theme)))
+        if split, let theme {
+            // Styled as the editor styles it: each soft paragraph with its own spacing.
+            for piece in SoftBreaks.pieces(of: NSRange(location: 0, length: output.length), in: output.nsString) where !piece.role.isEmpty {
+                if let style = theme.cachedAttributes(info: info, marks: InlineMarks(), role: piece.role)[.paragraphStyle] {
+                    output.addAttribute(.paragraphStyle, value: style, range: piece.range)
+                }
+            }
+        }
         return output
     }
 
@@ -124,6 +135,18 @@ enum DocumentText {
         return label.isEmpty ? "•" : label
     }
 
+    /// A piece of a block's text as the block has it: a stray attachment character
+    /// (dropped file icon etc.) carries no text, a "\r" is a soft line break and a soft
+    /// separator is the space it stands for (`SoftBreaks`). Nil when nothing is left.
+    private static func readable(_ piece: String) -> String? {
+        var piece = piece
+        if piece.utf16.contains(where: { $0 == 0xFFFC || $0 == 0x0D || $0 == SoftBreaks.character }) {
+            piece = piece.replacingOccurrences(of: objectReplacement, with: "").replacingOccurrences(of: "\r", with: softBreak)
+                .replacingOccurrences(of: SoftBreaks.separator, with: " ")
+        }
+        return piece.isEmpty ? nil : piece
+    }
+
     /// The inline runs of `range`. A node is one contiguous run of its box (see
     /// `InlineNodes`): read once however its label is split by other attributes, and
     /// twice when two copies of it sit in the paragraph.
@@ -135,11 +158,7 @@ enum DocumentText {
         var plain = NSRange()
         if text.attribute(.fnNode, at: range.location, longestEffectiveRange: &plain, in: range) == nil, plain == range,
            text.attribute(.fnMarks, at: range.location, longestEffectiveRange: &plain, in: range) == nil, plain == range {
-            var piece = string.substring(with: range)
-            if piece.utf16.contains(where: { $0 == 0xFFFC || $0 == 0x0D }) {
-                piece = piece.replacingOccurrences(of: objectReplacement, with: "").replacingOccurrences(of: "\r", with: softBreak)
-            }
-            return piece.isEmpty ? [] : [InlineRun(piece)]
+            return Self.readable(string.substring(with: range)).map { [InlineRun($0)] } ?? []
         }
         text.enumerateAttribute(.fnNode, in: range, options: []) { value, segment, _ in
             if let node = value as? NodeBox {
@@ -147,11 +166,7 @@ enum DocumentText {
                 return
             }
             text.enumerateAttribute(.fnMarks, in: segment, options: []) { marks, run, _ in
-                var piece = string.substring(with: run)
-                // A stray attachment character (dropped file icon etc.) carries no text.
-                if piece.utf16.contains(where: { $0 == 0xFFFC || $0 == 0x0D }) {
-                    piece = piece.replacingOccurrences(of: objectReplacement, with: "").replacingOccurrences(of: "\r", with: softBreak)
-                }
+                let piece = Self.readable(string.substring(with: run)) ?? ""
                 runs.append(InlineRun(piece, (marks as? MarksBox)?.marks ?? InlineMarks()))
             }
         }

@@ -291,7 +291,36 @@ final class FortressTextView: NSTextView {
         if type == BlockEditorController.markdownPasteboardType {
             return controller?.writeMarkdown(to: pboard) ?? false
         }
+        // Soft separators (`SoftBreaks`) go out as the spaces they stand for.
+        if [.string, .rtf, .rtfd].contains(type), let storage = textStorage {
+            let ranges = selectedRanges.map(\.rangeValue).filter { $0.length > 0 && NSMaxRange($0) <= storage.length }
+            if ranges.contains(where: { storage.mutableString.range(of: SoftBreaks.separator, options: .literal, range: $0).location != NSNotFound }) {
+                let text = NSMutableAttributedString()
+                for (index, range) in ranges.enumerated() {
+                    if index > 0 { text.append(NSAttributedString(string: "\n")) }
+                    text.append(SoftBreaks.plain(storage.attributedSubstring(from: range)))
+                }
+                let whole = NSRange(location: 0, length: text.length)
+                switch type {
+                case .string: return pboard.setString(text.string, forType: .string)
+                case .rtf: return text.rtf(from: whole, documentAttributes: [:]).map { pboard.setData($0, forType: .rtf) } ?? false
+                default: return text.rtfd(from: whole, documentAttributes: [:]).map { pboard.setData($0, forType: .rtfd) } ?? false
+                }
+            }
+        }
         return super.writeSelection(to: pboard, type: type)
+    }
+
+    /// The text with soft separators as the spaces they stand for (`SoftBreaks`), for
+    /// what reads it from the view: Find, Services, accessibility.
+    override var string: String {
+        get {
+            let text = super.string
+            guard let storage = textStorage,
+                  storage.mutableString.range(of: SoftBreaks.separator, options: .literal).location != NSNotFound else { return text }
+            return SoftBreaks.plain(text)
+        }
+        set { super.string = newValue }
     }
 
     // MARK: Dragging blocks by their handle (the note's editor places them, for columns too)

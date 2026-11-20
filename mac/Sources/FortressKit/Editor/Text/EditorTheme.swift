@@ -106,15 +106,17 @@ struct EditorTheme: Sendable {
 
     // MARK: Paragraphs
 
-    func paragraphStyle(for info: BlockInfo) -> NSParagraphStyle {
+    /// `role`: a soft paragraph of a long block (`SoftBreaks`) has no spacing on the sides
+    /// where its block goes on.
+    func paragraphStyle(for info: BlockInfo, role: SoftBreaks.Role = []) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.alignment = alignment
         let indent = textIndent(kind: info.kind, depth: info.depth)
         style.firstLineHeadIndent = indent
         style.headIndent = indent
         let spacing = spacing(for: info.kind)
-        style.paragraphSpacingBefore = spacing.before
-        style.paragraphSpacing = spacing.after
+        style.paragraphSpacingBefore = role.contains(.continuation) ? 0 : spacing.before
+        style.paragraphSpacing = role.contains(.continued) ? 0 : spacing.after
         if info.kind.hasInlineText {
             let height = lineHeight(for: info.kind)
             style.minimumLineHeight = height
@@ -224,6 +226,7 @@ struct EditorTheme: Sendable {
         var alignment: Int
         var emphasized: Bool
         var textColorName: String?
+        var role: SoftBreaks.Role
     }
 
     /// `@unchecked Sendable`: every access to `attributes` holds `lock`. (Not a `Mutex`:
@@ -237,13 +240,14 @@ struct EditorTheme: Sendable {
 
     private static let styleCache = StyleCache()
 
-    func cachedAttributes(info: BlockInfo, marks: InlineMarks) -> [NSAttributedString.Key: Any] {
+    func cachedAttributes(info: BlockInfo, marks: InlineMarks, role: SoftBreaks.Role = []) -> [NSAttributedString.Key: Any] {
         let key = StyleKey(kind: info.kind, depth: info.depth, checked: info.checked, marks: marks, baseSize: baseSize,
-                           isCompact: isCompact, alignment: alignment.rawValue, emphasized: emphasized, textColorName: textColorName)
+                           isCompact: isCompact, alignment: alignment.rawValue, emphasized: emphasized, textColorName: textColorName,
+                           role: role)
         let cache = Self.styleCache
         if let found = cache.lock.withLock({ cache.attributes[key] }) { return found }
         // Made outside the lock (it's the slow part); two threads may both make one.
-        let made = attributes(info: info, marks: marks, paragraphStyle: paragraphStyle(for: info))
+        let made = attributes(info: info, marks: marks, paragraphStyle: paragraphStyle(for: info, role: role))
         cache.lock.withLock {
             if cache.attributes.count > 4096 { cache.attributes.removeAll() }
             cache.attributes[key] = made
@@ -266,21 +270,25 @@ struct EditorTheme: Sendable {
         let end = min(string.length, NSMaxRange(range))
         repeat {
             let paragraph = string.paragraphRange(at: location)
-            restyleParagraph(storage, paragraph)
+            // The block's info is the one on its first character, for all its soft paragraphs.
+            let info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
+            for piece in SoftBreaks.pieces(of: paragraph, in: string) {
+                restyleParagraph(storage, piece.range, info: info, role: piece.role)
+            }
             location = NSMaxRange(paragraph)
         } while location < end && location < string.length
     }
 
-    private func restyleParagraph(_ storage: NSMutableAttributedString, _ paragraph: NSRange) {
-        let info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
+    private func restyleParagraph(_ storage: NSMutableAttributedString, _ paragraph: NSRange, info: BlockInfo, role: SoftBreaks.Role) {
         storage.enumerateAttributes(in: paragraph, options: []) { attributes, run, _ in
             var marks = (attributes[.fnMarks] as? MarksBox)?.marks ?? InlineMarks()
             let foreign = attributes[.fnStyled] == nil
             if foreign && attributes[.fnMarks] == nil {
                 marks = Self.marks(fromForeign: attributes)
             }
-            var updated = self.cachedAttributes(info: info, marks: marks)
+            var updated = self.cachedAttributes(info: info, marks: marks, role: role)
             updated[.fnBlock] = info
+            if let soft = attributes[.fnSoft] { updated[.fnSoft] = soft }
             if !marks.isPlain { updated[.fnMarks] = MarksBox(marks) }
             if let node = attributes[.fnNode] {
                 updated[.fnNode] = node

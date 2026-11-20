@@ -985,10 +985,20 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         var edited = NSIntersectionRange(editedRange, NSRange(location: 0, length: storage.length))
         if edited.length > 0 {
             let mutable = storage.mutableString
-            for (separator, shrinks) in [("\r\n", 1), ("\r", 0), ("\u{2029}", 0)]
+            for (separator, shrinks) in [("\r\n", 1), ("\r", 0)]
             where mutable.range(of: separator, options: .literal, range: edited).location != NSNotFound {
                 let count = mutable.replaceOccurrences(of: separator, with: "\n", options: .literal, range: edited)
                 edited.length -= count * shrinks
+            }
+            // U+2029 too, unless it is one of the editor's soft separators (`SoftBreaks`).
+            var search = edited
+            while search.length > 0 {
+                let found = mutable.range(of: SoftBreaks.separator, options: .literal, range: search)
+                guard found.location != NSNotFound else { break }
+                if storage.attribute(.fnSoft, at: found.location, effectiveRange: nil) == nil {
+                    mutable.replaceCharacters(in: found, with: "\n")
+                }
+                search = NSRange(location: NSMaxRange(found), length: NSMaxRange(search) - NSMaxRange(found))
             }
             if mutable.range(of: "\n", options: .literal, range: edited).location != NSNotFound { structuralEdit = true }
         }
@@ -1000,6 +1010,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         var touched: [NSRange] = []
         var touchedInfo: BlockInfo?
         var uniform = true
+        var resplit = false
         while location < text.length {
             let paragraph = text.paragraphRange(at: location)
             var info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
@@ -1016,6 +1027,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             var tagged = NSRange()
             let first = storage.attribute(.fnBlock, at: paragraph.location, longestEffectiveRange: &tagged, in: paragraph) as? BlockInfo
             if first !== info || tagged != paragraph { storage.addAttribute(.fnBlock, value: info, range: paragraph) }
+            if SoftBreaks.repair(storage, paragraph: paragraph, kind: info.kind, edited: editedRange) { resplit = true }
             dirtyBlocks.insert(info.id)
             dirtyInfos.insert(ObjectIdentifier(info))
             touched.append(paragraph)
@@ -1032,7 +1044,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         defer { EditorMetrics.restyle += EditorMetrics.since(restyleStart) }
         guard let first = touched.first, let last = touched.last else { return }
         let whole = NSUnionRange(first, last)
-        if touched.count >= 16, uniform, let info = touchedInfo, Self.isPlainAndStyled(storage, whole),
+        if touched.count >= 16, uniform, !resplit, let info = touchedInfo, Self.isPlainAndStyled(storage, whole),
            Self.has(theme.cachedAttributes(info: info, marks: InlineMarks()), throughout: whole, in: storage) {
             // Many paragraphs of one kind with no marks (pasted lines) already styled as
             // that kind (they came with the typing attributes): nothing to restyle.
@@ -1298,7 +1310,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                 marks.link = nil
             }
         }
-        var attributes = theme.attributes(info: info, marks: marks, paragraphStyle: theme.paragraphStyle(for: info))
+        // In a long block, the spacing of the soft paragraph typed in (`SoftBreaks`).
+        let role = SoftBreaks.eligible(info.kind) ? SoftBreaks.role(at: location, in: paragraph, string: string) : []
+        var attributes = theme.attributes(info: info, marks: marks, paragraphStyle: theme.paragraphStyle(for: info, role: role))
         attributes[.fnBlock] = info
         if !marks.isPlain { attributes[.fnMarks] = MarksBox(marks) }
         attributes[.link] = nil
@@ -1883,9 +1897,16 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard let manager = textView.textLayoutManager, let contentManager = manager.textContentManager else { return nil }
         let origin = textView.textContainerOrigin
         let local = CGPoint(x: max(0, point.x - origin.x), y: point.y - origin.y)
-        guard let fragment = manager.textLayoutFragment(for: local) else { return nil }
-        let offset = contentManager.offset(from: contentManager.documentRange.location, to: fragment.rangeInElement.location)
+        guard var fragment = manager.textLayoutFragment(for: local) else { return nil }
+        var offset = contentManager.offset(from: contentManager.documentRange.location, to: fragment.rangeInElement.location)
         guard offset < string.length else { return nil }
+        // A soft paragraph of a long block (`SoftBreaks`): the block's handle is at its first line.
+        let block = paragraph(at: offset)
+        if block.location != offset, let start = textRange(for: NSRange(location: block.location, length: 0)),
+           let first = manager.textLayoutFragment(for: start.location) {
+            fragment = first
+            offset = block.location
+        }
         var frame = fragment.layoutFragmentFrame
         if let first = fragment.textLineFragments.first {
             frame = CGRect(x: frame.minX, y: frame.minY + first.typographicBounds.minY, width: frame.width, height: first.typographicBounds.height)
