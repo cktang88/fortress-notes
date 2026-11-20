@@ -126,7 +126,7 @@ struct NoteListView: View {
     }
 }
 
-/// One note: title, two lines of text, then "date · folder" and a rough glyph.
+/// One note: title, two lines of text, then "date · folder".
 struct NoteRow: View {
     let note: NavigationDocument
     let folderName: String?
@@ -153,12 +153,6 @@ struct NoteRow: View {
                         .imageScale(.small)
                     Text(folderName)
                         .lineLimit(1)
-                }
-                Spacer(minLength: 4)
-                if note.status == .rough {
-                    Image(systemName: "circle.dashed")
-                        .help("Rough")
-                        .accessibilityLabel("Rough")
                 }
             }
             .font(.subheadline)
@@ -202,14 +196,6 @@ struct NoteListEmptyView: View {
             } actions: {
                 Button("New Note in \(name)") { Task { await model.newNote(in: id) } }
             }
-        case .rough:
-            ContentUnavailableView(
-                "Nothing Rough", systemImage: "circle.dashed",
-                description: Text("Notes you're still shaping show up here."))
-        case .polished:
-            ContentUnavailableView(
-                "Nothing Polished Yet", systemImage: "checkmark.seal",
-                description: Text("Promote a note when it's ready and it shows up here."))
         default:
             ContentUnavailableView {
                 Label("Write Your First Note", systemImage: "square.and.pencil")

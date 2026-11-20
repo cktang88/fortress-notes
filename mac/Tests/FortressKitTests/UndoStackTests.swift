@@ -465,11 +465,11 @@ struct UndoScript {
         script.walkBackAndForth()
     }
 
-    /// Title and status changes are steps on the note's stack too.
-    @Test func titleAndStatusChangesAreUndoable() {
+    /// Title changes are steps on the note's stack too.
+    @Test func titleChangesAreUndoable() {
         let node = BlockNode.paragraph("p1", "Body")
         let document = BlockDocument(id: "d", revision: 1, titleAuto: false, title: "Kyoto",
-                                     status: .rough, createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
+                                     createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
                                      children: [node])
         let session = EditorSession(document: document)
         let undo = UndoManager()
@@ -480,25 +480,17 @@ struct UndoScript {
         session.titleDidChange("Kyoto trip")
         undo.endUndoGrouping()
         #expect(undo.undoActionName == "Title Change")
-        undo.beginUndoGrouping()
-        session.changeStatus(.polished)
-        undo.endUndoGrouping()
-        #expect(undo.undoActionName == "Status Change")
-        undo.undo()
-        #expect(session.status == .rough)
         undo.undo()
         #expect(session.title == "Kyoto")
         undo.redo()
         #expect(session.title == "Kyoto trip")
-        undo.redo()
-        #expect(session.status == .polished)
     }
 
     /// Going to another note and back: the editor (and its undo stack) is the one left.
     @Test func eachNoteKeepsItsStackWhenTheWindowShowsAnotherNote() throws {
         func document(_ id: String, _ text: String) -> BlockDocument {
             BlockDocument(id: id, revision: 1, titleAuto: false, title: text,
-                          status: .rough, createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
+                          createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
                           children: [BlockNode.paragraph("\(id)-p", text, documentId: id)])
         }
         let model = AppModel(api: APIClient(baseURL: URL(string: "http://127.0.0.1:9")!))
@@ -548,7 +540,7 @@ struct UndoScript {
         let api = APIClient(baseURL: URL(string: "http://127.0.0.1:9")!)
         let sessions = ["A", "B", "C"].map { id in
             EditorSession(document: BlockDocument(id: id, revision: 1, titleAuto: false, title: id,
-                                                  status: .rough, createdAt: "2026-11-18T00:00:00+00:00",
+                                                  createdAt: "2026-11-18T00:00:00+00:00",
                                                   updatedAt: "2026-11-18T00:00:00+00:00", children: []), api: api)
         }
         for session in sessions { cache.keep(session, BlockEditorController(baseURL: api.baseURL)) }

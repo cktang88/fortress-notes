@@ -66,9 +66,8 @@ public enum Shortcuts {
     public static let moveToTrash = AppShortcut("Move to Trash", .delete)
     // Go
     public static let allNotes = AppShortcut("All Notes", "1")
-    public static let rough = AppShortcut("Rough", "2")
-    public static let polished = AppShortcut("Polished", "3")
-    public static let recent = AppShortcut("Recent", "4")
+    public static let recent = AppShortcut("Recent", "2")
+    public static let trash = AppShortcut("Trash", "3")
     // Format (the editor handles the same keys while it has focus)
     public static let bold = AppShortcut("Bold", "b")
     public static let italic = AppShortcut("Italic", "i")
@@ -101,7 +100,7 @@ public enum Shortcuts {
     /// The app's own shortcuts (Quick Capture's global one is configurable and separate).
     public static let all: [AppShortcut] = [
         newNote, newFolder, importMarkdown, exportMarkdown, searchAllNotes, toggleInspector, focusMode,
-        askNotes, reloadNotes, moveToTrash, allNotes, rough, polished, recent,
+        askNotes, reloadNotes, moveToTrash, allNotes, recent, trash,
         bold, italic, underline, strikethrough, inlineCode, highlight, superscript, `subscript`, addLink,
         body, heading1, heading2, heading3, bulletedList, numberedList, checklist, quote, codeBlock,
         toggleCheckbox, indent, outdent, moveBlockUp, moveBlockDown, duplicateBlock, showBlocks,

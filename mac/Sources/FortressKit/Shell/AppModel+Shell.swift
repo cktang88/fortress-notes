@@ -236,8 +236,6 @@ extension AppModel {
     public var scopeTitle: String {
         switch scope {
         case .all: "All Notes"
-        case .rough: "Rough"
-        case .polished: "Polished"
         case .recent: "Recent"
         case .trash: "Trash"
         case .folder(let id): NoteListing.folder(id: id, in: navigation.items)?.name ?? "Folder"
@@ -269,7 +267,6 @@ extension AppModel {
                 // Over a tree fetched later, an older answer never replaces a newer one.
                 if onlyIfNewer, let edited, let current = Timestamp.date(note.updatedAt), current > edited { return }
                 note.title = document.title
-                note.status = document.status
                 note.updatedAt = document.updatedAt
                 if let snippet { note.snippet = snippet }
                 changed = note
@@ -294,7 +291,7 @@ extension AppModel {
             // The answer is the whole note: add it to the tree without reloading it.
             patchNavigation { navigation in
                 let note = NavigationDocument(
-                    id: document.id, title: document.title, status: document.status, updatedAt: document.updatedAt,
+                    id: document.id, title: document.title, updatedAt: document.updatedAt,
                     createdAt: document.createdAt, snippet: document.children.first?.text ?? "", folderId: folder,
                     position: 0)
                 NavigationEdits.insertDocument(note, in: &navigation.items)

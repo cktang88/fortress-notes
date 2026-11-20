@@ -7,7 +7,7 @@ import Testing
 // Writing Tools and how the note list and editor avoid needless work.
 
 private func note(_ id: String, updated: String) -> NavigationDocument {
-    NavigationDocument(id: id, title: id, status: .rough, updatedAt: updated, createdAt: updated, snippet: "",
+    NavigationDocument(id: id, title: id, updatedAt: updated, createdAt: updated, snippet: "",
                        folderId: nil, position: 0)
 }
 

@@ -85,8 +85,6 @@ public enum NoteListing {
         let all = allDocuments(in: navigation.items)
         switch scope {
         case .all: return all
-        case .rough: return all.filter { $0.status == .rough }
-        case .polished: return all.filter { $0.status == .polished }
         case .recent: return navigation.recent
         case .trash: return []
         case .folder(let id): return all.filter { $0.folderId == id }

@@ -4,21 +4,15 @@ import Synchronization
 // Mirrors of the backend's JSON (snake_case keys are converted by `APIClient`'s
 // decoder). Timestamps stay ISO-8601 strings; use `Timestamp.date(_:)` to display them.
 
-public enum NoteStatus: String, Codable, Hashable, Sendable, CaseIterable {
-    case rough, polished
-}
-
 public struct NoteSummary: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var title: String
-    public var status: NoteStatus
     public var updatedAt: String
     public var snippet: String
 
     enum CodingKeys: String, CodingKey {
         case id
         case title
-        case status
         case updatedAt = "updated_at"
         case snippet
     }
@@ -27,7 +21,6 @@ public struct NoteSummary: Codable, Hashable, Identifiable, Sendable {
 public struct NavigationDocument: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var title: String
-    public var status: NoteStatus
     public var updatedAt: String
     public var createdAt: String
     public var snippet: String
@@ -37,7 +30,6 @@ public struct NavigationDocument: Codable, Hashable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id
         case title
-        case status
         case updatedAt = "updated_at"
         case createdAt = "created_at"
         case snippet
@@ -205,7 +197,6 @@ public struct BlockDocument: Codable, Hashable, Identifiable, Sendable {
     public var revision: Int
     public var titleAuto: Bool?
     public var title: String
-    public var status: NoteStatus
     public var createdAt: String
     public var updatedAt: String
     public var children: [BlockNode]
@@ -220,7 +211,6 @@ public struct BlockDocument: Codable, Hashable, Identifiable, Sendable {
         case revision
         case titleAuto = "title_auto"
         case title
-        case status
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case children

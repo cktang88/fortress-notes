@@ -141,11 +141,9 @@ public struct ShellCommands: Commands {
         CommandMenu("Go") {
             Group {
                 Button(Shortcuts.allNotes.title) { model?.select(.all) }.keyboardShortcut(Shortcuts.allNotes)
-                Button(Shortcuts.rough.title) { model?.select(.rough) }.keyboardShortcut(Shortcuts.rough)
-                Button(Shortcuts.polished.title) { model?.select(.polished) }.keyboardShortcut(Shortcuts.polished)
                 Button(Shortcuts.recent.title) { model?.select(.recent) }.keyboardShortcut(Shortcuts.recent)
                 Divider()
-                Button("Trash") { model?.select(.trash) }
+                Button(Shortcuts.trash.title) { model?.select(.trash) }.keyboardShortcut(Shortcuts.trash)
             }
             .disabled(model == nil)
         }

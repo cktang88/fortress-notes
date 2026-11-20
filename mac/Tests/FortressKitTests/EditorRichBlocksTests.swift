@@ -83,7 +83,7 @@ enum RichPage {
                                                               "size": .number(482_133), "mime": .string("application/pdf")], text: "Titration printout.pdf"),
         ]
         return BlockDocument(id: "01M7ONENOTEPAGE00000000000", revision: 4, titleAuto: false,
-                             title: "Titration — week 12", status: .rough, createdAt: "2024-03-11T09:00:00+00:00",
+                             title: "Titration — week 12", createdAt: "2024-03-11T09:00:00+00:00",
                              updatedAt: "2026-11-16T09:00:00+00:00", children: blocks)
     }
 
@@ -247,7 +247,7 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
 
     @Test func insertTableMakesANewBlock() throws {
         let (controller, _) = editor(BlockDocument(id: "d", revision: 1, titleAuto: true, title: "",
-                                                   status: .rough, createdAt: "", updatedAt: "", children: [RichPage.paragraph("p", [RichPage.run("Hello")])]))
+                                                   createdAt: "", updatedAt: "", children: [RichPage.paragraph("p", [RichPage.run("Hello")])]))
         let base = SyncedTree(controller.currentBlocks())
         controller.textView.setSelectedRange(NSRange(location: 2, length: 0))
         controller.insertTable()
@@ -268,7 +268,7 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         model.connectsOnAppear = false
         model.navigation = NavigationResponse(items: [.folder(NavigationFolder(
             id: "lab", parentId: nil, name: "Lab", position: 0,
-            children: [.document(NavigationDocument(id: document.id, title: document.title, status: .rough,
+            children: [.document(NavigationDocument(id: document.id, title: document.title,
                                                     updatedAt: document.updatedAt, createdAt: document.createdAt,
                                                     snippet: "", folderId: "lab", position: 0))]))], recent: [])
         for (name, appearance) in [("editor-onenote-light", NSAppearance.Name.aqua), ("editor-onenote-dark", .darkAqua)] {

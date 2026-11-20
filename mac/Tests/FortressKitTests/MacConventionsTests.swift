@@ -25,6 +25,8 @@ import Testing
         #expect(seen[chord] == nil, "\(chord) must stay the system’s")
     }
     #expect(Shortcuts.addLink.chord == "⌘K")  // As in Notes, Pages, Mail and TextEdit.
+    // Go: ⌘1–⌘3 in menu order, as in Finder's and Mail's sidebars.
+    #expect([Shortcuts.allNotes, Shortcuts.recent, Shortcuts.trash].map(\.chord) == ["⌘1", "⌘2", "⌘3"])
     #expect(Shortcuts.inlineCode.chord == "⌥⌘E")
 }
 
@@ -91,12 +93,13 @@ import Testing
 }
 
 @Test func scopesRoundTripThroughSceneStorage() {
-    let scopes: [LibraryScope] = [.all, .rough, .polished, .recent, .trash, .folder(id: "a:b")]
+    let scopes: [LibraryScope] = [.all, .recent, .trash, .folder(id: "a:b")]
     for scope in scopes {
         #expect(LibraryScope(storageKey: scope.storageKey) == scope)
     }
     #expect(LibraryScope(storageKey: "") == nil)
     #expect(LibraryScope(storageKey: "folder:") == nil)
+    #expect(LibraryScope(storageKey: "rough") == nil)  // A retired scope falls back to the default.
 }
 
 // MARK: Drag and drop

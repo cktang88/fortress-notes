@@ -32,7 +32,6 @@ public final class EditorSession {
     public private(set) var saveState: SaveState = .saved
     public var title = ""
     public private(set) var titleAuto = false
-    public private(set) var status: NoteStatus = .rough
     public private(set) var updatedAt: Date?
 
     /// Supplies the editor's current blocks (set by the text view controller).
@@ -43,7 +42,7 @@ public final class EditorSession {
     @ObservationIgnored var showBlocks: (([EditorBlock]) -> Void)?
     /// Told when a save can't reach the server (the app notices lost connections).
     @ObservationIgnored var onSaveError: ((Error) -> Void)?
-    /// The note's undo stack (the editor's): title and status changes go on it too.
+    /// The note's undo stack (the editor's): title changes go on it too.
     @ObservationIgnored weak var undoManager: UndoManager?
     /// Bumped whenever the note's content is replaced from the server (a load, Load
     /// Latest, a change made elsewhere): an editor kept from earlier then shows the new
@@ -178,7 +177,6 @@ public final class EditorSession {
         revision = document.revision
         titleAuto = document.titleAuto ?? false
         title = document.title
-        status = document.status
         updatedAt = Timestamp.date(document.updatedAt)
         loadedBlocks = blocks
         var shown = blocks
@@ -449,7 +447,7 @@ public final class EditorSession {
         }
     }
 
-    // MARK: Title and status
+    // MARK: Title
 
     /// The title as the person types it. Empty hands the title back to the first line.
     func titleDidChange(_ newTitle: String) {
@@ -522,33 +520,5 @@ public final class EditorSession {
         title = restored
         titleAuto = auto
         Task { [weak self] in await self?.commitTitle() }
-    }
-
-    func setStatus(_ newStatus: NoteStatus) async {
-        if let task = changeStatus(newStatus) { await task.value }
-    }
-
-    /// Changes the status as one undo step ("Undo Status Change") and saves it.
-    @discardableResult
-    func changeStatus(_ newStatus: NoteStatus) -> Task<Void, Never>? {
-        guard newStatus != status else { return nil }
-        let previous = status
-        undoManager?.registerUndo(withTarget: self) { target in
-            MainActor.assumeIsolated { _ = target.changeStatus(previous) }
-        }
-        undoManager?.setActionName(UndoNames.status)
-        status = newStatus
-        return Task { [weak self] in await self?.saveStatus(newStatus, previous: previous) }
-    }
-
-    private func saveStatus(_ newStatus: NoteStatus, previous: NoteStatus) async {
-        do {
-            let updated = try await api.updateDocument(id: documentId, status: newStatus)
-            status = updated.status
-            self.document?.status = updated.status
-            onDocumentChange?(updated)
-        } catch {
-            status = previous
-        }
     }
 }

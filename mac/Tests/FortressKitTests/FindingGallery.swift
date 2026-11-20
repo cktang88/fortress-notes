@@ -91,7 +91,7 @@ enum FindingFixtures {
     }
 
     static func note(_ id: String, _ title: String, _ snippet: String) -> NoteSummary {
-        NoteSummary(id: id, title: title, status: .rough, updatedAt: "2026-11-17T09:12:00+00:00", snippet: snippet)
+        NoteSummary(id: id, title: title, updatedAt: "2026-11-17T09:12:00+00:00", snippet: snippet)
     }
 
     static let seenBefore: [RelatedResult] = [

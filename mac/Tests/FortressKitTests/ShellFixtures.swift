@@ -12,10 +12,10 @@ enum ShellFixtures {
 
     static func note(
         _ id: String, _ title: String, _ snippet: String, folder: String? = nil,
-        status: NoteStatus = .rough, edited: Double, hours: Double = 0, created: Double? = nil
+        edited: Double, hours: Double = 0, created: Double? = nil
     ) -> NavigationDocument {
         NavigationDocument(
-            id: id, title: title, status: status, updatedAt: stamp(daysAgo: edited, hours: hours),
+            id: id, title: title, updatedAt: stamp(daysAgo: edited, hours: hours),
             createdAt: stamp(daysAgo: created ?? edited + 3), snippet: snippet, folderId: folder, position: 0)
     }
 
@@ -26,9 +26,9 @@ enum ShellFixtures {
     static var notes: [NavigationDocument] {
         [
             note("n1", "Kyoto trip", "We booked a ryokan in Gion for the first three nights, then a small hotel near Kyoto Station for day trips to Nara.", folder: "travel", edited: 0, hours: 0.1),
-            note("n2", "Reading notes: The Timeless Way of Building", "Patterns are alive when they resolve the forces in a situation. Alexander calls this the quality without a name.", folder: "reading", status: .polished, edited: 0, hours: 0.3),
+            note("n2", "Reading notes: The Timeless Way of Building", "Patterns are alive when they resolve the forces in a situation. Alexander calls this the quality without a name.", folder: "reading", edited: 0, hours: 0.3),
             note("n3", "Call the dentist about the cleaning", "Call the dentist about the cleaning", folder: "inbox", edited: 1),
-            note("n4", "Q4 planning", "Three bets for the quarter: ship the native app, make search instant, and cut the backlog in half.", folder: "work", status: .polished, edited: 2),
+            note("n4", "Q4 planning", "Three bets for the quarter: ship the native app, make search instant, and cut the backlog in half.", folder: "work", edited: 2),
             note("n5", "Packing list", "Passport, charger, rain jacket, the good walking shoes, and a paper map for when the phone dies.", edited: 4),
             note("n6", "Sourdough schedule", "Feed the starter at 9pm. Mix at 8am, bulk ferment until it's jiggly and domed, then shape and cold-proof overnight.", folder: "home", edited: 12),
             note("n7", "Design review feedback", "Sidebar feels heavy. Fewer dividers, softer section headers, and let the list breathe a little more.", folder: "work", edited: 26),

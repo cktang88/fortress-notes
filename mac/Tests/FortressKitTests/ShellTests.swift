@@ -12,8 +12,8 @@ private var utc: Calendar {
 
 private func date(_ string: String) -> Date { Timestamp.date(string)! }
 
-private func doc(_ id: String, _ title: String = "", updated: String, created: String = "2026-01-01T00:00:00+00:00", folder: String? = nil, status: NoteStatus = .rough, snippet: String = "") -> NavigationDocument {
-    NavigationDocument(id: id, title: title, status: status, updatedAt: updated, createdAt: created, snippet: snippet, folderId: folder, position: 0)
+private func doc(_ id: String, _ title: String = "", updated: String, created: String = "2026-01-01T00:00:00+00:00", folder: String? = nil, snippet: String = "") -> NavigationDocument {
+    NavigationDocument(id: id, title: title, updatedAt: updated, createdAt: created, snippet: snippet, folderId: folder, position: 0)
 }
 
 // MARK: Date sections
@@ -72,8 +72,6 @@ private func doc(_ id: String, _ title: String = "", updated: String, created: S
 @Test @MainActor func scopesFilterTheTree() throws {
     let navigation = try JSONDecoder().decode(NavigationResponse.self, from: fixtureData("navigation.json"))
     #expect(NoteListing.notes(in: .all, navigation: navigation).count == 3)
-    #expect(NoteListing.notes(in: .polished, navigation: navigation).isEmpty)
-    #expect(NoteListing.notes(in: .rough, navigation: navigation).count == 3)
     #expect(NoteListing.notes(in: .recent, navigation: navigation).count == navigation.recent.count)
     #expect(NoteListing.notes(in: .trash, navigation: navigation).isEmpty)
     let travel = try #require(NoteListing.folders(in: navigation.items).first { $0.folder.name == "Travel" })
@@ -121,10 +119,10 @@ private func fixtureData(_ name: String) throws -> Data {
     let model = ShellFixtures.model()
     let document = BlockDocument(
         id: "n1", revision: 3, titleAuto: false, title: "Kyoto, revised",
-        status: .polished, createdAt: "2026-01-01T00:00:00+00:00", updatedAt: "2026-11-18T10:00:00+00:00", children: [])
+        createdAt: "2026-01-01T00:00:00+00:00", updatedAt: "2026-11-18T10:00:00+00:00", children: [])
     model.noteDidChange(document)
     let note = try #require(model.openNote)
-    #expect(note.title == "Kyoto, revised" && note.status == .polished)
+    #expect(note.title == "Kyoto, revised")
     #expect(model.navigation.recent.first { $0.id == "n1" }?.title == "Kyoto, revised")
     #expect(model.windowTitle == "Kyoto, revised")
     #expect(model.windowSubtitle == "Travel")

@@ -137,7 +137,7 @@ enum LongNote {
             }
         }
         return BlockDocument(id: documentId, revision: 1, titleAuto: true, title: "Long note",
-                             status: .rough, createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
+                             createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
                              children: nodes)
     }
 }
