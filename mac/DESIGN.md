@@ -396,7 +396,7 @@ Menus are in the standard order: App, File, Edit, Format, View, Note, Go, Window
 | Format | Mark as Checked | ⇧⌘U (as in Notes) |
 | Format | Indent / Outdent | ⌘] / ⌘[ (and Tab / ⇧Tab in lists) |
 | Format | Move Up / Move Down (the block with the caret, or the selected blocks with their children) | ⌃⌘↑ / ⌃⌘↓ |
-| Format | Block ▸ Select Block, Insert Block…, Duplicate, Delete Block, Copy Link to Block, Turn into 2/3 Columns, Add Column, Remove Column, Unwrap Columns, Block Info | Esc selects (in the note), ⌘D Duplicate (the HIG's Duplicate, for blocks), the rest – |
+| Format | Block ▸ Select Block, Insert Block…, Duplicate, Delete Block, Copy Link to Block, Turn into 2/3 Columns, Add Column, Remove Column, Unwrap Columns | Esc selects (in the note), ⌘D Duplicate (the HIG's Duplicate, for blocks), the rest – |
 | Format | Add Link… | ⌘K (as in Notes, Pages, Mail, TextEdit) |
 | Format | Insert Table | – (⌥⌘T is Show/Hide Toolbar) |
 | View | Show/Hide Toolbar, Customize Toolbar… | ⌥⌘T (system) |

@@ -204,8 +204,6 @@ struct FormatCommands: Commands {
                 plain("Add Column", "fortressAddColumn:")
                 plain("Remove Column", "fortressRemoveColumn:")
                 plain("Unwrap Columns", "fortressUnwrapColumns:")
-                Divider()
-                plain("Block Info", "fortressBlockInfo:")
             }
             .disabled(!isEnabled)
             Divider()

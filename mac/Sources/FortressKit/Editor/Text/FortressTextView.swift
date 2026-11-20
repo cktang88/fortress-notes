@@ -375,7 +375,6 @@ final class FortressTextView: NSTextView {
     @objc func fortressAddColumn(_ sender: Any?) { controller?.addColumn() }
     @objc func fortressRemoveColumn(_ sender: Any?) { controller?.removeColumn() }
     @objc func fortressUnwrapColumns(_ sender: Any?) { controller?.unwrapColumns() }
-    @objc func fortressBlockInfo(_ sender: Any?) { controller?.showBlockInfo() }
 
     // Standard Format ▸ Font items route here too.
     @objc override func underline(_ sender: Any?) { controller?.toggleMark(\.underline) }
