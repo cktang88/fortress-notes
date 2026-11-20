@@ -26,6 +26,11 @@ actor FakeOCRBackend: PictureTextBackend {
         order.insert(hash, at: 0)
     }
 
+    /// Several files in one call, in the order given (the last is the newest).
+    func add(_ files: [(String, Data)]) {
+        for (hash, data) in files { add(hash, data) }
+    }
+
     func setOffline(_ value: Bool) { offline = value }
     func setRefused(_ hashes: Set<String>) { refuse = hashes }
 
@@ -78,19 +83,55 @@ final class FakeRecognizer: TextRecognizer, Sendable {
 
 // MARK: The reader
 
-@MainActor
+/// Not on the main actor: on CI other suites keep it busy for minutes, and every wait for
+/// it is long. The reader works off it (`PictureTextLoop`), so these tests wait on the
+/// loop and the fake backend, and go to the main actor only to start the reader and to
+/// check what it shows.
 @Suite(.timeLimit(.minutes(3))) struct PictureTextReaderTests {
+    /// What the reader shows, read on the main actor in one go.
+    struct Shown: Sendable {
+        var remaining: Int?, isWorking: Bool, storedCount: Int, reading: Set<String>
+        var lastError: String?, skipped: Set<String>, peakConcurrency: Int, isRunning: Bool
+    }
+
+    /// Waits (on the main actor) until the reader shows what `condition` asks, and returns it.
+    @MainActor static func shown(
+        _ reader: PictureTextReader, when condition: @Sendable @MainActor (PictureTextReader) -> Bool = { _ in true }
+    ) async -> Shown {
+        await until { condition(reader) }
+        return Shown(remaining: reader.remaining, isWorking: reader.isWorking, storedCount: reader.storedCount,
+                     reading: reader.reading, lastError: reader.lastError, skipped: reader.skipped,
+                     peakConcurrency: reader.peakConcurrency, isRunning: reader.isRunning)
+    }
+
+    /// Polls `condition` off the main actor (the test's `.timeLimit` bounds it).
+    static func poll(_ condition: () async -> Bool) async {
+        while !(await condition()), !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
     @Test func readsTheBacklogWithBoundedConcurrencyAndStoresEachReading() async {
+        let started = ContinuousClock.now
         let backend = FakeOCRBackend()
-        for index in 0..<11 { await backend.add("h\(index)", Data("text \(index)".utf8)) }
+        await backend.add((0..<11).map { ("h\($0)", Data("text \($0)".utf8)) })
         let recognizer = FakeRecognizer()
-        let reader = PictureTextReader(recognizer: recognizer, concurrency: 3, batchSize: 4,
-                                       idleDelay: .seconds(60), retryDelay: .seconds(60))
-        reader.start(backend: backend, key: "test")
-        // No wall-clock limit: the reader runs on the main actor, which other suites can
-        // hold for a minute on CI (a 20 s limit gave up after two of three batches).
-        await until { reader.remaining == 0 && !reader.isWorking }
-        reader.stop()
+        let (reader, loop) = await MainActor.run {
+            let reader = PictureTextReader(recognizer: recognizer, concurrency: 3, batchSize: 4,
+                                           idleDelay: .seconds(60), retryDelay: .seconds(60))
+            reader.start(backend: backend, key: "test")
+            return (reader, reader.loop)
+        }
+        // The whole backlog is read (three batches) and the next ask finds nothing.
+        await Self.poll {
+            let state = await loop.state
+            return state.remaining == 0 && !state.isWorking
+        }
+        let read = ContinuousClock.now - started
+        // ...and the reader shows it.
+        let shown = await Self.shown(reader) { $0.remaining == 0 && !$0.isWorking }
+        await reader.stop()
+        print("PictureText backlog: read in \(read), shown after \(ContinuousClock.now - started)")
 
         let stored = await backend.stored
         #expect(stored.count == 11)
@@ -100,17 +141,16 @@ final class FakeRecognizer: TextRecognizer, Sendable {
         #expect(stored.values.allSatisfy { $0.durationMs != nil })
         #expect(recognizer.calls == 11, "each file is read once")
         #expect(recognizer.peak <= 3)
-        #expect(reader.peakConcurrency <= 3)
-        #expect(reader.peakConcurrency >= 2, "reads overlap")
-        #expect(reader.storedCount == 11)
-        #expect(reader.reading.isEmpty)
+        #expect(shown.peakConcurrency <= 3)
+        #expect(shown.peakConcurrency >= 2, "reads overlap")
+        #expect(shown.storedCount == 11)
+        #expect(shown.reading.isEmpty)
     }
 
     @Test func anUnreadableFileIsStoredAsFailedAndTheRestGoOn() async {
         let backend = FakeOCRBackend()
-        await backend.add("ok", Data("fine".utf8))
-        await backend.add("bad", Data("bad".utf8))
-        let reader = PictureTextReader(recognizer: FakeRecognizer(), concurrency: 1)
+        await backend.add([("ok", Data("fine".utf8)), ("bad", Data("bad".utf8))])
+        let reader = await PictureTextReader(recognizer: FakeRecognizer(), concurrency: 1)
         #expect(await reader.readNextBatch(backend: backend) == .worked)
         let stored = await backend.stored
         #expect(stored["bad"]?.status == "failed")
@@ -121,57 +161,64 @@ final class FakeRecognizer: TextRecognizer, Sendable {
 
     @Test func aRefusedReadingIsNotAskedForAgainAndTheReaderGoesIdle() async {
         let backend = FakeOCRBackend()
-        await backend.add("gone", Data("x".utf8))
-        await backend.add("fine", Data("y".utf8))
+        await backend.add([("gone", Data("x".utf8)), ("fine", Data("y".utf8))])
         await backend.setRefused(["gone"])
         let recognizer = FakeRecognizer(delay: .zero)
-        let reader = PictureTextReader(recognizer: recognizer, concurrency: 2)
+        let reader = await PictureTextReader(recognizer: recognizer, concurrency: 2)
         #expect(await reader.readNextBatch(backend: backend) == .worked)
-        #expect(reader.skipped == ["gone"])
+        #expect(await reader.skipped == ["gone"])
         // "gone" still pends on the backend, but isn't read again: nothing to do.
         #expect(await reader.readNextBatch(backend: backend) == .idle)
         #expect(recognizer.calls == 2)
-        #expect(reader.remaining == 1)
+        #expect(await reader.remaining == 1)
     }
 
     @Test func anUnreachableBackendBacksOffAndWakeLooksAtOnce() async {
         let backend = FakeOCRBackend()
         await backend.setOffline(true)
-        let reader = PictureTextReader(recognizer: FakeRecognizer(delay: .zero), concurrency: 1,
-                                       idleDelay: .seconds(600), retryDelay: .seconds(600))
+        let reader = await PictureTextReader(recognizer: FakeRecognizer(delay: .zero), concurrency: 1,
+                                             idleDelay: .seconds(600), retryDelay: .seconds(600))
         #expect(await reader.readNextBatch(backend: backend) == .unreachable)
-        #expect(reader.lastError != nil)
+        #expect(await reader.lastError != nil)
 
-        reader.start(backend: backend, key: "test")
-        await until { reader.lastError != nil }
+        let loop = await MainActor.run {
+            reader.start(backend: backend, key: "test")
+            return reader.loop
+        }
+        // Wait for the running loop's own failed ask (and its ten-minute back-off).
+        await Self.poll { await backend.pendingAsks >= 2 }
+        await Self.poll { await loop.state.lastError != nil }
         let asks = await backend.pendingAsks
         await backend.setOffline(false)
-        await backend.add("new", Data("pasted".utf8))
-        reader.wake()  // instead of waiting ten minutes
-        await until { reader.storedCount == 1 }
+        await backend.add([("new", Data("pasted".utf8))])
+        await reader.wake()  // instead of waiting ten minutes
+        await Self.poll { await loop.state.storedCount == 1 }
         #expect(await backend.pendingAsks > asks)
-        #expect(reader.lastError == nil)
-        reader.stop()
-        #expect(!reader.isRunning)
+        let shown = await Self.shown(reader) { $0.storedCount == 1 }
+        #expect(shown.lastError == nil)
+        await reader.stop()
+        #expect(await !reader.isRunning)
     }
 
     @Test func startingAgainForTheSameBackendKeepsTheRunningReader() async {
         let backend = FakeOCRBackend()
-        let reader = PictureTextReader(recognizer: FakeRecognizer(delay: .zero), idleDelay: .seconds(600))
-        reader.start(backend: backend, key: "a")
-        await until { reader.remaining == 0 }
-        reader.start(backend: backend, key: "a")
+        let reader = await PictureTextReader(recognizer: FakeRecognizer(delay: .zero), idleDelay: .seconds(600))
+        let loop = await MainActor.run {
+            reader.start(backend: backend, key: "a")
+            return reader.loop
+        }
+        await Self.poll { await loop.state.remaining == 0 }
+        await reader.start(backend: backend, key: "a")
+        #expect(await reader.loop === loop, "the same reader keeps running")
         try? await Task.sleep(for: .milliseconds(100))
         #expect(await backend.pendingAsks == 1)
-        reader.start(backend: backend, key: "b")
+        await reader.start(backend: backend, key: "b")
         // A new key starts a new reader, which asks again (poll: a busy CI machine can
         // take far longer than any fixed sleep).
         let deadline = ContinuousClock.now + .seconds(30)
-        while await backend.pendingAsks < 2, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        await Self.poll { await backend.pendingAsks >= 2 || ContinuousClock.now >= deadline }
         #expect(await backend.pendingAsks == 2)
-        reader.stop()
+        await reader.stop()
     }
 }
 
