@@ -155,14 +155,24 @@ final class FortressTextView: NSTextView {
         super.selectAll(sender)
     }
 
+    // A column's Find is the note's (NotePrinting.swift): its own find bar would search
+    // the column alone.
     override func performTextFinderAction(_ sender: Any?) {
+        if isEmbedded, forwardFindToNote(sender, panel: false) { return }
         controller?.finishLoading()
         super.performTextFinderAction(sender)
     }
 
     override func performFindPanelAction(_ sender: Any?) {
+        if isEmbedded, forwardFindToNote(sender, panel: true) { return }
         controller?.finishLoading()
         super.performFindPanelAction(sender)
+    }
+
+    /// File ▸ Print…: the whole note, from the note's text or a column's.
+    override func print(_ sender: Any?) {
+        guard let controller else { return super.print(sender) }
+        controller.printNote()
     }
 
     override func moveToEndOfDocument(_ sender: Any?) {

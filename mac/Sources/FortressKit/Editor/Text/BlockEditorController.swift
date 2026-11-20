@@ -63,6 +63,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// The note's id and title (Copy Link to Block, provenance of duplicates).
     var noteReference: (() -> (id: String, title: String))?
     /// Picks files for the `/` menu's Image and File items (tests set their own).
+    /// Runs File ▸ Print…'s operation (tests look at it instead of a print panel).
+    var runPrintOperation: ((NSPrintOperation) -> Void)?
     var chooseFiles: ((_ images: Bool, _ completion: @escaping @MainActor ([URL]) -> Void) -> Void)?
 
     init(baseURL: URL, embedded: Bool = false) {
@@ -738,7 +740,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     /// Lays everything out again, once per run loop turn however many ask (a burst of
     /// resolved block references used to relayout the whole note once each).
-    private func relayoutAttachments() {
+    func relayoutAttachments() {
         guard !relayoutScheduled else { return }
         relayoutScheduled = true
         Self.later { [weak self] in
