@@ -301,7 +301,9 @@ extension AppModel {
 
     /// Moves a note to the Trash and offers Undo.
     public func trashNote(id: String) async {
-        let visible = NoteListing.sorted(NoteListing.notes(in: scope, navigation: navigation), by: .edited)
+        // In the order the list shows them (View ▸ Sort By), so the next note opened is
+        // the one that was under it.
+        let visible = NoteListing.sorted(NoteListing.notes(in: scope, navigation: navigation), by: listSort)
         do {
             try await api.trashDocument(id: id)
             if openNoteId == id {
@@ -329,6 +331,11 @@ extension AppModel {
         } catch {
             report(error)
         }
+    }
+
+    /// The note list's sort (View ▸ Sort By), as `NoteListView` reads it.
+    var listSort: NoteSort {
+        listDefaults.string(forKey: "noteSort").flatMap(NoteSort.init(rawValue:)) ?? .edited
     }
 
     public func moveNote(id: String, toFolder folderId: String?) async {
