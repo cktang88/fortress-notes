@@ -231,16 +231,6 @@ extension BlockEditorController {
         overlay.frame = selectionFrame(range).insetBy(dx: -6, dy: -3)
     }
 
-    /// Info for the block with the caret (or the first selected): where it came from.
-    func showBlockInfo() {
-        let root = rootEditor
-        let target = selectedParagraphs().first ?? paragraph(at: textView.selectedRange().location)
-        guard let id = storage.blockInfo(at: target.location)?.id else { return }
-        let frame = selectionFrame(target)
-        root.blockHandle.show(HandleTarget(editor: self, blockId: id, frame: root.textView.convert(frame, from: textView), inColumn: isEmbedded))
-        root.blockHandle.showInfo()
-    }
-
     /// The area of a range of paragraphs (text view coordinates), full measure wide.
     func selectionFrame(_ range: NSRange) -> CGRect {
         guard let manager = textView.textLayoutManager, let textRange = textRange(for: range) else { return .zero }
@@ -443,18 +433,7 @@ extension BlockEditorController {
     /// Puts copies of the selected blocks (new ids, children included) after them.
     func duplicateBlocks() {
         let range = targetBlocksRange()
-        let originals = blocks(in: range)
-        let reference = rootEditor.noteReference?()
-        let copies = originals.map { block in
-            var copy = Self.withFreshIds(block)
-            var origin: [String: JSONValue] = ["operation": .string("duplicate"), "block_id": .string(block.id)]
-            if let reference, !reference.id.isEmpty {
-                origin["document_id"] = .string(reference.id)
-                origin["document_title"] = .string(reference.title)
-            }
-            copy.newProvenance = .object(["source": .string("manual"), "origin": .object(origin)])
-            return copy
-        }
+        let copies = blocks(in: range).map(Self.withFreshIds)
         guard let first = copies.first, let last = copies.last else { return }
         let wasSelecting = blockSelection != nil
         let caretOffset = textView.selectedRange().location - range.location

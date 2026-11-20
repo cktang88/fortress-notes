@@ -351,16 +351,13 @@ private func columnsNode() -> BlockNode {
         #expect(BlockCodec.encode(block).content == .array(content))
     }
 
-    @Test func provenanceAndUnknownAttrsSurviveTableEdits() {
-        var node = tableNode(attrs: ["borders": .bool(false), "onenote": .object(["layout": .string("fixed")])])
-        node.provenance = .object(["source": .string("onenote_import"), "external_id": .string("{T1}")])
+    @Test func unknownAttrsSurviveTableEdits() {
+        let node = tableNode(attrs: ["borders": .bool(false), "onenote": .object(["layout": .string("fixed")])])
         var block = BlockCodec.decode(node)
         block.table?.setRuns([InlineRun("changed")], row: 0, column: 0)
         let fields = BlockCodec.encode(block)
         #expect(fields.attrs == node.attrs)
         let (operations, _) = BlockDiff.operations(from: SyncedTree([BlockCodec.decode(node)]), to: [block])
-        // Provenance is never sent on update (the server keeps it).
         #expect(operations.count == 1)
-        #expect(operations.first?.provenance == nil)
     }
 }

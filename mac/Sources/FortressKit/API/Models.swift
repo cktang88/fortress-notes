@@ -133,9 +133,6 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
     public var createdAt: String
     public var updatedAt: String
     public var children: [BlockNode]
-    /// Where the block came from (spec §7a); the note's, with `"inherited": true`, when
-    /// it has none of its own.
-    public var provenance: JSONValue? = nil
     /// The note revision that last changed this block (nil: unchanged since creation).
     public var revision: Int? = nil
 
@@ -143,7 +140,7 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
         id: String, documentId: String = "", parentId: String? = nil, order: String? = nil, type: String,
         attrs: [String: JSONValue] = [:], userAttrs: [String: JSONValue] = [:], content: JSONValue = .null,
         payload: JSONValue? = nil, text: String = "", createdAt: String = "", updatedAt: String = "",
-        children: [BlockNode] = [], provenance: JSONValue? = nil, revision: Int? = nil
+        children: [BlockNode] = [], revision: Int? = nil
     ) {
         self.id = id
         self.documentId = documentId
@@ -158,7 +155,6 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.children = children
-        self.provenance = provenance
         self.revision = revision
     }
 
@@ -178,12 +174,11 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
         children = try c.decodeIfPresent([BlockNode].self, forKey: .children) ?? []
-        provenance = try c.decodeIfPresent(JSONValue.self, forKey: .provenance)
         revision = try c.decodeIfPresent(Int.self, forKey: .revision)
     }
 
     enum CodingKeys: String, CodingKey {
-        case provenance, revision
+        case revision
         case id
         case documentId = "document_id"
         case parentId = "parent_id"
@@ -281,14 +276,11 @@ public struct BlockOperation: Codable, Hashable, Sendable {
     public var attrs: [String: JSONValue]?
     public var content: JSONValue?
     public var payload: JSONValue?
-    /// Only sent to set it (an insert's source); omitted, the server keeps what it has.
-    public var provenance: JSONValue?
 
     public init(
         operation: BlockOperationKind, blockId: String? = nil, parentId: String? = nil,
         afterId: String? = nil, beforeId: String? = nil, type: String? = nil,
-        attrs: [String: JSONValue]? = nil, content: JSONValue? = nil, payload: JSONValue? = nil,
-        provenance: JSONValue? = nil
+        attrs: [String: JSONValue]? = nil, content: JSONValue? = nil, payload: JSONValue? = nil
     ) {
         self.operation = operation
         self.blockId = blockId
@@ -299,7 +291,6 @@ public struct BlockOperation: Codable, Hashable, Sendable {
         self.attrs = attrs
         self.content = content
         self.payload = payload
-        self.provenance = provenance
     }
 
     enum CodingKeys: String, CodingKey {
@@ -312,7 +303,6 @@ public struct BlockOperation: Codable, Hashable, Sendable {
         case attrs
         case content
         case payload
-        case provenance
     }
 
     /// Encodes only the fields that are set (`parent_id: null` would still mean the
@@ -329,7 +319,6 @@ public struct BlockOperation: Codable, Hashable, Sendable {
         try c.encodeIfPresent(attrs, forKey: .attrs)
         try c.encodeIfPresent(content, forKey: .content)
         try c.encodeIfPresent(payload, forKey: .payload)
-        try c.encodeIfPresent(provenance, forKey: .provenance)
     }
 }
 

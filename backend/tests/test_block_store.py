@@ -66,11 +66,10 @@ class BlockStoreTests(unittest.TestCase):
                 ).fetchone()["version"]
                 columns = {row["name"] for row in connection.execute("PRAGMA table_info(blocks)")}
             self.assertIn("transaction_receipts", tables)
-            self.assertIn("block_sync", tables)
-            self.assertFalse({"revisions", "block_attrs"} & tables)
+            self.assertFalse({"revisions", "block_attrs", "block_sync"} & tables)
             self.assertEqual(version, SCHEMA_VERSION)
             self.assertTrue({"order_key", "payload_json", "content_json"} <= columns)
-            self.assertNotIn("position", columns)
+            self.assertFalse({"position", "provenance_json"} & columns)
 
 
     def test_fresh_database_has_the_folder_position_index(self) -> None:

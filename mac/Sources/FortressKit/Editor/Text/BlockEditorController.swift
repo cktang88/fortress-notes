@@ -60,7 +60,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     weak var parentEditor: BlockEditorController?
     /// The columns block this editor is a column of.
     weak var columnsHost: ColumnsBlockController?
-    /// The note's id and title (Copy Link to Block, provenance of duplicates).
+    /// The note's id and title (Copy Link to Block, printing).
     var noteReference: (() -> (id: String, title: String))?
     /// Picks files for the `/` menu's Image and File items (tests set their own).
     /// Runs File ▸ Print…'s operation (tests look at it instead of a print panel).
@@ -1893,7 +1893,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         return true
     }
 
-    // MARK: Block info and provenance
+    // MARK: Block handle
 
     func hover(at point: NSPoint?) {
         guard !isEmbedded else { return }
@@ -1937,19 +1937,6 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             location = NSMaxRange(paragraph)
         }
         return ids
-    }
-
-    /// Blocks a paste created remember where they came from (a web page's address).
-    func markPasted(from start: Int, to end: Int, existing: Set<String>, sourceURL: String?) {
-        guard let sourceURL, end > start else { return }
-        let provenance: JSONValue = .object(["source": .string("paste"), "source_url": .string(sourceURL)])
-        _ = currentBlocks()  // settle duplicate ids first
-        isNormalizing = true
-        defer { isNormalizing = false }
-        for paragraph in paragraphs(in: NSRange(location: start, length: end - start)) {
-            guard let info = storage.blockInfo(at: paragraph.location), !existing.contains(info.id) else { continue }
-            storage.addAttribute(.fnBlock, value: info.with(newProvenance: provenance), range: paragraph)
-        }
     }
 
     // MARK: Pasting text with foreign line ends

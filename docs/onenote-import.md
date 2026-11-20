@@ -29,8 +29,8 @@ and GFM tables landed as raw blocks. That model is gone: blocks are now canonica
 (`table` → `table_row` → `table_cell`, cells holding any blocks), `columns`/`column`,
 `check_item`, `file` and `image` blocks, and colour/highlight/underline/sup/sub
 marks — see [docs/block-model.md](block-model.md). Re-import keys live in
-`documents.source_kind`/`source_external_id` and the `block_sync` table
-(`backend/app/sources.py`, spec.md §7a).
+`documents.source_kind`/`source_external_id`, and what a refresh needs in the
+note's `sync_json` (`backend/app/sources.py`, spec.md §7a).
 
 ## 2a. Microsoft Graph OneNote API (verified Nov 2026)
 
@@ -178,7 +178,7 @@ is specified in [tools/fortress-onenote/SCHEMA.md](../tools/fortress-onenote/SCH
 usage and tests in [its README](../tools/fortress-onenote/README.md).
 
 ### Python side: `backend/app/onenote_import.py` + `POST /api/import/onenote` (upload zip/onepkg; job id; progress via polling)
-**Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, two-pass link rewrite) and the job API. Update (Nov 2026): blocks are keyed by OneNote object ids (ExGUIDs, stable across edits; the vendored `onenote_parser` exposes them — tools/fortress-onenote/SCHEMA.md "Object ids"), paragraph links become block references, pages deleted in OneNote are marked `source_removed`, jobs persist/cancel, and each page gets a text-coverage check.
+**Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, two-pass link rewrite) and the job API. Update (Nov 2026): blocks are keyed by OneNote object ids (ExGUIDs, stable across edits; the vendored `onenote_parser` exposes them — tools/fortress-onenote/SCHEMA.md "Object ids"), paragraph links become block references, pages deleted in OneNote are marked `source_removed_at`, jobs persist/cancel, and each page gets a text-coverage check.
 Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff against mapping table) → apply in one transaction per page (existing block transaction machinery) → second pass link rewrite → report.
 
 **Mapping** (as built; the authoritative list is spec.md §7b)
@@ -207,7 +207,7 @@ Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff a
 | Audio/video recordings | `file` block |
 | Ink | not imported: Fortress does not support ink or handwriting (decision, Nov 2026). The converter skips ink and counts it (`ink_skipped`, a warning per page) so nothing disappears silently |
 | Math | Fortress does not support math (same decision): a paragraph that is only an equation becomes a `code` block with OneNote's plain linear text (`language: "text"`); inline equations stay plain text; each page with equations gets a report warning |
-| `onenote:` links | rewritten in a second pass: page links → `docLink`; paragraph links (`object-id`) → `blockRef` when the paragraph is found, else a page link; unresolved → plain text, URL in provenance, listed in the report |
+| `onenote:` links | rewritten in a second pass: page links → `docLink`; paragraph links (`object-id`) → `blockRef` when the paragraph is found, else a page link; unresolved → plain text, listed in the report |
 | "Pasted from <url>" | `source_url` in the note's provenance |
 
 **Columns detection** (outline geometry; units = half-inches):
@@ -217,14 +217,14 @@ Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff a
 4. Page "scattered notes" (many tiny outlines) → if >4 columns in a band, fall back to sequential blocks and flag in report.
 Keep raw geometry in each column's attrs (`onenote_x/y/w`) so we can re-run with better heuristics without re-parsing.
 
-**Idempotent re-import** (as built: `backend/app/sources.py`, spec.md §7a)
-- Every note is a *living document* keyed by `(source, external_id)` = `("onenote_import", page GUID)`; folders by `notebook:`/`group:`/`section:` + `file_identity`; paragraphs by OneNote object id (ExGUID) where the converter can match one, else a content hash.
-- Re-run: untouched blocks follow the source; blocks edited in Fortress keep the local text and record the source's version as a conflict (shown in the inspector, settled with `POST …/source-conflict`); local additions and deletions stick; a whole re-import is one undo step; unchanged pages report `unchanged`. Deleted in OneNote → never deleted here; marked `source_removed` and listed in the report.
+**Re-import is a refresh** (as built: `backend/app/sources.py`, spec.md §7a)
+- Every note is keyed by `(source, external_id)` = `("onenote_import", page GUID)`; folders by `notebook:`/`group:`/`section:` + `file_identity`; paragraphs by OneNote object id (ExGUID) where the converter can match one, else a content hash.
+- Re-run: a page whose content and title are what the last import wrote reports `unchanged`. A page that changed in OneNote is refreshed: the note's blocks are replaced by the page's (title follows OneNote; the note's id and folder stay), and a paragraph with the same OneNote id keeps its Fortress block id, so links and block references into it keep working. A note edited in Fortress since the last import is **not** refreshed (nothing is merged or overwritten): the report lists it in `pages_not_refreshed` and as a warning. The .one converter and the Graph download go through the same importer, so both behave the same. Deleted in OneNote → never deleted here; marked `source_removed_at` and listed in the report.
 - Assets content-addressed by SHA-256 → no duplicate files.
 - Jobs run one at a time on the `imports` background lane; the job record is persisted in `NOTES_DIR/.fortress-imports/`, survives restarts (an interrupted job reads `failed` with `interrupted: true`; importing again resumes in place) and can be cancelled.
 
 **Verification report** (as built: the job's `result`, shown in the import sheet)
-- Per notebook: pages created/updated/unchanged/skipped, images, files, tables, pages with columns, ink drawings skipped, check items, conflicts, images queued for OCR, failed sections with reason and hint, warnings.
+- Per notebook: pages created/updated/unchanged/skipped, images, files, tables, pages with columns, ink drawings skipped, check items, pages edited here and not refreshed, images queued for OCR, failed sections with reason and hint, warnings.
 - Text coverage per page: the manifest's words vs the imported note's (multiset, weighted by length); pages under 98 % are listed.
 - Links: rewritten, block references, paragraph links that fell back to page links, unresolved links; pages and sections removed in OneNote; OneNote web's `errors.txt`.
 

@@ -77,9 +77,7 @@ def export_document_markdown(database_path: Path, document_id: str) -> str:
     links = layout.render_links(document_id, anchors, resolved.get)
     links.media_prefix = None
     body = _render_markdown(
-        document["children"],
-        document_provenance=document.get("provenance") or {"source": "manual"},
-        links=links,
+        document["children"], links=links,
     )
     stem = Path(layout.paths.get(document_id, "x.md")).stem
     return vault.dump(vault.front_matter(document, stem, None), body)

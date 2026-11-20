@@ -136,14 +136,14 @@ def _verify_snapshot(path: Path) -> None:
     try:
         with closing(_open_read_only(path)) as connection:
             check = connection.execute("PRAGMA quick_check").fetchone()
-            version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+            version = block_store.stored_version(connection)
     except sqlite3.DatabaseError as exc:
         raise ValueError(f"backup is not a readable Fortress database: {exc}") from exc
     if check is None or check[0] != "ok":
         raise ValueError("backup failed its integrity check")
-    if version is None or version[0] is None or version[0] > block_store.SCHEMA_VERSION:
+    if version is None or version > block_store.SCHEMA_VERSION:
         raise ValueError("backup was made by a newer version of Fortress Notes")
-    if version[0] < block_store.SCHEMA_VERSION:
+    if version < block_store.SCHEMA_VERSION:
         raise ValueError(
             "backup was made by an older version of Fortress Notes; restore it with a build "
             f"of the '{block_store.UPGRADE_BRANCH}' branch, which upgrades it"

@@ -21,7 +21,7 @@ struct InspectorView: View {
             if noteId != nil {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        InfoSection(info: info, provenance: info.provenance)
+                        InfoSection(info: info)
                         if !info.pictures.isEmpty {
                             PictureTextSection(
                                 pictures: info.pictures, reading: model.pictureText.reading,
@@ -232,15 +232,17 @@ private struct InspectorRow: View {
     }
 }
 
-/// Finder "Get Info"-style facts about the note: where it came from, dates, size and links.
+/// Finder "Get Info"-style facts about the note: how it came in, dates, size and links.
 struct InfoSection: View {
     let info: NoteInfo
-    let provenance: NoteProvenance?
-    @Environment(AppModel.self) private var model
 
     var body: some View {
         InspectorSection(title: "Info", symbol: "info.circle") {
-            if let provenance, provenance.isNotable { source(provenance) }
+            if let source = info.sourceLabel {
+                Label(source, systemImage: "square.and.arrow.down")
+                    .font(.callout.weight(.medium))
+                    .padding(.bottom, 4)
+            }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 5) {
                 if !info.folderPath.isEmpty { row("Folder", info.folderPath.joined(separator: " › ")) }
                 if let created = info.createdAt { row("Created", Self.format(created)) }
@@ -249,77 +251,11 @@ struct InfoSection: View {
                 if let words = info.words {
                     row("Length", Self.length(words: words, blocks: info.blocks))
                 }
-                if let mixed = info.mixedSources { row("Blocks", mixed) }
                 if info.linksOut != nil || info.backlinksIn != nil {
                     row("Links", "\(info.linksOut ?? 0) out · \(info.backlinksIn ?? 0) in")
                 }
             }
         }
-    }
-
-    private func source(_ provenance: NoteProvenance) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label {
-                Text(provenance.label).font(.callout.weight(.medium))
-            } icon: {
-                Image(systemName: provenance.symbol)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.themeSecondary)
-            }
-            if let path = provenance.path {
-                Text(path)
-                    .font(.subheadline)
-                    .foregroundStyle(.themeSecondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-            }
-            if let url = provenance.url {
-                Link(url.host() ?? url.absoluteString, destination: url)
-                    .font(.subheadline)
-                    .lineLimit(1)
-            }
-            if let line = provenance.originLine {
-                Button(line) {
-                    if let id = provenance.originDocumentId { model.open(noteId: id) }
-                }
-                .buttonStyle(.link)
-                .font(.subheadline)
-                .disabled(provenance.originDocumentId == nil)
-            }
-            if let dates = Self.sourceDates(provenance) {
-                Text(dates)
-                    .font(.subheadline)
-                    .foregroundStyle(.themeTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if info.conflicts > 0 {
-                Label("\(info.conflicts) \(info.conflicts == 1 ? "change differs" : "changes differ") from the source",
-                      systemImage: "exclamationmark.triangle")
-                    .font(.subheadline)
-                    .foregroundStyle(.themeSecondary)
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ThemeStyle(.surface), in: .rect(cornerRadius: 8, style: .continuous))
-        .padding(.bottom, 4)
-    }
-
-    /// "Written Mar 3, 2021 · changed May 12, 2024 · imported Nov 2, 2026"
-    static func sourceDates(_ provenance: NoteProvenance) -> String? {
-        let day = { (date: Date) in date.formatted(date: .abbreviated, time: .omitted) }
-        var parts: [String] = []
-        if let date = provenance.originalCreatedAt { parts.append("Written \(day(date))") }
-        if let date = provenance.originalUpdatedAt, date != provenance.originalCreatedAt {
-            parts.append("\(parts.isEmpty ? "Changed" : "changed") \(day(date))")
-        }
-        if let date = provenance.syncedAt {
-            parts.append("\(parts.isEmpty ? "Synced" : "synced") \(day(date))")
-        } else if let date = provenance.importedAt {
-            parts.append("\(parts.isEmpty ? "Imported" : "imported") \(day(date))")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     static func length(words: Int, blocks: Int?) -> String {

@@ -8,7 +8,7 @@ What is written is CommonMark + GFM + Obsidian Flavored Markdown: wikilinks for
 note links (``[[Note]]``), ``[[Note#^id]]`` / ``[[Note#Heading]]`` for block
 references, ``^id`` block identifiers on the blocks something refers to,
 ``> [!type]`` callouts, ``==highlight==``, task lists, GFM tables.
-Only what no standard can say (provenance, extension attributes, nesting under
+Only what no standard can say (extension attributes, nesting under
 a paragraph, column layouts) goes in an invisible ``<!-- fortress:block {...} -->``
 comment. Reading accepts all of that and plain Obsidian notes.
 """
@@ -32,7 +32,6 @@ from markdown_it.token import Token
 from ulid import ULID
 
 from . import block_schema as schema
-from . import provenance as _provenance
 from .block_schema import BlockShapeError, text_node
 
 
@@ -46,7 +45,6 @@ class BlockSpec:
     payload: dict[str, Any] | None = None
     children: list["BlockSpec"] = field(default_factory=list)
     id: str | None = None
-    provenance: dict[str, Any] | None = None
     # Parsing only: how deep a comment says this block is nested under the text block before it.
     indent: int = field(default=0, repr=False, compare=False)
 
@@ -136,13 +134,6 @@ def parse_comment(source: str) -> dict[str, Any] | None:
     meta: dict[str, Any] = {}
     if isinstance(value.get("id"), str):
         meta["id"] = value["id"]
-    if isinstance(value.get("provenance"), dict):
-        try:
-            restored = _provenance.normalize(value["provenance"], trusted=True)
-        except _provenance.ProvenanceError:
-            restored = {}
-        if restored:
-            meta["provenance"] = restored
     for key in ("attrs", "rows"):
         if isinstance(value.get(key), (dict, list)):
             meta[key] = value[key]
@@ -1064,9 +1055,7 @@ def _file_extra(attrs: dict[str, Any]) -> dict[str, Any]:
 
 
 class _Renderer:
-    def __init__(self, document_provenance: dict[str, Any] | None, include_ids: bool,
-                 links: RenderLinks | None):
-        self.document_source = (document_provenance or {}).get("source", _provenance.DEFAULT_SOURCE)
+    def __init__(self, include_ids: bool, links: RenderLinks | None):
         self.include_ids = include_ids
         self.links = links or _DEFAULT_LINKS
 
@@ -1089,13 +1078,9 @@ class _Renderer:
         return {k: v for k, v in attrs.items() if k not in native}
 
     def meta(self, node: dict[str, Any], *, indent: int = 0, skip_attrs: bool = False) -> dict[str, Any]:
-        """What only a comment can say: provenance, extension attributes, nesting."""
+        """What only a comment can say: extension attributes, nesting."""
 
         meta: dict[str, Any] = {}
-        own = node.get("provenance")
-        if isinstance(own, dict) and own and not own.get("inherited"):
-            if own != {"source": self.document_source}:
-                meta["provenance"] = {k: v for k, v in own.items() if k != "inherited"}
         if not skip_attrs:
             extra = self.extra_attrs(node)
             if extra:
@@ -1299,20 +1284,19 @@ class _Renderer:
         if gfm is None:
             return table_html(node, self, indent)
         meta = self.meta(node, indent=indent, skip_attrs=True)
-        lines, rows_meta = gfm
-        if rows_meta:
-            meta["rows"] = rows_meta
+        lines = gfm
         caret = anchor if anchor and _ANCHOR_RE.match(anchor) else None
         if anchor and not caret:
             meta["id"] = anchor
         out = (comment(meta) + "\n" if meta else "") + lines
         return out + (f"\n\n^{caret}" if caret else "")
 
-    def gfm_table(self, node: dict[str, Any]) -> tuple[str, list | None] | None:
-        """A GFM table and the comment's per-cell metadata, if the table fits one.
+    def gfm_table(self, node: dict[str, Any]) -> str | None:
+        """A GFM table, if the table fits one.
 
         It fits with one header row, cells of at most one paragraph, no spans,
-        colours or widths, and no block inside that something refers to.
+        colours or widths, and no block inside that something refers to or that
+        has attributes Markdown can't say.
         """
 
         attrs = node.get("attrs") or {}
@@ -1325,12 +1309,9 @@ class _Renderer:
         if not width or any(len(row.get("children") or []) != width for row in rows):
             return None
         aligns: list[str | None] = []
-        rows_meta: list[dict[str, Any]] = []
-        any_meta = False
         for number, row in enumerate(rows):
             if row.get("attrs") or self.html_meta(row, skip_attrs=True):
                 return None
-            cells_meta = []
             for column, cell in enumerate(row["children"]):
                 cell_attrs = cell.get("attrs") or {}
                 if cell_attrs.keys() - {"align"} or cell_attrs.get("align") == "justify":
@@ -1344,21 +1325,12 @@ class _Renderer:
                 inner = cell.get("children") or []
                 if len(inner) > 1:
                     return None
-                cell_meta: dict[str, Any] = {}
                 if inner:
                     paragraph = inner[0]
                     if paragraph["type"] != "paragraph" or paragraph.get("children"):
                         return None
-                    if self.anchor(paragraph):
+                    if self.anchor(paragraph) or self.meta(paragraph):
                         return None
-                    block_meta = self.meta(paragraph)
-                    if block_meta.keys() - {"provenance"}:
-                        return None
-                    if block_meta:
-                        cell_meta["block"] = block_meta
-                        any_meta = True
-                cells_meta.append(cell_meta)
-            rows_meta.append({"cells": cells_meta})
         lines = []
         for number, row in enumerate(rows):
             cells = []
@@ -1371,26 +1343,25 @@ class _Renderer:
                 separators = [{"center": ":---:", "right": "---:", "left": ":---"}.get(a or "", "---")
                               for a in aligns]
                 lines.append("| " + " | ".join(separators) + " |")
-        return "\n".join(lines), rows_meta if any_meta else None
+        return "\n".join(lines)
 
 
 def _indent(text: str, prefix: str) -> str:
     return "\n".join(prefix + line if line else line for line in text.split("\n"))
 
 
-def render_markdown(nodes: list[dict[str, Any]], *, document_provenance: dict | None = None,
-                    include_ids: bool = True, links: RenderLinks | None = None) -> str:
+def render_markdown(nodes: list[dict[str, Any]], *, include_ids: bool = True,
+                    links: RenderLinks | None = None) -> str:
     """A block tree (``document_tree`` nodes) as Markdown.
 
     With ``include_ids`` the id of every block in ``links.anchors`` (all blocks
     when ``links`` or its anchors are None) is written: ``^id`` where Obsidian
-    has a place for it, else in the block's comment. Provenance that differs
-    from ``document_provenance`` and attributes the syntax can't say are always
-    written. ``links`` names linked notes and blocks and places stored files.
+    has a place for it, else in the block's comment. Attributes the syntax
+    can't say are always written. ``links`` names linked notes and blocks and places stored files.
     """
 
     return "\n\n".join(
-        fragment for fragment in _Renderer(document_provenance, include_ids, links).blocks(nodes) if fragment
+        fragment for fragment in _Renderer(include_ids, links).blocks(nodes) if fragment
     )
 
 
@@ -1578,8 +1549,6 @@ def _apply_meta(block: BlockSpec, meta: dict[str, Any] | None) -> BlockSpec:
         return block
     if meta.get("id"):
         block.id = meta["id"]
-    if meta.get("provenance"):
-        block.provenance = meta["provenance"]
     wanted = meta.get("type")
     if isinstance(wanted, str) and wanted in schema.TYPES and wanted != block.type:
         try:
@@ -1991,7 +1960,7 @@ def _callout(children: list[BlockSpec]) -> BlockSpec | None:
     if blocks:
         # The paragraph's id and comment belong to its last line.
         last = blocks[-1]
-        last.id, last.provenance, last.indent = first.id, first.provenance, first.indent
+        last.id, last.indent = first.id, first.indent
         last.attrs = {**first.attrs, **last.attrs}
     try:
         return spec("callout", attrs, children=blocks + children[1:])

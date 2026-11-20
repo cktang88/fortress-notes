@@ -355,6 +355,20 @@ class InitializeTests(unittest.TestCase):
                 version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
             self.assertEqual(version, 14)
 
+    def test_a_schema_15_database_with_per_block_sync_state_is_refused(self) -> None:
+        # Not yet through last-migrating-release's last conversion (which stays at 15).
+        for statement in (
+            "CREATE TABLE block_sync (block_id TEXT PRIMARY KEY, source_hash TEXT)",
+            "ALTER TABLE blocks ADD COLUMN provenance_json TEXT",
+        ):
+            with self.subTest(statement), tempfile.TemporaryDirectory() as directory:
+                database = self._database_at(directory, SCHEMA_VERSION)
+                with connection_scope(database) as connection:
+                    connection.execute(statement)
+                block_store._ready_files.pop(database, None)
+                with self.assertRaisesRegex(block_store.WorkspaceTooOld, "last-migrating-release"):
+                    initialize(database)
+
     def test_notes_without_a_schema_version_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"

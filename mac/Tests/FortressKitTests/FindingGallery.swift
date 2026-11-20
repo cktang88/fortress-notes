@@ -130,7 +130,6 @@ enum FindingFixtures {
         counts["outgoing_links"] = 3
         counts["backlinks"] = 2
         object["counts"] = counts
-        object["blocks_by_source"] = ["onenote_import": 12, "manual": 2]
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
     }
 
@@ -156,8 +155,7 @@ enum FindingFixtures {
               var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return Data("{}".utf8) }
         object["id"] = scans
         object["title"] = "Receipts and tickets"
-        object["provenance"] = ["source": "paste"]
-        object["blocks_by_source"] = ["paste": 6]
+        object["source"] = "capture"
         object["picture_text"] = pictures
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
     }

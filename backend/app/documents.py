@@ -168,7 +168,7 @@ def _uncategorized_folder(db_path: Path) -> str:
         return str(block_store.create_folder(db_path, UNCATEGORIZED, None, position=0)["id"])
 
 
-# --- Living documents --------------------------------------------------------
+# --- Re-imports ---------------------------------------------------------------
 
 
 def upsert_from_source(**kwargs):
@@ -507,7 +507,7 @@ def _mirror_document(db_path: Path, notes_path: Path, document_id: str, layout: 
         return
     resolved = (tree.get("resolved_links") or {}).get("blocks") or {}
     body = block_store.render_markdown(
-        tree["children"], document_provenance=tree["provenance"],
+        tree["children"],
         links=layout.render_links(document_id, anchors, resolved.get),
     )
     relative = layout.paths[document_id]
