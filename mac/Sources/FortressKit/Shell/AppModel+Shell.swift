@@ -69,6 +69,9 @@ extension AppModel {
         }
         if backend.startsAutomatically && backend.canStart && !Self.isRunningTests {
             notice = nil
+            // Not connected until it answers: the window shows "Starting Fortress…" (or
+            // why it couldn't start) instead of an empty library.
+            isConnected = false
             await startBackend()
             return
         }
