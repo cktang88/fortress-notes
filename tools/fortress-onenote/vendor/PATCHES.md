@@ -136,5 +136,15 @@ block list, and a data block that decompressed to fewer bytes than its
 header promised is an error instead of an arithmetic underflow.
 
 **C2 — lint only.** Explicit `'_` lifetimes on returned borrowing types
-(`builder.rs`, `cabinet.rs`, `folder.rs`) to keep builds warning-free on
-current Rust. No behaviour change.
+(`builder.rs`, since removed by C3, `cabinet.rs`, `folder.rs`) to keep
+builds warning-free on current Rust. No behaviour change.
+
+**C3 — read-only.** The cabinet writer was only used by the converter's
+tests to build `.onepkg` inputs; they now use small checked-in fixtures
+(`tests/fixtures/*.onepkg`, how they were made is in `tests/cli.rs`).
+Removed `builder.rs` (`CabinetBuilder`, `CabinetWriter`, `FolderBuilder`,
+`FileBuilder`, `FileWriter`) and the code only it used: `MsZipCompressor`,
+`CompressionType::to_bitfield`, `datetime_to_bits`, the writer limits in
+`consts.rs`, and the inline unit tests of those (the inline tests needed
+removed dev-dependencies already). Files: `lib.rs`, `mszip.rs`, `ctype.rs`,
+`datetime.rs`, `consts.rs`.
