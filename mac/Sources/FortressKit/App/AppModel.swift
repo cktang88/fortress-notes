@@ -144,6 +144,10 @@ public final class AppModel {
 
     var navigationFetches: Int { get { library.navigationFetches } set { library.navigationFetches = newValue } }
     var newestAppliedFetch: Int { get { library.newestAppliedFetch } set { library.newestAppliedFetch = newValue } }
+    var rowEditSequence: Int { get { library.rowEditSequence } set { library.rowEditSequence = newValue } }
+    var rowEdits: [String: (sequence: Int, document: BlockDocument)] {
+        get { library.rowEdits } set { library.rowEdits = newValue }
+    }
     /// Reconnects after the backend goes away (see `startReconnecting`); one for all windows.
     var reconnectTask: Task<Void, Never>? { get { library.reconnectTask } set { library.reconnectTask = newValue } }
     /// Delays between reconnection attempts (doubling up to the last).
@@ -158,16 +162,21 @@ public final class AppModel {
     ///
     /// Every change to notes and folders ends with one (the server's tree is the truth).
     /// Safe to call often: concurrent calls share one request, a call after a change
-    /// never joins a request sent before it, and an answer that arrives after a newer
-    /// one is dropped.
+    /// never joins a request sent before it, an answer that arrives after a newer
+    /// one is dropped, and saves made while it was in flight are re-applied over it.
     public func refreshNavigation() async {
         navigationFetches += 1
         let fetch = navigationFetches
+        let mark = rowEditSequence
         do {
-            let fresh = try await api.navigation(recentLimit: Self.recentLimit)
+            var fresh = try await api.navigation(recentLimit: Self.recentLimit)
             isConnected = true
             guard fetch > newestAppliedFetch else { return }
             newestAppliedFetch = fetch
+            rowEdits = rowEdits.filter { $0.value.sequence > mark }
+            for edit in rowEdits.values.sorted(by: { $0.sequence < $1.sequence }) {
+                Self.applyRowEdit(edit.document, to: &fresh)
+            }
             if fresh != navigation { navigation = fresh }
             api.store.reconcile(with: fresh)
         } catch {

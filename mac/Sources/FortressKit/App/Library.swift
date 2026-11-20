@@ -30,6 +30,8 @@ public final class Library {
     // Data layer bookkeeping (see AppModel.refreshNavigation).
     @ObservationIgnored var navigationFetches = 0
     @ObservationIgnored var newestAppliedFetch = 0
+    @ObservationIgnored var rowEditSequence = 0
+    @ObservationIgnored var rowEdits: [String: (sequence: Int, document: BlockDocument)] = [:]
     @ObservationIgnored var reconnectTask: Task<Void, Never>?
     @ObservationIgnored public var reconnectDelays: (first: Duration, max: Duration) = (.milliseconds(500), .seconds(30))
     @ObservationIgnored var backendRestarts = 0

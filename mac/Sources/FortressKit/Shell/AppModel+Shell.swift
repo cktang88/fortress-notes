@@ -260,20 +260,27 @@ extension AppModel {
     /// reloading the tree on every save: the note's row takes the save's title, snippet
     /// and time, and the note moves to the top of Recent.
     public func noteDidChange(_ document: BlockDocument) {
-        func edit(_ note: inout NavigationDocument) {
+        // Kept until a reload that started after it lands, so one already in flight
+        // (holding the tree from before this save) doesn't put the old row back.
+        rowEditSequence += 1
+        rowEdits[document.id] = (rowEditSequence, document)
+        var updated = navigation
+        Self.applyRowEdit(document, to: &updated)
+        if updated != navigation { navigation = updated }
+        recordBlockVersions(of: document)  // Finding: "Seen before" cache key.
+    }
+
+    /// A save's title, snippet and time on the note's row, and the note at the top of Recent.
+    static func applyRowEdit(_ document: BlockDocument, to navigation: inout NavigationResponse) {
+        editDocument(document.id, in: &navigation.items) { note in
             note.title = document.title
             note.updatedAt = document.updatedAt
             if let snippet = document.children.first?.text { note.snippet = snippet }
         }
-        var updated = navigation
-        Self.editDocument(document.id, in: &updated.items, edit)
-        if let row = NoteListing.allDocuments(in: updated.items).first(where: { $0.id == document.id }) {
-            updated.recent.removeAll { $0.id == document.id }
-            updated.recent.insert(row, at: 0)
-            if updated.recent.count > Self.recentLimit { updated.recent.removeLast(updated.recent.count - Self.recentLimit) }
-        }
-        if updated != navigation { navigation = updated }
-        recordBlockVersions(of: document)  // Finding: "Seen before" cache key.
+        guard let row = NoteListing.allDocuments(in: navigation.items).first(where: { $0.id == document.id }) else { return }
+        navigation.recent.removeAll { $0.id == document.id }
+        navigation.recent.insert(row, at: 0)
+        if navigation.recent.count > recentLimit { navigation.recent.removeLast(navigation.recent.count - recentLimit) }
     }
 
     private static func editDocument(

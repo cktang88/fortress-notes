@@ -173,6 +173,29 @@ import Testing
         #expect(model.navigation.items.first.map { if case .document(let n) = $0 { n.title } else { "" } } == "New")
     }
 
+    /// Bug: an edit saved while a refresh was in flight was undone when the refresh
+    /// (holding the tree from before the save) arrived.
+    @Test func editDuringARefreshSurvivesIt() async throws {
+        let before = SpyJSON.navigation([.document(SpyJSON.note("n1", title: "Before"))])
+        let answer = StubGate()
+        SpyProtocol.reset { _ in .json(before, gate: answer) }
+        let model = makeModel(SpyProtocol.client())
+        model.navigation = NavigationResponse(items: [.document(SpyJSON.note("n1", title: "Before"))], recent: [])
+        async let refresh: Void = model.refreshNavigation()
+        try await waitUntil { SpyProtocol.seen.count >= 1 }
+        model.noteDidChange(SpyJSON.document("n1", revision: 2, title: "After", updatedAt: "2026-11-18T10:00:00.000000+00:00"))
+        answer.open()
+        await refresh
+        #expect(model.openNoteTitle("n1") == "After")
+        #expect(model.navigation.recent.first?.title == "After")
+
+        // A refresh that started after the save shows the server's tree as it is.
+        SpyProtocol.reset { _ in .json(SpyJSON.navigation([.document(SpyJSON.note("n1", title: "Server"))])) }
+        model.api.store.mutationStarted()
+        await model.refreshNavigation()
+        #expect(model.openNoteTitle("n1") == "Server")
+    }
+
     /// Bug: a note edited that wasn't among the 20 most recent never showed up in Recent
     /// until something reloaded the tree.
     @Test func editingAnOldNoteMovesItToTheTopOfRecent() {
