@@ -328,12 +328,6 @@ extension GallerySnapshotTests {
             model.query = question
             return MainWindow().environment(model)
         }
-        // TEMP diagnostic: a short question.
-        try await both("finding-search-question-short", seconds: 8) {
-            let model = FindingFixtures.model()
-            model.query = "ryokan?"
-            return MainWindow().environment(model)
-        }
     }
 
     /// Ask opened from the toolbar with no key configured: intro and setup card.

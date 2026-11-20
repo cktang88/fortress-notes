@@ -20,20 +20,27 @@ struct SearchResultsView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if controller.isQuestion {
-                        askRow.padding(.bottom, 6)
-                    }
-
-                    ForEach(controller.results) { match in
-                        PassageRow(match: match, isSelected: controller.selection == .result(match.id)) {
-                            controller.selection = .result(match.id)
-                            perform(.open(documentId: match.documentId, blockId: match.blockId))
+                    // One ForEach over the rows in display order, so each row has one
+                    // identity: the Ask row moving between first and last (a question
+                    // typed) is a move, never a stale copy (two `if` branches with the same
+                    // id left a LazyVStack showing the row as first drawn, without the query).
+                    let matches = Dictionary(controller.results.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                    let rows = controller.rows
+                    ForEach(rows, id: \.self) { row in
+                        switch row {
+                        case .ask:
+                            AskRow(query: controller.query, isSelected: controller.selection == .ask) {
+                                perform(.ask(question: controller.query))
+                            }
+                            .padding(row == rows.first ? .bottom : .top, rows.count > 1 ? 6 : 0)
+                        case .result(let id):
+                            if let match = matches[id] {
+                                PassageRow(match: match, isSelected: controller.selection == row) {
+                                    controller.selection = row
+                                    perform(.open(documentId: match.documentId, blockId: match.blockId))
+                                }
+                            }
                         }
-                        .id(SearchSelection.result(match.id))
-                    }
-
-                    if !controller.isQuestion {
-                        askRow.padding(.top, controller.results.isEmpty ? 0 : 6)
                     }
 
                     footer
@@ -55,13 +62,6 @@ struct SearchResultsView: View {
         }
         .onDisappear { controller.cancel() }
         .onLocalKeyDown(handleKey)
-    }
-
-    private var askRow: some View {
-        AskRow(query: controller.query, isSelected: controller.selection == .ask) {
-            perform(.ask(question: controller.query))
-        }
-        .id(SearchSelection.ask)
     }
 
     @ViewBuilder private var footer: some View {
@@ -136,8 +136,6 @@ private struct AskRow: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.tint)
                     .frame(width: 20)
-                // Two texts: one concatenated Text dropped the whole query when it didn't
-                // fit the column, leaving "Ask your notes:" alone.
                 HStack(spacing: 4) {
                     Text("Ask your notes:")
                         .foregroundStyle(.themeSecondary)
