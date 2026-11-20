@@ -53,34 +53,36 @@ enum SoftBreaks {
         static let continued = Role(rawValue: 2)
     }
 
-    /// The soft paragraphs of a block's paragraph (`paragraph` itself when it has none).
-    static func pieces(of paragraph: NSRange, in string: NSString) -> [(range: NSRange, role: Role)] {
-        var found = string.range(of: separator, options: .literal, range: paragraph)
-        guard found.location != NSNotFound else { return [(paragraph, [])] }
+    /// The soft paragraph holding `index` (TextKit's paragraph: up to and including the
+    /// next U+2029 or "\n") and where it sits in its block. Only reads that paragraph.
+    static func piece(at index: Int, in string: NSString) -> (range: NSRange, role: Role) {
+        let range = string.paragraphRange(for: NSRange(location: min(max(0, index), max(0, string.length - 1)), length: 0))
+        var role: Role = []
+        if range.location > 0, string.character(at: range.location - 1) == character { role.insert(.continuation) }
+        if range.length > 0, string.character(at: NSMaxRange(range) - 1) == character { role.insert(.continued) }
+        return (range, role)
+    }
+
+    /// The soft paragraphs of a block's `paragraph` (`paragraph` itself when it has none);
+    /// with `near`, only the ones touching it or next to it (an edit changes no others).
+    static func pieces(of paragraph: NSRange, near: NSRange? = nil, in string: NSString) -> [(range: NSRange, role: Role)] {
+        guard paragraph.length > 0 else { return [(paragraph, [])] }
+        let end = NSMaxRange(paragraph)
+        let start = near.map { min(max(paragraph.location, $0.location - 1), end - 1) } ?? paragraph.location
+        let stop = near.map { min(end, NSMaxRange($0) + 1) } ?? end
         var output: [(range: NSRange, role: Role)] = []
-        var start = paragraph.location
-        while found.location != NSNotFound {
-            let end = found.location + 1
-            output.append((NSRange(location: start, length: end - start), start > paragraph.location ? [.continuation, .continued] : [.continued]))
-            start = end
-            found = string.range(of: separator, options: .literal, range: NSRange(location: start, length: NSMaxRange(paragraph) - start))
-        }
-        output.append((NSRange(location: start, length: NSMaxRange(paragraph) - start), start > paragraph.location ? [.continuation] : []))
+        var location = start
+        repeat {
+            let piece = piece(at: location, in: string)
+            output.append(piece)
+            location = NSMaxRange(piece.range)
+        } while location < stop && location < end
         return output
     }
 
-    /// The role of the soft paragraph that text typed at `location` of a block's
-    /// `paragraph` goes into.
-    static func role(at location: Int, in paragraph: NSRange, string: NSString) -> Role {
-        guard location >= paragraph.location, location <= NSMaxRange(paragraph) else { return [] }
-        var role: Role = []
-        if string.range(of: separator, options: [.literal, .backwards], range: NSRange(location: paragraph.location, length: location - paragraph.location)).location != NSNotFound {
-            role.insert(.continuation)
-        }
-        if string.range(of: separator, options: .literal, range: NSRange(location: location, length: NSMaxRange(paragraph) - location)).location != NSNotFound {
-            role.insert(.continued)
-        }
-        return role
+    /// The role of the soft paragraph that text typed at `location` goes into.
+    static func role(at location: Int, in string: NSString) -> Role {
+        piece(at: location, in: string).role
     }
 
     /// `text` with every soft separator a space again (what copying and reading see).
@@ -98,27 +100,31 @@ enum SoftBreaks {
 
     // MARK: Splitting
 
-    /// Splits the soft paragraphs of `content` (a block's text, without its "\n") that are
-    /// longer than `longest`. True when it changed the text.
+    /// Splits the soft paragraphs of `content` (a block's text, without its "\n") longer
+    /// than `longest` (with `near`, only the ones touching it). The range of what changed.
     @discardableResult
-    static func split(_ text: NSMutableAttributedString, content: NSRange) -> Bool {
-        guard content.length > longest else { return false }
+    static func split(_ text: NSMutableAttributedString, content: NSRange, near: NSRange? = nil) -> NSRange? {
+        guard content.length > longest else { return nil }
         let string = text.nsString
         let end = NSMaxRange(content)
-        var changed = false
-        var start = content.location
-        while start < end {
-            let found = string.range(of: separator, options: .literal, range: NSRange(location: start, length: end - start))
-            let pieceEnd = found.location == NSNotFound ? end : found.location
+        var changed: NSRange?
+        var start = max(content.location, piece(at: near.map { max(content.location, $0.location - 1) } ?? content.location, in: string).range.location)
+        let stop = near.map { min(end, NSMaxRange($0) + 1) } ?? end
+        while start < stop {
+            let next = NSMaxRange(piece(at: start, in: string).range)
+            // Its text: without its separator, or the block's "\n".
+            var pieceEnd = min(next, end)
+            if pieceEnd == next, pieceEnd > start, string.character(at: pieceEnd - 1) == character { pieceEnd -= 1 }
             var from = start
             if pieceEnd - start > longest {
                 // Pieces of about `target`, the last one at least half that.
                 while pieceEnd - from > target + target / 2 {
                     let low = from + target / 2, high = min(pieceEnd - target / 2, from + target + target / 2)
                     if let point = breakPoint(near: from + target, low: low, high: high, in: text, content: content) {
-                        text.replaceCharacters(in: NSRange(location: point, length: 1), with: separator)
-                        text.addAttribute(.fnSoft, value: true, range: NSRange(location: point, length: 1))
-                        changed = true
+                        let range = NSRange(location: point, length: 1)
+                        text.replaceCharacters(in: range, with: separator)
+                        text.addAttribute(.fnSoft, value: true, range: range)
+                        changed = changed.map { NSUnionRange($0, range) } ?? range
                         from = point + 1
                     } else {
                         // No space to break at here (a long URL, base64): look further on.
@@ -126,7 +132,8 @@ enum SoftBreaks {
                     }
                 }
             }
-            start = pieceEnd + 1
+            guard next > start else { break }
+            start = next
         }
         return changed
     }
@@ -172,19 +179,26 @@ enum SoftBreaks {
     /// Fixes the soft separators of one block's paragraph after an edit around `edited`:
     /// `.fnSoft` only on separators (typing after one copies its attributes), a separator
     /// that no longer fits becomes a space again, and a soft paragraph grown too long is
-    /// split. True when characters changed (the block's paragraph styles need redoing).
+    /// split. The range of the characters it changed (their soft paragraphs need
+    /// restyling), nil when none. Reads only the soft paragraphs around the edit.
     @discardableResult
-    static func repair(_ text: NSMutableAttributedString, paragraph: NSRange, kind: BlockKind, edited: NSRange) -> Bool {
+    static func repair(_ text: NSMutableAttributedString, paragraph: NSRange, kind: BlockKind, edited: NSRange) -> NSRange? {
         let string = text.nsString
+        guard paragraph.length > 0 else { return nil }
         var content = paragraph
-        if content.length > 0, string.character(at: NSMaxRange(content) - 1) == 0x0A { content.length -= 1 }
-        var changed = false
-        // Only around the edit can a separator have gone wrong (a new kind edits the whole block).
+        if string.character(at: NSMaxRange(content) - 1) == 0x0A { content.length -= 1 }
+        var changed: NSRange?
+        // Only around the edit can a separator have gone wrong (a new kind edits the whole
+        // block); in a block of another kind, every separator goes.
         let low = max(paragraph.location, edited.location - 1), high = min(NSMaxRange(paragraph), NSMaxRange(edited) + 1)
-        let near = NSRange(location: low, length: max(0, high - low))
-        if near.length > 0 {
+        var checked = NSRange(location: low, length: max(0, high - low))
+        if !eligible(kind) {
+            guard NSMaxRange(piece(at: paragraph.location, in: string).range) < NSMaxRange(paragraph) else { return nil }
+            checked = paragraph
+        }
+        if checked.length > 0 {
             var stray: [NSRange] = []
-            text.enumerateAttribute(.fnSoft, in: near, options: []) { value, run, _ in
+            text.enumerateAttribute(.fnSoft, in: checked, options: []) { value, run, _ in
                 guard value != nil, run.length != 1 || string.character(at: run.location) != character else { return }
                 stray.append(run)
             }
@@ -194,20 +208,18 @@ enum SoftBreaks {
                     text.addAttribute(.fnSoft, value: true, range: NSRange(location: index, length: 1))
                 }
             }
-            let checked = eligible(kind) ? near : paragraph
-            var location = checked.location
-            while location < NSMaxRange(checked) {
-                let found = string.range(of: separator, options: .literal, range: NSRange(location: location, length: NSMaxRange(checked) - location))
-                guard found.location != NSNotFound else { break }
-                if !eligible(kind) || !canSeparate(at: found.location, in: string, content: content, strict: false) {
-                    text.replaceCharacters(in: found, with: " ")
-                    text.removeAttribute(.fnSoft, range: found)
-                    changed = true
+            for index in checked.location..<NSMaxRange(checked) where string.character(at: index) == character {
+                if !eligible(kind) || !canSeparate(at: index, in: string, content: content, strict: false) {
+                    let range = NSRange(location: index, length: 1)
+                    text.replaceCharacters(in: range, with: " ")
+                    text.removeAttribute(.fnSoft, range: range)
+                    changed = changed.map { NSUnionRange($0, range) } ?? range
                 }
-                location = NSMaxRange(found)
             }
         }
-        if eligible(kind), split(text, content: content) { changed = true }
+        if eligible(kind), let split = split(text, content: content, near: checked) {
+            changed = changed.map { NSUnionRange($0, split) } ?? split
+        }
         return changed
     }
 }

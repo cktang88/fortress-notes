@@ -26,7 +26,7 @@ enum DocumentText {
         var split = false
         if block.kind.hasInlineText {
             output.append(inline(block.runs, info: info, context: context, theme: theme))
-            split = SoftBreaks.eligible(block.kind) && SoftBreaks.split(output, content: NSRange(location: 0, length: output.length))
+            split = SoftBreaks.eligible(block.kind) && SoftBreaks.split(output, content: NSRange(location: 0, length: output.length)) != nil
         } else {
             let attachment = BlockAttachment(info: info, context: context, block: block)
             var attributes = base(info: info, marks: InlineMarks(), theme: theme)

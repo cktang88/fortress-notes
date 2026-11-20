@@ -263,7 +263,10 @@ struct EditorTheme: Sendable {
     /// Re-derives presentation for the paragraphs touching `range`. Also gives every
     /// paragraph one block (the one on its first character) and turns pasted rich text
     /// into marks.
-    func restyle(_ storage: NSMutableAttributedString, range: NSRange) {
+    ///
+    /// `near` (one block's paragraph as `range`): only its soft paragraphs touching `near`
+    /// (`SoftBreaks`), when the edit left the others as they were.
+    func restyle(_ storage: NSMutableAttributedString, range: NSRange, near: NSRange? = nil) {
         let string = storage.nsString
         guard string.length > 0 else { return }
         var location = string.paragraphRange(at: range.location).location
@@ -272,7 +275,7 @@ struct EditorTheme: Sendable {
             let paragraph = string.paragraphRange(at: location)
             // The block's info is the one on its first character, for all its soft paragraphs.
             let info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
-            for piece in SoftBreaks.pieces(of: paragraph, in: string) {
+            for piece in SoftBreaks.pieces(of: paragraph, near: near, in: string) {
                 restyleParagraph(storage, piece.range, info: info, role: piece.role)
             }
             location = NSMaxRange(paragraph)

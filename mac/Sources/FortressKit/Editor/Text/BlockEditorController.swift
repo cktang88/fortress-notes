@@ -1011,6 +1011,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         var touchedInfo: BlockInfo?
         var uniform = true
         var resplit = false
+        var nearRanges: [NSRange?] = []
         while location < text.length {
             let paragraph = text.paragraphRange(at: location)
             var info = storage.blockInfo(at: paragraph.location) ?? BlockInfo()
@@ -1026,8 +1027,18 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             // One lookup: the info on the paragraph's first character, and how far it runs.
             var tagged = NSRange()
             let first = storage.attribute(.fnBlock, at: paragraph.location, longestEffectiveRange: &tagged, in: paragraph) as? BlockInfo
-            if first !== info || tagged != paragraph { storage.addAttribute(.fnBlock, value: info, range: paragraph) }
-            if SoftBreaks.repair(storage, paragraph: paragraph, kind: info.kind, edited: editedRange) { resplit = true }
+            let newInfo = first !== info || tagged != paragraph
+            if newInfo { storage.addAttribute(.fnBlock, value: info, range: paragraph) }
+            // Restyled whole when its block changed, else only the soft paragraphs the edit
+            // (and any soft separator it moved) touched: a long block is many of them.
+            let low = min(max(editedRange.location, paragraph.location), NSMaxRange(paragraph))
+            let high = max(low, min(NSMaxRange(editedRange), NSMaxRange(paragraph)))
+            var near: NSRange? = newInfo ? nil : NSRange(location: low, length: high - low)
+            if let changed = SoftBreaks.repair(storage, paragraph: paragraph, kind: info.kind, edited: editedRange) {
+                resplit = true
+                near = near.map { NSUnionRange($0, changed) }
+            }
+            nearRanges.append(near)
             dirtyBlocks.insert(info.id)
             dirtyInfos.insert(ObjectIdentifier(info))
             touched.append(paragraph)
@@ -1050,7 +1061,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             // that kind (they came with the typing attributes): nothing to restyle.
             // Styling them paragraph by paragraph took a second for 25,000 lines.
         } else {
-            for paragraph in touched { theme.restyle(storage, range: paragraph) }
+            for (paragraph, near) in zip(touched, nearRanges) { theme.restyle(storage, range: paragraph, near: near) }
         }
     }
 
@@ -1311,7 +1322,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             }
         }
         // In a long block, the spacing of the soft paragraph typed in (`SoftBreaks`).
-        let role = SoftBreaks.eligible(info.kind) ? SoftBreaks.role(at: location, in: paragraph, string: string) : []
+        let role = SoftBreaks.eligible(info.kind) ? SoftBreaks.role(at: location, in: string) : []
         var attributes = theme.attributes(info: info, marks: marks, paragraphStyle: theme.paragraphStyle(for: info, role: role))
         attributes[.fnBlock] = info
         if !marks.isPlain { attributes[.fnMarks] = MarksBox(marks) }
