@@ -104,9 +104,13 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         context.leaveAttachment = { [weak self] attachment, forward in self?.leave(attachment, forward: forward) }
         context.configureNested = { [weak self] child in self?.configure(nested: child) }
         fragments.showsBlocks = BlockOutlines.isOn
-        outlinesObservation = UserDefaults.standard.observe(\.showBlocks, options: [.new]) { [weak self] _, change in
-            let on = change.newValue ?? false
-            Task { @MainActor in self?.setShowsBlocks(on) }
+        outlinesObservation = UserDefaults.standard.observe(\.showBlocks) { [weak self] _, _ in
+            // The menu toggle sets it on the main thread: applied at once, in that turn.
+            guard Thread.isMainThread else {
+                Task { @MainActor in self?.setShowsBlocks(BlockOutlines.isOn) }
+                return
+            }
+            MainActor.assumeIsolated { self?.setShowsBlocks(BlockOutlines.isOn) }
         }
     }
 
