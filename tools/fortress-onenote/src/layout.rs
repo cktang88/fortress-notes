@@ -1,5 +1,5 @@
 //! Reading-order layout of a page's positioned items (outlines, floating
-//! images, files, ink).
+//! images, files).
 //!
 //! OneNote stores only each item's top-left offset and (often) a width; the
 //! height is never stored, so it is estimated by the caller. The algorithm:
@@ -12,7 +12,7 @@
 //!    (more than [`H_TOLERANCE`]), again transitively, ordered left to right.
 //!    *Bridges* are set aside first: a box that overlaps (in both
 //!    directions) two side-by-side boxes, such as a picture floating across
-//!    the gap between two columns or an ink drawing over a page area, would
+//!    the gap between two columns or a picture over a page area, would
 //!    otherwise merge their columns. The rest of the band is laid out on its
 //!    own and each bridge becomes a row of its own at its top position.
 //! 4. A band with one box is a plain row. A band with one column (boxes that
@@ -212,7 +212,7 @@ fn v_overlap(a: &LBox, b: &LBox) -> bool {
 /// Boxes of a band that *bridge* side-by-side boxes: each overlaps (in both
 /// directions) two other boxes that are side by side, i.e. overlap each
 /// other vertically but not horizontally. Typical bridges are a picture
-/// floating across the gap between two columns, an ink drawing over a whole
+/// floating across the gap between two columns, a picture over a whole
 /// page area, or a wide outline whose estimated height reaches into columns
 /// below it. Left in, a bridge merges the columns it touches into one, and
 /// the band is stacked instead of laid out side by side.
@@ -438,16 +438,16 @@ mod tests {
 
     #[test]
     fn drawing_over_side_by_side_outlines_does_not_stack_them() {
-        // Cornell notes: an ink drawing (the template's lines) covers the
-        // cue column and the note-taking area.
+        // Cornell notes: a drawing (the template's lines, as a picture) covers
+        // the cue column and the note-taking area.
         let boxes = [
             bx("summary", 1.25, 22.9, 15.8, 0.5),
             bx("cue", 1.0, 2.4, 3.6, 3.3),
             bx("notes", 6.0, 2.4, 10.8, 9.1),
-            bx("ink", 1.0, 2.42, 16.2, 13.0),
+            bx("lines", 1.0, 2.42, 16.2, 13.0),
             bx("area", 6.0, 15.9, 6.7, 0.9),
         ];
-        assert_eq!(run(&boxes), "[cue|notes],ink,area,summary");
+        assert_eq!(run(&boxes), "[cue|notes],lines,area,summary");
     }
 
     #[test]

@@ -2,8 +2,8 @@ use super::ast::Equation;
 use crate::math::ast::{
     BoxAlignment, BoxDisplay, BoxFlags, BoxSize, BoxSpace, BoxedFormulaAlignment,
     BracketsAlignment, EquationArrayAlignment, MathOp, MatrixAlignment, MatrixBrackets,
-    NAryAlignment, NAryDisplay, NAryFlags, NAryOptions, PhantomDisplay, PhantomKind,
-    StretchStackPosition, SubSupAlignment,
+    NAryAlignment, NAryDisplay, NAryOptions, PhantomDisplay, PhantomKind, StretchStackPosition,
+    SubSupAlignment,
 };
 use crate::math::lexer::{Lexer, Token};
 use anyhow::Result;
@@ -275,13 +275,8 @@ impl Parser {
                 let align = NAryAlignment::from_u8(value & 0x3)
                     .ok_or_else(|| eyre!("Invalid n-ary alignment: {}", value))?;
                 let options = NAryOptions::from_bits_truncate(value);
-                let flags = NAryFlags::from_u8(value & 0xc0);
 
-                Ok(NAryDisplay {
-                    align,
-                    options,
-                    flags,
-                })
+                Ok(NAryDisplay { align, options })
             })
             .transpose()?;
 

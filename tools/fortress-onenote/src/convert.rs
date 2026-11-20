@@ -1,7 +1,6 @@
 //! Parser objects -> manifest model.
 
 use crate::assets::{self, AssetStore};
-use crate::ink;
 use crate::input::{self, NotebookSource};
 use crate::layout::{self, LBox};
 use crate::links::normalize_guid;
@@ -10,7 +9,7 @@ use crate::objectids::{Ids, PageIds, SectionIds};
 use crate::richtext::{self, color_hex};
 use onenote_parser::Parser;
 use onenote_parser::contents::{
-    Content, EmbeddedFile, EmbeddedObject, FileDataStatus, Image, Ink, List, NoteTag, Outline,
+    Content, EmbeddedFile, EmbeddedObject, FileDataStatus, Image, List, NoteTag, Outline,
     OutlineElement, OutlineItem, RichText, Table,
 };
 use onenote_parser::page::{Page as OnePage, PageContent};
@@ -93,6 +92,8 @@ struct PageCtx<'a, 'b> {
     source_url: Option<String>,
     /// Object ids of this page, when the section file could be indexed.
     ids: Option<PageIds>,
+    /// Ink drawings on this page, not converted (Fortress has no ink).
+    ink_skipped: usize,
 }
 
 fn set_ids(common: &mut BlockCommon, ids: Ids) {
@@ -111,6 +112,12 @@ impl PageCtx<'_, '_> {
             page_id: Some(self.page_id.clone()),
             page_title: Some(self.page_title.clone()),
         });
+    }
+
+    /// An ink drawing: counted in the report, never converted.
+    fn skip_ink(&mut self) {
+        self.ink_skipped += 1;
+        self.nb.report.counts.ink_skipped += 1;
     }
 
     fn missing(&mut self, kind: &str, name: Option<String>, status: &str) {
@@ -194,13 +201,7 @@ impl PageCtx<'_, '_> {
                     let b = self.file(f, indent);
                     out.push(b);
                 }
-                Content::Ink(i) => {
-                    if let Some(mut b) = self.ink_block(&[(i, (0.0, 0.0))], indent) {
-                        let ids = self.ids_with(|p| p.ink());
-                        set_ids(b.common_mut(), ids);
-                        out.push(b);
-                    }
-                }
+                Content::Ink(_) => self.skip_ink(),
                 Content::Unknown => self.warn("unsupported content element skipped".into()),
             }
         }
@@ -214,20 +215,17 @@ impl PageCtx<'_, '_> {
         let tags = self.tags(rt.note_tags());
         let ids = self.ids_with(|p| p.rich_text(rt.text()));
 
-        // Handwriting embedded in the paragraph.
-        if !rt.embedded_objects().is_empty() {
-            let parts = inline_ink_parts(rt.embedded_objects());
-            let refs: Vec<(&Ink, (f32, f32))> = parts.iter().map(|(i, o)| (*i, *o)).collect();
-            if let Some(mut b) = self.ink_block(&refs, indent) {
-                b.common_mut().tags = tags.clone();
-                if rt.text().trim().is_empty() {
-                    set_ids(b.common_mut(), ids.clone());
-                }
-                out.push(b);
-            }
-            if rt.text().trim().is_empty() {
-                return;
-            }
+        // Handwriting embedded in the paragraph is not converted.
+        let inline_ink = rt
+            .embedded_objects()
+            .iter()
+            .filter(|o| matches!(o, EmbeddedObject::Ink(_)))
+            .count();
+        for _ in 0..inline_ink {
+            self.skip_ink();
+        }
+        if rt.text().trim().is_empty() && !rt.embedded_objects().is_empty() {
+            return;
         }
 
         let style_id = rt
@@ -249,7 +247,6 @@ impl PageCtx<'_, '_> {
             let c = &mut self.nb.report.counts;
             c.links_web += conv.links_web;
             c.links_onenote += conv.links_onenote;
-            c.math += conv.math_count;
         }
         for n in &conv.notes {
             self.warn(n.clone());
@@ -276,13 +273,15 @@ impl PageCtx<'_, '_> {
         let check = common.tags.iter().find(|t| t.checkable).cloned();
 
         if is_display_equation(conv.all_math, list_info.is_some(), check.is_some())
-            && let Some((text, latex, mathml)) = conv.math
+            && let Some((text, latex)) = conv.equation
         {
-            out.push(Block::Math {
+            // Fortress has no math blocks: the equation's LaTeX (or, when it could
+            // not be converted, its linear text) becomes a code block.
+            let language = latex.is_some().then(|| "latex".to_string());
+            out.push(Block::Code {
                 common,
-                text,
-                latex,
-                mathml,
+                text: latex.unwrap_or(text),
+                language,
             });
             return;
         }
@@ -313,6 +312,7 @@ impl PageCtx<'_, '_> {
             out.push(Block::Code {
                 common,
                 text: rich.text,
+                language: None,
             });
             return;
         }
@@ -579,54 +579,6 @@ impl PageCtx<'_, '_> {
             icon_asset,
         }
     }
-
-    fn ink_block(&mut self, parts: &[(&Ink, (f32, f32))], indent: u32) -> Option<Block> {
-        let r = ink::render(parts)?;
-        let asset = match self.nb.assets.put_bytes(r.svg.as_bytes(), Some("svg")) {
-            Ok(a) => a,
-            Err(e) => {
-                self.warn(format!("ink could not be written: {e:#}"));
-                None
-            }
-        };
-        Some(Block::Ink {
-            common: BlockCommon {
-                indent,
-                ..Default::default()
-            },
-            asset,
-            recognized_text: r.recognized_text,
-            width: round2(r.width),
-            height: round2(r.height),
-            stroke_count: r.stroke_count,
-        })
-    }
-}
-
-/// Lay out handwriting containers of one paragraph left to right.
-fn inline_ink_parts(objects: &[EmbeddedObject]) -> Vec<(&Ink, (f32, f32))> {
-    let gap = ink::INK_UNITS_PER_PX * 6.0;
-    let mut cursor = (0.0f32, 0.0f32);
-    let mut line_h: f32 = 0.0;
-    let mut out = Vec::new();
-    for o in objects {
-        match o {
-            EmbeddedObject::Ink(c) => {
-                let i = c.ink();
-                if let Some((minx, miny, maxx, maxy)) = ink::bounds(i) {
-                    out.push((i, (cursor.0 - minx, cursor.1 - miny)));
-                    cursor.0 += (maxx - minx) + gap;
-                    line_h = line_h.max(maxy - miny);
-                }
-            }
-            EmbeddedObject::InkSpace(_) => cursor.0 += gap,
-            EmbeddedObject::InkLineBreak => {
-                cursor = (0.0, cursor.1 + line_h + gap);
-                line_h = 0.0;
-            }
-        }
-    }
-    out
 }
 
 fn round2(v: f32) -> f32 {
@@ -692,15 +644,21 @@ fn number_pattern(fmt: &[char]) -> Option<(&'static str, String)> {
     style.map(|s| (s, marker))
 }
 
-/// Merge consecutive code paragraphs at the same indent into one block.
+/// Merge consecutive code paragraphs at the same indent into one block
+/// (equations, which carry a language, stay one block each).
 fn merge_code(blocks: &mut Vec<Block>) {
     let mut out: Vec<Block> = Vec::with_capacity(blocks.len());
     for b in blocks.drain(..) {
-        if let Block::Code { common, text } = &b
+        if let Block::Code {
+            common,
+            text,
+            language: None,
+        } = &b
             && common.tags.is_empty()
             && let Some(Block::Code {
                 common: pc,
                 text: pt,
+                language: None,
             }) = out.last_mut()
             && pc.indent == common.indent
             && pc.tags.is_empty()
@@ -755,8 +713,6 @@ fn est_block(b: &Block, width: f32) -> f32 {
         Block::Image { height, .. } => height.unwrap_or(2.0) + PARA_GAP,
         Block::Embed { .. } => 4.0,
         Block::File { .. } => 1.2,
-        Block::Ink { height, .. } => *height + PARA_GAP,
-        Block::Math { .. } => LINE_H * 2.0,
         other => est_text(other.plain_text(), width, 1.0),
     }
 }
@@ -770,7 +726,6 @@ fn est_content_width(blocks: &[Block]) -> f32 {
                 + match b {
                     Block::Table { column_widths, .. } => column_widths.iter().sum(),
                     Block::Image { width, .. } => width.unwrap_or(4.0),
-                    Block::Ink { width, .. } => *width,
                     Block::File { .. } => 2.0,
                     Block::Embed { .. } => 6.0,
                     other => {
@@ -795,12 +750,10 @@ fn b_indent(b: &Block) -> u32 {
         | Block::CheckItem { common, .. }
         | Block::Quote { common, .. }
         | Block::Code { common, .. }
-        | Block::Math { common, .. }
         | Block::Table { common, .. }
         | Block::Image { common, .. }
         | Block::Embed { common, .. }
-        | Block::File { common, .. }
-        | Block::Ink { common, .. } => common.indent,
+        | Block::File { common, .. } => common.indent,
     }
 }
 
@@ -817,7 +770,6 @@ fn count_blocks(blocks: &[Block], c: &mut Counts) {
             Block::CheckItem { .. } => c.check_items += 1,
             Block::Quote { .. } => c.quotes += 1,
             Block::Code { .. } => c.code_blocks += 1,
-            Block::Math { .. } => {}
             Block::Table { rows, .. } => {
                 c.tables += 1;
                 for r in rows {
@@ -829,7 +781,6 @@ fn count_blocks(blocks: &[Block], c: &mut Counts) {
             Block::Image { .. } => c.images += 1,
             Block::Embed { .. } => {}
             Block::File { .. } => c.attachments += 1,
-            Block::Ink { .. } => c.ink += 1,
         }
     }
 }
@@ -874,6 +825,7 @@ fn convert_page(
         section_path: section_path.to_vec(),
         source_url: None,
         ids: section_ids.and_then(|s| s.page(&id)),
+        ink_skipped: 0,
     };
 
     let mut items: Vec<Item> = Vec::new();
@@ -930,58 +882,18 @@ fn convert_page(
                     blocks: vec![b],
                 });
             }
-            PageContent::Ink(_) => {
-                // Merge consecutive page-level ink objects into one drawing.
-                let start = i;
-                while i + 1 < contents.len() && matches!(contents[i + 1], PageContent::Ink(_)) {
-                    i += 1;
-                }
-                let inks: Vec<&Ink> = contents[start..=i].iter().filter_map(|c| c.ink()).collect();
-                let unit = 48.0 * ink::INK_UNITS_PER_PX;
-                let parts: Vec<(&Ink, (f32, f32))> = inks
-                    .iter()
-                    .map(|k| {
-                        (
-                            *k,
-                            (
-                                k.offset_horizontal().unwrap_or(0.0) * unit,
-                                k.offset_vertical().unwrap_or(0.0) * unit,
-                            ),
-                        )
-                    })
-                    .collect();
-                let origin = parts
-                    .iter()
-                    .filter_map(|(k, (dx, dy))| {
-                        ink::bounds(k).map(|(x, y, _, _)| ((x + dx) / unit, (y + dy) / unit))
-                    })
-                    .fold((f32::MAX, f32::MAX), |a, b| (a.0.min(b.0), a.1.min(b.1)));
-                if let Some(b) = ctx.ink_block(&parts, 0) {
-                    let (w, h) = match &b {
-                        Block::Ink { width, height, .. } => (*width, *height),
-                        _ => (1.0, 1.0),
-                    };
-                    let has_pos = origin.0 < f32::MAX;
-                    items.push(Item {
-                        id: item_id,
-                        kind: "ink",
-                        x: has_pos.then(|| round2(origin.0.max(0.0))),
-                        y: has_pos.then(|| round2(origin.1.max(0.0))),
-                        width: Some(w),
-                        width_set_by_user: false,
-                        est_width: w,
-                        est_height: h,
-                        is_background: false,
-                        source_url: None,
-                        blocks: vec![b],
-                    });
-                }
-            }
+            PageContent::Ink(_) => ctx.skip_ink(),
             PageContent::Unknown => ctx.warn("unsupported page element skipped".into()),
         }
         i += 1;
     }
 
+    if ctx.ink_skipped > 0 {
+        let n = ctx.ink_skipped;
+        ctx.warn(format!(
+            "{n} ink drawing(s) not imported (Fortress does not support ink)"
+        ));
+    }
     let page_source_url = ctx.source_url.take();
     drop(ctx);
 
@@ -1047,10 +959,6 @@ fn convert_page(
         source_path,
         source_url: page_source_url,
         height: page.height().map(round2),
-        ink_text: page
-            .ink_recognition()
-            .map(|r| r.text())
-            .filter(|t| !t.trim().is_empty()),
         items,
         layout: rows,
         stats: PageStats {
@@ -2102,8 +2010,8 @@ pub fn dedupe_ids(nbs: &mut [Notebook]) {
     }
 }
 
-/// Whether a paragraph becomes a `math` block. An equation alone in a list item
-/// or to-do stays a list item (with a math mark), so the bullet / box survives.
+/// Whether a paragraph becomes a LaTeX code block. An equation alone in a list item
+/// or to-do stays a list item (with its LaTeX as inline code), so the bullet / box survives.
 fn is_display_equation(all_math: bool, in_list: bool, checkable: bool) -> bool {
     all_math && !in_list && !checkable
 }
@@ -2197,10 +2105,20 @@ mod tests {
                 ..Default::default()
             },
             text: t.into(),
+            language: None,
         };
         let mut blocks = vec![code("a", 0), code("b", 0), code("c", 1)];
         merge_code(&mut blocks);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].plain_text(), "a\nb");
+        // An equation (LaTeX) is never merged into the code around it.
+        let latex = Block::Code {
+            common: BlockCommon::default(),
+            text: "x^2".into(),
+            language: Some("latex".into()),
+        };
+        let mut blocks = vec![code("a", 0), latex, code("b", 0)];
+        merge_code(&mut blocks);
+        assert_eq!(blocks.len(), 3);
     }
 }

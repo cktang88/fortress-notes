@@ -33,12 +33,9 @@ use anyhow::Result;
 use anyhow::anyhow as eyre;
 use itertools::Itertools;
 
-pub(super) fn render_equation(equation: Equation, block: bool) -> Result<String> {
-    if block {
-        Ok(format!("\\[{}\\]", render_eq(equation)?))
-    } else {
-        Ok(format!("\\({}\\)", render_eq(equation)?))
-    }
+/// The equation's LaTeX, without delimiters.
+pub(super) fn render_equation(equation: Equation) -> Result<String> {
+    render_eq(equation)
 }
 
 fn render_eq(eq: Equation) -> Result<String> {

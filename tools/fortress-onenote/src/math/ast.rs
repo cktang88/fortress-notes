@@ -212,7 +212,6 @@ pub(super) enum MatrixBrackets {
 pub(super) struct NAryDisplay {
     pub(super) align: NAryAlignment,
     pub(super) options: NAryOptions,
-    pub(super) flags: Option<NAryFlags>,
 }
 
 #[derive(Debug, Copy, Clone, Primitive)]
@@ -230,12 +229,6 @@ bitflags! {
         const ShowLLimPlaceHldr = 8;
         const ShowULimPlaceHldr = 16;
     }
-}
-
-#[derive(Debug, Copy, Clone, Primitive, PartialEq)]
-pub(super) enum NAryFlags {
-    DontGrowWithContent = 64,
-    GrowWithContent = 128,
 }
 
 bitflags! {

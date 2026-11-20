@@ -240,11 +240,6 @@ impl AssetStore {
         Ok(Some(name))
     }
 
-    pub fn put_bytes(&mut self, data: &[u8], ext_hint: Option<&str>) -> Result<Option<String>> {
-        let mut r: &[u8] = data;
-        self.put_reader(&mut r, ext_hint, true)
-    }
-
     pub fn total_bytes(&self) -> u64 {
         self.assets.values().map(|a| a.size).sum()
     }
@@ -266,21 +261,26 @@ mod tests {
         assert_eq!(sanitize_ext("p\0ng"), None);
     }
 
+    fn put_bytes(s: &mut AssetStore, data: &[u8], ext_hint: Option<&str>) -> Option<String> {
+        let mut r: &[u8] = data;
+        s.put_reader(&mut r, ext_hint, true).unwrap()
+    }
+
     #[test]
     fn dedupes_by_content() {
         let dir = std::env::temp_dir().join(format!("fo-assets-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let mut s = AssetStore::new(&dir).unwrap();
         let png = b"\x89PNG\r\n\x1a\nrest-of-image";
-        let a = s.put_bytes(png, None).unwrap().unwrap();
+        let a = put_bytes(&mut s, png, None).unwrap();
         let mut r: &[u8] = png;
         let b = s.put_reader(&mut r, Some("bin"), false).unwrap().unwrap();
         assert_eq!(a, b);
         assert!(a.ends_with(".png"));
         assert_eq!(s.assets.len(), 1);
         assert!(dir.join(&a).exists());
-        assert_eq!(s.put_bytes(b"", None).unwrap(), None);
-        let t = s.put_bytes(b"hello", Some("txt")).unwrap().unwrap();
+        assert_eq!(put_bytes(&mut s, b"", None), None);
+        let t = put_bytes(&mut s, b"hello", Some("txt")).unwrap();
         assert!(t.ends_with(".txt"));
         assert_eq!(s.assets[&t].mime, "text/plain");
         // No stray temp files.

@@ -5,7 +5,6 @@
 
 mod assets;
 mod convert;
-mod ink;
 mod input;
 mod layout;
 mod links;

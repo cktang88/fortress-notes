@@ -128,8 +128,6 @@ pub struct Page {
     pub source_url: Option<String>,
     /// Page height (geometry units) if OneNote stored one.
     pub height: Option<f32>,
-    /// Handwriting recognised by OneNote for Windows on this page.
-    pub ink_text: Option<String>,
     /// Top-level positioned items in OneNote's z/document order.
     pub items: Vec<Item>,
     /// Reading-order layout computed from `items` geometry.
@@ -147,7 +145,7 @@ pub struct PageStats {
 pub struct Item {
     /// `i0`, `i1`, ... unique within the page.
     pub id: String,
-    /// `outline`, `image`, `file`, `ink`.
+    /// `outline`, `image`, `file`.
     pub kind: &'static str,
     pub x: Option<f32>,
     pub y: Option<f32>,
@@ -212,6 +210,8 @@ pub enum MarkKind {
     Strikethrough,
     Superscript,
     Subscript,
+    /// Inline code (an equation's LaTeX, `$…$`).
+    Code,
     Highlight {
         color: String,
     },
@@ -231,12 +231,6 @@ pub enum MarkKind {
         /// True when the URL was found in plain text rather than stored as a link.
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         auto: bool,
-    },
-    Math {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        latex: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mathml: Option<String>,
     },
 }
 
@@ -357,14 +351,9 @@ pub enum Block {
         #[serde(flatten)]
         common: BlockCommon,
         text: String,
-    },
-    Math {
-        #[serde(flatten)]
-        common: BlockCommon,
-        /// Raw OneNote linear text of the equation.
-        text: String,
-        latex: Option<String>,
-        mathml: Option<String>,
+        /// `latex` for an equation (its LaTeX); none for code.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
     },
     Table {
         #[serde(flatten)]
@@ -417,15 +406,6 @@ pub enum Block {
         media_kind: String,
         icon_asset: Option<String>,
     },
-    Ink {
-        #[serde(flatten)]
-        common: BlockCommon,
-        asset: Option<String>,
-        recognized_text: Option<String>,
-        width: f32,
-        height: f32,
-        stroke_count: usize,
-    },
 }
 
 impl Block {
@@ -437,12 +417,10 @@ impl Block {
             | Block::CheckItem { common, .. }
             | Block::Quote { common, .. }
             | Block::Code { common, .. }
-            | Block::Math { common, .. }
             | Block::Table { common, .. }
             | Block::Image { common, .. }
             | Block::Embed { common, .. }
-            | Block::File { common, .. }
-            | Block::Ink { common, .. } => common,
+            | Block::File { common, .. } => common,
         }
     }
 
@@ -454,7 +432,7 @@ impl Block {
             | Block::ListItem { rich, .. }
             | Block::CheckItem { rich, .. }
             | Block::Quote { rich, .. } => &rich.text,
-            Block::Code { text, .. } | Block::Math { text, .. } => text,
+            Block::Code { text, .. } => text,
             _ => "",
         }
     }
@@ -486,8 +464,8 @@ pub struct Counts {
     pub printout_pages: usize,
     pub attachments: usize,
     pub attachments_missing: usize,
-    pub ink: usize,
-    pub math: usize,
+    /// Ink drawings not converted (Fortress does not support ink).
+    pub ink_skipped: usize,
     pub embeds: usize,
     pub links_web: usize,
     pub links_onenote: usize,
