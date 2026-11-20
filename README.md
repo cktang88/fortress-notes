@@ -24,7 +24,7 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
   model.
 - **Text in every picture and PDF.** Pasted, imported and attached pictures and PDFs are
   read in the background, locally, so search, related notes and Ask find their text.
-- **Lossless OneNote migration.** Exported notebooks become folders and notes, with
+- **OneNote migration.** Exported notebooks become folders and notes, with
   tables, columns, pictures, attachments, equations (as LaTeX code) and links between
   pages. Fortress has no math or ink: ink drawings are skipped and counted in the
   import report.
