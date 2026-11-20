@@ -957,7 +957,8 @@ class ImportJobLifecycleTests(_Base):
             calls.append(args[0]["id"])
             state = original(importer, *args, **kwargs)
             if len(calls) == 2:
-                self.jobs.cancel(job_id, self.notes)
+                # The job may run before the request that queued it returns its id.
+                self.jobs.cancel(self.jobs.list(self.notes)[0]["job_id"], self.notes)
             return state
 
         with patch.object(onenote_import._Importer, "_import_page", import_page):
