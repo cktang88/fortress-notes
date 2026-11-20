@@ -4,6 +4,8 @@ import AppKit
 /// the quote bar and the code block background (DESIGN c, "custom NSTextLayoutFragment").
 final class BlockFragmentFactory: NSObject, NSTextLayoutManagerDelegate {
     var theme = EditorTheme()
+    /// View ▸ Show Blocks: a faint outline and handle around every block.
+    var showsBlocks = false
 
     func textLayoutManager(
         _ textLayoutManager: NSTextLayoutManager, textLayoutFragmentFor location: any NSTextLocation,
@@ -15,6 +17,7 @@ final class BlockFragmentFactory: NSObject, NSTextLayoutManagerDelegate {
         else { return fragment }
         fragment.info = info
         fragment.theme = theme
+        fragment.showsBlocks = showsBlocks
         if info.kind == .numbered,
            let storage = (textLayoutManager.textContentManager as? NSTextContentStorage)?.textStorage,
            let contentManager = textLayoutManager.textContentManager {
@@ -45,6 +48,7 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
     var info: BlockInfo?
     var theme = EditorTheme()
     var ordinal = 1
+    var showsBlocks = false
 
     private var lineRect: CGRect {
         guard let first = textLineFragments.first else { return .zero }
@@ -79,7 +83,25 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
             bounds = bounds.union(CGRect(x: -theme.markerWidth - 8, y: lineRect.minY - 4, width: theme.markerWidth + 8, height: lineRect.height + 8))
         default: break
         }
+        if showsBlocks, let outline = outlineRect(info) {
+            bounds = bounds.union(outline.insetBy(dx: -2, dy: -2)).union(gripRect(outline).insetBy(dx: -1, dy: -1))
+        }
         return bounds
+    }
+
+    /// Show Blocks: the block's area (the measure from its depth, its lines).
+    private func outlineRect(_ info: BlockInfo) -> CGRect? {
+        let content = contentRect
+        guard !content.isNull else { return nil }
+        let nesting = CGFloat(info.depth) * theme.indentStep - leading
+        let columnWidth = textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.maxX
+        let width = columnWidth - CGFloat(info.depth) * theme.indentStep
+        let padding = info.kind == .code ? theme.codePadding + 2 : 3
+        return CGRect(x: nesting - 6, y: content.minY - padding, width: max(0, width + 12), height: content.height + padding * 2)
+    }
+
+    private func gripRect(_ outline: CGRect) -> CGRect {
+        CGRect(x: outline.minX - 22, y: outline.minY + 2, width: 14, height: min(outline.height - 4, 18))
     }
 
     /// The code background / quote bar area, in fragment coordinates.
@@ -106,7 +128,22 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
 
     override func draw(at point: CGPoint, in context: CGContext) {
         if let info { drawDecoration(info, at: point, in: context) }
+        if showsBlocks, let info, let outline = outlineRect(info) { drawOutline(outline.offsetBy(dx: point.x, dy: point.y), in: context) }
         super.draw(at: point, in: context)
+    }
+
+    /// Show Blocks: a hairline round the block and its handle's dots, both faint.
+    private func drawOutline(_ rect: CGRect, in context: CGContext) {
+        context.saveGState()
+        defer { context.restoreGState() }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
+        path.lineWidth = 1
+        NSColor.themeBorder.withAlphaComponent(0.9).setStroke()
+        path.stroke()
+        BlockGripView.drawDots(in: gripRect(rect), color: NSColor.tertiaryLabelColor.withAlphaComponent(0.6))
     }
 
     private func drawDecoration(_ info: BlockInfo, at point: CGPoint, in context: CGContext) {

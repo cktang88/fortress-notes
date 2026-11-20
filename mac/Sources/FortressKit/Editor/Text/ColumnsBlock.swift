@@ -18,6 +18,8 @@ final class ColumnsBlockController: NSObject, LiveBlock {
         return columnEditors
     }
     private var columnEditors: [BlockEditorController] = []
+    /// The column editors made so far (without making them).
+    var builtEditors: [BlockEditorController] { columnEditors }
     private var isBuilt = false
     weak var context: AttachmentContext?
     weak var attachment: BlockAttachment?
@@ -42,6 +44,7 @@ final class ColumnsBlockController: NSObject, LiveBlock {
             let editor = BlockEditorController(baseURL: context.baseURL, embedded: true)
             editor.theme = context.theme
             context.configureNested?(editor)
+            editor.columnsHost = self
             editor.load(column.blocks.isEmpty ? [EditorBlock()] : column.blocks)
             editor.onChange = { [weak self] in self?.columnDidChange() }
             editor.onRelayout = { [weak self] in self?.remeasure() }

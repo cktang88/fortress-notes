@@ -55,6 +55,12 @@ final class BlockInfo: NSObject, Sendable {
                   newProvenance: newProvenance, container: container)
     }
 
+    /// A quote line of `container` (or another kind keeping its container).
+    func with(kind: BlockKind, container: QuoteContainer?) -> BlockInfo {
+        BlockInfo(id: id, kind: kind, depth: depth, checked: false, language: language, origin: origin,
+                  newProvenance: newProvenance, container: container)
+    }
+
     func with(newProvenance: JSONValue?) -> BlockInfo {
         BlockInfo(id: id, kind: kind, depth: depth, checked: checked, language: language, origin: origin,
                   newProvenance: newProvenance, container: container)
