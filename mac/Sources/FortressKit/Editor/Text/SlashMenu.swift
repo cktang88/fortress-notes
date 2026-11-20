@@ -118,14 +118,14 @@ final class SlashMenu {
         if slash > paragraph.location {
             // Only after a space or a line break: never in the middle of a word or a URL.
             guard let before = UnicodeScalar(text.character(at: slash - 1)),
-                  CharacterSet.whitespaces.contains(before) || before == "\u{2028}" else { return false }
+                  CharacterSet.whitespaces.contains(before) || before == "\u{2028}" || before == "\u{2029}" else { return false }
         }
         let marks = storage.marks(at: slash)
         guard marks.link == nil, !marks.code, storage.attribute(.fnNode, at: slash, effectiveRange: nil) == nil else { return false }
         // Nothing but a space or the end of the line right after it.
         let after = slash + 1
         if after < NSMaxRange(paragraph) - 1, let next = UnicodeScalar(text.character(at: after)),
-           !CharacterSet.whitespaces.contains(next) {
+           !CharacterSet.whitespaces.contains(next), next != "\u{2029}" {
             return false
         }
         return true

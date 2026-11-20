@@ -434,6 +434,33 @@ final class PerfEditor {
             })
         }
         PerfLog.record("keystroke.long50k.part.bareTextKitRelayout", samples.sorted()[2])
+
+        // A key typed in the middle of it, then layout, in a bare TextKit 2 stack: the
+        // paragraph whole, and the same text as ~1,500-character paragraphs (what
+        // `SoftBreaks` stores a long block as).
+        func typing(_ text: NSAttributedString) -> Double {
+            let content = NSTextContentStorage()
+            let manager = NSTextLayoutManager()
+            content.addTextLayoutManager(manager)
+            let container = NSTextContainer(size: CGSize(width: 650, height: 0))
+            container.lineFragmentPadding = 0
+            manager.textContainer = container
+            content.textStorage?.setAttributedString(text)
+            manager.ensureLayout(for: manager.documentRange)
+            var samples: [Double] = []
+            for index in 0..<9 {
+                samples.append(milliseconds {
+                    content.textStorage?.replaceCharacters(in: NSRange(location: 25_000 + index, length: 0), with: "b")
+                    manager.ensureLayout(for: manager.documentRange)
+                })
+            }
+            return samples.sorted()[4]
+        }
+        PerfLog.record("keystroke.long50k.part.bareTextKitKeystroke(one paragraph)", typing(text))
+        let split = NSMutableAttributedString(attributedString: text)
+        SoftBreaks.split(split, content: NSRange(location: 0, length: split.length))
+        #expect(split.string.components(separatedBy: SoftBreaks.separator).count > 20)
+        PerfLog.record("keystroke.long50k.part.bareTextKitKeystroke(soft paragraphs)", typing(split))
     }
 
     @Test func richBlockLayout() throws {

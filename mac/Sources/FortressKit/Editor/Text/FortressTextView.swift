@@ -294,6 +294,28 @@ final class FortressTextView: NSTextView {
         return super.writeSelection(to: pboard, type: type)
     }
 
+    /// Soft separators (`SoftBreaks`) go out as the spaces they stand for. (The text
+    /// system writes its plain and rich text itself, not through `writeSelection(to:type:)`:
+    /// they are written again here when the selection has a separator.)
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard super.writeSelection(to: pboard, types: types) else { return false }
+        guard let storage = textStorage else { return true }
+        let ranges = selectedRanges.map(\.rangeValue).filter { $0.length > 0 && NSMaxRange($0) <= storage.length }
+        guard ranges.contains(where: { storage.mutableString.range(of: SoftBreaks.separator, options: .literal, range: $0).location != NSNotFound })
+        else { return true }
+        let text = NSMutableAttributedString()
+        for (index, range) in ranges.enumerated() {
+            if index > 0 { text.append(NSAttributedString(string: "\n")) }
+            text.append(SoftBreaks.plain(storage.attributedSubstring(from: range)))
+        }
+        let whole = NSRange(location: 0, length: text.length)
+        let written = Set(pboard.types ?? [])
+        if written.contains(.string) { pboard.setString(text.string, forType: .string) }
+        if written.contains(.rtf), let data = text.rtf(from: whole, documentAttributes: [:]) { pboard.setData(data, forType: .rtf) }
+        if written.contains(.rtfd), let data = text.rtfd(from: whole, documentAttributes: [:]) { pboard.setData(data, forType: .rtfd) }
+        return true
+    }
+
     // MARK: Dragging blocks by their handle (the note's editor places them, for columns too)
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
