@@ -162,15 +162,18 @@ struct NoteProvenance: Hashable, Sendable {
         source != "manual" || path != nil || url != nil || originTitle != nil
     }
 
-    var label: String {
+    var label: String { Self.label(for: source) }
+
+    /// A source kind in words: the note's Info and a block's hover card both say it so.
+    static func label(for source: String) -> String {
         switch source {
-        case "manual": "Written here"
-        case "capture": "Quick Capture"
-        case "markdown_import": "Imported from Markdown"
-        case "onenote_import": "Imported from OneNote"
-        case "paste": "Pasted"
-        case "web": "From the web"
-        case "ai": "Written with Ask"
+        case "manual", "": String(localized: "Written here")
+        case "capture": String(localized: "Quick Capture")
+        case "markdown_import": String(localized: "Imported from Markdown")
+        case "onenote_import": String(localized: "Imported from OneNote")
+        case "paste": String(localized: "Pasted")
+        case "web": String(localized: "From the web")
+        case "ai": String(localized: "Written with Ask")
         default: source.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }

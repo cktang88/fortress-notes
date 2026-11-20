@@ -801,10 +801,6 @@ def _nodes_from_inline_token(token: Token | None) -> tuple[list[dict[str, Any]],
     return _nodes_from_html(_parse_html(html), collapse=False)
 
 
-def inline_from_html(html: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    return _nodes_from_html(_parse_html(html), collapse=True)
-
-
 # --- A tiny HTML tree --------------------------------------------------------------------------
 
 _VOID = {"br", "img", "hr", "col", "input", "meta", "wbr", "source", "link"}

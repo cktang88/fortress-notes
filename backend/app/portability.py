@@ -58,10 +58,6 @@ class ImportReport:
     def error_count(self) -> int:
         return sum(item.status == "error" for item in self.items)
 
-    @property
-    def conflict_count(self) -> int:
-        return sum(item.status == "conflict" for item in self.items)
-
 
 def export_document_markdown(database_path: Path, document_id: str) -> str:
     """A note as one portable Markdown file, the same text as its vault mirror.
@@ -255,24 +251,6 @@ def _create_backup_directory(source_directory: Path) -> Path:
         suffix += 1
     candidate.mkdir()
     return candidate
-
-
-def _navigation_document_ids(data: dict[str, object]) -> list[str]:
-    document_ids: list[str] = []
-
-    def visit(nodes: object) -> None:
-        if not isinstance(nodes, list):
-            return
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-            if node.get("kind") == "document" and isinstance(node.get("id"), str):
-                document_ids.append(node["id"])
-            elif node.get("kind") == "folder":
-                visit(node.get("children"))
-
-    visit(data.get("items"))
-    return document_ids
 
 
 # --- Download filenames / uploaded import ----------------------------------

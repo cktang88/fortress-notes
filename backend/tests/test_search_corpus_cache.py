@@ -5,7 +5,6 @@ from pathlib import Path
 from app import corpus
 from app.block_store import (
     apply_transaction,
-    bootstrap_markdown,
     connection_scope,
     create_document,
     create_folder,
@@ -17,6 +16,8 @@ from app.block_store import (
 )
 from app.corpus import embedding_documents
 from app.models import BlockOperation
+
+from support import add_markdown_notes
 
 
 class CorpusCacheTests(unittest.TestCase):
@@ -36,7 +37,7 @@ class CorpusCacheTests(unittest.TestCase):
                 "---\nid: today\ntitle: Today\n---\nOld words\n", encoding="utf-8"
             )
             database = root / ".fortress.sqlite3"
-            bootstrap_markdown(notes, database)
+            add_markdown_notes(notes, database)
             self.assertIn("Old words", [text for *_rest, text in embedding_documents(database)])
 
             tree = document_tree(database, "today")

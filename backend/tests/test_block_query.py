@@ -3,7 +3,9 @@ import unittest
 from pathlib import Path
 
 from app.block_query import BlockSearchFilters, build_fts_match, search_blocks
-from app.block_store import bootstrap_markdown, connection_scope, delete_document
+from app.block_store import connection_scope, delete_document
+
+from support import add_markdown_notes
 
 
 class BlockQueryTests(unittest.TestCase):
@@ -39,7 +41,7 @@ class BlockQueryTests(unittest.TestCase):
             "[work]",
             "matchingonly paragraph",
         )
-        bootstrap_markdown(self.root, self.database)
+        add_markdown_notes(self.root, self.database)
         with connection_scope(self.database) as connection:
             connection.execute(
                 "UPDATE blocks SET updated_at = ? WHERE document_id = ?",

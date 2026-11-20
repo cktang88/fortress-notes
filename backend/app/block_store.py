@@ -30,7 +30,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-import frontmatter
 from ulid import ULID
 
 from . import order_keys, textutil
@@ -917,46 +916,6 @@ def is_ready(path: Path) -> bool:
     return path.resolve() in _ready_paths
 
 
-def bootstrap_markdown(notes_path: Path, path: Path) -> int:
-    """Import Markdown files that are not already represented in SQLite.
-
-    This is intentionally insert-only. Editing or deleting existing Markdown does
-    not mutate the new store until the block API owns writes in a later phase.
-    """
-
-    initialize(path)
-    imported = 0
-    with connection_scope(path) as connection:
-        for note_path in sorted(notes_path.glob("*.md")):
-            note_id = note_path.stem
-            if connection.execute(
-                "SELECT 1 FROM documents WHERE id = ?", (note_id,)
-            ).fetchone():
-                continue
-            post = frontmatter.load(note_path)
-            now = utc_now()
-            created_at = _iso(post.metadata.get("created_at", now))
-            updated_at = _iso(post.metadata.get("updated_at", now))
-            title = str(post.metadata.get("title") or derive_title(post.content))
-            status = post.metadata.get("status", "rough")
-            if status not in {"rough", "polished"}:
-                status = "rough"
-            _insert_document(
-                connection,
-                note_id,
-                title,
-                status,
-                post.content,
-                created_at,
-                updated_at,
-                provenance=markdown_import_provenance(
-                    post.metadata, note_path.name, now
-                ),
-            )
-            imported += 1
-    return imported
-
-
 MARKDOWN_IMPORTER = {"name": "fortress-markdown", "version": "1"}
 
 
@@ -1656,13 +1615,6 @@ def backup_database(path: Path, destination: Path) -> None:
     with connection_scope(path) as source, closing(sqlite3.connect(destination)) as target:
         source.backup(target)
         target.commit()
-
-
-def check_integrity(path: Path) -> bool:
-    initialize(path)
-    with connection_scope(path) as connection:
-        result = connection.execute("PRAGMA quick_check").fetchone()
-    return result is not None and result[0] == "ok"
 
 
 def fts_is_consistent(path: Path) -> bool:

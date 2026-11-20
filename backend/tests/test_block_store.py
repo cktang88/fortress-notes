@@ -10,8 +10,6 @@ from app.block_store import (
     backup_database,
     backfill_assets,
     block_link_targets,
-    bootstrap_markdown,
-    check_integrity,
     connection_scope,
     create_folder,
     create_document,
@@ -38,6 +36,8 @@ from app.corpus import embedding_documents
 from app.block_schema import BlockShapeError
 from app.models import BlockOperation, BlockTransaction
 from pydantic import ValidationError
+
+from support import add_markdown_notes
 
 
 def runs(text: str) -> list[dict]:
@@ -276,7 +276,7 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(list_documents(database), [])
             self.assertIsNone(document_tree(database, created["id"]))
 
-    def test_bootstraps_markdown_once_and_preserves_block_order(self) -> None:
+    def test_markdown_notes_become_blocks_in_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "one.md").write_text(
@@ -296,8 +296,7 @@ class BlockStoreTests(unittest.TestCase):
             )
             database = root / ".fortress.sqlite3"
 
-            self.assertEqual(bootstrap_markdown(root, database), 1)
-            self.assertEqual(bootstrap_markdown(root, database), 0)
+            add_markdown_notes(root, database)
 
             tree = document_tree(database, "one")
             self.assertIsNotNone(tree)
@@ -324,7 +323,7 @@ class BlockStoreTests(unittest.TestCase):
             root = Path(directory)
             (root / "one.md").write_text("---\ntitle: One\n---\nA\n\nB\n", encoding="utf-8")
             database = root / ".fortress.sqlite3"
-            bootstrap_markdown(root, database)
+            add_markdown_notes(root, database)
             tree = document_tree(database, "one")
             assert tree is not None
             a_id = tree["children"][0]["id"]
@@ -661,7 +660,7 @@ class BlockStoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
             database = root / ".fortress.sqlite3"
-            bootstrap_markdown(root, database)
+            add_markdown_notes(root, database)
 
             tree = document_tree(database, "one")
             assert tree is not None
@@ -694,7 +693,7 @@ class BlockStoreTests(unittest.TestCase):
                 "Parent keyword\n\n  - Child phrase\n\nOther text\n", encoding="utf-8"
             )
             database = root / ".fortress.sqlite3"
-            bootstrap_markdown(root, database)
+            add_markdown_notes(root, database)
 
             parent_hits = search_blocks(database, "keyword")
             child_hits = search_blocks(database, "phrase")
@@ -739,7 +738,7 @@ class BlockStoreTests(unittest.TestCase):
                 "---\ntitle: Two\n---\nAnother block\n", encoding="utf-8"
             )
             database = root / ".fortress.sqlite3"
-            bootstrap_markdown(root, database)
+            add_markdown_notes(root, database)
 
             all_targets = block_link_targets(database, "block", limit=10)
             self.assertEqual(len(all_targets), 3)
@@ -1031,7 +1030,7 @@ class BlockStoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
             database = root / ".fortress.sqlite3"
-            bootstrap_markdown(root, database)
+            add_markdown_notes(root, database)
             tree = document_tree(database, "one")
             assert tree is not None
             block_id = tree["children"][0]["id"]

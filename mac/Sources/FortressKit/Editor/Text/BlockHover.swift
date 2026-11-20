@@ -466,7 +466,7 @@ struct BlockDetails: Equatable {
         }
     }
 
-    /// "From OneNote › Work › Standups", "Pasted from example.com", "Folded in from Plans".
+    /// "Imported from OneNote › Work › Standups", "Pasted from example.com", "Folded in from Plans".
     static func describe(_ provenance: JSONValue?) -> String? {
         guard let provenance else { return nil }
         if let origin = provenance["origin"], let operation = origin["operation"]?.stringValue {
@@ -484,15 +484,12 @@ struct BlockDetails: Equatable {
             guard let path, !path.isEmpty else { return base }
             return String(localized: "\(base) › \(path)", comment: "Block provenance: source, then the path inside it")
         }
-        switch provenance["source"]?.stringValue ?? "" {
-        case "manual", "": return String(localized: "Written here")
-        case "capture": return host.map { String(localized: "Captured from \($0)") } ?? String(localized: "Quick Capture")
-        case "onenote_import": return with(String(localized: "From OneNote"))
-        case "markdown_import": return with(String(localized: "Imported from Markdown"))
-        case "paste": return host.map { String(localized: "Pasted from \($0)") } ?? String(localized: "Pasted")
-        case "web": return host.map { String(localized: "From \($0)") } ?? String(localized: "From the web")
-        case "ai": return String(localized: "Written with AI")
-        case let other: return with(String(localized: "From \(other.replacingOccurrences(of: "_", with: " "))"))
+        let kind = provenance["source"]?.stringValue ?? ""
+        switch (kind, host) {
+        case ("capture", let site?): return String(localized: "Captured from \(site)")
+        case ("paste", let site?): return String(localized: "Pasted from \(site)")
+        case ("web", let site?): return String(localized: "From \(site)")
+        default: return with(NoteProvenance.label(for: kind))
         }
     }
 }
