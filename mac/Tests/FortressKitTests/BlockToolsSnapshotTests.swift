@@ -4,7 +4,7 @@ import Testing
 @testable import FortressKit
 
 // Gallery of the block tools, light and dark (written to $SNAPSHOT_DIR): the handle on
-// hover, its menu, the `/` menu, selected blocks, Show Blocks.
+// hover, the `/` menu, selected blocks, Show Blocks.
 
 @MainActor
 private enum BlockGallery {
@@ -90,47 +90,9 @@ struct BlockToolsSnapshotTests {
         }
     }
 
-    @Test func blockMenu() throws {
-        for (appearance, suffix) in appearances {
-            let (controller, window) = BlockGallery.window(appearance: appearance)
-            controller.hover(at: BlockGallery.point(controller, onBlock: "g-p"))
-            let hover = controller.blockHandle
-            let menu = try #require(hover.prepareMenu())
-            pumpRunLoop(0.3)
-            let name = "blocks-menu-\(suffix)"
-            // The menu tracks on the main thread; the timer fires there, during tracking. It
-            // closes the menu with Esc, as a person would: cancelTracking() stops the main
-            // run loop, and a stop the tracking loop doesn't take ends the test process.
-            let number = window.windowNumber
-            let timer = Timer(timeInterval: 0.8, repeats: false) { _ in
-                MainActor.assumeIsolated {
-                    try? BlockGallery.capture(window, name, screenArea: true)
-                    for type in [NSEvent.EventType.keyDown, .keyUp] {
-                        if let escape = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                                         windowNumber: number, context: nil, characters: "\u{1b}",
-                                                         charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) {
-                            NSApp.postEvent(escape, atStart: false)
-                        }
-                    }
-                }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            // Only if Esc didn't close it (never after it closed).
-            let watcher = MenuCloseWatcher()
-            menu.delegate = watcher
-            nonisolated(unsafe) let tracked = menu
-            let fallback = Timer(timeInterval: 4, repeats: false) { _ in
-                MainActor.assumeIsolated { if !watcher.closed { tracked.cancelTracking() } }
-            }
-            RunLoop.main.add(fallback, forMode: .common)
-            _ = menu.popUp(positioning: nil, at: NSPoint(x: 0, y: hover.grip.bounds.maxY + 4), in: hover.grip)
-            // Never later: cancelling tracking that has ended stops the main run loop (the test process).
-            timer.invalidate()
-            fallback.invalidate()
-            pumpRunLoop(0.2)
-            window.close()
-        }
-    }
+    // The block menu is a system NSMenu: popping it up tracks on the main run loop, and
+    // ending that tracking from a test stops the run loop the test process runs on. Its
+    // contents are covered by BlockToolsTests (blockMenu(), turnIntoFromTheMenu…).
 
     @Test func slashMenu() throws {
         for (appearance, suffix) in appearances {
@@ -171,11 +133,4 @@ struct BlockToolsSnapshotTests {
             window.close()
         }
     }
-}
-
-/// Knows when a menu has closed.
-@MainActor
-final class MenuCloseWatcher: NSObject, NSMenuDelegate {
-    var closed = false
-    func menuDidClose(_ menu: NSMenu) { closed = true }
 }
