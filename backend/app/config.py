@@ -47,14 +47,10 @@ class Settings(BaseSettings):
     # A commit hash (or tag) of COLBERT_MODEL's repository. Empty: COLBERT_REVISION for
     # the default model; for another model the repository's newest commit, unpinned.
     colbert_revision: str = ""
-    # "auto" runs ColBERT in bfloat16 on CPUs with native support (AVX512-BF16/AMX):
-    # several times faster and within ~0.3% of float32 scores. Or "float32"/"bfloat16".
-    embeddings_precision: str = "auto"
-    # Apple Silicon: "auto" also loads a GPU encoder (MLX, else torch MPS) and uses it
-    # for queries and/or indexing only where it measures faster than the CPU on this
-    # machine and matches the CPU's encodings (app/embeddings.py); any GPU error moves
-    # back to the CPU. "cpu" never uses the GPU; "mlx" or "mps" use that one for both
-    # (still checked against the CPU) whenever it works.
+    # "auto": on Apple Silicon, ColBERT encodes on the GPU with MLX when it is
+    # installed (app/colbert_mlx.py), elsewhere on the CPU; any MLX error moves back to
+    # the CPU for good. "mlx": the same, with a warning when MLX is unavailable.
+    # "cpu": never the GPU.
     embeddings_device: str = "auto"
     # Threads torch may use for one encode. 0 = half the cores, at most 4. Measured on
     # 4 cores (query encode / 16-paragraph batch): 1 thread 141 ms / 2.2 s, 2 threads

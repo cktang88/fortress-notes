@@ -94,7 +94,7 @@ QUESTIONS = ["When does the airship take off?", "What did Miguel quote?"]
 LATE_NOTE = ("Bike repair", "The rear derailleur needs a new cable before the hill ride.")
 LATE_QUERIES = ["bicycle maintenance", "aircraft over the lake"]
 
-# Encodings of the same text on the GPU and the CPU (the bar _accelerate sets itself).
+# Encodings of the same text on the GPU and the CPU (colbert_mlx measured >= 0.9999).
 MIN_COSINE = 0.999
 
 
@@ -122,7 +122,6 @@ class _Records(logging.Handler):
 def _run_backend(device: str, *, break_gpu: bool = False) -> dict:
     """Start a backend with ``EMBEDDINGS_DEVICE=device`` over NOTES; what it answers."""
 
-    import torch
     from fastapi.testclient import TestClient
 
     from app import embeddings, llm, main
@@ -163,14 +162,13 @@ def _run_backend(device: str, *, break_gpu: bool = False) -> dict:
             out["index_s"] = time.perf_counter() - started
             out["health"] = client.get("/api/health").json()
             out["cpu_model_device"] = next(embeddings._cache.model.parameters()).device.type
-            routes = embeddings._cache.routes
-            out["gpu_encoder"] = type(routes.documents).__name__ if routes is not None else None
-            out["mps_available"] = bool(torch.backends.mps.is_available())
+            gpu = embeddings._cache.gpu
+            out["gpu_encoder"] = type(gpu).__name__ if gpu is not None else None
             out["first"] = _answers(client, ids, QUERIES, prompts)
             out["encodings"] = _encodings()
 
             if break_gpu:
-                _break(routes)
+                _break(gpu)
             response = client.post(
                 "/api/block-documents", json={"title": LATE_NOTE[0], "body": LATE_NOTE[1]}
             )
@@ -186,20 +184,19 @@ def _run_backend(device: str, *, break_gpu: bool = False) -> dict:
     _say(
         f"device={device} chosen={out['health']['embeddings_device']} "
         f"gpu_encoder={out['gpu_encoder']} cpu_model_on={out['cpu_model_device']} "
-        f"mps_available={out['mps_available']} load+accelerate={out['load_s']:.1f}s "
+        f"load={out['load_s']:.1f}s "
         f"index={out['index_s']:.1f}s search_p50={out['first']['search_ms']:.0f}ms "
         f"after={out['late_health']['embeddings_device']}"
     )
     return out
 
 
-def _break(routes) -> None:
+def _break(encoder) -> None:
     """Make the real GPU encoder fail: a weight of the wrong shape, so MLX itself raises
     (a shape error from the first layer's matmul) on the next encode."""
 
-    if routes is None or not hasattr(routes.documents, "w"):
-        raise AssertionError(f"no MLX encoder to break (routes: {routes})")
-    encoder = routes.documents
+    if encoder is None or not hasattr(encoder, "w"):
+        raise AssertionError(f"no MLX encoder to break ({encoder})")
     mx = encoder.mx
     encoder.w["layers.0.attn.Wqkv.weight"] = mx.zeros((7, 5), dtype=encoder.dense.dtype)
 
@@ -258,7 +255,7 @@ def _answers(client, ids: dict[str, str], queries: list[str], prompts: list[str]
 
 
 def _encodings() -> dict:
-    """Encodings of a few texts through the backend's own routes (GPU or CPU)."""
+    """Encodings of a few texts through the backend's own encoder (GPU or CPU)."""
 
     from app import embeddings
 
