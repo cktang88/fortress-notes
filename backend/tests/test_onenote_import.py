@@ -1076,7 +1076,7 @@ def _manifest_blocks(notebook):
 
 
 class CompareFindingsTests(_Base):
-    """Regressions found by tools/onenote-compare (rendered OneNote vs imported note)."""
+    """Regressions found by comparing rendered OneNote pages with imported notes."""
 
     def import_blocks(self, blocks: list[dict], guid: str = P3) -> dict:
         page = _pages(self.manifest)[guid]

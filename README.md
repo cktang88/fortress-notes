@@ -314,9 +314,6 @@ Mac test switches: `SNAPSHOT_DIR=<dir>` writes window snapshots there,
 `FORTRESS_INTEGRATION_URL=http://127.0.0.1:8000` (with the backend's `FORTRESS_TOKEN`
 in the environment) runs `IntegrationTests`.
 
-[`tools/onenote-compare`](tools/onenote-compare/README.md) checks the OneNote importer
-page by page against an independent rendering (one2html) and writes an HTML report.
-
 Benchmarks and calibration scripts live in `backend/scripts/` (`bench.py`,
 `bench_api.py`, `bench_workspace.py`, `calibrate_related.py`).
 
@@ -342,7 +339,6 @@ mac/
   Scripts/            seed_backend.py (integration seeding), fixture regeneration
 tools/
   fortress-onenote/   Rust OneNote converter (manifest format: SCHEMA.md)
-  onenote-compare/    importer verification against one2html
 docs/                 block model, OneNote research, screenshots
 notes/                default NOTES_DIR (gitignored except the welcome note)
 spec.md               backend spec: data model, API, OCR, provenance, OneNote import
@@ -362,5 +358,3 @@ spec.md               backend spec: data model, API, OCR, provenance, OneNote im
 - [docs/onenote-import.md](docs/onenote-import.md): OneNote migration research and design.
 - [tools/fortress-onenote/README.md](tools/fortress-onenote/README.md) and
   [SCHEMA.md](tools/fortress-onenote/SCHEMA.md): the converter and its manifest.
-- [tools/onenote-compare/README.md](tools/onenote-compare/README.md): visual
-  verification of imports.
