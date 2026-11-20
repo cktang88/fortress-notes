@@ -21,8 +21,13 @@ jobs:
       # signature (ad hoc here; Developer ID + notarization with SIGN_IDENTITY/NOTARY_PROFILE).
       - name: Package app (hardened runtime)
         run: Scripts/package_app.sh "$RUNNER_TEMP/app"
-      - name: Test and render snapshots
-        run: SNAPSHOT_DIR="$PWD/snapshots" swift test --skip EditorPerformanceTests --skip ThemeGallerySnapshotTests
+      # Snapshot suites run in their own step: their long synchronous renders hold the main
+      # actor for minutes, which starved timing-sensitive tests running beside them.
+      - name: Test
+        run: swift test --skip EditorPerformanceTests --skip SnapshotTests
+      - name: Render snapshots
+        if: success() || failure()
+        run: SNAPSHOT_DIR="$PWD/snapshots" swift test --filter GallerySnapshotTests --filter BlockToolsSnapshotTests --skip ThemeGallerySnapshotTests
       # On their own: choosing a theme recolours every window in the process.
       - name: Theme snapshots
         if: success() || failure()
