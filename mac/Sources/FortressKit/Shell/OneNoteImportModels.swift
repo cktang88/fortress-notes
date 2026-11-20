@@ -7,9 +7,9 @@ import Foundation
 
 public struct OneNoteImportJob: Decodable, Hashable, Sendable, Identifiable {
     public enum Status: String, Hashable, Sendable {
-        case queued, converting, importing, linking, done, failed
+        case queued, converting, importing, linking, done, failed, cancelled
 
-        public var isFinished: Bool { self == .done || self == .failed }
+        public var isFinished: Bool { self == .done || self == .failed || self == .cancelled }
     }
 
     public struct Progress: Decodable, Hashable, Sendable {
@@ -272,18 +272,26 @@ public enum OneNoteImport {
 
     /// The steps the sheet lists while an import runs.
     public enum Step: Int, CaseIterable, Sendable, Comparable {
-        case upload, convert, importPages, link
+        case signIn, download, upload, convert, importPages, link
 
         public var title: String {
             switch self {
-            case .upload: "Uploading"
-            case .convert: "Converting"
-            case .importPages: "Importing pages"
-            case .link: "Linking pages"
+            case .signIn: String(localized: "Signing in to Microsoft")
+            case .download: String(localized: "Downloading notebooks")
+            case .upload: String(localized: "Uploading")
+            case .convert: String(localized: "Converting")
+            case .importPages: String(localized: "Importing pages")
+            case .link: String(localized: "Linking pages")
             }
         }
 
         public static func < (lhs: Step, rhs: Step) -> Bool { lhs.rawValue < rhs.rawValue }
+
+        /// The steps shown for an import of a file, or a download from Microsoft
+        /// (whose result needs no converting).
+        public static func shown(downloading: Bool) -> [Step] {
+            downloading ? [.signIn, .download, .importPages, .link] : [.upload, .convert, .importPages, .link]
+        }
     }
 
     /// The step a job is on (queued counts as converting: the upload is done).
@@ -291,7 +299,16 @@ public enum OneNoteImport {
         switch status {
         case .queued, .converting: .convert
         case .importing: .importPages
-        case .linking, .done, .failed: .link
+        case .linking, .done, .failed, .cancelled: .link
+        }
+    }
+
+    /// The step a download from Microsoft is on.
+    public static func step(for status: OneNoteGraphJob.Status) -> Step {
+        switch status {
+        case .queued, .starting, .signingIn: .signIn
+        case .downloading, .converting: .download
+        case .importing, .done, .failed, .cancelled: .importPages
         }
     }
 

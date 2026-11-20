@@ -15,7 +15,7 @@ struct OneNoteImportSheet: View {
             switch importer.phase {
             case .choosing:
                 OneNoteChooseStep(importer: importer, close: close)
-            case .uploading, .running:
+            case .uploading, .downloading, .running:
                 OneNoteProgressStep(importer: importer, close: close)
             case .finished(let job):
                 OneNoteReportStep(importer: importer, job: job, close: close)
@@ -30,7 +30,7 @@ struct OneNoteImportSheet: View {
     private var stepKey: Int {
         switch importer.phase {
         case .choosing: 0
-        case .uploading, .running: 1
+        case .uploading, .downloading, .running: 1
         case .finished: 2
         case .failed: 3
         }
@@ -46,12 +46,11 @@ struct OneNoteImportSheet: View {
 
 // MARK: Step 1
 
-/// The exact wording of the export how-to.
+/// The exact wording of the export how-to (the "Import a file" way).
 enum OneNoteExportHelp {
-    static let steps = "OneNote on the web and on the Mac can't export notebooks any more."
-    static let mac = "On a Mac, download them with the Fortress OneNote tool in tools/fortress-onenote-graph (one command; its README has the steps), then drop the .zip it makes."
-    static let windows = "On Windows, OneNote's File › Export › Notebook › OneNote Package (.onepkg) keeps the most."
-    static let locked = "Password-protected sections must be unlocked in OneNote before you export, or they're skipped."
+    static let windows = "On Windows, OneNote's File › Export › Notebook › OneNote Package (.onepkg) keeps the most: ink, equations and custom tags come along."
+    static let other = "A .zip from an earlier download from Microsoft, or a .one section file, works too."
+    static let locked = "Password-protected sections must be unlocked in OneNote first, or they're skipped."
 }
 
 private struct OneNoteChooseStep: View {
@@ -66,30 +65,26 @@ private struct OneNoteChooseStep: View {
                 symbol: "square.and.arrow.down", title: "Import from OneNote",
                 subtitle: "Notebooks become folders and pages become notes. Tables, columns, images and attachments come along.")
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Get your notebooks out of OneNote")
-                    .font(.headline)
-                ForEach([OneNoteExportHelp.steps, OneNoteExportHelp.mac, OneNoteExportHelp.windows], id: \.self) { line in
-                    Text(line)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Label {
-                    Text(OneNoteExportHelp.locked)
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "lock")
-                }
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            Picker("Get notebooks by", selection: $importer.source) {
+                Text("Download from Microsoft").tag(OneNoteImporter.Source.microsoft)
+                Text("Import a File").tag(OneNoteImporter.Source.file)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+
+            switch importer.source {
+            case .microsoft:
+                OneNoteMicrosoftForm(importer: importer)
+            case .file:
+                fileForm
             }
 
-            dropZone
-
-            if let problem = importer.fileProblem {
-                Label(problem, systemImage: "exclamationmark.triangle")
+            if let notice = importer.notice {
+                Label(notice, systemImage: "pause.circle")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(spacing: 10) {
@@ -116,13 +111,48 @@ private struct OneNoteChooseStep: View {
                 Spacer()
                 Button("Cancel", action: close)
                     .keyboardShortcut(.cancelAction)
-                Button("Import") { importer.start(api: model.api) }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(importer.file == nil)
+                switch importer.source {
+                case .microsoft:
+                    Button("Download and Import") { importer.startDownload(api: model.api) }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!importer.canDownload)
+                case .file:
+                    Button("Import") { importer.start(api: model.api) }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(importer.file == nil)
+                }
             }
         }
         .padding(24)
+        .task { await importer.checkMicrosoft(api: model.api) }
+    }
+
+    @ViewBuilder private var fileForm: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach([OneNoteExportHelp.windows, OneNoteExportHelp.other], id: \.self) { line in
+                Text(line)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Label {
+                Text(OneNoteExportHelp.locked)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "lock")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+
+        dropZone
+
+        if let problem = importer.fileProblem {
+            Label(problem, systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var dropZone: some View {
@@ -191,6 +221,145 @@ private struct OneNoteChooseStep: View {
     }
 }
 
+/// "Download from Microsoft": the user's own app id, the account type, which notebooks,
+/// and how to get an app id (a one-time registration in Microsoft Entra).
+private struct OneNoteMicrosoftForm: View {
+    @Environment(AppModel.self) private var model
+    @Bindable var importer: OneNoteImporter
+    @State private var showsHelp: Bool
+
+    init(importer: OneNoteImporter) {
+        self.importer = importer
+        // Shown until there is an app id: it is what a first-time user needs.
+        _showsHelp = State(initialValue: !OneNoteGraph.isValidClientId(importer.clientId))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Fortress signs in to your Microsoft account in your browser (read-only), downloads your notebooks and imports them. Run it again later to bring in only what changed.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 10) {
+                GridRow {
+                    Text("Application (client) ID:")
+                        .gridColumnAlignment(.trailing)
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("Application (client) ID", text: $importer.clientId,
+                                  prompt: Text(verbatim: "1b2c3d4e-5f60-7182-93a4-b5c6d7e8f901"))
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .font(.body.monospaced())
+                            .autocorrectionDisabled()
+                        if !importer.clientId.trimmingCharacters(in: .whitespaces).isEmpty,
+                           !OneNoteGraph.isValidClientId(importer.clientId) {
+                            Text("An Application ID looks like the example: 32 letters and digits in groups.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                GridRow {
+                    Text("Account:")
+                    Picker("Account", selection: $importer.account) {
+                        ForEach(OneNoteGraphAccount.allCases, id: \.self) { account in
+                            Text(account.title).tag(account)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+                    .horizontalRadioGroupLayout()
+                    .labelsHidden()
+                }
+                GridRow {
+                    Text("Notebooks:")
+                    notebooks
+                }
+            }
+            .font(.callout)
+
+            DisclosureGroup(isExpanded: $showsHelp) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Microsoft lets apps read OneNote only through an app you register. It's free, takes about five minutes, and only your copy of Fortress uses it.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 2)
+                    ForEach(Array(OneNoteGraph.registrationSteps.enumerated()), id: \.offset) { index, step in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text("\(index + 1).")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16, alignment: .trailing)
+                            Text(step)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Button("Open Microsoft Entra") { NSWorkspace.shared.open(OneNoteGraph.entraURL) }
+                        .padding(.top, 4)
+                }
+                .font(.callout)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 6)
+            } label: {
+                Text("How do I get an Application ID?")
+                    .font(.callout)
+            }
+
+            if let status = importer.graphStatus, !status.available, let problem = status.problem {
+                Label {
+                    Text(problem)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private var notebooks: some View {
+        if let choices = importer.notebookChoices {
+            VStack(alignment: .leading, spacing: 4) {
+                if choices.isEmpty {
+                    Text("This account has no notebooks.")
+                        .foregroundStyle(.secondary)
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(choices) { notebook in
+                            Toggle(isOn: Binding(
+                                get: { importer.selectedNotebooks.contains(notebook.name) },
+                                set: { importer.setNotebook(notebook.name, selected: $0) })) {
+                                HStack(spacing: 6) {
+                                    Text(notebook.name)
+                                    Text(OneNoteImport.plural(notebook.sections, "section"))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 110)
+                .fixedSize(horizontal: false, vertical: true)
+                Button("Download All Notebooks") { importer.clearNotebookChoices() }
+                    .buttonStyle(.link)
+            }
+        } else {
+            HStack(spacing: 10) {
+                Text("All notebooks")
+                Button("Choose…") { importer.listNotebooks(api: model.api) }
+                    .disabled(!OneNoteGraph.isValidClientId(importer.clientId) || importer.graphStatus?.available == false)
+                    .help("Sign in and pick which notebooks to download")
+            }
+        }
+    }
+}
+
 /// Symbol, title and a line of explanation at the top of each step.
 private struct SheetHeader: View {
     let symbol: String
@@ -221,6 +390,7 @@ private struct SheetHeader: View {
 // MARK: Step 2
 
 private struct OneNoteProgressStep: View {
+    @Environment(AppModel.self) private var model
     let importer: OneNoteImporter
     let close: () -> Void
 
@@ -229,22 +399,43 @@ private struct OneNoteProgressStep: View {
         return nil
     }
 
+    private var download: OneNoteGraphJob? {
+        if case .downloading(let job) = importer.phase { return job }
+        return nil
+    }
+
+    private var fromMicrosoft: Bool { importer.origin == .microsoft }
+    private var listing: Bool { download?.kind == .notebooks }
+
+    private var steps: [OneNoteImport.Step] {
+        listing ? [.signIn] : OneNoteImport.Step.shown(downloading: fromMicrosoft)
+    }
+
     private var step: OneNoteImport.Step {
-        job.map { OneNoteImport.step(for: $0.status) } ?? .upload
+        if let download { return OneNoteImport.step(for: download.status) }
+        guard let job else { return fromMicrosoft ? .importPages : .upload }
+        let step = OneNoteImport.step(for: job.status)
+        // A download needs no converting: the import starts at once.
+        return fromMicrosoft && step == .convert ? .importPages : step
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            SheetHeader(symbol: "square.and.arrow.down", title: "Importing “\(importer.fileName)”",
-                        subtitle: "Large notebooks take a few minutes. You can close this window; the import keeps going.")
+            SheetHeader(symbol: fromMicrosoft ? "icloud.and.arrow.down" : "square.and.arrow.down", title: title,
+                        subtitle: subtitle)
 
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(OneNoteImport.Step.allCases, id: \.self) { item in
+                ForEach(steps, id: \.self) { item in
                     StepRow(title: item.title, state: item < step ? .done : item == step ? .current : .pending,
                             detail: detail(for: item))
                 }
             }
             .padding(.leading, 42)
+
+            if let code = download?.deviceCode {
+                DeviceCodeCard(code: code)
+                    .padding(.leading, 42)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 if let fraction {
@@ -259,10 +450,21 @@ private struct OneNoteProgressStep: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if let timing {
+                    Label(timing.text, systemImage: timing.waiting ? "hourglass" : "clock")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
             .padding(.leading, 42)
 
             HStack {
+                if canCancel {
+                    Button(listing ? "Cancel" : "Stop") { importer.cancel(api: model.api) }
+                        .disabled(importer.isCancelling)
+                        .help(fromMicrosoft ? "Stop now; downloading again continues where it stopped" : "Stop the import; pages already imported are kept")
+                }
                 Spacer()
                 Button("Close", action: close)
                     .keyboardShortcut(.cancelAction)
@@ -271,23 +473,55 @@ private struct OneNoteProgressStep: View {
         .padding(24)
     }
 
+    private var title: String {
+        if listing { return String(localized: "Finding your notebooks") }
+        if fromMicrosoft { return String(localized: "Downloading from Microsoft") }
+        return String(localized: "Importing “\(importer.fileName)”")
+    }
+
+    private var subtitle: String {
+        if listing { return String(localized: "Sign in to Microsoft to see the notebooks in your account.") }
+        if fromMicrosoft {
+            return String(localized: "Microsoft allows about 400 requests an hour, so a first download of many pages takes a while; later ones only fetch what changed. You can close this window; it keeps going.")
+        }
+        return String(localized: "Large notebooks take a few minutes. You can close this window; the import keeps going.")
+    }
+
+    private var canCancel: Bool {
+        switch importer.phase {
+        case .downloading(let job): !job.jobId.isEmpty && !job.status.isFinished
+        case .running(let job): !job.status.isFinished
+        default: false
+        }
+    }
+
     private var fraction: Double? {
         switch importer.phase {
         case .uploading(let value): return value
+        case .downloading(let job): return job.progress.fraction
         case .running(let job) where job.status == .importing: return job.progress.fraction
         default: return nil
         }
     }
 
+    /// The throttling pause, or how long the download probably still takes.
+    private var timing: (text: String, waiting: Bool)? {
+        guard let download else { return nil }
+        if let wait = download.wait { return (OneNoteGraph.waitText(wait), true) }
+        if let eta = download.etaSeconds { return (OneNoteGraph.etaText(eta), false) }
+        return nil
+    }
+
     private var caption: String {
         switch importer.phase {
-        case .uploading: return "Sending the export to Fortress…"
+        case .uploading: return String(localized: "Sending the export to Fortress…")
+        case .downloading(let job): return OneNoteGraph.caption(job)
         case .running(let job):
             switch job.status {
-            case .queued: return "Waiting to start…"
-            case .converting: return "Reading sections and pages…"
-            case .importing: return job.progress.current ?? "Creating notes…"
-            default: return "Connecting links between pages…"
+            case .queued: return String(localized: "Waiting to start…")
+            case .converting: return fromMicrosoft ? String(localized: "Reading the download…") : String(localized: "Reading sections and pages…")
+            case .importing: return job.progress.current ?? String(localized: "Creating notes…")
+            default: return String(localized: "Connecting links between pages…")
             }
         default: return ""
         }
@@ -297,11 +531,45 @@ private struct OneNoteProgressStep: View {
         switch (item, importer.phase) {
         case (.upload, .uploading(let value)):
             return value > 0 ? "\(Int((value * 100).rounded()))%" : nil
+        case (.download, .downloading(let job)):
+            return OneNoteGraph.pageCount(job.progress)
         case (.importPages, .running(let job)):
             return OneNoteImport.pageCount(job.progress)
         default:
             return nil
         }
+    }
+}
+
+/// The browser sign-in didn't work: the code to enter at Microsoft's page.
+private struct DeviceCodeCard: View {
+    let code: OneNoteGraphJob.DeviceCode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sign in with a code")
+                .font(.headline)
+            Text("Open \(code.verificationURI) in your browser and enter this code:")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 12) {
+                Text(code.userCode)
+                    .font(.system(size: 22, weight: .semibold).monospaced())
+                    .textSelection(.enabled)
+                    .accessibilityLabel("Code \(code.userCode)")
+                Spacer()
+                Button("Copy Code") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(code.userCode, forType: .string)
+                }
+                if let url = code.url {
+                    Button("Open Page") { NSWorkspace.shared.open(url) }
+                }
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: .quaternarySystemFill).opacity(0.6)))
     }
 }
 
@@ -381,7 +649,9 @@ private struct OneNoteReportStep: View {
                         .padding(.horizontal, 4)
                     }
                     Label {
-                        Text("Importing the same export again updates these notes; your edits are kept.")
+                        Text(importer.origin == .microsoft
+                             ? "Downloading again fetches only pages that changed and updates these notes; your edits are kept."
+                             : "Importing the same export again updates these notes; your edits are kept.")
                             .fixedSize(horizontal: false, vertical: true)
                     } icon: {
                         Image(systemName: "arrow.triangle.2.circlepath")
@@ -604,8 +874,12 @@ private struct OneNoteFailedStep: View {
                 }
                 .padding(.leading, 42)
             } else {
-                SheetHeader(symbol: "exclamationmark.triangle", title: "The import didn't finish", subtitle: message)
-                Text("Nothing was lost: notes imported before the problem are kept, and importing the same export again picks up where it left off.")
+                SheetHeader(symbol: "exclamationmark.triangle",
+                            title: importer.origin == .microsoft ? "The download didn't finish" : "The import didn't finish",
+                            subtitle: message)
+                Text(importer.origin == .microsoft
+                     ? "Nothing was lost: what was downloaded stays on this Mac, and Download and Import continues from there."
+                     : "Nothing was lost: notes imported before the problem are kept, and importing the same export again picks up where it left off.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

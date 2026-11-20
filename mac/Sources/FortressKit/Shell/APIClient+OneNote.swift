@@ -38,6 +38,64 @@ extension APIClient {
         return try OneNoteImport.decodeRecent(data)
     }
 
+    /// Stops an import between pages (pages already imported are kept).
+    public func cancelOneNoteImport(id: String) async throws {
+        var request = URLRequest(url: baseURL.appending(path: "api/import/onenote/\(id)/cancel"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        let (data, response) = try await session.data(for: request)
+        try Self.oneNoteCheck(data, response)
+    }
+
+    // MARK: Download from Microsoft (app/onenote_graph.py)
+
+    /// Whether the backend can run the download, and its latest download job.
+    public func oneNoteGraphStatus() async throws -> OneNoteGraphStatus {
+        var request = URLRequest(url: baseURL.appending(path: "api/import/onenote-graph"))
+        request.timeoutInterval = 30
+        let (data, response) = try await session.data(for: request)
+        try Self.oneNoteCheck(data, response)
+        return try JSONDecoder().decode(OneNoteGraphStatus.self, from: data)
+    }
+
+    /// Starts a download (then import) or, with `kind: .notebooks`, a sign-in that lists
+    /// the notebooks. `notebooks` nil downloads every notebook.
+    public func startOneNoteGraph(
+        kind: OneNoteGraphJob.Kind, clientId: String, account: OneNoteGraphAccount,
+        notebooks: [String]? = nil, folderId: String? = nil
+    ) async throws -> OneNoteGraphJob {
+        let path = kind == .notebooks ? "api/import/onenote-graph/notebooks" : "api/import/onenote-graph"
+        var request = URLRequest(url: baseURL.appending(path: path))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["client_id": clientId.trimmingCharacters(in: .whitespacesAndNewlines),
+                                   "account": account.rawValue]
+        if let notebooks { body["notebooks"] = notebooks }
+        if let folderId { body["folder_id"] = folderId }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await session.data(for: request)
+        try Self.oneNoteCheck(data, response)
+        return try JSONDecoder().decode(OneNoteGraphJob.self, from: data)
+    }
+
+    public func oneNoteGraphJob(id: String) async throws -> OneNoteGraphJob {
+        var request = URLRequest(url: baseURL.appending(path: "api/import/onenote-graph/\(id)"))
+        request.timeoutInterval = 30
+        let (data, response) = try await session.data(for: request)
+        try Self.oneNoteCheck(data, response)
+        return try JSONDecoder().decode(OneNoteGraphJob.self, from: data)
+    }
+
+    /// Stops a download; what was downloaded stays cached, so the next run resumes.
+    public func cancelOneNoteGraph(id: String) async throws {
+        var request = URLRequest(url: baseURL.appending(path: "api/import/onenote-graph/\(id)/cancel"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        let (data, response) = try await session.data(for: request)
+        try Self.oneNoteCheck(data, response)
+    }
+
     /// Writes the multipart body (the file, then `folder_id`) to a temporary file.
     static func oneNoteMultipartFile(file: URL, folderId: String?, boundary: String) throws -> URL {
         let output = FileManager.default.temporaryDirectory.appending(path: "onenote-upload-\(UUID().uuidString)")
