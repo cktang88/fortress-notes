@@ -106,7 +106,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         fragments.showsBlocks = BlockOutlines.isOn
         outlinesObservation = UserDefaults.standard.observe(\.showBlocks, options: [.new]) { [weak self] _, change in
             let on = change.newValue ?? false
-            MainActor.assumeIsolated { self?.setShowsBlocks(on) }
+            Task { @MainActor in self?.setShowsBlocks(on) }
         }
     }
 

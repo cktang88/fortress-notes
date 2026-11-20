@@ -9,6 +9,16 @@ import Testing
 // columns, Show Blocks. Each action is checked for the blocks it leaves (ids included),
 // the block operations a save sends, and one named step on the note's undo stack.
 
+/// Diagnostic: who ends the test process early (prints the stack at exit).
+nonisolated(unsafe) private var exitReported = false
+private func reportExits() {
+    guard !exitReported else { return }
+    exitReported = true
+    atexit {
+        print("EXIT STACK\n" + Thread.callStackSymbols.joined(separator: "\n"))
+    }
+}
+
 @MainActor
 enum BlockFixture {
     /// Plans (h1) · First paragraph · • Item one ( • Child ) · • Item two · Last
@@ -24,6 +34,7 @@ enum BlockFixture {
     }
 
     static func harness(_ blocks: [EditorBlock] = blocks()) -> UndoHarness {
+        reportExits()
         let harness = UndoHarness(blocks)
         harness.controller.noteReference = { (id: "doc-1", title: "Trip [draft]") }
         harness.layout()
@@ -107,8 +118,8 @@ extension UndoHarness {
         #expect(hover.target?.blockId == "b1")
         #expect(!hover.grip.isHidden && !hover.plus.isHidden)
         // Left of the text, the grip nearer it than the +.
-        let text = harness.point(onBlock: "b1")
-        #expect(hover.grip.frame.maxX <= text.x && hover.plus.frame.maxX <= hover.grip.frame.minX + 1)
+        let text = try #require(hover.target?.frame)
+        #expect(hover.grip.frame.maxX <= text.minX && hover.plus.frame.maxX <= hover.grip.frame.minX + 1)
         // Moving to the handle keeps it; leaving the view hides it.
         controller.hover(at: CGPoint(x: hover.grip.frame.midX, y: hover.grip.frame.midY))
         #expect(hover.target?.blockId == "b1")
