@@ -291,37 +291,51 @@ final class FortressTextView: NSTextView {
         if type == BlockEditorController.markdownPasteboardType {
             return controller?.writeMarkdown(to: pboard) ?? false
         }
-        // Soft separators (`SoftBreaks`) go out as the spaces they stand for.
-        if [.string, .rtf, .rtfd].contains(type), let storage = textStorage {
-            let ranges = selectedRanges.map(\.rangeValue).filter { $0.length > 0 && NSMaxRange($0) <= storage.length }
-            if ranges.contains(where: { storage.mutableString.range(of: SoftBreaks.separator, options: .literal, range: $0).location != NSNotFound }) {
-                let text = NSMutableAttributedString()
-                for (index, range) in ranges.enumerated() {
-                    if index > 0 { text.append(NSAttributedString(string: "\n")) }
-                    text.append(SoftBreaks.plain(storage.attributedSubstring(from: range)))
-                }
-                let whole = NSRange(location: 0, length: text.length)
-                switch type {
-                case .string: return pboard.setString(text.string, forType: .string)
-                case .rtf: return text.rtf(from: whole, documentAttributes: [:]).map { pboard.setData($0, forType: .rtf) } ?? false
-                default: return text.rtfd(from: whole, documentAttributes: [:]).map { pboard.setData($0, forType: .rtfd) } ?? false
-                }
-            }
-        }
         return super.writeSelection(to: pboard, type: type)
     }
 
-    /// The text with soft separators as the spaces they stand for (`SoftBreaks`), for
-    /// what reads it from the view: Find, Services, accessibility.
-    override var string: String {
-        get {
-            let text = super.string
-            guard let storage = textStorage,
-                  storage.mutableString.range(of: SoftBreaks.separator, options: .literal).location != NSNotFound else { return text }
-            return SoftBreaks.plain(text)
+    /// Soft separators (`SoftBreaks`) go out as the spaces they stand for. (The text
+    /// system writes its plain and rich text itself, not through `writeSelection(to:type:)`:
+    /// they are written again here when the selection has a separator.)
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard super.writeSelection(to: pboard, types: types) else { return false }
+        guard let storage = textStorage else { return true }
+        let ranges = selectedRanges.map(\.rangeValue).filter { $0.length > 0 && NSMaxRange($0) <= storage.length }
+        guard ranges.contains(where: { storage.mutableString.range(of: SoftBreaks.separator, options: .literal, range: $0).location != NSNotFound })
+        else { return true }
+        let text = NSMutableAttributedString()
+        for (index, range) in ranges.enumerated() {
+            if index > 0 { text.append(NSAttributedString(string: "\n")) }
+            text.append(SoftBreaks.plain(storage.attributedSubstring(from: range)))
         }
-        set { super.string = newValue }
+        let whole = NSRange(location: 0, length: text.length)
+        let written = Set(pboard.types ?? [])
+        if written.contains(.string) { pboard.setString(text.string, forType: .string) }
+        if written.contains(.rtf), let data = text.rtf(from: whole, documentAttributes: [:]) { pboard.setData(data, forType: .rtf) }
+        if written.contains(.rtfd), let data = text.rtfd(from: whole, documentAttributes: [:]) { pboard.setData(data, forType: .rtfd) }
+        return true
     }
+
+    // MARK: Find (NSTextFinderClient): the text with soft separators as spaces
+
+    /// Find reads the note a block at a time, each soft separator (`SoftBreaks`) the space
+    /// it stands for, so a phrase is found across the end of a soft paragraph. (Overriding
+    /// `string` instead copied the whole note on every keystroke: NSTextView reads it a lot.)
+    @objc(stringAtIndex:effectiveRange:endsWithSearchBoundary:)
+    func findString(at characterIndex: Int, effectiveRange outRange: NSRangePointer,
+                    endsWithSearchBoundary outFlag: UnsafeMutablePointer<ObjCBool>) -> String {
+        outFlag.pointee = false
+        guard let storage = textStorage, storage.length > 0 else {
+            outRange.pointee = NSRange(location: 0, length: 0)
+            return ""
+        }
+        let range = storage.nsString.paragraphRange(at: characterIndex)
+        outRange.pointee = range
+        return SoftBreaks.plain(storage.nsString.substring(with: range))
+    }
+
+    @objc(stringLength)
+    var findStringLength: Int { textStorage?.length ?? 0 }
 
     // MARK: Dragging blocks by their handle (the note's editor places them, for columns too)
 

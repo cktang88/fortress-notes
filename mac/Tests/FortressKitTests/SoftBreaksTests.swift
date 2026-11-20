@@ -179,9 +179,6 @@ struct SoftBreaksTests {
         let all = try #require(NSPasteboard.general.string(forType: .string))
         #expect(!Self.hasSeparator(all))
         #expect(all.hasPrefix("First block.\n") && all.contains(String(Self.prose(20_000).prefix(3_000))))
-        // The view's text (Find, Services, accessibility) has the spaces too.
-        #expect(!Self.hasSeparator(harness.view.string))
-        #expect(harness.view.string == harness.controller.storage.string.replacingOccurrences(of: SoftBreaks.separator, with: " "))
         // Pasting what was copied gives the same text back.
         harness.select(NSRange(location: harness.controller.range(ofBlock: "c")!.location, length: 0))
         harness.paste(expected, plain: true)
@@ -194,15 +191,28 @@ struct SoftBreaksTests {
         let string = harness.controller.storage.nsString
         let range = NSRange(location: at - 6, length: 12)
         let needle = (string.substring(with: range) as NSString).replacingOccurrences(of: SoftBreaks.separator, with: " ")
-        harness.select(NSRange(location: 0, length: 0))
-        let find = NSPasteboard(name: .find)
-        find.clearContents()
-        find.setString(needle, forType: .string)
-        let item = NSMenuItem()
-        item.tag = NSTextFinder.Action.nextMatch.rawValue
-        harness.view.performTextFinderAction(item)
-        settleRunLoop(0.2)
-        #expect(harness.view.selectedRange() == range, "searched for \(needle.debugDescription)")
+        func find(_ needle: String) -> NSRange {
+            harness.select(NSRange(location: 0, length: 0))
+            let find = NSPasteboard(name: .find)
+            find.clearContents()
+            find.setString(needle, forType: .string)
+            let item = NSMenuItem()
+            item.tag = NSTextFinder.Action.nextMatch.rawValue
+            harness.view.performTextFinderAction(item)
+            settleRunLoop(0.2)
+            return harness.view.selectedRange()
+        }
+        // Text within a soft paragraph (the way Find is driven here works).
+        #expect(find("Last block") == harness.controller.range(ofBlock: "c").map { NSRange(location: $0.location, length: 10) })
+        // A phrase across the end of one.
+        #expect(find(needle) == range, "searched for \(needle.debugDescription)")
+        // What Find reads: the whole block, with spaces.
+        var effective = NSRange()
+        var boundary = ObjCBool(false)
+        let read = harness.view.findString(at: at, effectiveRange: &effective, endsWithSearchBoundary: &boundary)
+        #expect(effective == harness.controller.range(ofBlock: "long"))
+        #expect(!Self.hasSeparator(read) && (read as NSString).length == effective.length)
+        #expect(harness.view.findStringLength == harness.controller.storage.length)
     }
 
     @Test func editsAtASoftBoundaryKeepTheTextRight() throws {
