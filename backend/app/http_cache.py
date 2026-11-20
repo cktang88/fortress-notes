@@ -1,4 +1,4 @@
-"""HTTP validators, conditional GETs, compression and small response caches.
+"""HTTP validators, conditional GETs and small response caches.
 
 GET responses of the API carry a strong ``ETag`` derived from what they show
 (a note's change sequence, the workspace change sequence, ...) and
@@ -18,14 +18,9 @@ from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
-from starlette.datastructures import MutableHeaders
-from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from starlette.responses import Response
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 API_CACHE_CONTROL = "no-cache"
-# The gzip variant of a representation gets its own strong validator.
-GZIP_SUFFIX = "-gzip"
 
 
 def etag(*parts: object) -> str:
@@ -52,8 +47,6 @@ def if_none_match(header: str | None, tag: str) -> bool:
         if value.startswith("W/"):
             value = value[2:]
         value = value.strip('"')
-        if value.endswith(GZIP_SUFFIX):
-            value = value[: -len(GZIP_SUFFIX)]
         if value == wanted:
             return True
     return False
@@ -138,55 +131,3 @@ class ResponseCache:
         with self._lock:
             self._items.clear()
             self._bytes = 0
-
-
-# --- Compression ---------------------------------------------------------------
-
-# Never compressed: the Ask stream (must reach the client line by line), files
-# that are already compressed, and downloads clients may resume with ranges.
-EXCLUDED_CONTENT_TYPES = (
-    *DEFAULT_EXCLUDED_CONTENT_TYPES,
-    "application/x-ndjson",
-    "application/octet-stream",
-    "application/pdf",
-    "application/vnd.sqlite3",
-)
-
-
-class ApiCompressionMiddleware:
-    """gzip for ``/api`` responses of at least ``minimum_size`` bytes.
-
-    Media (``/media``) is served as stored: images and audio are compressed
-    already and are fetched with ranges. A compressed response's strong ETag
-    gets a ``-gzip`` suffix (it is a different representation); conditional
-    requests accept either form.
-    """
-
-    def __init__(self, app: ASGIApp, minimum_size: int = 1024, compresslevel: int = 6):
-        self.app = app
-        self.gzip = GZipMiddleware(
-            app,
-            minimum_size=minimum_size,
-            compresslevel=compresslevel,
-            exclude_content_types=EXCLUDED_CONTENT_TYPES,
-        )
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
-            await self.app(scope, receive, send)
-            return
-
-        async def send_with_etag(message: Message) -> None:
-            if message["type"] == "http.response.start":
-                headers = MutableHeaders(raw=message["headers"])
-                tag = headers.get("etag")
-                if (
-                    tag
-                    and headers.get("content-encoding") == "gzip"
-                    and not tag.startswith("W/")
-                    and not tag.endswith(f'{GZIP_SUFFIX}"')
-                ):
-                    headers["etag"] = f'{tag[:-1]}{GZIP_SUFFIX}"'
-            await send(message)
-
-        await self.gzip(scope, receive, send_with_etag)

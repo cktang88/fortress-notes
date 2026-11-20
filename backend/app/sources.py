@@ -3,7 +3,7 @@
 Importers (OneNote, Markdown, ...) call :func:`upsert_document_from_source` once
 per source page. The call is an idempotent upsert keyed by ``(source kind,
 external id)``: the first call creates a note, later calls update that same note
-in place, so its Fortress ID, links, backlinks and history survive.
+in place, so its Fortress ID, links and backlinks survive.
 
 Conflict policy (simple on purpose):
 
@@ -31,7 +31,7 @@ Conflict policy (simple on purpose):
   imported afresh.
 
 Re-import state lives in the ``block_sync`` table and ``documents.sync_json``,
-never in provenance. A whole re-import is one undoable step in the note's history.
+never in provenance.
 """
 
 from __future__ import annotations
@@ -51,7 +51,6 @@ from .block_markdown import BlockSpec, legalize, parse_markdown
 from .block_schema import BlockShapeError
 from .block_store import (
     apply_transaction,
-    ChangeRecorder,
     connection_scope,
     document_insert_position,
     document_retitled,
@@ -696,17 +695,6 @@ def _update(
     )
 
     if blocks_changed:
-        changes = ChangeRecorder(connection)
-        for block_id in deletable:
-            changes.touch_subtree(block_id)
-        for parent_id in reordered:
-            for block_id in final[parent_id]:
-                if block_id in by_id:
-                    changes.touch(block_id)
-        for block_id in [*content_updates, *provenance_updates, *sync_updates, *moved]:
-            changes.touch(block_id)
-        for block_id in inserts:
-            changes.touch(block_id)
         # Park the blocks being placed, and those going away (they are deleted
         # last: matched children move out of them first), on unique temporary
         # keys; then give every reordered sibling list fresh keys (parents
@@ -757,7 +745,6 @@ def _update(
         # Matched children were moved out above; what cascades is deletable too.
         for block_id in deletable:
             connection.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
-        changes.record(document_id, revision, now)
         rebuild_document_derived(connection, document_id)
         result.blocks_created = len(inserts)
         result.blocks_updated = len(content_updates)
@@ -904,13 +891,6 @@ def document_info(path: Path, document_id: str) -> dict[str, Any]:
                  ORDER BY blocks.order_key, assets.media_name""",
             (document_id, *sorted(_ocr.OCR_TYPES)),
         ).fetchall()
-        history = connection.execute(
-            """SELECT COUNT(*) AS edits,
-                      MAX(CASE WHEN undone = 0 THEN 1 ELSE 0 END) AS can_undo,
-                      MAX(CASE WHEN undone = 1 THEN 1 ELSE 0 END) AS can_redo
-                 FROM document_history WHERE document_id = ?""",
-            (document_id,),
-        ).fetchone()
 
     document_provenance = _provenance.document_provenance(
         document["provenance_json"], document["source_kind"]
@@ -981,11 +961,8 @@ def document_info(path: Path, document_id: str) -> dict[str, Any]:
             "outgoing_document_links": outgoing_documents,
             "outgoing_block_links": outgoing_blocks,
             "backlinks": backlinks,
-            "edits": history["edits"],
         },
         "blocks_by_source": dict(sorted(by_source.items())),
-        "can_undo": bool(history["can_undo"]),
-        "can_redo": bool(history["can_redo"]),
         "sync": None
         if not sync
         else {

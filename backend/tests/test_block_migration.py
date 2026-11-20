@@ -88,8 +88,8 @@ class LegacyMigrationTests(unittest.TestCase):
             sorted(hit["text"] for hit in block_store.search_blocks(self.db, "quoted")),
             ["Quoted text", "quoted one\nquoted two"],
         )
-        # Old undo steps describe rows that no longer exist in that shape.
-        self.assertFalse(self.tree("Editor")["can_undo"])
+        # The retired server-side undo history is gone, with its triggers.
+        self.assertNotIn("document_history", tables)
 
     def test_markdown_import_is_parsed_and_the_quote_keeps_only_its_own_lines(self) -> None:
         tree = self.tree("MD")

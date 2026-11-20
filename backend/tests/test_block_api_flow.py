@@ -42,8 +42,7 @@ class BlockApiFlowTests(unittest.TestCase):
                     self.assertEqual(created.status_code, 201)
                     source = created.json()
                     block = source["children"][0]
-                    original_text = block["text"]
-                    self.assertEqual(original_text, "Draft body A migrated searchable block")
+                    self.assertEqual(block["text"], "Draft body A migrated searchable block")
 
                     edited = client.post(
                         f"/api/block-documents/{source['id']}/transactions?response=document",
@@ -64,22 +63,6 @@ class BlockApiFlowTests(unittest.TestCase):
                     self.assertEqual(edited.status_code, 200)
                     self.assertEqual(edited.json()["children"][0]["text"],
                                      EDITED)
-
-                    undone = client.post(
-                        f"/api/block-documents/{source['id']}/undo",
-                        json={"base_revision": edited.json()["revision"]},
-                    )
-                    self.assertEqual(undone.status_code, 200)
-                    self.assertTrue(undone.json()["can_redo"])
-                    redone = client.post(
-                        f"/api/block-documents/{source['id']}/redo",
-                        json={"base_revision": undone.json()["revision"]},
-                    )
-                    self.assertEqual(redone.status_code, 200)
-                    self.assertEqual(
-                        redone.json()["children"][0]["text"],
-                        EDITED,
-                    )
 
                     results = block_store.search_blocks(settings.block_db_path, "searchable phrase")
                     self.assertEqual(results[0]["document_id"], source["id"])
@@ -104,17 +87,4 @@ class BlockApiFlowTests(unittest.TestCase):
                     self.assertEqual(
                         recovered.json()["children"][0]["text"],
                         EDITED,
-                    )
-                    restarted_undo = restarted.post(
-                        f"/api/block-documents/{source['id']}/undo",
-                        json={"base_revision": recovered.json()["revision"]},
-                    )
-                    self.assertEqual(restarted_undo.status_code, 200)
-                    self.assertEqual(
-                        restarted_undo.json()["children"][0]["text"],
-                        original_text,
-                    )
-                    # The undone edit is out of the index after a restart too.
-                    self.assertEqual(
-                        block_store.search_blocks(settings.block_db_path, "searchable phrase"), []
                     )

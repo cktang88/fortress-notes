@@ -2,12 +2,12 @@
 
 The block model itself (types, inline content, derived text) is in
 ``block_schema``, Markdown in ``block_markdown``; docs/block-model.md is the
-contract. This module stores blocks, applies transactions (with undo/redo),
+contract. This module stores blocks, applies transactions,
 and keeps the derived data in step: text, links, asset links and full-text
 search.
 
 Other modules that write documents with SQL of their own (sources, workspace,
-duplicates, migrations) use only the public names here, mostly
+migrations) use only the public names here, mostly
 :func:`document_write`. Everything that must follow a write follows from it:
 
 * derived rows (text, links, asset links, the FTS row) of the documents a
@@ -30,7 +30,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-import frontmatter
 from ulid import ULID
 
 from . import order_keys, textutil
@@ -163,17 +162,6 @@ CREATE TABLE IF NOT EXISTS block_sync (
     source_removed INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS document_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    revision INTEGER NOT NULL,
-    patches_json TEXT NOT NULL,
-    undone INTEGER NOT NULL DEFAULT 0 CHECK (undone IN (0, 1)),
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS document_history_order
-    ON document_history(document_id, id);
-
 CREATE TABLE IF NOT EXISTS assets (
     content_hash TEXT NOT NULL,
     media_name TEXT NOT NULL,
@@ -274,18 +262,8 @@ _MIGRATIONS = {
     );
     """,
     7: "",
-    8: """
-    CREATE TABLE IF NOT EXISTS document_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        revision INTEGER NOT NULL,
-        patches_json TEXT NOT NULL,
-        undone INTEGER NOT NULL DEFAULT 0 CHECK (undone IN (0, 1)),
-        created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS document_history_order
-        ON document_history(document_id, id);
-    """,
+    # 8 made the server-side undo history, later retired (``_drop_retired_schema``).
+    8: "",
     9: """
     CREATE TABLE IF NOT EXISTS transaction_receipts (
         transaction_id TEXT PRIMARY KEY,
@@ -538,7 +516,7 @@ CREATE INDEX IF NOT EXISTS transaction_receipts_document ON transaction_receipts
 # Change tracking for HTTP validators (ETags) and server-side response caches.
 # ``change_log.seq`` grows with every change to anything a cached response
 # shows; ``documents.change_seq`` is the seq of the last change to that note's
-# own rows (blocks, user attrs, links, history, the document row). ``epoch``
+# own rows (blocks, user attrs, links, the document row). ``epoch``
 # changes when a backup is restored, so validators from before never match.
 # last_opened_at is deliberately not tracked: it is metadata of a read.
 _DOCUMENT_COLUMNS = (
@@ -571,15 +549,6 @@ _CHANGE_TRIGGERS = {
     "folders_changed_insert": ("AFTER INSERT ON folders", _bump(None)),
     "folders_changed_update": ("AFTER UPDATE ON folders", _bump(None)),
     "folders_changed_delete": ("AFTER DELETE ON folders", _bump(None)),
-    "document_history_changed_insert": (
-        "AFTER INSERT ON document_history", _bump("NEW.document_id")
-    ),
-    "document_history_changed_update": (
-        "AFTER UPDATE ON document_history", _bump("NEW.document_id")
-    ),
-    "document_history_changed_delete": (
-        "AFTER DELETE ON document_history", _bump("OLD.document_id")
-    ),
 }
 # A picture's OCR state and text show in the info of every note that contains it.
 for _event, _row in (("insert", "NEW"), ("update", "NEW")):
@@ -616,7 +585,8 @@ for _table, _column in (
 
 
 def _drop_retired_schema(connection: sqlite3.Connection) -> None:
-    """Remove what retired features stored: tags, saved searches, link checks.
+    """Remove what retired features stored: tags, saved searches, link checks and
+    the server-side undo history (the app undoes locally).
 
     Idempotent and version-free (runs on every initialize, a no-op once done).
     The documents update trigger names ``tags_json``, so it is dropped first;
@@ -629,6 +599,8 @@ def _drop_retired_schema(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE documents DROP COLUMN tags_json")
     connection.execute("DROP TABLE IF EXISTS saved_searches")
     connection.execute("DROP TABLE IF EXISTS link_check_cache")
+    # Its triggers (document_history_changed_*) go with it.
+    connection.execute("DROP TABLE IF EXISTS document_history")
 
 
 def _ensure_change_tracking(connection: sqlite3.Connection) -> None:
@@ -949,46 +921,6 @@ def is_ready(path: Path) -> bool:
     return path.resolve() in _ready_paths
 
 
-def bootstrap_markdown(notes_path: Path, path: Path) -> int:
-    """Import Markdown files that are not already represented in SQLite.
-
-    This is intentionally insert-only. Editing or deleting existing Markdown does
-    not mutate the new store until the block API owns writes in a later phase.
-    """
-
-    initialize(path)
-    imported = 0
-    with connection_scope(path) as connection:
-        for note_path in sorted(notes_path.glob("*.md")):
-            note_id = note_path.stem
-            if connection.execute(
-                "SELECT 1 FROM documents WHERE id = ?", (note_id,)
-            ).fetchone():
-                continue
-            post = frontmatter.load(note_path)
-            now = utc_now()
-            created_at = _iso(post.metadata.get("created_at", now))
-            updated_at = _iso(post.metadata.get("updated_at", now))
-            title = str(post.metadata.get("title") or derive_title(post.content))
-            status = post.metadata.get("status", "rough")
-            if status not in {"rough", "polished"}:
-                status = "rough"
-            _insert_document(
-                connection,
-                note_id,
-                title,
-                status,
-                post.content,
-                created_at,
-                updated_at,
-                provenance=markdown_import_provenance(
-                    post.metadata, note_path.name, now
-                ),
-            )
-            imported += 1
-    return imported
-
-
 MARKDOWN_IMPORTER = {"name": "fortress-markdown", "version": "1"}
 
 
@@ -1227,7 +1159,7 @@ def ensure_editable_block(path: Path, document_id: str | None = None) -> int:
     repairs older data). Called where a note can end up empty - create, import,
     restore - never on a read. The editor needs a paragraph with a stable ID the
     server knows; the content is unchanged (an empty paragraph exports as
-    nothing), so the revision and history stay as they are.
+    nothing), so the revision stays as it is.
     """
 
     initialize(path)
@@ -1690,13 +1622,6 @@ def backup_database(path: Path, destination: Path) -> None:
         target.commit()
 
 
-def check_integrity(path: Path) -> bool:
-    initialize(path)
-    with connection_scope(path) as connection:
-        result = connection.execute("PRAGMA quick_check").fetchone()
-    return result is not None and result[0] == "ok"
-
-
 def fts_is_consistent(path: Path) -> bool:
     """Check that FTS contains exactly the active canonical blocks.
 
@@ -2021,7 +1946,6 @@ def insert_specs(
     created_at: str,
     updated_at: str,
     revision: int | None,
-    changes: "ChangeRecorder | None" = None,
     default_provenance: dict[str, object] | None = None,
 ) -> list[str]:
     """Insert canonical block trees between two sibling keys; returns the new ids.
@@ -2045,8 +1969,6 @@ def insert_specs(
             "SELECT 1 FROM blocks WHERE id = ?", (block_id,)
         ).fetchone():
             block_id = new_id()
-        if changes is not None:
-            changes.touch(block_id)
         provenance = block_spec.provenance or default_provenance
         connection.execute(
             """INSERT INTO blocks(id, document_id, parent_id, order_key, type, attrs_json,
@@ -2063,7 +1985,7 @@ def insert_specs(
         written.append(block_id)
         written.extend(insert_specs(
             connection, document_id, block_spec.children, block_id, None, None,
-            created_at, updated_at, revision, changes,
+            created_at, updated_at, revision,
         ))
     return written
 
@@ -2264,7 +2186,7 @@ class DocumentWrite:
                 "DELETE FROM blocks_fts WHERE document_id = ?", (document_id,)
             )
             # Children reference parents with ON DELETE CASCADE: blocks, refs,
-            # history and receipts go with the document.
+            # and receipts go with the document.
             self.connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
             self._rederive.pop(document_id, None)
 
@@ -2346,12 +2268,6 @@ def _document_tree(
     ).fetchone()
     if document is None:
         return None
-    history_state = connection.execute(
-        """SELECT MAX(CASE WHEN undone = 0 THEN 1 ELSE 0 END) AS can_undo,
-                  MAX(CASE WHEN undone = 1 THEN 1 ELSE 0 END) AS can_redo
-             FROM document_history WHERE document_id = ?""",
-        (document_id,),
-    ).fetchone()
     document_provenance = _provenance.document_provenance(
         document["provenance_json"], document["source_kind"]
     )
@@ -2387,8 +2303,6 @@ def _document_tree(
         "updated_at": document["updated_at"],
         "revision": document["revision"],
         "title_auto": bool(document["title_auto"]),
-        "can_undo": bool(history_state["can_undo"]),
-        "can_redo": bool(history_state["can_redo"]),
         "provenance": document_provenance,
         # Current titles/text of every note and block this document links to.
         "resolved_links": _resolved_links(connection, document_id),
@@ -2452,115 +2366,6 @@ class DocumentRevisionConflict(RuntimeError):
             "base_revision": self.base_revision,
             "current_revision": self.current_revision,
         }
-
-
-def _snapshot(connection: sqlite3.Connection, block_id: str) -> dict | None:
-    """One block's stored state, as undo and redo put it back."""
-
-    row = connection.execute("SELECT * FROM blocks WHERE id = ?", (block_id,)).fetchone()
-    if row is None:
-        return None
-    state = {key: row[key] for key in _SNAPSHOT_COLUMNS}
-    state["user_attrs"] = {
-        item["name"]: item["value"]
-        for item in connection.execute(
-            "SELECT name, value FROM block_user_attrs WHERE block_id = ?", (block_id,)
-        )
-    }
-    sync = connection.execute(
-        "SELECT source_hash, dismissed_hash, conflict_json, source_removed FROM block_sync WHERE block_id = ?",
-        (block_id,),
-    ).fetchone()
-    state["sync"] = None if sync is None else dict(sync)
-    return state
-
-
-_SNAPSHOT_COLUMNS = (
-    "document_id", "parent_id", "order_key", "type", "attrs_json", "content_json",
-    "payload_json", "text", "created_at", "updated_at", "provenance_json", "revision",
-)
-
-
-class ChangeRecorder:
-    """The blocks one write touched, with their state before it (one undo step)."""
-
-    def __init__(self, connection: sqlite3.Connection):
-        self.connection = connection
-        self.before: dict[str, dict | None] = {}
-
-    def touch(self, block_id: str) -> None:
-        if block_id not in self.before:
-            self.before[block_id] = _snapshot(self.connection, block_id)
-
-    def touch_subtree(self, block_id: str) -> None:
-        for row in self.connection.execute(
-            """WITH RECURSIVE subtree(id) AS (
-                   SELECT ? UNION ALL
-                   SELECT blocks.id FROM blocks JOIN subtree ON blocks.parent_id = subtree.id
-               ) SELECT id FROM subtree""",
-            (block_id,),
-        ).fetchall():
-            self.touch(row["id"])
-
-    def patch(self) -> list[dict]:
-        return [
-            {"id": block_id, "before": before, "after": _snapshot(self.connection, block_id)}
-            for block_id, before in self.before.items()
-        ]
-
-    def record(self, document_id: str, revision: int, now: str) -> None:
-        """Store this write as the document's newest undo step (dropping redo)."""
-
-        self.connection.execute(
-            "DELETE FROM document_history WHERE document_id = ? AND undone = 1", (document_id,)
-        )
-        self.connection.execute(
-            """INSERT INTO document_history(document_id, revision, patches_json, created_at)
-               VALUES (?, ?, ?, ?)""",
-            (document_id, revision, json.dumps(self.patch()), now),
-        )
-
-
-def _restore(connection: sqlite3.Connection, document_id: str, entries: list[dict], key: str) -> None:
-    """Put the blocks of one history step back into their ``key`` ("before"/"after") state.
-
-    Touched blocks that exist are parked on unique temporary order keys first, so
-    restoring them in any order never trips the sibling-order index; foreign keys
-    are checked at commit (a parent may be restored after its child).
-    """
-
-    connection.execute("PRAGMA defer_foreign_keys = ON")
-    present = {
-        entry["id"] for entry in entries
-        if connection.execute("SELECT 1 FROM blocks WHERE id = ?", (entry["id"],)).fetchone()
-    }
-    for block_id in present:
-        connection.execute("UPDATE blocks SET order_key = '~' || id WHERE id = ?", (block_id,))
-    columns = ", ".join(_SNAPSHOT_COLUMNS)
-    for entry in entries:
-        state = entry[key]
-        if state is None:
-            continue
-        values = [state[column] for column in _SNAPSHOT_COLUMNS]
-        if entry["id"] in present:
-            assignments = ", ".join(f"{column} = ?" for column in _SNAPSHOT_COLUMNS)
-            connection.execute(f"UPDATE blocks SET {assignments} WHERE id = ?", (*values, entry["id"]))
-        else:
-            connection.execute(
-                f"INSERT INTO blocks(id, {columns}) VALUES (?, {', '.join('?' for _ in values)})",
-                (entry["id"], *values),
-            )
-        connection.execute("DELETE FROM block_user_attrs WHERE block_id = ?", (entry["id"],))
-        connection.executemany(
-            "INSERT INTO block_user_attrs(block_id, name, value) VALUES (?, ?, ?)",
-            [(entry["id"], name, value) for name, value in state["user_attrs"].items()],
-        )
-        write_block_sync(connection, entry["id"], state["sync"])
-    # Search rows go first: deleting a parent cascades to its children.
-    doomed = [entry["id"] for entry in entries if entry[key] is None and entry["id"] in present]
-    _delete_fts(connection, doomed)
-    for block_id in doomed:
-        connection.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
 
 
 def write_block_sync(connection: sqlite3.Connection, block_id: str, sync: dict | None) -> None:
@@ -2658,7 +2463,6 @@ def apply_transaction(
             (now, revision, document_id),
         )
         _refresh_auto_title(connection, document_id)
-        writer.changes.record(document_id, revision, now)
         tree = _document_tree(connection, document_id, include_children)
         if tree is None:  # pragma: no cover - protected by the transaction above
             raise KeyError("document not found")
@@ -2680,7 +2484,6 @@ class _Writer:
         self.document_id = document_id
         self.now = now
         self.revision = revision
-        self.changes = ChangeRecorder(connection)
         self.content_changed: list[str] = []
         self.removed: list[str] = []
 
@@ -2766,7 +2569,6 @@ class _Writer:
             _provenance.normalize(operation.provenance)
             if operation.provenance is not None else {"source": "manual"}
         )
-        self.changes.touch(block_id)
         self.connection.execute(
             """INSERT INTO blocks(id, document_id, parent_id, order_key, type, attrs_json,
                    content_json, payload_json, text, created_at, updated_at, provenance_json,
@@ -2785,7 +2587,6 @@ class _Writer:
         if not operation.model_fields_set & {"type", "attrs", "content", "payload", "user_attrs", "provenance"}:
             raise BlockShapeError("an update names what to change: type, attrs, content, payload, user_attrs or provenance")
         row = self.row(operation.block_id)
-        self.changes.touch(row["id"])
         current = _row_block(row)
         new_type = current.type
         if operation.type is not None:
@@ -2832,7 +2633,6 @@ class _Writer:
         if parent_id is not None and (parent_id == row["id"] or _is_descendant(self.connection, row["id"], parent_id)):
             raise ValueError("cannot move a block into itself or its descendant")
         schema.check_nesting(self.parent_type(parent_id), row["type"])
-        self.changes.touch(row["id"])
         self.connection.execute(
             "UPDATE blocks SET parent_id = ?, order_key = ?, updated_at = ?, revision = ? WHERE id = ?",
             (parent_id, key, self.now, self.revision, row["id"]),
@@ -2840,7 +2640,6 @@ class _Writer:
 
     def delete(self, operation: BlockOperation) -> None:
         row = self.row(operation.block_id)
-        self.changes.touch_subtree(row["id"])
         subtree = [
             item[0] for item in self.connection.execute(
                 """WITH RECURSIVE subtree(id) AS (
@@ -2897,58 +2696,6 @@ def _is_descendant(
             "SELECT parent_id FROM blocks WHERE id = ?", (row["parent_id"],)
         ).fetchone()
     return False
-
-
-def _change_history(
-    path: Path, document_id: str, base_revision: int, redo: bool
-) -> dict:
-    initialize(path)
-    now = utc_now()
-    with connection_scope(path) as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        document = connection.execute(
-            "SELECT revision FROM documents WHERE id = ? AND deleted_at IS NULL",
-            (document_id,),
-        ).fetchone()
-        if document is None:
-            raise KeyError("document not found")
-        if base_revision != document["revision"]:
-            raise DocumentRevisionConflict(document_id, base_revision, document["revision"])
-        history = connection.execute(
-            """SELECT * FROM document_history WHERE document_id = ? AND undone = ?
-               ORDER BY id """ + ("ASC" if redo else "DESC") + " LIMIT 1",
-            (document_id, 1 if redo else 0),
-        ).fetchone()
-        if history is None:
-            raise ValueError("nothing to redo" if redo else "nothing to undo")
-        entries = json.loads(history["patches_json"])
-        _restore(connection, document_id, entries, "after" if redo else "before")
-        present = [
-            entry["id"] for entry in entries if entry["after" if redo else "before"] is not None
-        ]
-        gone = [entry["id"] for entry in entries if entry["after" if redo else "before"] is None]
-        refresh_derived(connection, document_id, present, removed=gone)
-        connection.execute(
-            "UPDATE document_history SET undone = ? WHERE id = ?",
-            (0 if redo else 1, history["id"]),
-        )
-        connection.execute(
-            "UPDATE documents SET updated_at = ?, revision = revision + 1 WHERE id = ?",
-            (now, document_id),
-        )
-        _refresh_auto_title(connection, document_id)
-    tree = document_tree(path, document_id)
-    if tree is None:  # pragma: no cover - protected by the transaction above
-        raise KeyError("document not found")
-    return tree
-
-
-def undo_transaction(path: Path, document_id: str, base_revision: int) -> dict:
-    return _change_history(path, document_id, base_revision, redo=False)
-
-
-def redo_transaction(path: Path, document_id: str, base_revision: int) -> dict:
-    return _change_history(path, document_id, base_revision, redo=True)
 
 
 def stored_document_provenance(connection: sqlite3.Connection, document_id: str) -> dict:

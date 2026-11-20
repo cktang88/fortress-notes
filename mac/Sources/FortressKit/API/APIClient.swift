@@ -113,11 +113,6 @@ public struct APIClient: Sendable {
         return document
     }
 
-    /// The server's block type registry (`BlockSchema.bundled` is the copy the editor uses).
-    public func blockSchema() async throws -> BlockSchema {
-        try await get("api/block-schema")
-    }
-
     public func createDocument(title: String = "", folderId: String? = nil) async throws -> BlockDocument {
         let request = try makeRequest(
             "POST", "api/block-documents",
@@ -170,18 +165,6 @@ public struct APIClient: Sendable {
             body: try JSONEncoder().encode(transaction)))
     }
 
-    public func undo(documentId: String, revision: Int) async throws -> BlockDocument {
-        try await documentMutation(documentId, try makeRequest(
-            "POST", "api/block-documents/\(documentId)/undo",
-            body: try JSONEncoder().encode(["base_revision": JSONValue.number(Double(revision))])))
-    }
-
-    public func redo(documentId: String, revision: Int) async throws -> BlockDocument {
-        try await documentMutation(documentId, try makeRequest(
-            "POST", "api/block-documents/\(documentId)/redo",
-            body: try JSONEncoder().encode(["base_revision": JSONValue.number(Double(revision))])))
-    }
-
     /// Runs a change to one note: its answer becomes the cached copy, kept under the
     /// `X-Document-ETag` it came with (so the next read is a 304); a rejection (409
     /// conflict, 404 gone) drops the cached copy so the next read asks the server.
@@ -207,10 +190,6 @@ public struct APIClient: Sendable {
 
     public func backlinks(documentId: String) async throws -> [Backlink] {
         try await get("api/block-documents/\(documentId)/backlinks")
-    }
-
-    public func similar(documentId: String) async throws -> [SimilarDocument] {
-        try await get("api/block-documents/\(documentId)/similar", kind: .search)
     }
 
     public func related(documentId: String, blockId: String? = nil, count: Int = 5) async throws -> [RelatedResult] {

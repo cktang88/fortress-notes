@@ -25,7 +25,6 @@ from . import (
     embeddings,
     documents,
     document_service,
-    duplicates,
     http_cache,
     llm,
     media,
@@ -43,14 +42,13 @@ from .portability import (
     safe_filename,
     import_markdown_if_empty,
 )
-from .block_schema import BlockShapeError, schema_json
+from .block_schema import BlockShapeError
 from .config import get_settings
 from .models import (
     NoteCreate,
     NoteStatus,
     NoteUpdate,
     BlockTransaction,
-    BlockHistoryRequest,
     BlockLinkTarget,
     Backlink,
     RelatedResult,
@@ -176,8 +174,6 @@ class ResponseHeadersMiddleware:
 
 
 app.add_middleware(ResponseHeadersMiddleware)
-# gzip API JSON of 1 KB or more (not the Ask stream, not media).
-app.add_middleware(http_cache.ApiCompressionMiddleware, minimum_size=1024)
 # Keep last (outermost): token and browser checks run before anything else.
 from .auth import LocalAuthMiddleware  # noqa: E402
 
@@ -361,13 +357,6 @@ def ocr_store(content_hash: str, result: ExternalOcrResult) -> dict:
         )
     except KeyError:
         raise HTTPException(404, "No picture or PDF with that content") from None
-
-
-@app.get("/api/block-schema")
-def block_schema():
-    """The block type registry (docs/block-model.md): types, attrs, nesting, marks."""
-
-    return schema_json()
 
 
 @app.get("/api/navigation")
@@ -725,29 +714,6 @@ def capture(data: CaptureRequest):
         raise HTTPException(422, str(exc)) from exc
 
 
-@app.get("/api/block-documents/{document_id}/similar")
-def similar_documents(document_id: str):
-    """Other notes containing most of this note's distinctive words."""
-
-    try:
-        return duplicates.similar_documents(_db(), document_id)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-
-
-@app.post("/api/block-documents/{document_id}/move-into/{target_id}")
-def move_document_into(document_id: str, target_id: str):
-    """Append this note's paragraphs to another note and trash the emptied one."""
-
-    try:
-        moved = documents.move_into(document_id, target_id)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    return {"moved": moved, "document_id": target_id}
-
-
 # --- Trash ---------------------------------------------------------------------
 
 
@@ -925,36 +891,6 @@ def apply_block_transaction(
     except BlockShapeError as exc:
         # An unknown type, illegal nesting or attrs/content the registry rejects.
         raise HTTPException(422, str(exc)) from exc
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/block-documents/{document_id}/undo")
-def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
-    try:
-        block_store.undo_transaction(
-            _db(), document_id, request.base_revision
-        )
-        return _written_response(document_id)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except block_store.DocumentRevisionConflict as exc:
-        raise HTTPException(409, exc.detail()) from exc
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/block-documents/{document_id}/redo")
-def redo_block_transaction(document_id: str, request: BlockHistoryRequest):
-    try:
-        block_store.redo_transaction(
-            _db(), document_id, request.base_revision
-        )
-        return _written_response(document_id)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except block_store.DocumentRevisionConflict as exc:
-        raise HTTPException(409, exc.detail()) from exc
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(409, str(exc)) from exc
 

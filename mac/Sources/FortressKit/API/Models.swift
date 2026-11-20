@@ -204,8 +204,6 @@ public struct BlockDocument: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var revision: Int
     public var titleAuto: Bool?
-    public var canUndo: Bool?
-    public var canRedo: Bool?
     public var title: String
     public var status: NoteStatus
     public var createdAt: String
@@ -221,8 +219,6 @@ public struct BlockDocument: Codable, Hashable, Identifiable, Sendable {
         case id
         case revision
         case titleAuto = "title_auto"
-        case canUndo = "can_undo"
-        case canRedo = "can_redo"
         case title
         case status
         case createdAt = "created_at"
@@ -499,21 +495,6 @@ public enum AskEvent: Hashable, Sendable {
     case sentence(AskSentence)
     case step(AskStep)
     case done(AskResponse)
-}
-
-public struct SimilarDocument: Codable, Hashable, Identifiable, Sendable {
-    public var documentId: String
-    public var title: String
-    public var updatedAt: String
-    public var overlap: Double
-    public var id: String { documentId }
-
-    enum CodingKeys: String, CodingKey {
-        case documentId = "document_id"
-        case title
-        case updatedAt = "updated_at"
-        case overlap
-    }
 }
 
 public struct TrashedDocument: Codable, Hashable, Identifiable, Sendable {

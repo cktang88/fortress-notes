@@ -136,7 +136,7 @@ enum LongNote {
                 made += 1
             }
         }
-        return BlockDocument(id: documentId, revision: 1, titleAuto: true, canUndo: false, canRedo: false, title: "Long note",
+        return BlockDocument(id: documentId, revision: 1, titleAuto: true, title: "Long note",
                              status: .rough, createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
                              children: nodes)
     }
@@ -393,7 +393,7 @@ final class PerfEditor {
             PerfLog.record("keystroke.long50k.part.relayoutOnly.median", relayouts.sorted()[2])
         }
 
-        // What long50k measured before the caret fix (UNDO_AUDIT.md): the first key went
+        // What long50k measured before the caret fix (restyling moved the caret): the first key went
         // into the long paragraph and moved the caret past it, so the rest were typed at
         // the start of the paragraph after it. Kept to compare like with like.
         editor.controller.textView.setSelectedRange(NSRange(location: NSMaxRange(editor.range(ofBlock: "l0")), length: 0))
@@ -414,7 +414,7 @@ final class PerfEditor {
     /// The floor under `keystroke.long50k`: TextKit 2 lays a paragraph out whole (one
     /// layout fragment per paragraph), so a bare TextKit 2 stack with nothing of the
     /// editor's takes about as long to lay a 50,000-character paragraph out again as a
-    /// keystroke in it costs (UNDO_AUDIT.md, performance note).
+    /// keystroke in it costs (see Editor/Text/SoftBreaks.swift).
     @Test func longParagraphLayoutCosts() throws {
         let long = String(String(repeating: LongNote.sentence, count: 50_000 / LongNote.sentence.count + 1).prefix(50_000))
         let text = NSAttributedString(string: long, attributes: [.font: EditorTheme().bodyFont(), .paragraphStyle: NSParagraphStyle.default])

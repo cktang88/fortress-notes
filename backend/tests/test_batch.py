@@ -51,7 +51,7 @@ class BatchApiTests(unittest.TestCase):
         self.assertEqual(body["documents"][0]["title"], "First")
         # Each body is the single GET's body, under the ETag the GET answers 304 to.
         single = self.client.get(f"/api/block-documents/{first['id']}")
-        self.assertEqual(body["etags"][first["id"]], single.headers["etag"].replace("-gzip", ""))
+        self.assertEqual(body["etags"][first["id"]], single.headers["etag"])
         self.assertEqual(body["documents"][0], single.json())
 
     def test_batch_documents_skips_known_etags(self) -> None:

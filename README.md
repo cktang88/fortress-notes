@@ -259,7 +259,7 @@ flowchart LR
     Vision[Apple Vision reader]
   end
   subgraph Backend["backend/ (FastAPI, 127.0.0.1)"]
-    API["REST API<br/>ETags · gzip · token auth"]
+    API["REST API<br/>ETags · token auth"]
     Store[("SQLite<br/>.fortress.sqlite3")]
     BG["background lanes:<br/>mirrors · imports · backups · ocr · index"]
     Corpus["search corpus<br/>FTS5 · ColBERT"]
@@ -278,10 +278,10 @@ flowchart LR
 ```
 
 - **SQLite is the only source of truth** (`NOTES_DIR/.fortress.sqlite3`): folders,
-  documents, nested blocks with stable ids, links, history, assets, OCR text, FTS5. The
+  documents, nested blocks with stable ids, links, assets, OCR text, FTS5. The
   block model is the contract between backend and clients:
   [docs/block-model.md](docs/block-model.md). Edits are revision-checked block
-  transactions; each is one undo step.
+  transactions; undo is the editor's own, per note, and saves as ordinary edits.
 - **Background work** runs in one manager (`backend/app/background.py`), one thread per
   lane: Markdown mirrors (`NOTES_DIR/<folder>/<Title>.md`, an Obsidian vault, write-only), OneNote import jobs, daily
   backups, OCR and ColBERT indexing. Low-priority lanes yield while a search is scoring.
@@ -307,7 +307,7 @@ identity. It still writes every note out as Markdown, so the files stay open.
 | **Paragraph links and embeds** | Every block has a stable id; links survive edits, renames and moves | Ids must live in the text (`^abc123`); a paste, rename or edit in another editor can drop or duplicate them and break links silently |
 | **Related notes and search speed** | The ColBERT index updates only the paragraphs that changed (from SQLite's change log) | Each save means re-reading and re-parsing the file and guessing which paragraphs are the old ones before re-indexing |
 | **Concurrent edits** | Edits are block operations; two windows conflict only on the same paragraph | Git merges by line, and a prose paragraph is one line, so edits conflict or the last write wins |
-| **Undo** | One undo step per transaction, per note | Editor-local only; history is per commit |
+| **Undo** | Per note in the editor, named steps; an undo saves like any edit | Editor-local only; history is per commit |
 | **Rich content** | Tables whose cells hold blocks, columns, callouts and OneNote layout are kept without loss | No faithful Markdown form; each round trip loses some of it |
 | **Pictures** | Stored once by content hash, with cached OCR text | A git repo grows forever unless you add Git LFS |
 | **Open format, no lock-in** | ✅ via the Markdown mirror (an Obsidian vault in `NOTES_DIR`) | ✅ natively |
@@ -332,11 +332,8 @@ Mac test switches: `SNAPSHOT_DIR=<dir>` writes window snapshots there,
 `FORTRESS_INTEGRATION_URL=http://127.0.0.1:8000` (with the backend's `FORTRESS_TOKEN`
 in the environment) runs `IntegrationTests`.
 
-[`tools/onenote-compare`](tools/onenote-compare/README.md) checks the OneNote importer
-page by page against an independent rendering (one2html) and writes an HTML report.
-
-Benchmarks and calibration scripts live in `backend/scripts/` (`bench.py`,
-`bench_api.py`, `bench_workspace.py`, `calibrate_related.py`).
+Benchmarks and calibration scripts live in `backend/scripts/` (`bench.py` with its
+generated workspace `bench_workspace.py`, `calibrate_related.py`).
 
 ## Project layout
 
@@ -360,7 +357,6 @@ mac/
   Scripts/            seed_backend.py (integration seeding), fixture regeneration
 tools/
   fortress-onenote/   Rust OneNote converter (manifest format: SCHEMA.md)
-  onenote-compare/    importer verification against one2html
 docs/                 block model, OneNote research, screenshots
 notes/                default NOTES_DIR (gitignored except the welcome note)
 spec.md               backend spec: data model, API, OCR, provenance, OneNote import
@@ -380,5 +376,3 @@ spec.md               backend spec: data model, API, OCR, provenance, OneNote im
 - [docs/onenote-import.md](docs/onenote-import.md): OneNote migration research and design.
 - [tools/fortress-onenote/README.md](tools/fortress-onenote/README.md) and
   [SCHEMA.md](tools/fortress-onenote/SCHEMA.md): the converter and its manifest.
-- [tools/onenote-compare/README.md](tools/onenote-compare/README.md): visual
-  verification of imports.

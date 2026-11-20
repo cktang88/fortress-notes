@@ -114,8 +114,6 @@ def migrate(connection: sqlite3.Connection) -> None:
                source_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
                target_document_id TEXT NOT NULL,
                PRIMARY KEY (source_block_id, target_document_id))""",
-        # Undo steps were snapshots of the old shapes.
-        "DELETE FROM document_history",
         "DELETE FROM block_user_attrs WHERE block_id NOT IN (SELECT id FROM blocks)",
         "DELETE FROM block_assets",
     ):
@@ -370,22 +368,6 @@ def retire_math_and_ink(connection: sqlite3.Connection) -> None:
             "UPDATE block_sync SET conflict_json = ? WHERE block_id = ?",
             (json.dumps(conflict, sort_keys=True), sync["block_id"]),
         )
-    for history in connection.execute(
-        "SELECT id, patches_json FROM document_history"
-        " WHERE patches_json LIKE '%math%' OR patches_json LIKE '%ink%'"
-    ).fetchall():
-        entries = json.loads(history["patches_json"])
-        changed = False
-        for entry in entries:
-            for key in ("before", "after"):
-                state = entry.get(key)
-                if isinstance(state, dict):
-                    changed |= _retire_snapshot(state)
-        if changed:
-            connection.execute(
-                "UPDATE document_history SET patches_json = ? WHERE id = ?",
-                (json.dumps(entries), history["id"]),
-            )
     for document_id, block_ids in touched.items():
         block_store.refresh_derived(connection, document_id, block_ids)
 
@@ -413,22 +395,6 @@ def _retired(block: schema.Block) -> schema.Block | None:
         return schema.Block("image", {k: v for k, v in block.attrs.items() if k != "ink"},
                             block.content, block.payload)
     return None
-
-
-def _retire_snapshot(state: dict[str, Any]) -> bool:
-    """Convert one undo snapshot (a stored row) in place; whether it changed."""
-
-    old = _row_block(state)
-    new = _retired(old)
-    if new is None:
-        return False
-    state.update(type=new.type, attrs_json=_dumps(new.attrs),
-                 content_json=_dumps_nullable(new.content),
-                 payload_json=_dumps_nullable(new.payload), text=schema.derive_text(new))
-    sync = state.get("sync")
-    if isinstance(sync, dict) and sync.get("source_hash") == schema.canonical_hash(old):
-        sync["source_hash"] = schema.canonical_hash(new)
-    return True
 
 
 def _follow_sync(connection: sqlite3.Connection, block_id: str, old: schema.Block,

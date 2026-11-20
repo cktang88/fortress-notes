@@ -19,8 +19,7 @@ The file-based route (F1–F5) shipped first:
 File › Import › From OneNote… in the Mac app. **The behaviour as implemented is
 specified in [spec.md §7b](../spec.md#7b-onenote-import-onenote_importpy)**; this
 document keeps the research and the reasoning behind it. Sections 2a and the Obsidian
-notes are Graph background only. [tools/onenote-compare](../tools/onenote-compare/README.md)
-verifies imports page by page against an independent rendering.
+notes are Graph background only.
 
 ## 0. Fortress block model
 
@@ -255,7 +254,7 @@ User refused any Microsoft/Azure sign-in. Also: a personal-account user can't re
 STATUS: complete (Nov 18 2026).
 
 ## Open items from the research
-1. ~~Run `one2html` on an exported zip and compare to OneNote visually.~~ Done as a tool: `tools/onenote-compare` renders every page with one2html and with Fortress and diffs them (text, marks, tables, images, links, layout, ...).
+1. ~~Run `one2html` on an exported zip and compare to OneNote visually.~~ Was done as a tool (`tools/onenote-compare`, since removed to cut code).
 2. Confirm `page-id={GUID}` in the user's `onenote:` links equals `Page::link_target_id()` — the importer relies on it (links it cannot resolve are listed in the report).
 3. Confirm the web "Export notebook" zip contains `.onetoc2` + every section `.one` and embedded files/printouts in full (Joplin/Obsidian users have reported incomplete zips: [Joplin forum](https://discourse.joplinapp.org/t/onenote-zip-import-incomplete/43826)); the converter places sections missing from the TOC by folder (`in_toc: false`).
 4. "Pasted from <url>" source lines are a OneNote-for-Windows convention; check whether the user's clippings have them.

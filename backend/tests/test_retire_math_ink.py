@@ -1,7 +1,7 @@
 """Schema 15: Fortress has no math or ink, and stored ones lose nothing.
 
 A math block becomes a code block holding its LaTeX (language ``latex``), an
-image imported from ink drops only its ``ink`` marker; undo steps, re-import
+image imported from ink drops only its ``ink`` marker; re-import
 hashes and conflicts follow.
 """
 
@@ -58,12 +58,6 @@ class RetireMathAndInkTests(unittest.TestCase):
                 "INSERT INTO block_sync(block_id, source_hash, conflict_json) VALUES (?, 'x', ?)",
                 (self.ink, json.dumps(conflict)),
             )
-            snapshot = block_store._snapshot(connection, self.math)
-            connection.execute(
-                """INSERT INTO document_history(document_id, revision, patches_json, created_at)
-                   VALUES ('D1', 1, ?, '2026-01-01')""",
-                (json.dumps([{"id": self.math, "before": None, "after": snapshot}]),),
-            )
             connection.execute("DELETE FROM schema_migrations")
             connection.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (14, '')")
         connection.close()
@@ -101,7 +95,7 @@ class RetireMathAndInkTests(unittest.TestCase):
         self.assertEqual(image["attrs"], {k: v for k, v in INK.items() if k != "ink"})
         self.assertEqual(image["text"], "handwritten words")
 
-    def test_conflicts_and_undo_steps_follow(self) -> None:
+    def test_conflicts_follow(self) -> None:
         [sync] = self.rows("SELECT conflict_json FROM block_sync WHERE block_id = ?", self.ink)
         conflict = json.loads(sync["conflict_json"])
         self.assertEqual(conflict["source"], {"type": "code", "attrs": {"language": "latex"},
@@ -109,15 +103,6 @@ class RetireMathAndInkTests(unittest.TestCase):
                                               "payload": None})
         self.assertEqual(conflict["source_hash"], schema.canonical_hash(schema.Block(
             "code", {"language": "latex"}, [{"type": "text", "text": "a+b"}], None)))
-        [history] = self.rows("SELECT patches_json FROM document_history")
-        [entry] = json.loads(history["patches_json"])
-        after = entry["after"]
-        self.assertEqual((after["type"], json.loads(after["attrs_json"]), after["payload_json"]),
-                         ("code", {"onenote_object": "x", "language": "latex"}, None))
-        self.assertEqual(json.loads(after["content_json"]), [{"type": "text", "text": "e=mc^2"}])
-        self.assertEqual(after["sync"]["source_hash"], schema.canonical_hash(schema.Block(
-            "code", {"onenote_object": "x", "language": "latex"},
-            [{"type": "text", "text": "e=mc^2"}], None)))
 
 
 if __name__ == "__main__":

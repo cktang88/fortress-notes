@@ -1,7 +1,7 @@
 """Deterministic, realistic-looking workspace for performance benchmarks.
 
 ``build(notes_dir, notes=2000)`` writes ~10 paragraphs per note (about 20,000 for
-2,000 notes) as Markdown and imports them into ``notes_dir/.fortress.sqlite3``.
+2,000 notes) into ``notes_dir/.fortress.sqlite3``.
 A few notes carry planted facts so Ask questions have known answers
 (``QUESTIONS``), and some questions have no answer at all.
 """
@@ -216,9 +216,9 @@ def _paragraph(topic: dict[str, list[str]], rng: random.Random) -> str:
 
 
 def build(notes_dir: Path, notes: int = 2000, seed: int = 7) -> dict[str, int]:
-    """Write ``notes`` Markdown notes and import them into the SQLite store."""
+    """Write ``notes`` notes into the SQLite store."""
 
-    from app.block_store import bootstrap_markdown
+    from app.block_store import create_document
 
     rng = random.Random(seed)
     notes_dir.mkdir(parents=True, exist_ok=True)
@@ -235,10 +235,8 @@ def build(notes_dir: Path, notes: int = 2000, seed: int = 7) -> dict[str, int]:
             body.insert(rng.randrange(len(body) + 1), fact)
         paragraphs += len(body)
         stamp = (start + timedelta(hours=index * 3)).isoformat()
-        text = "\n\n".join(body)
-        (notes_dir / f"note-{index:05d}.md").write_text(
-            f"---\ntitle: {title!r}\ncreated_at: {stamp}\nupdated_at: {stamp}\n---\n{text}\n",
-            encoding="utf-8",
+        create_document(
+            notes_dir / ".fortress.sqlite3", f"note-{index:05d}", title, "rough",
+            "\n\n".join(body), stamp, stamp,
         )
-    bootstrap_markdown(notes_dir, notes_dir / ".fortress.sqlite3")
     return {"notes": notes, "paragraphs": paragraphs}

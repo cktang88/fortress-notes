@@ -105,20 +105,6 @@ struct IntegrationTests {
         #expect(counts["after"]! == 1)
     }
 
-    /// The registry bundled with the app is the server's.
-    @Test func bundledBlockSchemaMatchesTheServer() async throws {
-        let schema = try await client(APIStore.Options.uncached).blockSchema()
-        #expect(schema.version == BlockSchema.bundled.version)
-        #expect(Set(schema.flow) == Set(BlockSchema.bundled.flow))
-        #expect(Set(schema.types.keys) == Set(BlockSchema.bundled.types.keys))
-        for (name, info) in schema.types {
-            let bundled = BlockSchema.bundled.types[name]
-            #expect(bundled?.category == info.category, "\(name)")
-            #expect(Set(bundled?.children ?? []) == Set(info.children), "\(name)")
-            #expect(bundled?.changeGroup == info.changeGroup, "\(name)")
-        }
-    }
-
     /// The editor's operations against the real server (docs/block-model.md): a note
     /// written block by block (marks, a level-5 heading, a quote, code, a table), then
     /// edited (a cell, a new row, a quote line out of its quote, a paragraph that becomes
@@ -172,7 +158,7 @@ struct IntegrationTests {
         try await api.trashDocument(id: document.id)
     }
 
-    /// Undo and redo save what the editor shows (UNDO_AUDIT.md): a note edited through
+    /// Undo and redo save what the editor shows: a note edited through
     /// the real editor (typing, a paste of several paragraphs, Return, a list by Markdown
     /// shortcut, a table with a cell typed in and a row added, bold, a block moved), each
     /// step saved by the session's diff; then undone step by step to the start and redone

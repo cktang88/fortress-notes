@@ -93,10 +93,6 @@ class BlockTransaction(BaseModel):
     operations: list[BlockOperation] = Field(min_length=1)
 
 
-class BlockHistoryRequest(BaseModel):
-    base_revision: int = Field(ge=0)
-
-
 class Folder(BaseModel):
     id: str
     parent_id: str | None = None

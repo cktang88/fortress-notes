@@ -129,7 +129,6 @@ enum FindingFixtures {
         counts["blocks"] = 14
         counts["outgoing_links"] = 3
         counts["backlinks"] = 2
-        counts["edits"] = 9
         object["counts"] = counts
         object["blocks_by_source"] = ["onenote_import": 12, "manual": 2]
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
@@ -212,7 +211,7 @@ final class FixtureURLProtocol: URLProtocol, @unchecked Sendable {
             let hasBlock = query.contains { $0.name == "block_id" }
             return encoded(hasBlock ? FindingFixtures.seenBefore : FindingFixtures.related)
         }
-        if path.contains("/api/block-documents/"), !path.hasSuffix("/similar") {
+        if path.contains("/api/block-documents/") {
             return (try? findingFixture("document.json")) ?? Data()
         }
         return Data("[]".utf8)

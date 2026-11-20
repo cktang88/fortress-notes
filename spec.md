@@ -28,7 +28,7 @@ sheet) is never overridden. The policy and the decision for every format are in
 ## 2. Data model
 
 SQLite (`NOTES_DIR/.fortress.sqlite3`) is the only source of truth: documents,
-folders, nested blocks with stable IDs, references, history, assets, OCR text and the
+folders, nested blocks with stable IDs, references, assets, OCR text and the
 FTS index. Every write goes to SQLite first. Each active note also gets a read-only
 Markdown mirror, so notes stay readable outside the app: the notes folder is an
 **Obsidian vault** of plain CommonMark/GFM/Obsidian Markdown (`vault.py`,
@@ -85,7 +85,7 @@ originals to a timestamped backup folder first.
 
 The block model is specified in **[docs/block-model.md](docs/block-model.md)**, the
 contract between the backend and every client. In short: a block is a `type`
-from one registry (`block_schema.py`, served at `GET /api/block-schema`), `attrs`,
+from one registry (`block_schema.py`), `attrs`,
 inline `content` (text blocks: text/link/docLink/blockRef nodes with marks) and a
 `payload` (html). Fortress supports neither math nor ink drawings (formulas are
 LaTeX `code` blocks). Tables, columns, quotes and callouts are container blocks
@@ -113,10 +113,9 @@ with **422**.
   wikilink resolution across an import.
 - `block_legacy.py`, `block_migration.py` — the schema-14 migration of stored
   data in older block shapes (the API accepts canonical shapes only).
-- `documents.py` — note lifecycle (create/update/trash/restore/purge/capture/move-into)
+- `documents.py` — note lifecycle (create/update/trash/restore/purge/capture)
   and the Markdown mirror writer.
-- `workspace.py` — the Trash listing. `duplicates.py` — notes that repeat each other
-  (`/similar`, move-into). `backups.py` — snapshots and restore.
+- `workspace.py` — the Trash listing. `backups.py` — snapshots and restore.
 - `portability.py` — Markdown import (files, uploads, first-start import) and export.
 - `background.py` — the one owner of background work (lanes, below).
 - `corpus.py` — the incremental search corpus every search reader shares.
@@ -132,7 +131,7 @@ with **422**.
 - `main.py` — FastAPI app and routes.
 - `document_service.py` — rendered note bodies and the one document ETag, shared by
   the single GET, the batch read and the writes that answer with a tree.
-- `http_cache.py` — ETags, `If-None-Match` → 304, rendered-body caches, API gzip.
+- `http_cache.py` — ETags, `If-None-Match` → 304, rendered-body caches.
 - `media.py` — `/media` file serving (immutable caching, ranges, content types).
 - `batch.py` — batch reads and moves for the native app.
 - `onenote_import.py` — OneNote importer: runs `fortress-onenote`, imports its manifest as living documents, import jobs (§7b).
@@ -142,7 +141,6 @@ with **422**.
 | Method | Path | Body / Query | Returns |
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded, vision_enabled, vision_loaded, block_db_ready}` (open without the token) |
-| `GET` | `/api/block-schema` | — | the block type registry (docs/block-model.md) |
 | `GET` | `/api/navigation` | `?recent_limit=` | folder tree + recent notes |
 | `POST` · `PATCH` · `DELETE` | `/api/folders` · `/api/folders/{id}` | `{name, parent_id?, position?}` · `{name}` · — | folder (folders nest); `DELETE` answers 409 unless the folder is empty |
 | `POST` | `/api/folders/{id}/move` · `/api/block-documents/{id}/move` | `{parent_id, position?}` · `{folder_id, position?}` | the moved item |
@@ -151,10 +149,8 @@ with **422**.
 | `PATCH` | `/api/block-documents/{id}` | `{title?, status?}` (anything else: 422) | metadata payload (`children: []`); header `X-Document-ETag`. Title `""` hands it back to the first line |
 | `DELETE` | `/api/block-documents/{id}` | — | `204` (to the Trash) |
 | `POST` | `/api/block-documents/{id}/opened` | — | `204`; records `last_opened_at` (debounced, skipped while a writer is busy; not in the ETag) |
-| `POST` | `/api/block-documents/{id}/undo` · `/redo` | `{base_revision}` | document tree; header `X-Document-ETag` |
 | `GET` | `/api/block-documents/{id}/related` | `?k=5&block_id=` | `RelatedResult[]` |
-| `GET` | `/api/block-documents/{id}/backlinks` · `/similar` | — | backlinks · notes repeating this one |
-| `POST` | `/api/block-documents/{id}/move-into/{target_id}` | — | `{moved, document_id}` |
+| `GET` | `/api/block-documents/{id}/backlinks` | — | backlinks |
 | `GET` | `/api/block-link-targets` | `?q=&limit=` | link autocomplete |
 | `GET` | `/api/unified-search` | `?q=&limit=` + filters | ranked blocks (words, meaning, titles) |
 | `POST` | `/api/ask` | `{question}` (`Accept: application/x-ndjson` streams) | cited answer |
@@ -187,7 +183,7 @@ with **422**.
   (keep, but revalidate); a request whose `If-None-Match` matches gets `304` with no
   body:
   - `GET /api/block-documents/{id}` — changes with anything in the payload: the note's
-    own rows (blocks, user attrs, links, history, title/status/provenance/...)
+    own rows (blocks, user attrs, links, title/status/provenance/...)
     and every linked note or block (titles and text in
     `resolved_links`, `[[id|Title]]` labels).
   - `GET /api/navigation` (per `recent_limit`), `GET /api/trash`,
@@ -209,11 +205,6 @@ with **422**.
   `X-Document-ETag` is the ETag the next GET of that note answers 304 to.
 - **Server caches.** Rendered bodies are cached per validator (documents: 256 entries
   / 64 MB; others: 256 / 32 MB), so repeated GETs skip SQLite and JSON encoding.
-- **gzip.** `/api` responses of 1 KB or more are gzipped when the client sends
-  `Accept-Encoding: gzip` (`Vary: Accept-Encoding`). A gzipped response's ETag gets a
-  `-gzip` suffix (`"abc-gzip"`); `If-None-Match` accepts either form. Never
-  compressed: the Ask NDJSON stream (stays unbuffered), media, octet-stream, PDF and
-  SQLite downloads.
 - **Media.** `/media/<name>` files named by a ULID (uploads) or SHA-256 (imports) never
   change: `Cache-Control: public, max-age=31536000, immutable`, `ETag` = the SHA-256
   for content-addressed names (else size/mtime), `Last-Modified`, `Accept-Ranges`
@@ -410,8 +401,8 @@ was created with). Provenance is never part of block text, FTS or embeddings.
   for a saved Ask answer), `CaptureRequest.provenance` (e.g. `source_url`), and
   `BlockOperation.provenance` on `insert` (default `{"source": "manual"}`) and
   `update` (omitted keeps it). Client input is validated (422/409) and cannot set the
-  server-maintained keys. Move-into (`POST …/move-into/{target_id}`) stamps
-  `origin.operation = "move_into"` on every moved block.
+  server-maintained keys. Blocks folded in by the former move-into keep
+  `origin.operation = "move_into"`.
 - **Markdown**: export and mirror front matter carry `fortress: {provenance: …}`
   (and `source:` for a `source_url`); a block whose provenance differs from the
   note's carries it in an invisible comment, e.g.
@@ -428,9 +419,8 @@ was created with). Provenance is never part of block text, FTS or embeddings.
   "folder_id", "folder_path": [{"id", "name"}],          // top folder first
   "provenance": {…},
   "counts": {"words", "characters", "blocks", "outgoing_links", "outgoing_document_links",
-             "outgoing_block_links", "backlinks", "edits"},  // backlinks from other notes
+             "outgoing_block_links", "backlinks"},  // backlinks from other notes
   "blocks_by_source": {"manual": 3, "onenote_import": 12},
-  "can_undo", "can_redo",
   "sync": null | {"synced_at", "checked_at", "source_title", "blocks_edited_here",
                   "blocks_removed_in_source": [block_id]},
   "conflicts": [{"kind": "title", "local_title", "source_title", "detected_at"} |
@@ -440,7 +430,7 @@ was created with). Provenance is never part of block text, FTS or embeddings.
 ```
 
 `POST /api/block-documents/{id}/blocks/{block_id}/source-conflict` `{"keep": "source"|"local"}`
-settles a block conflict (taking the source's version is an ordinary undoable edit).
+settles a block conflict (taking the source's version is an ordinary edit).
 
 **Living documents** (`sources.py`): importers call
 `documents.upsert_from_source(source=, external_id=, title=, blocks=, folder_path=,
@@ -477,7 +467,7 @@ updated like changed text; conflicts on structured blocks keep the source's
 folders by source id (`sources.ensure_folder_path`). It returns
 `UpsertResult(document_id, status=created|updated|unchanged|skipped_deleted, revision,
 blocks_created, blocks_updated, blocks_deleted, blocks_skipped, conflicts)`. The note
-keeps its Fortress id, links, backlinks and history; a re-import is one undo step.
+keeps its Fortress id, links and backlinks.
 Policy: untouched blocks follow the source; locally edited blocks keep the local
 text and record the source's version as a conflict; local additions stay after the
 block they followed; local deletions stick; blocks gone from the source are deleted
@@ -557,7 +547,7 @@ README.
 - Block source ids: `<page>/obj:<object_id>` when the manifest block has a
   OneNote object id (ExGUID `{GUID}&N`, stable across edits — SCHEMA.md
   "Object ids"), so a paragraph edited in OneNote updates the **same** Fortress
-  block (id, links, backlinks and history kept; a block edited here keeps the
+  block (id, links and backlinks kept; a block edited here keeps the
   local text and records the source's version as a conflict, §7a). Blocks
   without one (older manifests, ambiguous content) use `<page>/<type>:<hash of
   the block's content>` (duplicates get `#n`; a paragraph edited in OneNote then

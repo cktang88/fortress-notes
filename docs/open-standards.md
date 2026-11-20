@@ -129,7 +129,7 @@ would fix that (below).
 | Apple Notes / Bear / Joplin / Notion import | via Markdown export of those apps | Markdown + front matter, HTML, ENEX | covered by Markdown import; Notion's export adds ids to file names (`Title 1a2b…md`) — **later**: strip them |
 | HTML in Markdown | `<table>`, `<img>` read structurally; any other HTML block kept as an `html` block | HTML (CommonMark allows raw HTML) | **keep** |
 | Pasteboard (copy/paste with other apps) | Mac app | the system pasteboard types (`public.utf8-plain-text`, `public.html`, `public.rtf`, file URLs, images) | per the least-surprise principle; owned by the Mac app (`mac/DESIGN.md`) |
-| API description | FastAPI generates OpenAPI 3.1 at `/openapi.json` (needs the per-launch token; the `/docs` page can't be used, since browser requests are refused by design); `GET /api/block-schema` serves the block registry as our own JSON | OpenAPI 3.1, JSON Schema 2020-12 | **later**: check `openapi.json` into the repo (and test it is current), express `/api/block-schema` as JSON Schema |
+| API description | FastAPI generates OpenAPI 3.1 at `/openapi.json` (needs the per-launch token; the `/docs` page can't be used, since browser requests are refused by design) | OpenAPI 3.1, JSON Schema 2020-12 | **later**: check `openapi.json` into the repo (and test it is current), publish the block registry as JSON Schema |
 | API errors | `{"detail": …}` (FastAPI), 409 `{"code": …}` | RFC 9457 `application/problem+json` | **later** (low value for a single local client) |
 | Ask stream | `application/x-ndjson` | NDJSON (de-facto) / SSE | **keep** |
 | HTTP caching | ETags, `If-None-Match`, `Cache-Control` | RFC 9110/9111 | **keep** (already standard) |
@@ -151,7 +151,7 @@ would fix that (below).
 | **Export folder** (vault copy with `assets/`, `/media` → relative paths; Pandoc-ready; no zip — product decision) | real backup + migration path out | S: ½–1 day (the vault writer already renders everything; copy + rewrite + a menu item) |
 | **Copy Obsidian attachments on import** (folder import: copy `![[x.png]]` targets into `assets/`, register them, OCR them) | Obsidian vaults import with their pictures | S–M: 1 day |
 | **Evernote ENEX import** (XML; ENML → HTML → blocks; base64 resources → assets; `created`/`updated`/`source-url`/`tag`) | the most common legacy notes export | M: 2–3 days (ENML is XHTML; the HTML-to-blocks reader exists) |
-| **OpenAPI document**: check in `openapi.json`, document the transaction model in it, turn `/api/block-schema` into JSON Schema | other tools and clients can use the API | S: ½ day for the dump + CI check; M: 2 days to make `block-schema` JSON Schema |
+| **OpenAPI document**: check in `openapi.json`, document the transaction model in it, publish the block registry as JSON Schema | other tools and clients can use the API | S: ½ day for the dump + CI check; M: 2 days for a block-registry JSON Schema |
 | **Notion export import** (strip the hex ids from file names and links, CSV databases → tables) | Notion migration | S: 1 day |
 | **HTML export** (one note or the folder as standalone HTML) | sharing, printing, archiving | S: 1 day (markdown-it renders our output; add CSS) |
 | **RFC 9457 problem details** for API errors | consistency for third-party clients | S: ½ day |

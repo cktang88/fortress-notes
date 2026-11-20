@@ -4,9 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import embeddings
-from app.block_store import bootstrap_markdown
 
-from support import make_settings, use_settings
+from support import add_markdown_notes, make_settings, use_settings
 
 
 class _FakeModel:
@@ -85,7 +84,7 @@ class BlockEmbeddingTests(unittest.TestCase):
                 "---\ntitle: One\n---\nFirst block\n\nSecond block\n", encoding="utf-8"
             )
             database = root / ".fortress.sqlite3"
-            bootstrap_markdown(notes, database)
+            add_markdown_notes(notes, database)
             model = _FakeModel()
 
             with patch.object(embeddings, "_get_model", return_value=model), use_settings(

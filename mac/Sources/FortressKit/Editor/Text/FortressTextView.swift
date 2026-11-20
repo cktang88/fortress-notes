@@ -21,7 +21,7 @@ final class FortressTextView: NSTextView {
     /// The note's own undo stack. Text undo stays apart from the window's (where the
     /// list's Move to Trash, moves and renames are undone), so ⌘Z in the note undoes
     /// typing and ⌘Z in the list undoes list actions. One stack per note: the note's
-    /// text, its columns' text and its table cells all register here (UNDO_AUDIT.md).
+    /// text, its columns' text and its table cells all register here (mac/DESIGN.md, Undo).
     let noteUndo = UndoManager()
 
     /// The note's stack: the editor's (shared with the columns and tables inside it),

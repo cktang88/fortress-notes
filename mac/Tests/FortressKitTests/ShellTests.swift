@@ -120,7 +120,7 @@ private func fixtureData(_ name: String) throws -> Data {
 @Test @MainActor func editorChangesPatchTheSidebarCopy() throws {
     let model = ShellFixtures.model()
     let document = BlockDocument(
-        id: "n1", revision: 3, titleAuto: false, canUndo: true, canRedo: false, title: "Kyoto, revised",
+        id: "n1", revision: 3, titleAuto: false, title: "Kyoto, revised",
         status: .polished, createdAt: "2026-01-01T00:00:00+00:00", updatedAt: "2026-11-18T10:00:00+00:00", children: [])
     model.noteDidChange(document)
     let note = try #require(model.openNote)

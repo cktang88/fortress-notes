@@ -5,7 +5,7 @@ import Testing
 
 @testable import FortressKit
 
-// Tests for the HIG audit (mac/UX_AUDIT.md): shortcuts, per-window state, restoration,
+// Mac conventions (HIG): shortcuts, per-window state, restoration,
 // undo, drag and drop rules, Quick Capture's shortcut and the editor's pasteboard.
 
 // MARK: Shortcuts (principle of least surprise)

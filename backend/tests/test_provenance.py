@@ -17,9 +17,7 @@ from app.block_store import (
     create_document,
     document_tree,
     initialize,
-    redo_transaction,
     rename_document,
-    undo_transaction,
 )
 from app.models import BlockOperation
 from app.portability import export_document_markdown, import_markdown_directory
@@ -86,7 +84,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertIsNone(tree["children"][0]["revision"])
         self.assertNotIn("last_opened_at", tree)  # in /info; not part of the note's ETag
 
-    def test_editor_inserts_are_manual_or_what_the_client_says_and_survive_undo(self) -> None:
+    def test_editor_inserts_are_manual_or_what_the_client_says(self) -> None:
         create_document(self.db, "doc", "Doc", "rough", "One", "t", "t",
                         provenance={"source": "capture"})
         tree = apply_transaction(self.db, "doc", [
@@ -108,16 +106,6 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(tree["children"][2]["revision"], 2)
         self.assertEqual(tree["children"][1]["revision"], 1)
 
-        tree = undo_transaction(self.db, "doc", 2)
-        self.assertEqual(tree["children"][2]["text"], "pasted")
-        self.assertEqual(tree["children"][2]["revision"], 1)
-        self.assertEqual(tree["children"][2]["provenance"]["source"], "web")
-        tree = undo_transaction(self.db, "doc", 3)
-        self.assertEqual(len(tree["children"]), 1)
-        tree = redo_transaction(self.db, "doc", 4)
-        self.assertEqual(tree["children"][2]["provenance"]["source_url"], "https://example.com/a")
-        self.assertEqual(tree["children"][2]["revision"], 1)
-
 
     def test_client_provenance_is_validated_and_cannot_set_internal_fields(self) -> None:
         with self.assertRaises(provenance.ProvenanceError):
@@ -128,24 +116,6 @@ class ProvenanceStoreTests(unittest.TestCase):
             provenance.normalize({"source": "paste", "source_hash": "x", "conflict": {}}),
             {"source": "paste"},
         )
-
-
-    def test_move_into_keeps_each_blocks_source_and_records_the_old_note(self) -> None:
-        from app import duplicates
-
-        create_document(self.db, "captured", "Captured", "rough", "Thought", "t", "t",
-                        provenance={"source": "capture"})
-        create_document(self.db, "target", "Target", "rough", "Body", "t", "t")
-        duplicates.move_into(self.db, "captured", "target")
-        tree = document_tree(self.db, "target")
-        moved = tree["children"][1]
-        self.assertEqual(moved["provenance"]["source"], "capture")
-        self.assertNotIn("inherited", moved["provenance"])
-        self.assertEqual(moved["provenance"]["origin"]["operation"], "move_into")
-        self.assertEqual(moved["provenance"]["origin"]["document_id"], "captured")
-        self.assertEqual(moved["provenance"]["origin"]["document_title"], "Captured")
-        self.assertEqual(moved["revision"], tree["revision"])
-        self.assertEqual(tree["children"][0]["provenance"]["inherited"], True)
 
     def test_provenance_is_not_searchable_text(self) -> None:
         self.page([SourceBlock("Plain words", external_id="{A}")],
@@ -299,7 +269,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         with connection_scope(self.db) as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0], 1)
 
-    def test_untouched_blocks_follow_the_source_and_ids_links_history_survive(self) -> None:
+    def test_untouched_blocks_follow_the_source_and_ids_and_links_survive(self) -> None:
         first = self.page([
             SourceBlock("Keep me", external_id="{A}"),
             SourceBlock("Old text", external_id="{B}"),
@@ -334,13 +304,6 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(len(block_store.search_blocks(self.db, "Keep me")), 1)
         self.assertEqual(tree["provenance"]["source_modified_at"], "2020-02-01T00:00:00+00:00")
         self.assertIn("synced_at", tree["provenance"])
-
-        # The whole re-import is one undo step.
-        tree = undo_transaction(self.db, first.document_id, tree["revision"])
-        self.assertEqual(_texts(tree["children"]), ["Keep me", "Old text", "Dropped"])
-        self.assertEqual(tree["children"][1]["id"], ids["Old text"])
-        tree = redo_transaction(self.db, first.document_id, tree["revision"])
-        self.assertEqual(_texts(tree["children"]), ["New first", "Keep me", "New text"])
 
 
     def test_local_edits_win_and_conflicts_are_recorded_then_resolved(self) -> None:
@@ -523,7 +486,6 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(info["counts"]["blocks"], 3)
         self.assertEqual(info["counts"]["outgoing_links"], 1)
         self.assertEqual(info["counts"]["backlinks"], 2)
-        self.assertEqual(info["counts"]["edits"], 1)
         self.assertEqual(info["blocks_by_source"], {"manual": 3})
         self.assertEqual(info["provenance"], {"source": "manual"})
         self.assertIsNone(info["sync"])
@@ -623,8 +585,7 @@ class ProvenanceApiTests(unittest.TestCase):
         self.assertEqual(
             set(body),
             {"id", "title", "status", "created_at", "updated_at", "last_opened_at", "revision",
-             "folder_id", "folder_path", "provenance", "counts", "blocks_by_source", "can_undo",
-             "can_redo", "sync", "conflicts", "picture_text"},
+             "folder_id", "folder_path", "provenance", "counts", "blocks_by_source", "sync", "conflicts", "picture_text"},
         )
         self.assertEqual(body["counts"]["words"], 2)
         self.assertEqual(self.client.get("/api/block-documents/nope/info").status_code, 404)
