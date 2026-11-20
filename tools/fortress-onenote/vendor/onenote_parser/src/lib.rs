@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P3, P9).
+// Modified by fortress-onenote (vendor/PATCHES.md: P3, P9, P10, P11).
 //! A OneNote file parser.
 //!
 //! `onenote_parser` provides a high-level API to parse OneNote notebooks and
@@ -191,20 +191,19 @@ pub mod page {
 /// The data that represents the contents of a OneNote section.
 pub mod contents {
     pub use crate::onenote::content::Content;
+    // PATCH(fortress-onenote, P11)
+    pub use crate::fsshttpb::data::exguid::ExGuid;
     pub use crate::onenote::embedded_file::EmbeddedFile;
     pub use crate::onenote::image::Image;
-    pub use crate::onenote::ink::{Ink, InkBoundingBox, InkPoint, InkStroke};
-    pub use crate::onenote::ink_recognition::{
-        InkRecognition, InkRecognizedLine, InkRecognizedWord,
-    };
+    // PATCH(fortress-onenote, P10)
+    pub use crate::onenote::ink::Ink;
     pub use crate::onenote::list::List;
     pub use crate::onenote::math_inline_object::{MathInlineObject, MathObjectType};
     pub use crate::onenote::note_tag::NoteTag;
     pub use crate::onenote::outline::{Outline, OutlineElement, OutlineGroup, OutlineItem};
     pub use crate::onenote::picture::Picture;
     pub use crate::onenote::rich_text::{
-        EmbeddedInkContainer, EmbeddedInkSpace, EmbeddedObject, ParagraphStyling, RichText,
-        TextHyperlink,
+        EmbeddedInkSpace, EmbeddedObject, ParagraphStyling, RichText, TextHyperlink,
     };
     pub use crate::onenote::table::{Table, TableCell, TableRow};
     pub use crate::onestore::shared::file_blob::FileDataStatus;

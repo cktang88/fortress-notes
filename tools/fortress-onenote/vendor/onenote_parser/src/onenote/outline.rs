@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P7).
+// Modified by fortress-onenote (vendor/PATCHES.md: P7, P11).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::layout_alignment::LayoutAlignment;
@@ -207,6 +207,8 @@ impl OutlineGroup {
 /// [\[MS-ONE\] 2.2.21]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/d47760a6-6f1f-4fd5-b2ad-a51fe5a72c21
 #[derive(Clone, Debug)]
 pub struct OutlineElement {
+    /// PATCH(fortress-onenote, P11)
+    pub(crate) id: ExGuid,
     pub(crate) contents: Vec<Content>,
 
     pub(crate) list_contents: Vec<List>,
@@ -217,6 +219,12 @@ pub struct OutlineElement {
 }
 
 impl OutlineElement {
+    /// PATCH(fortress-onenote, P11): the object's id (extended GUID), stable
+    /// across revisions of the object.
+    pub fn id(&self) -> ExGuid {
+        self.id
+    }
+
     /// The outline element's contents.
     pub fn contents(&self) -> &[Content] {
         &self.contents
@@ -394,6 +402,7 @@ pub(crate) fn parse_outline_element(
     }
 
     let element = OutlineElement {
+        id: element_id,
         child_level: data.child_level,
         list_spacing: data.list_spacing,
         children,

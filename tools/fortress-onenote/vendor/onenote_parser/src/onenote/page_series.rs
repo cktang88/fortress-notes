@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P7).
+// Modified by fortress-onenote (vendor/PATCHES.md: P7, P10).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property_set::page_series_node;
@@ -44,7 +44,6 @@ pub(crate) fn parse_page_series(
             .ok_or_else(|| ErrorKind::MalformedOneNoteData("page space is missing".into()).into())
             .and_then(|page_space| parse_page(page_space, ctx));
         ctx.page = None;
-        ctx.recognized_words.clear();
         pages.extend(skip_damaged(ctx, "page", page)?);
     }
 

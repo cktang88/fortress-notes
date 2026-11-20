@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P11).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::color::Color;
@@ -16,6 +17,8 @@ use crate::onestore::ObjectSpace;
 /// [\[MS-ONE\] 2.2.26]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/9046980a-2410-4b2d-8a35-ec06e55648e0
 #[derive(Clone, Debug)]
 pub struct Table {
+    /// PATCH(fortress-onenote, P11)
+    pub(crate) id: ExGuid,
     pub(crate) rows: u32,
     pub(crate) cols: u32,
     pub(crate) contents: Vec<TableRow>,
@@ -32,6 +35,12 @@ pub struct Table {
 }
 
 impl Table {
+    /// PATCH(fortress-onenote, P11): the object's id (extended GUID), stable
+    /// across revisions of the object.
+    pub fn id(&self) -> ExGuid {
+        self.id
+    }
+
     /// The number of rows in this table.
     pub fn rows(&self) -> u32 {
         self.rows
@@ -182,6 +191,7 @@ pub(crate) fn parse_table(
         .collect::<Result<_>>()?;
 
     let table = Table {
+        id: table_id,
         rows: data.row_count,
         cols: data.col_count,
         contents,

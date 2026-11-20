@@ -34,6 +34,12 @@ or, inline, `$…$` with a `code` mark; ink is skipped and counted
 version 1: the only importer (Fortress) handles both forms by ignoring the
 retired ones as unknown.
 
+Converter 0.3.1 no longer converts equations to LaTeX: a paragraph that is
+only an equation is a `code` block with OneNote's plain linear text
+(`language: "text"`), an inline equation is plain text in its paragraph (no
+`code` mark), and each page with equations gets one warning
+(`N equation(s) imported as plain linear text …`).
+
 ## Conventions
 
 | Topic | Rule |
@@ -55,7 +61,7 @@ retired ones as unknown.
 {
   "format": "fortress-onenote-manifest",
   "format_version": 1,
-  "generator": {"name": "fortress-onenote", "version": "0.3.0", "parser": "onenote_parser 2.1"},
+  "generator": {"name": "fortress-onenote", "version": "0.3.1", "parser": "onenote_parser 2.1"},
   "units": {"text_offsets": "code_points", "geometry": "half_inch", "px_per_geometry_unit": 48.0},
   "input": {"kind": "zip|directory|onetoc2|one|onepkg", "name": "<input base name>"},
   "notebooks": [Notebook],
@@ -190,7 +196,7 @@ vertical tab/CR normalised to `\n`) and `marks` (*omitted when empty*).
 | `list_item` | `list`: ListInfo; rich text. |
 | `check_item` | To Do style tag (any checkable tag shape): `checked` bool, `checked_at` (string \| null), `list` (ListInfo \| null); rich text. The tag is also in `tags`. |
 | `quote` | OneNote "Quote"/"Citation" style: `variant` `quote` \| `cite`; rich text. |
-| `code` | `text` (plain); `language` *(omitted for code)*: `latex` for an equation. OneNote "Code" style or all-monospace (Consolas, Courier…) paragraphs; consecutive code paragraphs at the same indent are merged with `\n`. A paragraph that is only an equation is a `code` block with its LaTeX (no delimiters) and `language: "latex"`, or its linear text (no `language`) when it could not be converted. Inline equations are `$…$` LaTeX with a `code` mark instead. |
+| `code` | `text` (plain); `language` *(omitted for code)*: `text` for an equation. OneNote "Code" style or all-monospace (Consolas, Courier…) paragraphs; consecutive code paragraphs at the same indent are merged with `\n`. A paragraph that is only an equation is a `code` block with OneNote's plain linear text (structure markers removed, so fractions and powers read flat) and `language: "text"`; it is never merged with code around it. Inline equations stay plain text in their paragraph. Pages with equations get a report warning. |
 | `table` | `row_count`, `col_count`, `column_widths` ([number], geometry units), `borders_visible` bool, `rows`: [{`cells`: [{`background`: colour \| null, `blocks`: [Block]}]}]. Cells hold any blocks, including nested tables. OneNote has no merged cells. |
 | `image` | `asset` (string \| null), `data_status` (`available` \| `missing` \| `invalid` \| `empty`; see below), `alt_text` (string \| null — usually OneNote's OCR text), `width`/`height` (geometry units \| null), `hyperlink` (string \| null), `is_printout_page` bool, `printout_page_number` (int \| null, as stored; may be 0-based), `is_background` bool, `original_name` (sanitised display name \| null), `original_asset` (string \| null: the original when `asset` is OneNote's browser-friendly fallback picture, e.g. for EMF images or XPS printout pages). |
 | `embed` | Online video/iframe: `url`, `thumbnail_asset` (string \| null), `alt_text` (string \| null, alt/OCR text of the poster picture; converter 0.2.1). |
@@ -241,7 +247,6 @@ their look is expressed by the block type.
 | `type` | fields |
 |---|---|
 | `bold`, `italic`, `underline`, `strikethrough`, `superscript`, `subscript` | — |
-| `code` | — (an inline equation's LaTeX, `$…$`) |
 | `highlight` | `color` (text background/highlighter) |
 | `color` | `color` (font colour) |
 | `font` | `family` — only when not the default `Calibri` |
@@ -267,28 +272,23 @@ a new revision of the same object). Paragraph links use it:
 `{GUID}&N` — upper-case GUID with braces, `&`, `N` in upper-case hexadecimal
 without leading zeros. Compare as strings.
 
-`onenote_parser` 2.1 resolves these ids internally but does not expose them
-on its content types, so the converter reads them from the parser's public
-`Parser::dump_onestore` view (`src/objectids.rs`; the crate version is pinned
-with `=` in `Cargo.toml` because that text format is not a stable API) and
-matches them to the converted content per page:
+The converter takes them from the parser (`id()` of rich text, tables,
+images, attachments and outline elements, added by vendor patch P11):
 
-| field | how it is found |
+| field | value |
 |---|---|
-| `object_id` of rich text (paragraph, heading, list/check item, quote, code) | the page's `RichTextNode` whose text equals the paragraph text (whitespace-normalised), when exactly one does |
-| `object_id` of a file / image | the `EmbeddedFileNode` / `ImageNode` with that file name / alt text (or file name), else the page's only one |
-| `object_id` of a table | the page's only `TableNode` with that row and column count |
-| `element_id` | the `OutlineElementNode` OneNote created with the content: same GUID and last-modified time; within such a group, elements and content nodes pair up in counter order (or by counter `n − 1` when the numbers differ) |
+| `object_id` | the content node itself: `RichTextNode` (paragraph, heading, list/check item, quote, code), `TableNode`, `ImageNode`, `EmbeddedFileNode` |
+| `element_id` | the outline element (paragraph) whose contents hold that node; omitted for floating images and files, which sit on the page outside any outline |
 
-Anything ambiguous (two paragraphs with identical text on a page, a merged
-code block's later lines, the second embed of one picture) gets no id, and an
-id is never given to two blocks of a page. Table cells and items have no ids
-(their blocks do). Sections inside a `.onepkg` are unpacked first and get ids like
-any other.
-On the public samples about 90 % of text blocks get an `object_id`, and
-the ids are identical across two downloads of the same section. Importers
-must fall back to their own keys (e.g. a content hash) when a block has no
-`object_id`.
+An id is never given to two blocks of a page (the second embed of one
+picture gets none), and a merged code block carries the id of its first
+paragraph. Table cells and items have no ids (their blocks do). Sections
+inside a `.onepkg` are unpacked first and get ids like any other. Converters
+before 0.3.1 matched ids heuristically from the parser's debug dump, so
+blocks with ambiguous content had none and some `element_id`s (mostly in
+files written by third-party tools) named a neighbouring element; importers
+should still fall back to their own keys (e.g. a content hash) when a block
+has no `object_id`.
 
 ## Reports
 

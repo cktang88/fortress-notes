@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: C3).
 use std::io;
 
 use lzxd::Lzxd;
@@ -69,36 +70,6 @@ impl CompressionType {
         }
     }
 
-    pub(crate) fn to_bitfield(self) -> u16 {
-        match self {
-            CompressionType::None => CTYPE_NONE,
-            CompressionType::MsZip => CTYPE_MSZIP,
-            CompressionType::Quantum(level, memory) => {
-                CTYPE_QUANTUM
-                    | (level.max(QUANTUM_LEVEL_MIN).min(QUANTUM_LEVEL_MAX)
-                        << 4)
-                    | (memory.max(QUANTUM_MEMORY_MIN).min(QUANTUM_MEMORY_MAX)
-                        << 8)
-            }
-            CompressionType::Lzx(window_size) => {
-                let window = match window_size {
-                    lzxd::WindowSize::KB32 => 15,
-                    lzxd::WindowSize::KB64 => 16,
-                    lzxd::WindowSize::KB128 => 17,
-                    lzxd::WindowSize::KB256 => 18,
-                    lzxd::WindowSize::KB512 => 19,
-                    lzxd::WindowSize::MB1 => 20,
-                    lzxd::WindowSize::MB2 => 21,
-                    lzxd::WindowSize::MB4 => 22,
-                    lzxd::WindowSize::MB8 => 23,
-                    lzxd::WindowSize::MB16 => 24,
-                    lzxd::WindowSize::MB32 => 25,
-                };
-                CTYPE_LZX | (window << 8)
-            }
-        }
-    }
-
     pub(crate) fn into_decompressor(self) -> io::Result<Decompressor> {
         match self {
             CompressionType::None => Ok(Decompressor::Uncompressed),
@@ -153,17 +124,6 @@ impl Decompressor {
 #[cfg(test)]
 mod tests {
     use super::CompressionType;
-
-    #[test]
-    fn compression_type_to_bitfield() {
-        assert_eq!(CompressionType::None.to_bitfield(), 0x0);
-        assert_eq!(CompressionType::MsZip.to_bitfield(), 0x1);
-        assert_eq!(CompressionType::Quantum(7, 20).to_bitfield(), 0x1472);
-        assert_eq!(
-            CompressionType::Lzx(lzxd::WindowSize::MB2).to_bitfield(),
-            0x1503
-        );
-    }
 
     #[test]
     fn compression_type_from_bitfield() {

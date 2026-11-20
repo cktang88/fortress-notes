@@ -116,22 +116,23 @@ fn garbage_section_is_reported_as_failed() {
     fs::remove_dir_all(&d).unwrap();
 }
 
-/// A `.onepkg` (CAB) with the given files, MSZIP-compressed in one folder.
-fn cab_with(path: &Path, entries: &[(&str, &[u8])]) {
-    let mut builder = cab::CabinetBuilder::new();
-    {
-        let folder = builder.add_folder(cab::CompressionType::MsZip);
-        for (name, _) in entries {
-            folder.add_file(*name);
-        }
-    }
-    let mut writer = builder.build(fs::File::create(path).unwrap()).unwrap();
-    let mut i = 0;
-    while let Some(mut file) = writer.next_file().unwrap() {
-        file.write_all(entries[i].1).unwrap();
-        i += 1;
-    }
-    writer.finish().unwrap();
+/// Checked-in `.onepkg` (CAB) fixtures, each one MSZIP-compressed folder:
+///
+/// - `Notebook.onepkg`: `Old.one` = `section_header(0x1b)`, `Group\Broken.one`
+///   = 300 bytes of 0x42;
+/// - `Empty.onepkg`: `readme.txt` = `nothing here`;
+/// - `P.onepkg`: `A.one` = 20,000 bytes `(i * 7 % 251) as u8`, `B.one` =
+///   `section_header(0x2a)`.
+///
+/// They were generated once with the `cab` crate's `CabinetBuilder` (the
+/// `cab_with` helper this file had before `vendor/cab/src/builder.rs` was
+/// removed; see its git history). Any CAB writer with MSZIP compression
+/// gives equivalent files (e.g. `gcab -c -z`, which stores names with `/`).
+fn cab_fixture(name: &str, to: &Path) {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name);
+    fs::copy(from, to).unwrap();
 }
 
 /// First 0x48 bytes of a OneNote section header ([MS-ONESTORE] 2.3.1) with
@@ -222,13 +223,7 @@ fn onepkg_sections_are_reported_not_dropped() {
     // rejected as a whole.
     let d = tmp("onepkg");
     let pkg = d.join("Notebook.onepkg");
-    cab_with(
-        &pkg,
-        &[
-            ("Old.one", &section_header(0x1b)),
-            ("Group\\Broken.one", &[0x42u8; 300]),
-        ],
-    );
+    cab_fixture("Notebook.onepkg", &pkg);
     let (out, m) = convert(&pkg, &d.join("out"));
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let m = m.unwrap();
@@ -256,7 +251,7 @@ fn onepkg_sections_are_reported_not_dropped() {
 
     // A package without any section is reported too.
     let empty = d.join("Empty.onepkg");
-    cab_with(&empty, &[("readme.txt", b"nothing here")]);
+    cab_fixture("Empty.onepkg", &empty);
     let (out, m) = convert(&empty, &d.join("out2"));
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let reasons = failed_reasons(&m.unwrap());
@@ -271,8 +266,7 @@ fn corrupt_onepkg_never_aborts_the_conversion() {
     // corrupted packages (folder.rs index out of bounds).
     let d = tmp("cabfuzz");
     let pkg = d.join("P.onepkg");
-    let body: Vec<u8> = (0..20_000u32).map(|i| (i * 7 % 251) as u8).collect();
-    cab_with(&pkg, &[("A.one", &body), ("B.one", &section_header(0x2a))]);
+    cab_fixture("P.onepkg", &pkg);
     let good = fs::read(&pkg).unwrap();
     let mut cases: Vec<Vec<u8>> = Vec::new();
     // Every header byte set to 0xFF, and the file truncated at many points.
@@ -522,15 +516,12 @@ fn converts_real_samples_when_configured() {
         total_pages += pages;
     }
     assert!(total_pages > 0);
-    // Stable object ids are derived for most text blocks (see objectids.rs).
+    // Text blocks carry the parser's object ids (SCHEMA.md, Object ids).
     eprintln!("object ids on {} of {} text blocks", coverage.1, coverage.0);
-    if coverage.0 > 20 {
-        assert!(
-            coverage.1 * 2 > coverage.0,
-            "object ids on only {} of {} text blocks",
-            coverage.1,
-            coverage.0
-        );
-    }
+    assert_eq!(
+        coverage.1, coverage.0,
+        "object ids on only {} of {} text blocks",
+        coverage.1, coverage.0
+    );
     fs::remove_dir_all(&base).unwrap();
 }

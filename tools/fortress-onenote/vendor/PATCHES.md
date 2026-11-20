@@ -78,8 +78,8 @@ be resolved is reported as missing/invalid data instead of failing the
 section (`onestore/desktop/file_node/shared.rs`).
 
 **P7 — skip damaged objects, keep the section.** A page, outline item,
-content object, list format, page title or handwriting-recognition object
-that fails to parse is dropped with a section warning
+content object, list format or page title (and, before P10, a
+handwriting-recognition object) that fails to parse is dropped with a section warning
 (`skipped a damaged …: <error>`) instead of failing the whole section
 (`onenote::skip_damaged`). Encryption errors are never swallowed. Files:
 `onenote/{mod,outline,page,page_series}.rs`.
@@ -104,6 +104,30 @@ their paragraph style (a whole paragraph made bold and blue by a custom
 paragraph style lost both). Files: `lib.rs`, `onenote/rich_text.rs`,
 `one/property_set/paragraph_style_object.rs`.
 
+**P10 — ink is located, not parsed.** Fortress has no ink; the converter
+only counts ink drawings (`report.counts.ink_skipped`). `contents::Ink` is now
+a marker with no data: `Content::Ink`, `PageContent::Ink` and
+`EmbeddedObject::Ink` (which held an `EmbeddedInkContainer`, now removed) are
+produced when the ink container object exists, without reading its strokes.
+Handwriting recognition (`Page::ink_recognition`, `InkRecognition*`) is no
+longer parsed. Removed files: `onenote/ink_recognition.rs`,
+`one/property_set/{ink_container,ink_data_node,ink_stroke_node,stroke_properties_node,recognized_text_node}.rs`,
+`one/property/ink_dimensions.rs`, `shared/multi_byte.rs` (ISF integers);
+`onenote/ink.rs` shrank to the marker and the dead `simple::parse_vec_i32`
+went. A damaged ink container no longer drops its outline item or paragraph
+(the converter output on the regression corpus is byte-identical). Files:
+`lib.rs`, `onenote/{ink,content,page_content,rich_text,page,page_series,section,mod}.rs`,
+`one/property_set/mod.rs`, `one/property/{mod,simple}.rs`, `shared/mod.rs`.
+
+**P11 — object ids.** `RichText`, `Table`, `Image`, `EmbeddedFile` and
+`OutlineElement` keep the extended GUID they were parsed from and return it
+from `id()`; `ExGuid` is exported as `onenote_parser::contents::ExGuid`
+(public `guid`, whose `Display` is `{GUID}` in upper case, and `value`). The
+converter writes them as block `object_id` / `element_id`; before this it
+recovered them by matching the text of `Parser::dump_onestore` against the
+content. Files: `lib.rs`, `fsshttpb/data/exguid.rs`,
+`onenote/{rich_text,table,image,embedded_file,outline}.rs`.
+
 ## cab 0.6.0
 
 **C1 — no panic on corrupt cabinets.** In `folder.rs`, a file offset beyond
@@ -112,5 +136,15 @@ block list, and a data block that decompressed to fewer bytes than its
 header promised is an error instead of an arithmetic underflow.
 
 **C2 — lint only.** Explicit `'_` lifetimes on returned borrowing types
-(`builder.rs`, `cabinet.rs`, `folder.rs`) to keep builds warning-free on
-current Rust. No behaviour change.
+(`builder.rs`, since removed by C3, `cabinet.rs`, `folder.rs`) to keep
+builds warning-free on current Rust. No behaviour change.
+
+**C3 — read-only.** The cabinet writer was only used by the converter's
+tests to build `.onepkg` inputs; they now use small checked-in fixtures
+(`tests/fixtures/*.onepkg`, how they were made is in `tests/cli.rs`).
+Removed `builder.rs` (`CabinetBuilder`, `CabinetWriter`, `FolderBuilder`,
+`FileBuilder`, `FileWriter`) and the code only it used: `MsZipCompressor`,
+`CompressionType::to_bitfield`, `datetime_to_bits`, the writer limits in
+`consts.rs`, and the inline unit tests of those (the inline tests needed
+removed dev-dependencies already). Files: `lib.rs`, `mszip.rs`, `ctype.rs`,
+`datetime.rs`, `consts.rs`.
