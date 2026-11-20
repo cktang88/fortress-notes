@@ -90,8 +90,14 @@ final class FakeRecognizer: TextRecognizer, Sendable {
 @Suite(.timeLimit(.minutes(3))) struct PictureTextReaderTests {
     /// What the reader shows, read on the main actor in one go.
     struct Shown: Sendable {
-        var remaining: Int?, isWorking: Bool, storedCount: Int, reading: Set<String>
-        var lastError: String?, skipped: Set<String>, peakConcurrency: Int, isRunning: Bool
+        var remaining: Int?
+        var isWorking: Bool
+        var storedCount: Int
+        var reading: Set<String>
+        var lastError: String?
+        var skipped: Set<String>
+        var peakConcurrency: Int
+        var isRunning: Bool
     }
 
     /// Waits (on the main actor) until the reader shows what `condition` asks, and returns it.
