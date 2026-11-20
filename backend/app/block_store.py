@@ -413,8 +413,8 @@ def too_old_message(path: Path, version: int) -> str:
     return (
         f"This notes database ({path}) is at schema version {version}; this version of "
         f"Fortress Notes opens only the current version {SCHEMA_VERSION} and no longer upgrades "
-        f"older ones. Open the workspace once with the app and backend built from the "
-        f"'{UPGRADE_BRANCH}' branch (it upgrades the database), then return to this version."
+        f"older ones. Quit Fortress and run ./upgrade-database.sh in the repository (it "
+        f"backs the file up and upgrades it with the '{UPGRADE_BRANCH}' branch), then reopen."
     )
 
 

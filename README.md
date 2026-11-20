@@ -118,6 +118,9 @@ How it works:
 Requirements: macOS 26 with Xcode 26 (Swift 6.2 or later), [uv](https://docs.astral.sh/uv/)
 (Python 3.11+), and Rust (stable) if you want to import OneNote.
 
+**Notes database from before 20 Nov 2026?** If the app says the database is at an older
+schema version, quit Fortress and run `./upgrade-database.sh` once (it keeps a backup).
+
 **Quick start:** `./start.sh` installs the backend's dependencies, creates `backend/.env`
 if it's missing, builds the OneNote converter when Rust is installed, then builds and
 opens the Mac app, which starts and stops the backend itself. `./start.sh --backend`

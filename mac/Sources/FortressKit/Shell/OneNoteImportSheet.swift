@@ -48,7 +48,9 @@ struct OneNoteImportSheet: View {
 
 /// The exact wording of the export how-to.
 enum OneNoteExportHelp {
-    static let steps = "Go to onenote.com/notebooks, right-click a notebook, choose Export notebook. If you don't see it, on onedrive.com select the notebook and click Download."
+    static let steps = "OneNote on the web and on the Mac can't export notebooks any more."
+    static let mac = "On a Mac, download them with the Fortress OneNote tool in tools/fortress-onenote-graph (one command; its README has the steps), then drop the .zip it makes."
+    static let windows = "On Windows, OneNote's File › Export › Notebook › OneNote Package (.onepkg) keeps the most."
     static let locked = "Password-protected sections must be unlocked in OneNote before you export, or they're skipped."
 }
 
@@ -65,11 +67,13 @@ private struct OneNoteChooseStep: View {
                 subtitle: "Notebooks become folders and pages become notes. Tables, columns, images and attachments come along.")
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Export your notebook")
+                Text("Get your notebooks out of OneNote")
                     .font(.headline)
-                Text(OneNoteExportHelp.steps)
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
+                ForEach([OneNoteExportHelp.steps, OneNoteExportHelp.mac, OneNoteExportHelp.windows], id: \.self) { line in
+                    Text(line)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Label {
                     Text(OneNoteExportHelp.locked)
                         .fixedSize(horizontal: false, vertical: true)

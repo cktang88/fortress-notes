@@ -111,6 +111,7 @@ The Graph material above is kept only as background (it documents what the HTML 
 
 ### In-app instructions to show the user (Mac, personal OneDrive)
 > **Export from OneNote (about 1 minute per notebook)**
+> (Historical: this browser route no longer exists in 2026.)
 > 1. In a browser, open **onenote.com/notebooks** and sign in with your Microsoft account.
 > 2. Right-click a notebook → **Export notebook** → **Export**. A `.zip` downloads (it contains a folder named after the notebook).
 > 3. Repeat for each notebook. Don't unzip — in Fortress choose File → Import → From OneNote… and drop each `.zip` on the sheet.
