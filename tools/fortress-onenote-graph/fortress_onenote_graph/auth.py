@@ -71,7 +71,8 @@ class Session:
 
     def __init__(self, client_id: str, config_dir: Path, *, account_type: str = "personal",
                  tenant: str | None = None, device_code: bool = False,
-                 say: Callable[[str], None] = lambda message: print(message, file=sys.stderr)):
+                 say: Callable[[str], None] = lambda message: print(message, file=sys.stderr),
+                 on_device_code: Callable[[dict], None] | None = None):
         import msal
         import msal_extensions
 
@@ -80,6 +81,9 @@ class Session:
         self.scopes = SCOPES[account_type]
         self.device_code = device_code
         self.say = say
+        # Told the device-code flow (``user_code``, ``verification_uri``, ``expires_in``,
+        # ``message``) so a host app can show the code itself.
+        self.on_device_code = on_device_code
         tenant = (tenant or os.environ.get(TENANT_ENV) or
                   ("consumers" if account_type == "personal" else "organizations")).strip()
         cache = msal_extensions.PersistedTokenCache(make_persistence(config_dir, client_id))
@@ -107,6 +111,8 @@ class Session:
             if "user_code" not in flow:
                 raise AuthError(f"Could not start device-code sign-in: {flow.get('error_description') or flow}")
             self.say(flow["message"])
+            if self.on_device_code is not None:
+                self.on_device_code(flow)
             result = self.app.acquire_token_by_device_flow(flow)
         if "access_token" not in result:
             raise AuthError(f"Sign-in failed: {result.get('error_description') or result.get('error')}")

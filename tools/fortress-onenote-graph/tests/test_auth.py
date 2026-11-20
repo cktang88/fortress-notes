@@ -74,6 +74,30 @@ class AuthTests(unittest.TestCase):
         self.assertIn("Go to microsoft.com/devicelogin", said)
         app.initiate_device_flow.assert_called_once_with(scopes=["Notes.Read", "User.Read"])
 
+    def test_device_code_is_reported_as_a_json_event(self):
+        import io
+        import json
+
+        from fortress_onenote_graph.progress import Progress
+
+        stream = io.StringIO()
+        progress = Progress("json", stream=stream)
+        with patch.object(msal, "PublicClientApplication") as factory:
+            app = MagicMock()
+            factory.return_value = app
+            app.get_accounts.return_value = []
+            app.acquire_token_interactive.side_effect = RuntimeError("no browser")
+            app.initiate_device_flow.return_value = {
+                "user_code": "ABCD-EFGH", "verification_uri": "https://microsoft.com/devicelogin",
+                "expires_in": 900, "message": "Go to https://microsoft.com/devicelogin and enter ABCD-EFGH"}
+            app.acquire_token_by_device_flow.return_value = {"access_token": "tok"}
+            session = auth.Session("client-1", self.config, say=progress.info, on_device_code=progress.device_code)
+            self.assertEqual(session.token(), "tok")
+        events = [json.loads(line) for line in stream.getvalue().splitlines()]
+        [code] = [event for event in events if event["event"] == "device_code"]
+        self.assertEqual((code["user_code"], code["verification_uri"], code["expires_in"]),
+                         ("ABCD-EFGH", "https://microsoft.com/devicelogin", 900))
+
     def test_cached_account_is_used_silently(self):
         with patch.object(msal, "PublicClientApplication") as factory:
             app = MagicMock()

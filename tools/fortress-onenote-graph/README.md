@@ -106,14 +106,19 @@ is fetched again: run the same command and it continues. Exit code **3** means
 ### Progress output
 
 Readable progress goes to stderr. `--progress json` prints one JSON object per line
-instead, for a host app (e.g. a future progress bar in Fortress):
+instead, for a host app (Fortress's backend reads these to drive the import sheet):
 
 ```json
 {"event": "phase", "phase": "pages"}
 {"event": "progress", "phase": "pages", "done": 12, "total": 340, "current": "Work › Meetings › Standup"}
 {"event": "wait", "seconds": 60.0, "reason": "throttled by Microsoft (429), backing off"}
+{"event": "device_code", "user_code": "ABCD-EFGH", "verification_uri": "https://microsoft.com/devicelogin", "expires_in": 900, "message": "…"}
 {"event": "warning", "message": "…"}
+{"event": "info", "message": "…"}
 ```
+
+`device_code` appears only when the browser sign-in did not work and a code must be
+entered instead. `notebooks --json` prints `{"notebooks": [{"name": "Work", "sections": 3}]}`.
 
 Phases: `signin`, `hierarchy`, `sections`, `pages`, `convert`, `done`. When it
 finishes, stdout gets one summary line like the converter's: `{"manifest": "…",
