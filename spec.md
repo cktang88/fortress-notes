@@ -6,8 +6,8 @@ A local-first block-centric notes app where **SQLite is the live source of truth
 documents, nested blocks, references, and indexes. Markdown remains the portable
 import/export format. The native Mac app provides one search box (full text +
 ColBERT late-interaction embedding search + titles, no mode toggle), live related
-results, nested folders, a rough→polished workflow, Ask (cited answers from your
-notes), text read from every picture and PDF, and lossless OneNote import.
+results, nested folders, Ask (cited answers from your notes), text read from every
+picture and PDF, and lossless OneNote import.
 
 Non-goals: multi-user, real-time collaboration, mobile, cloud sync, tags, pinned notes,
 whole-workspace (zip) export. The backend serves one local user; its only access
@@ -49,7 +49,6 @@ aliases: [My note?]      # only when the file name differs from the title
 created: '2026-06-20T10:00:00+00:00'
 updated: '2026-06-20T10:05:00+00:00'
 id: 01HZX...             # ULID
-status: rough            # "rough" | "polished"
 source: https://...      # only for a note that came from a web page
 picture_text:            # text read from each picture/PDF it shows (see §6)
   01J....png: "Q1 revenue"
@@ -70,8 +69,6 @@ Pasted images are stored as files in `NOTES_DIR/assets/<id>.<ext>` (imported one
 `![alt|width](assets/<name>)` relative to the note (docs/block-model.md §7).
 
 - **id**: ULID (sortable, unique), in the mirror's front matter.
-- **status**: `rough` (braindump/brainstorm) or `polished`. Drives UI badge + filter
-  and the "promote to polished" action.
 - **title**: if empty, derived from the first heading/line of the body.
 - Timestamps are UTC ISO-8601. `updated_at` is set on every save.
 
@@ -101,7 +98,7 @@ with **422**.
   parent-process watch (see "Local auth" below).
 - `models.py` — Pydantic schemas (`NoteCreate`, `NoteUpdate`, `BlockTransaction`,
   `RelatedResult`, `ExternalOcrResult`, ...).
-- `block_store.py` — SQLite schema (version 15; older databases are refused, see
+- `block_store.py` — SQLite schema (version 16; older databases are refused, see
   `docs/block-model.md` §10), blocks, transactions, FTS, change log.
 - `block_schema.py` — the block type registry and inline content rules (§2a).
 - `block_query.py` — filtered block-level full-text queries.
@@ -143,7 +140,7 @@ with **422**.
 | `POST` | `/api/folders/{id}/move` · `/api/block-documents/{id}/move` | `{parent_id, position?}` · `{folder_id, position?}` | the moved item |
 | `POST` | `/api/block-documents` | `NoteCreate` | `201` document tree; header `X-Document-ETag` |
 | `GET` | `/api/block-documents/{id}` | `If-None-Match` | document tree (`ETag`), or `304`; never writes |
-| `PATCH` | `/api/block-documents/{id}` | `{title?, status?}` (anything else: 422) | metadata payload (`children: []`); header `X-Document-ETag`. Title `""` hands it back to the first line |
+| `PATCH` | `/api/block-documents/{id}` | `{title?}` (anything else: 422) | metadata payload (`children: []`); header `X-Document-ETag`. Title `""` hands it back to the first line |
 | `DELETE` | `/api/block-documents/{id}` | — | `204` (to the Trash) |
 | `POST` | `/api/block-documents/{id}/opened` | — | `204`; records `last_opened_at` (debounced, skipped while a writer is busy; not in the ETag) |
 | `GET` | `/api/block-documents/{id}/related` | `?k=5&block_id=` | `RelatedResult[]` |
@@ -179,7 +176,7 @@ with **422**.
   (keep, but revalidate); a request whose `If-None-Match` matches gets `304` with no
   body:
   - `GET /api/block-documents/{id}` — changes with anything in the payload: the note's
-    own rows (blocks, user attrs, links, title/status/provenance/...)
+    own rows (blocks, user attrs, links, title/provenance/...)
     and every linked note or block (titles and text in
     `resolved_links`, `[[id|Title]]` labels).
   - `GET /api/navigation` (per `recent_limit`), `GET /api/trash`,
@@ -398,7 +395,7 @@ of block text, FTS or embeddings.
 
 ```jsonc
 {
-  "id", "title", "status", "created_at", "updated_at", "last_opened_at", "revision",
+  "id", "title", "created_at", "updated_at", "last_opened_at", "revision",
   "folder_id", "folder_path": [{"id", "name"}],          // top folder first
   "source": "onenote_import",                            // the note's provenance kind
   "counts": {"words", "characters", "blocks", "outgoing_links", "outgoing_document_links",

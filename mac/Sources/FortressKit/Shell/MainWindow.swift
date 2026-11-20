@@ -161,8 +161,6 @@ extension LibraryScope {
     var storageKey: String {
         switch self {
         case .all: "all"
-        case .rough: "rough"
-        case .polished: "polished"
         case .recent: "recent"
         case .trash: "trash"
         case .folder(let id): "folder:" + id
@@ -172,8 +170,6 @@ extension LibraryScope {
     init?(storageKey: String) {
         switch storageKey {
         case "all": self = .all
-        case "rough": self = .rough
-        case "polished": self = .polished
         case "recent": self = .recent
         case "trash": self = .trash
         default:

@@ -65,7 +65,7 @@ private func node(_ id: String, _ text: String) -> BlockNode {
 
 private func document(revision: Int, _ nodes: [BlockNode]) -> BlockDocument {
     BlockDocument(id: "d", revision: revision, titleAuto: false, title: "Note",
-                  status: .rough, createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
+                  createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
                   children: nodes)
 }
 

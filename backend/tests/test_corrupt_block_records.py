@@ -18,7 +18,7 @@ class CorruptBlockRecordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)
             database = notes / ".fortress.sqlite3"
-            document = create_block_document(database, "Damaged", "rough", "Readable")
+            document = create_block_document(database, "Damaged", "Readable")
             block_id = document["children"][0]["id"]
             with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute(

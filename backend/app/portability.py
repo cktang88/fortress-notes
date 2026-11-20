@@ -58,7 +58,7 @@ def seed_welcome_note(database_path: Path) -> None:
     post = frontmatter.loads(WELCOME_NOTE.read_text(encoding="utf-8"))
     note = vault.read_front_matter(post.metadata)
     now = datetime.now(timezone.utc).isoformat()
-    create_document(database_path, "welcome", note.title or "Welcome", note.status, post.content,
+    create_document(database_path, "welcome", note.title or "Welcome", post.content,
                     now, now, provenance={"source": "manual"})
 
 
@@ -78,7 +78,6 @@ def safe_filename(name: str, fallback: str = "Untitled") -> str:
 @dataclass(frozen=True)
 class UploadedNote:
     title: str
-    status: str
     body: str
     created_at: object | None = None
     provenance: dict | None = None
@@ -103,7 +102,6 @@ def parse_uploaded_markdown(filename: str, raw: bytes) -> UploadedNote:
     # A `tags:` line from an old export is ignored: tags are no longer a feature.
     return UploadedNote(
         title=title[:200],
-        status=note.status,
         body=post.content,
         created_at=note.created,
         provenance=markdown_import_provenance(

@@ -42,7 +42,7 @@ class MirrorTests(_Workspace):
         note = documents.create(NoteCreate(title="t", body="hello"))
         documents.flush_mirrors()
         self.assertTrue(self.mirror(note["id"]).exists())
-        documents.update(note["id"], documents.NoteUpdate(status="polished"))
+        documents.update(note["id"], documents.NoteUpdate(title="t"))
         rendering = threading.Event()
         original = block_store.render_markdown
 

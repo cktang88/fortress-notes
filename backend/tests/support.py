@@ -47,7 +47,7 @@ def mirror_file(notes: Path, document_id: str) -> Path:
 def add_markdown_notes(notes: Path, database: Path) -> None:
     """Each ``*.md`` file in ``notes`` as a note whose id is the file name.
 
-    Front matter gives the title, status and dates (a test's way to write notes).
+    Front matter gives the title and dates (a test's way to write notes).
     """
 
     import frontmatter
@@ -59,7 +59,7 @@ def add_markdown_notes(notes: Path, database: Path) -> None:
         meta = post.metadata
         create_document(
             database, path.stem, str(meta.get("title") or derive_title(post.content)),
-            str(meta.get("status", "rough")), post.content,
+            post.content,
             meta.get("created_at", utc_now()), meta.get("updated_at", utc_now()),
         )
 
@@ -77,7 +77,7 @@ def import_markdown_files(database: Path, root: Path) -> list[str]:
     notes = [parse_uploaded_markdown(path.relative_to(root).as_posix(), path.read_bytes()) for path in paths]
     ids = []
     for note, (document_id, specs) in zip(notes, parse_uploaded_batch(database, notes, block_store.new_id)):
-        create_document(database, document_id, note.title, note.status, note.body,
+        create_document(database, document_id, note.title, note.body,
                         note.created_at or "t", "t", provenance=note.provenance, specs=specs)
         ids.append(document_id)
     return ids

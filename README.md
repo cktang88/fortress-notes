@@ -65,8 +65,8 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
   action is one named undo step and saves as ordinary block operations.
 - Links to notes (type `[[` to pick one) and references to individual paragraphs,
   with backlinks in the inspector. Links always show the target's current title or text.
-- Nested folders (drag notes and folders to move them), a **Rough / Polished** status
-  per note, and a title that follows the first line until you set one.
+- Nested folders (drag notes and folders to move them), and a title that follows the
+  first line until you set one.
 - **Quick Capture** (⇧⌘Space, from any app) saves a thought to the *Uncategorized*
   folder; captures made while the backend is down wait on disk and are sent later.
 - **Trash** with Undo, and **backups**: one SQLite snapshot per day (last 7 kept),

@@ -122,13 +122,11 @@ public struct APIClient: Sendable {
         return document
     }
 
-    /// Renames a note or changes its status. The server answers with the note's
+    /// Renames a note. The server answers with the note's
     /// metadata only (its content didn't change): it is merged into the cached copy,
     /// and the merged note is returned (the metadata alone when nothing is cached).
-    public func updateDocument(id: String, title: String? = nil, status: NoteStatus? = nil) async throws -> BlockDocument {
-        var body: [String: JSONValue] = [:]
-        if let title { body["title"] = .string(title) }
-        if let status { body["status"] = .string(status.rawValue) }
+    public func updateDocument(id: String, title: String) async throws -> BlockDocument {
+        let body: [String: JSONValue] = ["title": .string(title)]
         let request = try makeRequest("PATCH", "api/block-documents/\(id)", body: try JSONEncoder().encode(body))
         do {
             let (metadata, _) = try await sendDocument(request)

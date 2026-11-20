@@ -279,7 +279,6 @@ def upsert_document_from_source(
     modified_at: str | None = None,
     provenance: dict[str, Any] | None = None,
     importer: dict[str, str] | None = None,
-    status: str = "rough",
 ) -> UpsertResult:
     """Create, refresh or leave alone the note for one source page (see the module docstring).
 
@@ -318,7 +317,7 @@ def upsert_document_from_source(
             (source, external_id),
         ).fetchone()
         if row is None:
-            return _create(connection, title, status, planned, folder_id, created_at,
+            return _create(connection, title, planned, folder_id, created_at,
                            modified_at, document_provenance, source_hash)
         if row["deleted_at"] is not None:
             return UpsertResult(row["id"], "skipped_deleted", row["revision"])
@@ -461,7 +460,6 @@ def _row_block(row: sqlite3.Row) -> schema.Block:
 def _create(
     connection: sqlite3.Connection,
     title: str,
-    status: str,
     planned: list[_Planned],
     folder_id: str | None,
     created_at: str | None,
@@ -474,13 +472,11 @@ def _create(
     created = created_at or now
     position = document_insert_position(connection, folder_id, None)
     connection.execute(
-        """INSERT INTO documents(id, title, status, folder_id, position,
+        """INSERT INTO documents(id, title, folder_id, position,
                created_at, updated_at, provenance_json, source_kind, source_external_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            document_id, title,
-            status if status in {"rough", "polished"} else "rough",
-            folder_id, position, created, modified_at or created,
+            document_id, title, folder_id, position, created, modified_at or created,
             _provenance.dumps({**document_provenance, "imported_at": now}),
             document_provenance["source"], document_provenance["external_id"],
         ),
@@ -642,7 +638,6 @@ def document_info(path: Path, document_id: str) -> dict[str, Any]:
     return {
         "id": document["id"],
         "title": document["title"],
-        "status": document["status"],
         "created_at": document["created_at"],
         "updated_at": document["updated_at"],
         "last_opened_at": document["last_opened_at"],

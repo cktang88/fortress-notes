@@ -781,7 +781,7 @@ final class TableBlockController: NSObject, LiveBlock, NSTextViewDelegate, NSTex
         typingRun = typing ? (position, deleting) : nil
     }
 
-    /// Anything else put on the stack (an edit in the note, in another table, a status
+    /// Anything else put on the stack (an edit in the note, in another table, a title
     /// change) ends the typing step.
     private func observe(_ undoManager: UndoManager) {
         guard observedUndoManager !== undoManager else { return }

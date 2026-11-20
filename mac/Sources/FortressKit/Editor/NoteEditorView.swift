@@ -258,7 +258,7 @@ enum EditorSelectionMemory {
     static var anchors: [String: (blockId: String, offset: Int)] = [:]
 }
 
-/// Title (28 bold; ↩ moves into the body) and the meta line: status, edited, folder.
+/// Title (28 bold; ↩ moves into the body) and the meta line: edited, folder.
 struct EditorHeader: View {
     @Bindable var session: EditorSession
     let model: AppModel
@@ -296,33 +296,13 @@ private struct MetaLine: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Menu {
-                ForEach(NoteStatus.allCases, id: \.self) { status in
-                    Button {
-                        Task { await session.setStatus(status) }
-                    } label: {
-                        Label(status.label, systemImage: status.symbol)
-                    }
-                }
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: session.status.symbol)
-                    Text(session.status.label)
-                }
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.visible)
-            .fixedSize()
-            .help("Status")
             if let updatedAt = session.updatedAt {
-                Text("·").foregroundStyle(.themeTertiary)
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     Text(EditorDates.edited(updatedAt, now: context.date))
                 }
             }
             if let folder {
-                Text("·").foregroundStyle(.themeTertiary)
+                if session.updatedAt != nil { Text("·").foregroundStyle(.themeTertiary) }
                 Label(folder, systemImage: "folder").labelStyle(.titleAndIcon)
             }
         }
@@ -340,22 +320,6 @@ enum EditorDates {
         if now.timeIntervalSince(date) < 60 { return String(localized: "Edited just now") }
         let relative = date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
         return String(localized: "Edited \(relative)", comment: "Note meta line; the argument is a relative date such as “5 min. ago”")
-    }
-}
-
-extension NoteStatus {
-    var label: String {
-        switch self {
-        case .rough: String(localized: "Rough", comment: "Note status")
-        case .polished: String(localized: "Polished", comment: "Note status")
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .rough: "circle.dashed"
-        case .polished: "checkmark.seal"
-        }
     }
 }
 

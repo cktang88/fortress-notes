@@ -89,7 +89,7 @@ class BlockStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
 
-            document = create_block_document(database, "Blank", "rough", "")
+            document = create_block_document(database, "Blank", "")
 
             self.assertEqual(len(document["children"]), 1)
             block = document["children"][0]
@@ -103,7 +103,7 @@ class BlockStoreTests(unittest.TestCase):
             database = root / ".fortress.sqlite3"
             media = root / "01ARZ3NDEKTSV4RRFFQ69G5FAV.png"
             media.write_bytes(b"new image")
-            document = create_block_document(database, "Asset search", "rough", "")
+            document = create_block_document(database, "Asset search", "")
             image_hash = hashlib.sha256(b"new image").hexdigest()
             register_asset(database, media, image_hash, "image/png")
             inserted = apply_transaction(
@@ -177,7 +177,7 @@ class BlockStoreTests(unittest.TestCase):
             database = root / ".fortress.sqlite3"
             media = root / "01JABCDEF0123456789ABCDEFGH.png"
             media.write_bytes(b"image")
-            document = create_block_document(database, "Asset owner", "rough", "")
+            document = create_block_document(database, "Asset owner", "")
             register_asset(database, media, "a" * 64, "image/png")
 
             result = apply_transaction(
@@ -204,7 +204,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_document_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", "Parent")
+            created = create_block_document(database, "Draft", "Parent")
             self.assertEqual(created["title"], "Draft")
             self.assertEqual([item["id"] for item in list_documents(database)], [created["id"]])
             parent = created["children"][0]
@@ -229,7 +229,6 @@ class BlockStoreTests(unittest.TestCase):
             (root / "one.md").write_text(
                 "---\n"
                 "title: One\n"
-                "status: polished\n"
                 "tags: [demo]\n"
                 "---\n"
                 "# Heading\n\n"
@@ -309,7 +308,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_failed_operation_rolls_back_the_whole_batch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", "Start")
+            created = create_block_document(database, "Draft", "Start")
             block_id = created["children"][0]["id"]
 
             updated = apply_transaction(
@@ -339,7 +338,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_deleting_a_subtree_breaks_links_into_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", "Parent")
+            created = create_block_document(database, "Draft", "Parent")
             parent = created["children"][0]
             nested = apply_transaction(
                 database, created["id"],
@@ -348,7 +347,7 @@ class BlockStoreTests(unittest.TestCase):
             )
             child = nested["children"][0]["children"][0]
             reference = create_block_document(
-                database, "Reference", "rough", f"Link [[#^{parent['id']}]]"
+                database, "Reference", f"Link [[#^{parent['id']}]]"
             )
             self.assertEqual(reference["children"][0]["text"], "Link Parent")
             deleted = apply_transaction(
@@ -371,7 +370,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_nested_moves_keep_sibling_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", "Parent")
+            created = create_block_document(database, "Draft", "Parent")
             parent_id = created["children"][0]["id"]
             inserted = apply_transaction(
                 database,
@@ -410,7 +409,7 @@ class BlockStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             create_document(
-                database, "user-attrs", "User attributes", "rough", "",
+                database, "user-attrs", "User attributes", "",
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             empty = document_tree(database, "user-attrs")
@@ -455,7 +454,7 @@ class BlockStoreTests(unittest.TestCase):
     def test_failed_structural_operation_rolls_back_the_whole_transaction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            create_document(database, "one", "One", "rough", "A\n\nB", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
+            create_document(database, "one", "One", "A\n\nB", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
             before = document_tree(database, "one"); assert before is not None
             with self.assertRaises(KeyError):
                 apply_transaction(database, "one", [paragraph("C"), BlockOperation(operation="move", block_id="missing")], before["revision"])
@@ -468,7 +467,7 @@ class BlockStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             create_document(
-                database, "one", "One", "rough", "A\n\nB",
+                database, "one", "One", "A\n\nB",
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             before = document_tree(database, "one")
@@ -504,7 +503,7 @@ class BlockStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             create_document(
-                database, "one", "One", "rough", "A\n\nB\n\nC",
+                database, "one", "One", "A\n\nB\n\nC",
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             initial = document_tree(database, "one")
@@ -539,7 +538,7 @@ class BlockStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "blocks.sqlite3"
             create_document(
-                database, "receipt-note", "Receipt note", "rough", "Original",
+                database, "receipt-note", "Receipt note", "Original",
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             initial = document_tree(database, "receipt-note")
@@ -579,7 +578,7 @@ class BlockStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             create_document(
-                database, "legacy-filename-id", "Legacy", "rough", "",
+                database, "legacy-filename-id", "Legacy", "",
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             before = document_tree(database, "legacy-filename-id")
@@ -657,7 +656,6 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "one",
                 "One",
-                "rough",
                 "Indexed text",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -710,14 +708,14 @@ class BlockStoreTests(unittest.TestCase):
             root = Path(directory)
             database = root / ".fortress.sqlite3"
             create_document(
-                database, "target", "Target", "rough", "Target block",
+                database, "target", "Target", "Target block",
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             target = document_tree(database, "target")
             assert target is not None
             target_block_id = target["children"][0]["id"]
             create_document(
-                database, "source", "Source", "rough", f"[[#^{target_block_id}|block label]] and [[target|document label]]",
+                database, "source", "Source", f"[[#^{target_block_id}|block label]] and [[target|document label]]",
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
 
@@ -755,7 +753,6 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "one",
                 "One",
-                "rough",
                 "First",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -764,7 +761,6 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "two",
                 "Two",
-                "polished",
                 "Second",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-02T00:00:00+00:00",
@@ -813,7 +809,6 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "one",
                 "One",
-                "rough",
                 "First",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -822,7 +817,6 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "two",
                 "Two",
-                "rough",
                 "Second",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -850,7 +844,6 @@ class BlockStoreTests(unittest.TestCase):
                 database,
                 "three",
                 "Three",
-                "rough",
                 "Third",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",

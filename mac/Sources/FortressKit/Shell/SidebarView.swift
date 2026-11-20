@@ -13,8 +13,6 @@ struct SidebarView: View {
         List(selection: selection) {
             Section("Library") {
                 LibraryRow(title: "All Notes", symbol: "note.text", scope: .all, dropFolder: .some(nil))
-                LibraryRow(title: "Rough", symbol: "circle.dashed", scope: .rough)
-                LibraryRow(title: "Polished", symbol: "checkmark.seal", scope: .polished)
                 LibraryRow(title: "Recent", symbol: "clock", scope: .recent)
             }
             Section("Folders") {

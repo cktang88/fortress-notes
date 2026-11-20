@@ -22,7 +22,7 @@ enum PerfData {
     static func related(_ prefix: String, count: Int = 3) -> [RelatedResult] {
         (0..<count).map { index in
             RelatedResult(
-                note: NoteSummary(id: "\(prefix)-n\(index)", title: "Related \(index)", status: .rough, updatedAt: "2026-11-01T10:00:00Z", snippet: "s"),
+                note: NoteSummary(id: "\(prefix)-n\(index)", title: "Related \(index)", updatedAt: "2026-11-01T10:00:00Z", snippet: "s"),
                 score: 0.8, matchedBlockId: "\(prefix)-m\(index)", matchedBlockText: "Something like this \(index)")
         }
     }

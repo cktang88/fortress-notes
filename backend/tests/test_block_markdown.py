@@ -197,7 +197,7 @@ class MarkdownExportTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Doc", "rough", "Intro\n\n> note\n")
+            created = create_block_document(database, "Doc", "Intro\n\n> note\n")
             intro, quote = created["children"]
             tree = apply_transaction(database, created["id"], [
                 BlockOperation(operation="update", block_id=quote["id"], type="callout",

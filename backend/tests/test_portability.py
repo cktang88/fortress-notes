@@ -16,7 +16,6 @@ class PortabilityTests(unittest.TestCase):
                 database,
                 "guide",
                 "Guide",
-                "polished",
                 "# Guide\n\n- Parent\n  - Child\n\nAfter",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-02T00:00:00+00:00",
@@ -44,7 +43,6 @@ class PortabilityTests(unittest.TestCase):
                 source_database,
                 "round-trip",
                 "Round trip",
-                "polished",
                 "# Heading\n\nParagraph with **formatting**.\n\n- First\n  - Nested\n- Second",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-02T00:00:00+00:00",
@@ -59,7 +57,6 @@ class PortabilityTests(unittest.TestCase):
             imported_tree = document_tree(imported_database, imported_id)
             assert imported_tree is not None
             self.assertEqual(imported_tree["title"], source_tree["title"])
-            self.assertEqual(imported_tree["status"], source_tree["status"])
             # Tags were removed from the product: not exported, ignored on import.
             self.assertNotIn("tags:", markdown)
             self.assertNotIn("tags", imported_tree)
@@ -77,7 +74,6 @@ class PortabilityTests(unittest.TestCase):
                 source_database,
                 "empty",
                 "Empty",
-                "rough",
                 "",
                 "2026-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
@@ -110,7 +106,7 @@ class NestedBlockRoundTripTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             create_document(
-                root / "0.sqlite3", "doc", "Doc", "rough", body,
+                root / "0.sqlite3", "doc", "Doc", body,
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             first_tree = document_tree(root / "0.sqlite3", "doc")

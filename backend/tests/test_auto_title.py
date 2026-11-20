@@ -66,12 +66,6 @@ class AutoTitleTests(unittest.TestCase):
         document = self.write(document, "Something else entirely")
         self.assertEqual(document["title"], "Plans")
 
-        # A status change alone keeps the chosen title.
-        self.client.patch(f"/api/block-documents/{document['id']}", json={"status": "polished"})
-        self.assertEqual(
-            self.client.get(f"/api/block-documents/{document['id']}").json()["title"], "Plans"
-        )
-
         cleared = self.client.patch(f"/api/block-documents/{document['id']}", json={"title": ""})
         self.assertEqual(cleared.json()["title"], "Something else entirely")
         self.assertTrue(cleared.json()["title_auto"])

@@ -41,7 +41,9 @@ from .block_markdown import render_markdown as _render_markdown
 from .block_schema import BlockShapeError
 from .models import BlockOperation
 
-SCHEMA_VERSION = 15
+# 16 is the schema last-migrating-release leaves a database in after its startup
+# cleanup (which keeps it recorded as 15): see stored_version.
+SCHEMA_VERSION = 16
 DB_FILENAME = ".fortress.sqlite3"
 
 def new_id() -> str:
@@ -71,7 +73,6 @@ CREATE TABLE IF NOT EXISTS folders (
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('rough', 'polished')),
     folder_id TEXT REFERENCES folders(id) ON DELETE RESTRICT,
     position INTEGER NOT NULL DEFAULT 0,
     deleted_at TEXT,
@@ -375,23 +376,36 @@ class WorkspaceTooOld(RuntimeError):
 UPGRADE_BRANCH = "last-migrating-release"
 
 
-def stored_version(connection: sqlite3.Connection) -> int | None:
-    """The schema version of a database (None: a new, empty one).
+# What last-migrating-release's startup cleanup removes from a version-15 database
+# without changing its version: (table, column or None for the whole table).
+_RETIRED_AT_15 = (
+    ("block_sync", None), ("saved_searches", None), ("link_check_cache", None),
+    ("document_history", None), ("blocks", "provenance_json"), ("documents", "status"),
+    ("documents", "tags_json"),
+)
 
-    A database at 15 that still has the per-block re-import state
-    (``block_sync``, ``blocks.provenance_json``) predates the last conversion
-    the last-migrating-release build makes, which keeps it at 15: it counts as 14.
+
+def stored_version(connection: sqlite3.Connection) -> int | None:
+    """The schema version a database is in (None: a new, empty one).
+
+    A database recorded at 15 is in version 16 once last-migrating-release's
+    startup cleanup has run (nothing of ``_RETIRED_AT_15`` is left); otherwise it
+    still needs that build, and counts as 15.
     """
 
     tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    if "schema_migrations" not in tables:
-        return 0 if "documents" in tables else None  # notes without a version: older than any
-    version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+    version = None
+    if "schema_migrations" in tables:
+        version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
     if version is None:
-        return 0 if "documents" in tables else None
-    block_columns = {row[1] for row in connection.execute("PRAGMA table_info(blocks)")}
-    if version == SCHEMA_VERSION and ("block_sync" in tables or "provenance_json" in block_columns):
-        return SCHEMA_VERSION - 1
+        return 0 if "documents" in tables else None  # notes without a version: older than any
+    if version == 15:
+        for table, column in _RETIRED_AT_15:
+            if table in tables and (column is None or column in {
+                row[1] for row in connection.execute(f"PRAGMA table_info({table})")
+            }):
+                return 15
+        return 16
     return int(version)
 
 
@@ -422,7 +436,8 @@ def _initialize(path: Path) -> None:
         connection.executescript(_SCHEMA)
         for name, (event, body) in _CHANGE_TRIGGERS.items():
             connection.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {event} BEGIN {body} END")
-        if version is None:
+        recorded = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+        if recorded != SCHEMA_VERSION:  # new, or cleaned up at 15 by last-migrating-release
             connection.execute(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, utc_now()),
@@ -436,7 +451,7 @@ def _initialize(path: Path) -> None:
 # changes when a backup is restored, so validators from before never match.
 # last_opened_at is deliberately not tracked: it is metadata of a read.
 _DOCUMENT_COLUMNS = (
-    "title, status, folder_id, position, deleted_at, created_at, updated_at, "
+    "title, folder_id, position, deleted_at, created_at, updated_at, "
     "revision, title_auto, provenance_json, source_kind, source_external_id, sync_json"
 )
 
@@ -589,7 +604,6 @@ def create_document(
     path: Path,
     document_id: str,
     title: str,
-    status: str,
     body: str,
     created_at: object,
     updated_at: object,
@@ -613,7 +627,6 @@ def create_document(
             connection,
             document_id,
             title,
-            status,
             body,
             _iso(created_at),
             _iso(updated_at),
@@ -789,7 +802,7 @@ def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, o
     only = "" if ids is None else f"AND id IN ({','.join('?' for _ in ids)})"
     with connection_scope(path) as connection:
         rows = connection.execute(
-            f"""SELECT id, title, status, folder_id, position,
+            f"""SELECT id, title, folder_id, position,
                       created_at, updated_at, source_kind,
                       COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
                                 AND text <> '' ORDER BY parent_id IS NOT NULL, order_key
@@ -803,7 +816,7 @@ def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, o
 
 
 def create_block_document(
-    path: Path, title: str, status: str, body: str,
+    path: Path, title: str, body: str,
     folder_id: str | None = None,
     created_at: object | None = None,
     title_auto: bool = False,
@@ -821,7 +834,7 @@ def create_block_document(
         document_id = new_id()
     now = utc_now()
     create_document(
-        path, document_id, title, status, body,
+        path, document_id, title, body,
         _iso(created_at) if created_at is not None else now, now,
         folder_id=folder_id,
         provenance=provenance,
@@ -862,9 +875,8 @@ def update_document_metadata(
     document_id: str,
     *,
     title: str | None = None,
-    status: str | None = None,
 ) -> tuple[dict, tuple]:
-    """Change a document's title and/or status; KeyError if it is missing.
+    """Change a document's title; KeyError if it is missing.
 
     A title of ``""`` or ``"Untitled"`` hands the title back to the first line
     (``title_auto``); any other title is the person's choice. Reads and writes
@@ -876,7 +888,7 @@ def update_document_metadata(
     initialize(path)
     with connection_scope(path, immediate=True) as connection:
         row = connection.execute(
-            "SELECT title, status FROM documents WHERE id = ? AND deleted_at IS NULL",
+            "SELECT title FROM documents WHERE id = ? AND deleted_at IS NULL",
             (document_id,),
         ).fetchone()
         if row is None:
@@ -884,12 +896,11 @@ def update_document_metadata(
         clearing = title is not None and title.strip() in ("", UNSET_TITLE)
         connection.execute(
             """UPDATE documents
-                  SET title = ?, status = ?, updated_at = ?,
+                  SET title = ?, updated_at = ?,
                       title_auto = CASE WHEN ? THEN 1 WHEN ? THEN 0 ELSE title_auto END
                 WHERE id = ?""",
             (
                 row["title"] if title is None or clearing else title,
-                status or row["status"],
                 utc_now(),
                 clearing,
                 title is not None,
@@ -1053,7 +1064,7 @@ def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
                 ORDER BY parent_id, position, id"""
         ).fetchall()
         documents = connection.execute(
-            """SELECT id, title, status, folder_id, position,
+            """SELECT id, title, folder_id, position,
                       created_at, updated_at, source_kind,
                       COALESCE((
                           SELECT text FROM blocks
@@ -1065,7 +1076,7 @@ def navigation(path: Path, recent_limit: int = 10) -> dict[str, object]:
                 ORDER BY folder_id, position, id"""
         ).fetchall()
         recent = connection.execute(
-            """SELECT id, title, status, folder_id, position,
+            """SELECT id, title, folder_id, position,
                       created_at, updated_at, source_kind,
                       COALESCE((
                           SELECT text FROM blocks
@@ -1421,7 +1432,6 @@ def _insert_document(
     connection: sqlite3.Connection,
     document_id: str,
     title: str,
-    status: str,
     body: str,
     created_at: str,
     updated_at: str,
@@ -1435,10 +1445,10 @@ def _insert_document(
     ).fetchone()[0]
     connection.execute(
         """INSERT INTO documents(
-                   id, title, status, folder_id, position, deleted_at,
+                   id, title, folder_id, position, deleted_at,
                    created_at, updated_at
-               ) VALUES (?, ?, ?, NULL, ?, NULL, ?, ?)""",
-        (document_id, title, status, position, created_at, updated_at),
+               ) VALUES (?, ?, NULL, ?, NULL, ?, ?)""",
+        (document_id, title, position, created_at, updated_at),
     )
     _set_document_provenance(
         connection, document_id, _unclaimed_source_key(connection, provenance or {"source": "manual"})
@@ -1491,7 +1501,6 @@ def _navigation_document(row: sqlite3.Row) -> dict[str, object]:
         "kind": "document",
         "id": row["id"],
         "title": row["title"],
-        "status": row["status"],
         "folder_id": row["folder_id"],
         "position": row["position"],
         "created_at": row["created_at"],
@@ -1871,7 +1880,6 @@ def _document_tree(
     return {
         "id": document["id"],
         "title": document["title"],
-        "status": document["status"],
         "created_at": document["created_at"],
         "updated_at": document["updated_at"],
         "revision": document["revision"],

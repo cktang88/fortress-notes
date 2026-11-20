@@ -10,7 +10,7 @@ public enum Route: Hashable, Sendable {
 
 /// Sidebar selection that filters the note list.
 public enum LibraryScope: Hashable, Sendable {
-    case all, rough, polished, recent, trash
+    case all, recent, trash
     case folder(id: String)
 }
 

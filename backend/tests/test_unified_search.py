@@ -27,10 +27,8 @@ class UnifiedSearchTests(unittest.TestCase):
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
 
-    def create(self, title: str, body: str, status: str = "rough") -> str:
-        response = self.client.post(
-            "/api/block-documents", json={"title": title, "body": body, "status": status}
-        )
+    def create(self, title: str, body: str) -> str:
+        response = self.client.post("/api/block-documents", json={"title": title, "body": body})
         return response.json()["id"]
 
     def find(self, q: str, **params) -> list[dict]:
@@ -106,16 +104,10 @@ class UnifiedSearchTests(unittest.TestCase):
         # text; the packing note (edited later) only shares "zqmarl".
         packing = self.create("Packing zqmarl", "Packing zqmarl\n\nPassport and charger.")
         budget = self.create("Budget zqmarl", "Hotel 120 a night.")
-        touched = self.client.patch(f"/api/block-documents/{packing}", json={"status": "polished"})
+        touched = self.client.patch(f"/api/block-documents/{packing}", json={"title": "Packing zqmarl"})
         self.assertEqual(touched.status_code, 200, touched.text)
         results = self.find("hotel zqmarl")
         self.assertEqual(results[0]["document_id"], budget)
-
-    def test_filters_apply_to_every_source(self) -> None:
-        self.create("Rough idea", "Solar panels on the shed")
-        polished = self.create("Final plan", "Solar panels on the roof", status="polished")
-        results = self.find("solar panels", status="polished")
-        self.assertEqual({r["document_id"] for r in results}, {polished})
 
     def test_one_note_cannot_flood_the_results(self) -> None:
         self.create("Many", "\n\n".join(f"apple fact number {i}" for i in range(10)))

@@ -3,8 +3,8 @@
 Each note is ``<folder>/<subfolder>/<title>.md``, the folders being the note's
 Fortress folders; stored files stay in ``assets/`` and are embedded with paths
 relative to the note. Front matter uses only plain keys (``title``, ``aliases``,
-``created``, ``updated``, ``id``, ``status``, ``source``, ``picture_text``). The
-vault is a one-way export: nothing reads it back as Fortress notes. Note links are wikilinks by file name, the
+``created``, ``updated``, ``id``, ``source``, ``picture_text``). The vault is a
+one-way export: nothing reads it back as Fortress notes. Note links are wikilinks by file name, the
 shortest name that is unique in the vault, as Obsidian writes them.
 
 This module holds the naming (:func:`compute_layout`), the front matter written
@@ -166,7 +166,6 @@ def front_matter(tree: dict[str, Any], stem: str | None,
     meta["created"] = _plain(tree["created_at"])
     meta["updated"] = _plain(tree["updated_at"])
     meta["id"] = tree["id"]
-    meta["status"] = tree["status"]
     source_url = (tree.get("provenance") or {}).get("source_url")
     if isinstance(source_url, str):
         # What web clippers (Obsidian's included) call the page a note came from.
@@ -204,7 +203,6 @@ class NoteMetadata:
     """What a Markdown file's front matter says about its note."""
 
     title: str | None
-    status: str
     created: Any
     updated: Any
     aliases: list[str]
@@ -216,10 +214,8 @@ def read_front_matter(metadata: dict[str, Any]) -> NoteMetadata:
     aliases = metadata.get("aliases", metadata.get("alias"))
     if isinstance(aliases, str):
         aliases = [aliases]
-    status = metadata.get("status")
     return NoteMetadata(
         title=str(metadata["title"]).strip() or None if metadata.get("title") is not None else None,
-        status=status if status in ("rough", "polished") else "rough",
         created=_first(metadata, "created", "created_at", "date created", "date"),
         updated=_first(metadata, "updated", "updated_at", "modified", "date modified", "lastmod"),
         aliases=[str(alias) for alias in aliases if alias] if isinstance(aliases, list) else [],

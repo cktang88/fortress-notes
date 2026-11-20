@@ -343,15 +343,17 @@ The `position` in responses (§1) is still served, read-only.
 
 ## 10. Stored data and older databases
 
-A new database is created at schema version 15 with every table, index and
-trigger (`block_store._SCHEMA`); a database at 15 opens as it is. This version
-no longer migrates: a database at an older version (or with notes but no
-version), or at 15 but still holding per-block re-import state (`block_sync`,
-`blocks.provenance_json`, converted to note `sync_json` without a version bump),
-is refused at startup with a message saying to open the workspace once with a
-build of the `last-migrating-release` branch, the last release with the
-migrations (BlockNote shapes to canonical blocks in 14, math and ink retired in
-15, then per-block re-import state retired); a database at a newer version is
-refused as before (`block_store.stored_version`). Restoring a backup checks the
-same. The Mac app shows the backend's reason (the line after
-`Fortress can't start: ` in its log) instead of the exit code.
+A new database is created at schema version 16 with every table, index and
+trigger (`block_store._SCHEMA`); a database at 16 opens as it is. Version 16 is
+the schema the `last-migrating-release` branch leaves a database in after its
+startup cleanup, which keeps the database recorded as 15: a database at 15
+with nothing of that cleanup left (`block_sync`, `blocks.provenance_json`,
+`documents.status`/`tags_json`, the undo history and other retired tables) is
+recorded as 16 and opens. This version no longer migrates: anything older (an
+older version, a 15 not yet cleaned up, or notes with no version) is refused at
+startup with a message saying to open the workspace once with a build of
+`last-migrating-release`, the last release with the migrations (BlockNote shapes
+to canonical blocks in 14, math and ink retired in 15, then the cleanup); a
+database at a newer version is refused as before (`block_store.stored_version`).
+Restoring a backup checks the same. The Mac app shows the backend's reason (the
+line after `Fortress can't start: ` in its log) instead of the exit code.

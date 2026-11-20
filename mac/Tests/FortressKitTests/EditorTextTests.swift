@@ -181,7 +181,7 @@ private func settle() {
         let model = AppModel()
         model.navigation = NavigationResponse(items: [.folder(NavigationFolder(
             id: "f", parentId: nil, name: "Travel", position: 0,
-            children: [.document(NavigationDocument(id: document.id, title: document.title, status: .polished,
+            children: [.document(NavigationDocument(id: document.id, title: document.title,
                                                     updatedAt: document.updatedAt, createdAt: document.createdAt,
                                                     snippet: "", folderId: "f", position: 0))]))], recent: [])
         for (name, appearance) in [("editor-light", NSAppearance.Name.aqua), ("editor-dark", .darkAqua)] {

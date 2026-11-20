@@ -60,7 +60,7 @@ class SourceStoreTests(unittest.TestCase):
     # --- Basic provenance --------------------------------------------------
 
     def test_new_documents_default_to_manual_and_blocks_have_no_provenance(self) -> None:
-        create_document(self.db, "doc", "Doc", "rough", "One\n\nTwo", "t", "t")
+        create_document(self.db, "doc", "Doc", "One\n\nTwo", "t", "t")
         tree = document_tree(self.db, "doc")
         self.assertEqual(tree["provenance"], {"source": "manual"})
         self.assertNotIn("provenance", tree["children"][0])
@@ -124,8 +124,8 @@ class SourceStoreTests(unittest.TestCase):
     # --- Links follow renames ----------------------------------------------
 
     def test_note_links_show_the_current_title_after_a_rename(self) -> None:
-        create_document(self.db, "target", "Old title", "rough", "Target body", "t", "t")
-        create_document(self.db, "source", "Source", "rough", "", "t", "t")
+        create_document(self.db, "target", "Old title", "Target body", "t", "t")
+        create_document(self.db, "source", "Source", "", "t", "t")
         target_block = document_tree(self.db, "target")["children"][0]["id"]
         apply_transaction(self.db, "source", [
             BlockOperation(
@@ -208,7 +208,7 @@ class SourceStoreTests(unittest.TestCase):
         ids = {node["text"]: node["id"] for node in tree["children"]}
         child = tree["children"][1]["children"][0]["id"]
         # Another note links to the page, to one of its blocks and to a nested one.
-        create_document(self.db, "linker", "Linker", "rough", "", "t", "t")
+        create_document(self.db, "linker", "Linker", "", "t", "t")
         apply_transaction(self.db, "linker", [BlockOperation(
             operation="insert", block_id="01J00000000000000000000005", type="paragraph",
             content=[{"type": "docLink", "id": first.document_id}, {"type": "text", "text": " "},
@@ -302,8 +302,8 @@ class SourceStoreTests(unittest.TestCase):
     # --- Metadata -------------------------------------------------------------
 
     def test_document_info_counts(self) -> None:
-        create_document(self.db, "a", "A", "rough", "Hello world, it's me.\n\nSecond block", "t", "t")
-        create_document(self.db, "b", "B", "rough", "", "t", "t")
+        create_document(self.db, "a", "A", "Hello world, it's me.\n\nSecond block", "t", "t")
+        create_document(self.db, "b", "B", "", "t", "t")
         a_block = document_tree(self.db, "a")["children"][0]["id"]
         apply_transaction(self.db, "b", [BlockOperation(
             operation="insert", block_id="01J00000000000000000000008", type="paragraph",
@@ -391,7 +391,7 @@ class SourceApiTests(unittest.TestCase):
         body = info.json()
         self.assertEqual(
             set(body),
-            {"id", "title", "status", "created_at", "updated_at", "last_opened_at", "revision",
+            {"id", "title", "created_at", "updated_at", "last_opened_at", "revision",
              "folder_id", "folder_path", "source", "counts", "picture_text"},
         )
         self.assertEqual(body["counts"]["words"], 2)

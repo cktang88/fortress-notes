@@ -707,7 +707,7 @@ class LivingDocumentTests(_Base):
         self.assertEqual((state["anchors"][oid(0x1A)], state["anchors"][oid(0x1B)]),
                          (before["id"], before["id"]))
         # Another note references the paragraph.
-        other = block_store.create_block_document(self.db, "Elsewhere", "rough", f"See [[#^{before['id']}]]")
+        other = block_store.create_block_document(self.db, "Elsewhere", f"See [[#^{before['id']}]]")
 
         def references() -> list:
             return [(link["source_document_id"], link["target_block_id"])

@@ -22,7 +22,7 @@ class TransactionTests(unittest.TestCase):
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
         self.db = Path(self._directory.name) / ".fortress.sqlite3"
-        self.tree = create_block_document(self.db, "T", "rough", "A\n\nB")
+        self.tree = create_block_document(self.db, "T", "A\n\nB")
         self.a, self.b = (node["id"] for node in self.tree["children"])
 
     def apply(self, *operations: BlockOperation) -> dict:

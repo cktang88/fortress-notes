@@ -236,7 +236,7 @@ def build(notes_dir: Path, notes: int = 2000, seed: int = 7) -> dict[str, int]:
         paragraphs += len(body)
         stamp = (start + timedelta(hours=index * 3)).isoformat()
         create_document(
-            notes_dir / ".fortress.sqlite3", f"note-{index:05d}", title, "rough",
+            notes_dir / ".fortress.sqlite3", f"note-{index:05d}", title,
             "\n\n".join(body), stamp, stamp,
         )
     return {"notes": notes, "paragraphs": paragraphs}

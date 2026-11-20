@@ -102,7 +102,7 @@ class BlockEmbeddingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             block_store.create_document(
-                database, "doc", "Doc", "rough", "Alpha beta\n\nGamma delta", "2025-01-01", "2025-01-01"
+                database, "doc", "Doc", "Alpha beta\n\nGamma delta", "2025-01-01", "2025-01-01"
             )
             settings = make_settings(Path(directory), embeddings_enabled=True)
             model = _WordModel()
@@ -139,7 +139,7 @@ class BlockEmbeddingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             block_store.create_document(
-                database, "doc", "Doc", "rough", "Alpha beta\n\nGamma delta", "2025-01-01", "2025-01-01"
+                database, "doc", "Doc", "Alpha beta\n\nGamma delta", "2025-01-01", "2025-01-01"
             )
             settings = make_settings(Path(directory), embeddings_enabled=True)
             model = CountingModel()

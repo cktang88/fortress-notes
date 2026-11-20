@@ -225,7 +225,7 @@ public final class APIStore: Sendable {
         }
     }
 
-    /// Merges a metadata-only answer (a rename, a status change: `children` empty) into
+    /// Merges a metadata-only answer (a rename: `children` empty) into
     /// the cached note and returns the merged note. Only when the cached copy is at the
     /// same revision (its content is then still the server's); it keeps its old ETag,
     /// so the next read after `documentMaxAge` revalidates. Otherwise the cached copy is

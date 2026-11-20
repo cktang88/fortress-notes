@@ -111,7 +111,7 @@ class VaultMirrorTests(_Workspace):
         self.assertEqual(mirror_file(self.notes, source["id"]), self.notes / "Weekly.md")
         post = frontmatter.loads(weekly)
         # Plain keys only: nothing Fortress-only (provenance, block metadata) is written.
-        self.assertEqual(list(post.metadata), ["title", "created", "updated", "id", "status"])
+        self.assertEqual(list(post.metadata), ["title", "created", "updated", "id"])
         self.assertEqual(post.content, (
             "Intro\n\n"
             f"See [[Roadmap]], [[Roadmap#^{goal['id']}|Ship the beta.]] and [[Roadmap#Q3 goals|Q3 goals]]\n\n"

@@ -10,7 +10,7 @@ Research date: 18 November 2026. This spec covers the native SwiftUI app in `mac
 
 1. **The note is the hero.** Chrome recedes, as in Linear's 2026 refresh: "parts central to the user's task should stay in focus, ones that support orientation and navigation should recede." Linear dimmed its sidebar "a few notches" and softened its separators ([Linear, Mar 2026](https://linear.app/now/behind-the-latest-design-refresh)).
 2. **Standard components first, glass only on the navigation layer.** Apple says "Don't use Liquid Glass in the content layer" and "use Liquid Glass effects sparingly" ([HIG: Materials](https://developer.apple.com/design/human-interface-guidelines/materials)). Standard bars, sidebars, sheets and popovers adopt glass on their own. Custom backgrounds on them should be removed ([Adopting Liquid Glass](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)).
-3. **One accent, used for state only.** No color for decoration. Status (rough or polished) is shown by glyph shape, not by hue.
+3. **One accent, used for state only.** No color for decoration.
 4. **Keyboard-complete.** Every action is in the menu bar (frequent ones with a shortcut) and in context menus. Notes are found in one place, the search field (⌥⌘F, b.2); there is no separate command palette. Raycast's rule: "every action has a keyboard shortcut, and every shortcut has visual confirmation" ([Raycast teardown, third-party](https://blakecrosley.com/guides/design/raycast)).
 5. **Instant and local.** No spinners for local work. Bear's approach: "no spinners, skeleton screens, or toasts… sync runs in the background" ([Bear teardown, third-party](https://blakecrosley.com/guides/design/bear)). Progress UI appears only for network or LLM work, and only after 300 ms.
 6. **Calm motion.** Critically damped springs, no bounce, everything under 300 ms. Reduce Motion is respected everywhere.
@@ -140,10 +140,6 @@ Content colours come from **one semantic palette** (`App/Theme/Palette.swift`); 
 - **User colours** (OneNote text and cell colours): named colours map onto the theme's hues; hex colours keep their hue and are moved in lightness until they read at 4.5:1 on the page (`legibleText`); fills become a tint the text stays legible on (`legibleFill`, as is on light pages when already legible).
 - **Themes:** Settings ▸ Appearance picks System/Light/Dark, a light theme and a dark theme. Themes are tinted-theming Base16/Base24 YAML schemes (nine MIT-licensed ones bundled, licences shown in Settings) or VS Code colour theme JSON, imported as files into `~/Library/Application Support/Fortress Notes/Themes`. There is no Fortress theme format.
 - **Separators:** used rarely. No separators between list rows. The list uses `.listRowSeparator(.hidden)` and 8pt row spacing, as in Linear's "structure should be felt, not seen".
-- **Status:**
-  - *Rough* uses the glyph `circle.dashed` in `.tertiary`.
-  - *Polished* uses `checkmark.seal` in `.secondary`.
-  - No colors.
 - **Destructive:** `.red` only in confirmation buttons (`role: .destructive`).
 - **Dark mode** follows the system appearance (or the Appearance setting) through the palette pair. Verify contrast with Increase Contrast on.
 
@@ -187,8 +183,6 @@ Under Reduce Transparency, glass becomes opaque automatically. Our custom glass 
 | Use | Symbol |
 |---|---|
 | All Notes | `note.text` |
-| Rough | `circle.dashed` |
-| Polished | `checkmark.seal` |
 | Recent | `clock` |
 | Folder | `folder` (selected: `folder.fill`) |
 | New folder | `plus.circle` (sidebar footer) |
@@ -234,23 +228,23 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 │ ● ● ●                 [sidebar⇆]  │ Kyoto trip   [≡] [✎ new]  │        [⇪][⋯]   [ⓘ]  [🔍 Search notes      ]│
 │                                   │                           │                                    │                          │
 │ Library                           │ Today                     │      My note title (28 bold)       │ 👁 Seen before            │
-│  􀉆 All Notes                      │ ┌───────────────────────┐ │      rough · edited 2h ago         │ ┌──────────────────────┐ │
-│  􀓞 Rough                          │ │Title (13 semibold)    │ │                                    │ │“…passage…”            │ │
-│  􀇻 Polished                       │ │Snippet two lines…(12) │ │      Body text 16/26 capped at     │ │Note B                 │ │
-│  􀐫 Recent                         │ │8:24 AM · Travel   ◌   │ │      68ch, centered …              │ └──────────────────────┘ │
-│ Folders                           │ └───────────────────────┘ │                                    │ Related notes            │
-│  􀈕 Inbox                          │ Yesterday                 │                                    │ Backlinks                │
-│ ›􀈕 Work                           │  …                        │                                    │ Info                     │
-│  􀈕 Travel                         │ Previous 7 Days           │                                    │ Text in pictures         │
-│  􀈑 Trash                          │  …                        │                                    │                          │
+│  􀉆 All Notes                      │ ┌───────────────────────┐ │      edited 2h ago                 │ ┌──────────────────────┐ │
+│  􀐫 Recent                         │ │Title (13 semibold)    │ │                                    │ │“…passage…”            │ │
+│ Folders                           │ │Snippet two lines…(12) │ │      Body text 16/26 capped at     │ │Note B                 │ │
+│  􀈕 Inbox                          │ │8:24 AM · Travel       │ │      68ch, centered …              │ └──────────────────────┘ │
+│ ›􀈕 Work                           │ └───────────────────────┘ │                                    │ Related notes            │
+│  􀈕 Travel                         │ Yesterday                 │                                    │ Backlinks                │
+│  􀈑 Trash                          │  …                        │                                    │ Info                     │
+│                                   │ Previous 7 Days           │                                    │ Text in pictures         │
+│                                   │  …                        │                                    │                          │
 │ ⊕ New Folder                      │                           │                                    │                          │
 └───────────────────────────────────┴───────────────────────────┴────────────────────────────────────┴──────────────────────────┘
 ```
 
 **Sidebar** (`List(selection:)`, `.listStyle(.sidebar)`):
 - Sections, in order:
-  - **Library**: All Notes, Rough, Polished, Recent (⌘1–⌘4).
-  - **Folders**: nested, as an `OutlineGroup` (disclosure triangles, collapsed by default), then **Trash** as the last row (HIG: nothing critical at the bottom). *HIG decision:* the HIG suggests at most two levels in a sidebar; OneNote imports bring notebook → section → page trees, so deeper folders are allowed but stay collapsed, so the sidebar shows two levels unless the person opens more. Folders drag into folders (never into themselves or their own subfolders); notes drag onto folders and the Trash; Markdown files drop onto folders. Every drop has a menu alternative (Note ▸ Move To ▸) and is undoable.
+  - **Library**: All Notes, Recent (⌘1, ⌘2).
+  - **Folders**: nested, as an `OutlineGroup` (disclosure triangles, collapsed by default), then **Trash** as the last row (⌘3; HIG: nothing critical at the bottom). *HIG decision:* the HIG suggests at most two levels in a sidebar; OneNote imports bring notebook → section → page trees, so deeper folders are allowed but stay collapsed, so the sidebar shows two levels unless the person opens more. Folders drag into folders (never into themselves or their own subfolders); notes drag onto folders and the Trash; Markdown files drop onto folders. Every drop has a menu alternative (Note ▸ Move To ▸) and is undoable.
 - A quiet **New Folder** button (⌥⌘N) in the sidebar's bottom inset.
 - No counts and no badges.
 - Drag notes onto a folder, onto All Notes (top level) or onto Trash; drag folders into folders. Drop `.md` files onto a folder to import them there.
@@ -258,13 +252,13 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 
 **Note list** (`List(selection:)` with `.listStyle(.inset)`, `.listRowSeparator(.hidden)`):
 - Grouped by date sections like Apple Notes (Today / Yesterday / Previous 7 Days / Previous 30 Days / month names). Section headers are 11pt semibold secondary.
-- Row anatomy (top to bottom): title (1 line), snippet (2 lines, first non-title text), meta line (`time or date · folder`, plus a trailing `circle.dashed` glyph when rough).
+- Row anatomy (top to bottom): title (1 line), snippet (2 lines, first non-title text), meta line (`time or date · folder`).
 - The column's toolbar has the **Sort and Group** menu (`line.3.horizontal.decrease`) and **New Note** (`square.and.pencil`, ⌘N). The window title shows the open note's title with its folder as subtitle.
 - Context menu: Open, Open in New Window, Move To ▸, Export as Markdown…, Move to Trash. ⌘⌫ moves the selected note to the Trash (only while the list has focus) with the undo toast. Library edits (Move to Trash, Restore, Move Note, Move Folder, New Folder, Rename Folder) are undoable with ⌘Z on the window's undo stack (Edit ▸ Undo Move to Trash); the note's text has its own undo stack, so ⌘Z in the editor undoes typing and ⌘Z in the list undoes list actions.
 
 **Editor** (detail):
 - The title is a separate single-line field (28 bold). ↩ in the title moves to the body. A new note's title follows its first line until the person types one.
-- A meta line under the title (12 secondary) with the Rough/Polished status menu and "edited …".
+- A meta line under the title (12 secondary): "edited …" and the folder.
 - The body is the TextKit 2 editor (section c).
 - Detail toolbar: **Export as Markdown** (`square.and.arrow.up`, ⇧⌘E) and the **⋯** menu (Move To ▸ folders, Export as Markdown…, Move to Trash), then `ToolbarSpacer(.fixed)` and the **Inspector** toggle (⌥⌘I), then `ToolbarSpacer(.fixed)` and **Ask** (`sparkle.magnifyingglass`, title and icon, ⇧⌘A) right beside the system search field, which sits top trailing. Ask is always there, so the feature is visible without knowing a shortcut; it is also View ▸ Ask Your Notes… (HIG: every toolbar item is in the menu bar).
 
@@ -333,7 +327,7 @@ Toolbar rule: icons only, no text labels, with an `accessibilityLabel` on each (
 
 ### b.9 Import and export
 
-- **File → Import → Markdown Files…** (⇧⌘I) picks `.md` files, then a sheet: destination folder ("Into"), "Each file becomes a note named after the file. Front matter (title, status) is kept.", [Cancel] [Import], then the files that couldn't be imported with the reason.
+- **File → Import → Markdown Files…** (⇧⌘I) picks `.md` files, then a sheet: destination folder ("Into"), "Each file becomes a note named after the file. Front matter (title, dates) is kept.", [Cancel] [Import], then the files that couldn't be imported with the reason.
 - Dropping `.md` files on a sidebar folder imports them into it.
 - **File → Import → From OneNote…** (also Settings ▸ General). One sheet, 560 wide, three steps:
   1. The export how-to (onenote.com/notebooks → Export notebook, or Download on onedrive.com; unlock password-protected sections first), a dashed drop zone with [Choose File…] (.zip, .onepkg, .one), and "Put notebooks in" (top level or a folder).
@@ -410,7 +404,7 @@ Menus are in the standard order: App, File, Edit, Format, View, Note, Go, Window
 | View | Enter Full Screen | ⌃⌘F (system) |
 | Note | Move To ▸, Open in New Window | – |
 | Note | Move to Trash (only while the note list has focus; in the note ⌘⌫ deletes to the line start) | ⌘⌫ |
-| Go | All Notes / Rough / Polished / Recent / Trash | ⌘1 / ⌘2 / ⌘3 / ⌘4 / – |
+| Go | All Notes / Recent / Trash | ⌘1 / ⌘2 / ⌘3 |
 | Window | Minimize, Zoom, Tile, Merge All Windows, Cycle Windows | ⌘M, ⌘` (system) |
 | Help | Search | ⇧⌘/ (system) |
 

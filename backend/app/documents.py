@@ -66,7 +66,6 @@ def create(
     tree = block_store.create_block_document(
         db_path,
         data.title or block_store.derive_title(data.body),
-        data.status,
         data.body,
         folder_id=data.folder_id,
         created_at=created_at,
@@ -94,11 +93,11 @@ def _linked_specs(db_path: Path, body: str) -> list | None:
 
 
 def update(document_id: str, data: NoteUpdate) -> tuple[dict, tuple]:
-    """Change title and/or status; the metadata payload and validator. KeyError if missing."""
+    """Change the title; the metadata payload and validator. KeyError if missing."""
 
     db_path, _ = _paths()
     return block_store.update_document_metadata(
-        db_path, document_id, title=data.title, status=data.status
+        db_path, document_id, title=data.title
     )
 
 
@@ -150,7 +149,6 @@ def capture(text: str, extra_provenance: dict | None = None) -> dict[str, object
     tree = block_store.create_block_document(
         db_path,
         block_store.derive_title(body)[:80],
-        "rough",
         body,
         folder_id=folder_id,
         provenance=source,

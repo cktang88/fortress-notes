@@ -28,7 +28,7 @@ import Testing
         model.connectsOnAppear = false
         model.navigation = NavigationResponse(items: [.folder(NavigationFolder(
             id: "lab", parentId: nil, name: "Lab", position: 0,
-            children: [.document(NavigationDocument(id: page.id, title: page.title, status: .rough,
+            children: [.document(NavigationDocument(id: page.id, title: page.title,
                                                     updatedAt: page.updatedAt, createdAt: page.createdAt,
                                                     snippet: "", folderId: "lab", position: 0))]))], recent: [])
         try snapshot(NoteEditorView(session: EditorSession(document: page)).environment(model).fortressTheme(),

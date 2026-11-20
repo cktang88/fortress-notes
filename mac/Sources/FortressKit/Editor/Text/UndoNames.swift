@@ -27,7 +27,6 @@ enum UndoNames {
     static let cut = "Cut"
     static let insertBlock = "Insert Block"
     static let title = "Title Change"
-    static let status = "Status Change"
 
     static func mark(_ keyPath: WritableKeyPath<InlineMarks, Bool>) -> String {
         switch keyPath {

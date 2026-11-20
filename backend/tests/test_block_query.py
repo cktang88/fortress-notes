@@ -16,29 +16,21 @@ class BlockQueryTests(unittest.TestCase):
         self._write_note(
             "alpha",
             "Alpha",
-            "rough",
-            "[work, shared]",
             "# Matching alpha heading\n\nmatching alpha paragraph",
         )
         self._write_note(
             "beta",
             "Beta",
-            "polished",
-            "[personal, shared]",
             "matching beta paragraph",
         )
         self._write_note(
             "deleted",
             "Deleted",
-            "rough",
-            "[work]",
             "matching deleted paragraph",
         )
         self._write_note(
             "prefix_only",
             "Prefix only",
-            "rough",
-            "[work]",
             "matchingonly paragraph",
         )
         add_markdown_notes(self.root, self.database)
@@ -65,12 +57,6 @@ class BlockQueryTests(unittest.TestCase):
         )
         self.assertEqual({hit["document_id"] for hit in document_hits}, {"alpha"})
         self.assertEqual([hit["block_type"] for hit in heading_hits], ["heading"])
-
-    def test_filters_by_status(self) -> None:
-        polished_hits = search_blocks(
-            self.database, "matching", BlockSearchFilters(status="polished")
-        )
-        self.assertEqual({hit["document_id"] for hit in polished_hits}, {"beta"})
 
     def test_filters_by_updated_range(self) -> None:
         after_hits = search_blocks(
@@ -117,7 +103,6 @@ class BlockQueryTests(unittest.TestCase):
             BlockSearchFilters(
                 document_id="alpha",
                 block_type="paragraph",
-                status="rough",
             ),
         )
         self.assertEqual(len(hits), 1)
@@ -130,9 +115,6 @@ class BlockQueryTests(unittest.TestCase):
         self.assertNotIn("deleted", {hit["document_id"] for hit in hits})
 
     def test_invalid_filters_and_wildcards_are_safe(self) -> None:
-        self.assertEqual(
-            search_blocks(self.database, "matching", BlockSearchFilters(status="other")), []
-        )
         self.assertEqual(
             search_blocks(
                 self.database,
@@ -151,9 +133,9 @@ class BlockQueryTests(unittest.TestCase):
         wildcard_hits = search_blocks(self.database, "matching*")
         self.assertNotIn("prefix_only", {hit["document_id"] for hit in wildcard_hits})
 
-    def _write_note(self, note_id: str, title: str, status: str, tags: str, body: str) -> None:
+    def _write_note(self, note_id: str, title: str, body: str) -> None:
         (self.root / f"{note_id}.md").write_text(
-            f"---\ntitle: {title}\nstatus: {status}\ntags: {tags}\n---\n{body}\n",
+            f"---\ntitle: {title}\n---\n{body}\n",
             encoding="utf-8",
         )
 
