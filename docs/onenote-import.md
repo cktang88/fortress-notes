@@ -15,7 +15,7 @@ At the time of this research (early Nov 2026) blocks stored Markdown or BlockNot
 and GFM tables landed as raw blocks. That model is gone: blocks are now canonical
 (`type`, `attrs`, inline `content` with marks, `payload`), with structured tables
 (`table` → `table_row` → `table_cell`, cells holding any blocks), `columns`/`column`,
-`check_item`, `math`, `file` and `image` blocks, and colour/highlight/underline/sup/sub
+`check_item`, `file` and `image` blocks, and colour/highlight/underline/sup/sub
 marks — see [docs/block-model.md](block-model.md). Re-import keys live in
 `documents.source_kind`/`source_external_id` and the `block_sync` table
 (`backend/app/sources.py`, spec.md §7a).
@@ -193,13 +193,13 @@ Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff a
 | Printouts | the page pictures as `image` blocks with `attrs.printout_page`; EMF/XPS originals kept as `attrs.original_url` |
 | Video iframes | paragraph with a link to the video |
 | Audio/video recordings | `file` block |
-| Ink | one SVG per page as an `image` block with `attrs.ink`; `alt` = recognised handwriting |
-| Math | `math` block (`latex` + `mathml`) for a paragraph that is only an equation; inline equations become inline code `$<LaTeX>$` |
+| Ink | not imported: Fortress does not support ink or handwriting (decision, Nov 2026). The converter skips ink and counts it (`ink_skipped`, a warning per page) so nothing disappears silently |
+| Math | Fortress does not support math (same decision): a paragraph that is only an equation becomes a `code` block with its LaTeX (`language: "latex"`; its linear text when it can't be converted); inline equations become inline code `$<LaTeX>$` |
 | `onenote:` links | rewritten in a second pass: page links → `docLink`; paragraph links (`object-id`) → `blockRef` when the paragraph is found, else a page link; unresolved → plain text, URL in provenance, listed in the report |
 | "Pasted from <url>" | `source_url` in the note's provenance |
 
 **Columns detection** (outline geometry; units = half-inches):
-1. Collect outlines + floating images/files/ink as boxes `(x, y, w, h_est)`; `h_est` = Σ estimated line heights (≈0.18 in per text line at 11pt, wrap by width; image height from picture height) — no height is stored.
+1. Collect outlines + floating images/files as boxes `(x, y, w, h_est)`; `h_est` = Σ estimated line heights (≈0.18 in per text line at 11pt, wrap by width; image height from picture height) — no height is stored.
 2. Sort by y. Sweep into horizontal **bands**: a box joins the current band if its y < band.top + 0.6·band.min_h_est and it does not horizontally overlap any box in the band (x-ranges disjoint with ≥0.1 in gap). Otherwise start a new band.
 3. Band with 1 box → its blocks inline. Band with ≥2 boxes → `columns` block, children ordered by x, `width` = box.w / Σw. Small floating image beside text → also a column (common "image next to notes" layout).
 4. Page "scattered notes" (many tiny outlines) → if >4 columns in a band, fall back to sequential blocks and flag in report.
@@ -212,7 +212,7 @@ Keep raw geometry in each column's attrs (`onenote_x/y/w`) so we can re-run with
 - Jobs run one at a time on the `imports` background lane; the job record is persisted in `NOTES_DIR/.fortress-imports/`, survives restarts (an interrupted job reads `failed` with `interrupted: true`; importing again resumes in place) and can be cancelled.
 
 **Verification report** (as built: the job's `result`, shown in the import sheet)
-- Per notebook: pages created/updated/unchanged/skipped, images, files, tables, pages with columns, ink, math, check items, conflicts, images queued for OCR, failed sections with reason and hint, warnings.
+- Per notebook: pages created/updated/unchanged/skipped, images, files, tables, pages with columns, ink drawings skipped, check items, conflicts, images queued for OCR, failed sections with reason and hint, warnings.
 - Text coverage per page: the manifest's words vs the imported note's (multiset, weighted by length); pages under 98 % are listed.
 - Links: rewritten, block references, paragraph links that fell back to page links, unresolved links; pages and sections removed in OneNote; OneNote web's `errors.txt`.
 
@@ -225,8 +225,8 @@ Keep raw geometry in each column's attrs (`onenote_x/y/w`) so we can re-run with
 5. **Page hierarchy / subpages** — partial: subpages sit next to their parent with a *Subpages* link list; nested notes are not built.
 6. **Image alt/OCR text + width** — done (OneNote's OCR text in `alt`, plus the app's own OCR: RapidOCR in the backend and Apple Vision in the Mac app).
 7. **Note tags** — kept as `attrs.onenote_tags` labels only; Fortress deliberately has no tags or tag views.
-8. **Math** — done (`math` blocks with LaTeX + MathML; the Mac app sets LaTeX with a small built-in renderer).
-9. **Ink** — done (SVG image + recognised handwriting as `alt`).
+8. **Math** — not supported, by decision: equations are kept as LaTeX code (stored math blocks were converted by schema 15).
+9. **Ink** — not supported, by decision: skipped and counted in the report (images imported from ink earlier stay plain images).
 10. **Source URL on notes** — done (provenance `source_url`); folder colours and embedded video players are not built.
 
 ## F5. Licensing

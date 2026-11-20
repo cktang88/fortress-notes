@@ -12,7 +12,7 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
 </p>
 
 - **Native Mac UI.** Sidebar with nested folders, a date-grouped note list, a TextKit 2
-  block editor (checklists, lists, links, highlights, tables, columns, math, pictures,
+  block editor (checklists, lists, links, highlights, tables, columns, pictures,
   files), an inspector, a ⇧⌘O command palette and a global Quick Capture panel.
 - **One search box.** Exact words (SQLite FTS5), meaning (ColBERT late interaction) and
   note titles in one ranked list. Each result shows the matching passage and opens the
@@ -25,7 +25,9 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
 - **Text in every picture and PDF.** Pasted, imported and attached pictures and PDFs are
   read in the background, locally, so search, related notes and Ask find their text.
 - **Lossless OneNote migration.** Exported notebooks become folders and notes, with
-  tables, columns, pictures, attachments, ink, equations and links between pages.
+  tables, columns, pictures, attachments, equations (as LaTeX code) and links between
+  pages. Fortress has no math or ink: ink drawings are skipped and counted in the
+  import report.
   Every note and block records where it came from, and importing the same export
   again updates the notes in place and keeps your edits.
 
@@ -50,14 +52,14 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
 
 **Writing and organizing**
 - Block editor with Markdown shortcuts; headings, bulleted/numbered/check lists, quotes,
-  callouts, code, dividers, tables, columns, math, pictures and file attachments.
+  callouts, code, dividers, tables, columns, pictures and file attachments.
   Paste or drop a picture or file to attach it.
 - Blocks you can see and move, Craft/Notion style, on a calm page: hover a block for its
   **⠿ handle** (drag to move it with its children, between blocks, nested, into a column,
   beside a block to make columns, into a table cell; click for **Turn Into**, Duplicate,
   Delete, **Copy Link to Block** as `[[Note#^id]]`, Move Up/Down, Info) and a **+** that
   adds a block. Type **`/`** at the start of a line for the insert menu (headings, lists,
-  quote, callout, code, divider, `table 4x5`, 2/3 columns, image, file, math, note link).
+  quote, callout, code, divider, `table 4x5`, 2/3 columns, image, file, note link).
   **Esc** selects blocks: ⇧↑/⇧↓ extend, ⌥⇧↑/⌥⇧↓ move, ⌘C/⌘X/⌫/Tab/⌘D act on them.
   View ▸ **Show Blocks** (⌥⌘B) keeps faint outlines and handles on every block. Every
   action is one named undo step and saves as ordinary block operations.
@@ -290,7 +292,7 @@ identity. It still writes every note out as Markdown, so the files stay open.
 | **Related notes and search speed** | The ColBERT index updates only the paragraphs that changed (from SQLite's change log) | Each save means re-reading and re-parsing the file and guessing which paragraphs are the old ones before re-indexing |
 | **Concurrent edits** | Edits are block operations; two windows conflict only on the same paragraph | Git merges by line, and a prose paragraph is one line, so edits conflict or the last write wins |
 | **Undo** | One undo step per transaction, per note | Editor-local only; history is per commit |
-| **Rich content** | Tables whose cells hold blocks, columns, math, callouts and OneNote layout are kept without loss | No faithful Markdown form; each round trip loses some of it |
+| **Rich content** | Tables whose cells hold blocks, columns, callouts and OneNote layout are kept without loss | No faithful Markdown form; each round trip loses some of it |
 | **Pictures** | Stored once by content hash, with cached OCR text | A git repo grows forever unless you add Git LFS |
 | **Open format, no lock-in** | ✅ via the Markdown mirror (an Obsidian vault in `NOTES_DIR`) | ✅ natively |
 | **Edit with any editor** | ⚠️ The mirror is write-only; changes made there are not read back | ✅ |

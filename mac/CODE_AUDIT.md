@@ -166,8 +166,8 @@ Strict concurrency is a build error now (`treatAllWarnings(as: .error)`, Swift 6
   being changed by the UX audit; and catalog extraction needs Xcode's string extraction
   (no `.xcodeproj` here), so keys are added by hand for now.
 - **N2 [M] no concatenated sentences, plural rules — fail → fixed.** `"Deleted " + date`
-  (`NoteListing.deletedLabel`), `"Today, " + time` (`InspectorView.format`), `"Math: " +`
-  (math accessibility label), `plural(...) + " from the converter"`, and
+  (`NoteListing.deletedLabel`), `"Today, " + time` (`InspectorView.format`),
+  `plural(...) + " from the converter"`, and
   `OneNoteImport.plural` appending an English "s" are now single interpolated keys;
   counts use automatic grammar agreement (`^[\(count) page](inflect: true)`), so "1 page",
   "1,204 images", "1 of 1 page" come out right and each noun is its own catalog key
@@ -293,7 +293,7 @@ new `NSHostingView`. Now `BlockAttachment.blockView` is made once per attachment
 reused by every provider; pictures (`ImageAttachmentView`) and dividers
 (`DividerAttachmentView`) are AppKit views that draw themselves (a hosting view
 re-renders on every move to a window, which TextKit's re-adding is); a picture redraws
-only when it arrives (`ImageSlot.whenLoaded`); files, math and embeds keep one hosting
+only when it arrives (`ImageSlot.whenLoaded`); files and embeds keep one hosting
 view each. Same runner, typing next to a picture: views made per key 0.55 → 0.03, hosting
 view moves per key 1.1 → 0, median 7.6 / 7.3 / 6.0 → 6.7 / 4.0 / 4.1 ms (run 1) and
 9.8 / 11.4 / 9.5 → 7.4 / 10.2 / 7.3 ms (run 4). Test: `AttachmentViewTests`.
