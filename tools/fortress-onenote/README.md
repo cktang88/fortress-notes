@@ -43,9 +43,10 @@ one JSON summary line is printed to stdout; see SCHEMA.md for exit codes.
   the notebook still converts.
 - Names from the notebook (attachment file names, image names) are untrusted
   and only appear as display strings; assets are named by SHA-256.
-- Equations become their LaTeX (a `latex` code block, or inline `$…$` code):
-  Fortress has no math. Ink drawings are skipped (Fortress has no ink) and
-  counted in the report, with a warning per page.
+- Equations become OneNote's plain linear text (a code block with language
+  `text`, or plain text inline): Fortress has no math; pages with equations
+  get a warning in the report. Ink drawings are skipped (Fortress has no ink)
+  and counted in the report, with a warning per page.
 - Blocks carry OneNote's own object ids (`object_id`, `element_id`: ExGUIDs
   that survive edits) where they can be matched unambiguously, and paragraph
   links carry their target id (`onenote.object_ref`), so an importer can
@@ -120,7 +121,5 @@ Synthetic versions of the package, crash and failure-reason checks
   every change is listed in `vendor/PATCHES.md`.
 - [`cab`](https://github.com/mdsteele/rust-cab) 0.6.0 — MIT, vendored with
   hardening fixes in `vendor/cab/` (see `vendor/PATCHES.md`); reads `.onepkg`.
-- `src/math/` is adapted from [one2html](https://github.com/msiemens/one2html)
-  (MIT, © 2020 Markus Siemens) — see `LICENSES/one2html-MIT.txt`.
 - Other dependencies are permissive (MIT / Apache-2.0 / BSD / Zlib /
   Unicode); see `LICENSES/THIRD-PARTY.md`.

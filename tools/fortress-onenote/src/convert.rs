@@ -94,6 +94,8 @@ struct PageCtx<'a, 'b> {
     ids: Option<PageIds>,
     /// Ink drawings on this page, not converted (Fortress has no ink).
     ink_skipped: usize,
+    /// Equations on this page, imported as their linear text (Fortress has no math).
+    equations: usize,
 }
 
 fn set_ids(common: &mut BlockCommon, ids: Ids) {
@@ -248,6 +250,7 @@ impl PageCtx<'_, '_> {
             c.links_web += conv.links_web;
             c.links_onenote += conv.links_onenote;
         }
+        self.equations += conv.equations;
         for n in &conv.notes {
             self.warn(n.clone());
         }
@@ -272,16 +275,13 @@ impl PageCtx<'_, '_> {
         let list_info = list.map(list_info);
         let check = common.tags.iter().find(|t| t.checkable).cloned();
 
-        if is_display_equation(conv.all_math, list_info.is_some(), check.is_some())
-            && let Some((text, latex)) = conv.equation
-        {
-            // Fortress has no math blocks: the equation's LaTeX (or, when it could
-            // not be converted, its linear text) becomes a code block.
-            let language = latex.is_some().then(|| "latex".to_string());
+        if is_display_equation(conv.all_math, list_info.is_some(), check.is_some()) {
+            // Fortress has no math blocks: the equation's linear text becomes a
+            // code block (language `text`, so it is not merged with code around it).
             out.push(Block::Code {
                 common,
-                text: latex.unwrap_or(text),
-                language,
+                text: rich.text,
+                language: Some("text".to_string()),
             });
             return;
         }
@@ -826,6 +826,7 @@ fn convert_page(
         source_url: None,
         ids: section_ids.and_then(|s| s.page(&id)),
         ink_skipped: 0,
+        equations: 0,
     };
 
     let mut items: Vec<Item> = Vec::new();
@@ -892,6 +893,12 @@ fn convert_page(
         let n = ctx.ink_skipped;
         ctx.warn(format!(
             "{n} ink drawing(s) not imported (Fortress does not support ink)"
+        ));
+    }
+    if ctx.equations > 0 {
+        let n = ctx.equations;
+        ctx.warn(format!(
+            "{n} equation(s) imported as plain linear text (Fortress does not support math)"
         ));
     }
     let page_source_url = ctx.source_url.take();
@@ -2010,7 +2017,7 @@ pub fn dedupe_ids(nbs: &mut [Notebook]) {
     }
 }
 
-/// Whether a paragraph becomes a LaTeX code block. An equation alone in a list item
+/// Whether a paragraph becomes an equation code block. An equation alone in a list item
 /// or to-do stays a list item (with its LaTeX as inline code), so the bullet / box survives.
 fn is_display_equation(all_math: bool, in_list: bool, checkable: bool) -> bool {
     all_math && !in_list && !checkable
@@ -2111,13 +2118,13 @@ mod tests {
         merge_code(&mut blocks);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].plain_text(), "a\nb");
-        // An equation (LaTeX) is never merged into the code around it.
-        let latex = Block::Code {
+        // An equation (language `text`) is never merged into the code around it.
+        let equation = Block::Code {
             common: BlockCommon::default(),
             text: "x^2".into(),
-            language: Some("latex".into()),
+            language: Some("text".into()),
         };
-        let mut blocks = vec![code("a", 0), latex, code("b", 0)];
+        let mut blocks = vec![code("a", 0), equation, code("b", 0)];
         merge_code(&mut blocks);
         assert_eq!(blocks.len(), 3);
     }

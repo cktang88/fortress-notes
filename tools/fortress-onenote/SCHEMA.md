@@ -34,6 +34,12 @@ or, inline, `$…$` with a `code` mark; ink is skipped and counted
 version 1: the only importer (Fortress) handles both forms by ignoring the
 retired ones as unknown.
 
+Converter 0.3.1 no longer converts equations to LaTeX: a paragraph that is
+only an equation is a `code` block with OneNote's plain linear text
+(`language: "text"`), an inline equation is plain text in its paragraph (no
+`code` mark), and each page with equations gets one warning
+(`N equation(s) imported as plain linear text …`).
+
 ## Conventions
 
 | Topic | Rule |
@@ -55,7 +61,7 @@ retired ones as unknown.
 {
   "format": "fortress-onenote-manifest",
   "format_version": 1,
-  "generator": {"name": "fortress-onenote", "version": "0.3.0", "parser": "onenote_parser 2.1"},
+  "generator": {"name": "fortress-onenote", "version": "0.3.1", "parser": "onenote_parser 2.1"},
   "units": {"text_offsets": "code_points", "geometry": "half_inch", "px_per_geometry_unit": 48.0},
   "input": {"kind": "zip|directory|onetoc2|one|onepkg", "name": "<input base name>"},
   "notebooks": [Notebook],
@@ -190,7 +196,7 @@ vertical tab/CR normalised to `\n`) and `marks` (*omitted when empty*).
 | `list_item` | `list`: ListInfo; rich text. |
 | `check_item` | To Do style tag (any checkable tag shape): `checked` bool, `checked_at` (string \| null), `list` (ListInfo \| null); rich text. The tag is also in `tags`. |
 | `quote` | OneNote "Quote"/"Citation" style: `variant` `quote` \| `cite`; rich text. |
-| `code` | `text` (plain); `language` *(omitted for code)*: `latex` for an equation. OneNote "Code" style or all-monospace (Consolas, Courier…) paragraphs; consecutive code paragraphs at the same indent are merged with `\n`. A paragraph that is only an equation is a `code` block with its LaTeX (no delimiters) and `language: "latex"`, or its linear text (no `language`) when it could not be converted. Inline equations are `$…$` LaTeX with a `code` mark instead. |
+| `code` | `text` (plain); `language` *(omitted for code)*: `text` for an equation. OneNote "Code" style or all-monospace (Consolas, Courier…) paragraphs; consecutive code paragraphs at the same indent are merged with `\n`. A paragraph that is only an equation is a `code` block with OneNote's plain linear text (structure markers removed, so fractions and powers read flat) and `language: "text"`; it is never merged with code around it. Inline equations stay plain text in their paragraph. Pages with equations get a report warning. |
 | `table` | `row_count`, `col_count`, `column_widths` ([number], geometry units), `borders_visible` bool, `rows`: [{`cells`: [{`background`: colour \| null, `blocks`: [Block]}]}]. Cells hold any blocks, including nested tables. OneNote has no merged cells. |
 | `image` | `asset` (string \| null), `data_status` (`available` \| `missing` \| `invalid` \| `empty`; see below), `alt_text` (string \| null — usually OneNote's OCR text), `width`/`height` (geometry units \| null), `hyperlink` (string \| null), `is_printout_page` bool, `printout_page_number` (int \| null, as stored; may be 0-based), `is_background` bool, `original_name` (sanitised display name \| null), `original_asset` (string \| null: the original when `asset` is OneNote's browser-friendly fallback picture, e.g. for EMF images or XPS printout pages). |
 | `embed` | Online video/iframe: `url`, `thumbnail_asset` (string \| null), `alt_text` (string \| null, alt/OCR text of the poster picture; converter 0.2.1). |
@@ -241,7 +247,6 @@ their look is expressed by the block type.
 | `type` | fields |
 |---|---|
 | `bold`, `italic`, `underline`, `strikethrough`, `superscript`, `subscript` | — |
-| `code` | — (an inline equation's LaTeX, `$…$`) |
 | `highlight` | `color` (text background/highlighter) |
 | `color` | `color` (font colour) |
 | `font` | `family` — only when not the default `Calibri` |

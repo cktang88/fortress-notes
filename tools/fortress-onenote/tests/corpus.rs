@@ -388,17 +388,31 @@ fn third_party_tables_of_contents_give_the_order() {
 }
 
 #[test]
-fn equations_from_other_writers_become_latex_code() {
+fn equations_from_other_writers_become_plain_text_code() {
     let Some(c) = corpus() else { return };
     let m = run(&c, "notecraft-joshmaster2165/onenote-equations.one");
-    let latex: Vec<_> = blocks_of(&m, "code")
+    let equations: Vec<_> = blocks_of(&m, "code")
         .into_iter()
-        .filter(|b| b["language"] == "latex")
+        .filter(|b| b["language"] == "text")
         .collect();
-    assert_eq!(latex.len(), 13);
-    for b in latex {
-        assert!(!b["text"].as_str().unwrap().trim().is_empty(), "{b}");
+    assert_eq!(equations.len(), 13);
+    for b in equations {
+        let text = b["text"].as_str().unwrap();
+        assert!(!text.trim().is_empty(), "{b}");
+        assert!(!text.contains('$') && !text.contains('\\'), "{b}");
     }
+    let warned = m["notebooks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|nb| nb["report"]["warnings"].as_array().unwrap())
+        .any(|w| {
+            w["message"]
+                .as_str()
+                .unwrap()
+                .contains("equation(s) imported as plain")
+        });
+    assert!(warned, "no equation warning in the report");
 }
 
 #[test]

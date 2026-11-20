@@ -2,8 +2,7 @@
 
 use crate::links::{is_onenote_link, parse_onenote_link};
 use crate::manifest::{Mark, MarkKind, Rich};
-use crate::math;
-use onenote_parser::contents::{MathInlineObject, RichText};
+use onenote_parser::contents::RichText;
 use onenote_parser::property::common::ColorRef;
 use onenote_parser::property::rich_text::ParagraphStyling;
 use regex::Regex;
@@ -204,14 +203,12 @@ pub struct Converted {
     pub all_monospace: bool,
     /// Every visible non-whitespace run is math (display equation).
     pub all_math: bool,
-    /// The display equation when `all_math`: (linear text, LaTeX if it converted).
-    pub equation: Option<(String, Option<String>)>,
+    /// Equations (maximal runs of math-formatted text) in the paragraph.
+    pub equations: usize,
     pub links_web: usize,
     pub links_onenote: usize,
     /// Human-readable notes about lossy conversions.
     pub notes: Vec<String>,
-    /// Math groups as (first run, end run exclusive, cp start, cp end).
-    math_groups: Vec<(usize, usize, usize, usize)>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -248,85 +245,8 @@ pub fn convert(rt: &RichText, opts: Options) -> Converted {
             end: l.end() as usize,
         })
         .collect();
-    let mut out = convert_runs(rt.text(), &indices, &fmts, &links, opts);
-
-    // Equations: Fortress has no math, so each one's LaTeX replaces its linear
-    // text (which loses fractions, powers and roots) as inline code `$…$`.
-    let utf16: Vec<u16> = rt.text().encode_utf16().collect();
-    let bounds = run_bounds(&indices, utf16.len());
-    let objects = rt.math_inline_objects();
-    let mut obj_offset = 0usize;
-    let groups = std::mem::take(&mut out.math_groups);
-    let linear = out.rich.text.clone();
-    let mut rendered: Vec<(usize, usize, Option<String>)> = Vec::new();
-    for (first, last, s, e) in groups {
-        let segments: Vec<(String, MathInlineObject)> = (first..last)
-            .enumerate()
-            .map(|(k, ri)| {
-                let (a, b) = bounds[ri];
-                (
-                    String::from_utf16_lossy(&utf16[a..b]),
-                    objects.get(obj_offset + k).copied().unwrap_or_default(),
-                )
-            })
-            .collect();
-        obj_offset += last - first;
-        let latex = math::latex(&segments);
-        if latex.is_none() {
-            let raw: String = linear.chars().skip(s).take(e - s).collect();
-            out.notes.push(format!(
-                "equation {:?} could not be converted to LaTeX; only its linear text is kept",
-                raw.chars().take(80).collect::<String>()
-            ));
-        }
-        rendered.push((s, e, latex));
-    }
-    if out.all_math && !rendered.is_empty() {
-        let latex: Option<Vec<String>> = rendered.iter().map(|r| r.2.clone()).collect();
-        out.equation = Some((linear, latex.map(|l| l.join("\n"))));
-    }
-    for (s, e, latex) in rendered.into_iter().rev() {
-        if let Some(latex) = latex {
-            let latex = latex.split_whitespace().collect::<Vec<_>>().join(" ");
-            replace_span(&mut out.rich, s, e, &format!("${latex}$"));
-        }
-    }
-    out.rich.marks = merge_marks(std::mem::take(&mut out.rich.marks));
-    out
-}
-
-/// Replace the code points `[s, e)` of `rich` by `new` as inline code, moving
-/// the marks after it (marks inside it shrink or grow with it).
-fn replace_span(rich: &mut Rich, s: usize, e: usize, new: &str) {
-    let len = new.chars().count();
-    let at = |p: usize, end: bool| {
-        if p <= s {
-            p
-        } else if p >= e {
-            p + len - (e - s)
-        } else if end {
-            s + len
-        } else {
-            s
-        }
-    };
-    rich.text = rich
-        .text
-        .chars()
-        .take(s)
-        .chain(new.chars())
-        .chain(rich.text.chars().skip(e))
-        .collect();
-    for m in &mut rich.marks {
-        m.start = at(m.start, false);
-        m.end = at(m.end, true);
-    }
-    rich.marks.retain(|m| m.end > m.start);
-    rich.marks.push(Mark {
-        start: s,
-        end: s + len,
-        kind: MarkKind::Code,
-    });
+    // Equations stay OneNote's plain linear text (Fortress has no math).
+    convert_runs(rt.text(), &indices, &fmts, &links, opts)
 }
 
 /// Characters that are never text: C0/C1 control characters other than tab
@@ -512,7 +432,7 @@ pub fn convert_runs(
     out.all_monospace = any_text && all_mono;
     out.all_math = any_text && all_math;
 
-    // Math groups: maximal sequences of math-formatted runs.
+    // Equations: maximal sequences of math-formatted runs with visible text.
     let mut ri = 0usize;
     while ri < bounds.len() {
         if !fmt_of(ri).map(|f| f.math).unwrap_or(false) {
@@ -523,10 +443,8 @@ pub fn convert_runs(
         while ri < bounds.len() && fmt_of(ri).map(|f| f.math).unwrap_or(false) {
             ri += 1;
         }
-        let s = map16[bounds[first].0];
-        let e = map16[bounds[ri - 1].1];
-        if e > s {
-            out.math_groups.push((first, ri, s, e));
+        if map16[bounds[ri - 1].1] > map16[bounds[first].0] {
+            out.equations += 1;
         }
     }
 
@@ -692,7 +610,6 @@ fn mark_key(k: &MarkKind) -> String {
         MarkKind::Font { family } => format!("8f{family}"),
         MarkKind::FontSize { pt } => format!("9s{pt}"),
         MarkKind::Link { href, .. } => format!("al{href}"),
-        MarkKind::Code => "bcode".into(),
     }
 }
 
@@ -1034,32 +951,9 @@ mod tests {
             Options::default(),
         );
         assert!(c.all_math);
-        assert_eq!(c.math_groups, vec![(0, 1, 0, 5)]);
-    }
-
-    #[test]
-    fn equation_latex_replaces_its_linear_text_as_code() {
-        // "Area: πr2 m²" with the equation at 6..9 and bold over "Area" and "m²".
-        let mut rich = Rich {
-            text: "Area: πr2 m²".into(),
-            marks: vec![
-                Mark {
-                    start: 0,
-                    end: 4,
-                    kind: MarkKind::Bold,
-                },
-                Mark {
-                    start: 10,
-                    end: 12,
-                    kind: MarkKind::Bold,
-                },
-            ],
-        };
-        replace_span(&mut rich, 6, 9, "$\\pi r^{2}$");
-        assert_eq!(rich.text, "Area: $\\pi r^{2}$ m²");
-        let spans: Vec<(usize, usize)> = rich.marks.iter().map(|m| (m.start, m.end)).collect();
-        assert_eq!(spans, vec![(0, 4), (18, 20), (6, 17)]);
-        assert_eq!(rich.marks[2].kind, MarkKind::Code);
+        assert_eq!(c.equations, 1);
+        assert_eq!(c.rich.text, "x=a+b");
+        assert!(c.rich.marks.is_empty());
     }
 
     #[test]
