@@ -35,9 +35,12 @@ public struct ShellCommands: Commands {
                 if let model { Task { await model.newNote() } } else { library.pendingNewNote = true; openWindow(id: MainWindowScene.id) }
             }
             .keyboardShortcut(Shortcuts.newNote)
+            // Like the toolbar's New Note button: off while the backend can't be reached
+            // (pressed then, it did nothing at all). With no window it opens one.
+            .disabled(model != nil && !library.isConnected)
             Button(Shortcuts.newFolder.title) { if let model { Task { await model.newFolder() } } }
                 .keyboardShortcut(Shortcuts.newFolder)
-                .disabled(model == nil)
+                .disabled(model == nil || !library.isConnected)
             Button("New Window") { openWindow(id: MainWindowScene.id) }
         }
 
