@@ -89,7 +89,7 @@ class _Workspace(unittest.TestCase):
         return path, digest
 
     def note_with(self, title: str, media: list[str], alt: str = "") -> tuple[str, list[str]]:
-        document = block_store.create_block_document(self.db, title, "rough", "")
+        document = block_store.create_block_document(self.db, title, "")
         tree = block_store.apply_transaction(
             self.db,
             document["id"],
@@ -635,7 +635,7 @@ class RealColbertTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            document = block_store.create_block_document(database, "Trips", "rough", "")
+            document = block_store.create_block_document(database, "Trips", "")
             assets = Path(directory)
             names = []
             for name, data in (("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"a"), ("01JBBBBBBBBBBBBBBBBBBBBBBB.png", b"b")):

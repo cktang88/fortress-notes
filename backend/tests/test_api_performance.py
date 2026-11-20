@@ -22,7 +22,7 @@ from support import make_settings, use_settings
 
 def _document(database: Path, document_id: str, blocks: int) -> None:
     create_document(
-        database, document_id, document_id, "rough", "\n\n".join(f"Paragraph {index} of {document_id}" for index in range(blocks)),
+        database, document_id, document_id, "\n\n".join(f"Paragraph {index} of {document_id}" for index in range(blocks)),
         "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
     )
 

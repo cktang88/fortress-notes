@@ -187,7 +187,7 @@ class MarkdownExportTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Doc", "rough", "Intro\n\n> note\n")
+            created = create_block_document(database, "Doc", "Intro\n\n> note\n")
             intro, quote = created["children"]
             tree = apply_transaction(database, created["id"], [
                 BlockOperation(operation="update", block_id=quote["id"], type="callout",
@@ -197,7 +197,7 @@ class MarkdownExportTests(unittest.TestCase):
             self.assertIn('<!-- fortress:block {"attrs":{"icon":"!"}} -->\n> [!note]\n> note', body)
 
             copy = Path(directory) / "copy.sqlite3"
-            create_document(copy, "doc", "Doc", "rough", body, "t", "t")
+            create_document(copy, "doc", "Doc", body, "t", "t")
             after = document_tree(copy, "doc")
             self.assertEqual([node["id"] for node in after["children"]], [intro["id"], quote["id"]])
             self.assertEqual((after["children"][1]["type"], after["children"][1]["attrs"]),

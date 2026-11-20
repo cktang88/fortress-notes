@@ -43,7 +43,7 @@ class BlockMoveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             created = create_block_document(
-                database, "T", "rough", "- a\n  - c0\n  - c1\n  - c2\n- b\n"
+                database, "T", "- a\n  - c0\n  - c1\n  - c2\n- b\n"
             )
             c1 = created["children"][0]["children"][1]["id"]
 
@@ -66,8 +66,8 @@ class BlockMoveTests(unittest.TestCase):
     def test_inserting_an_existing_block_id_is_a_conflict_not_a_crash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "T", "rough", "one")
-            other = create_block_document(database, "O", "rough", "two")
+            created = create_block_document(database, "T", "one")
+            other = create_block_document(database, "O", "two")
             for target, existing in (
                 (created, created["children"][0]["id"]),
                 (other, created["children"][0]["id"]),
@@ -89,7 +89,7 @@ class LinkTargetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             created = create_block_document(
-                database, "Zebra facts", "rough", "- parent\n  - child\n"
+                database, "Zebra facts", "- parent\n  - child\n"
             )
 
             targets = block_link_targets(database, "zebra")
@@ -103,13 +103,13 @@ class TrashRestoreTests(unittest.TestCase):
     def test_restore_recovers_links_written_while_the_document_was_in_the_trash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            create_document(database, "target", "Target", "rough", "Target block", _T, _T)
+            create_document(database, "target", "Target", "Target block", _T, _T)
             target = document_tree(database, "target")
             assert target is not None
             block_id = target["children"][0]["id"]
             delete_document(database, "target")
             create_document(
-                database, "source", "Source", "rough", f"See [[target]] and (({block_id}))", _T, _T,
+                database, "source", "Source", f"See [[target]] and (({block_id}))", _T, _T,
             )
 
             workspace.restore_document(database, "target")
@@ -129,7 +129,7 @@ class TrashRestoreTests(unittest.TestCase):
             image_hash = hashlib.sha256(b"image").hexdigest()
             register_asset(database, media, image_hash, "image/png")
             document = create_block_document(
-                database, "Pic", "rough", f"![x](/media/{media.name})"
+                database, "Pic", f"![x](/media/{media.name})"
             )
             delete_document(database, document["id"])
 
@@ -143,8 +143,8 @@ class EmbeddingCorpusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             future = "2999-01-01T00:00:00+00:00"
-            create_document(database, "imported", "Imported", "rough", "old words\n\nother", future, future)
-            create_document(database, "second", "Second", "rough", "second", future, future)
+            create_document(database, "imported", "Imported", "old words\n\nother", future, future)
+            create_document(database, "second", "Second", "second", future, future)
             tree = document_tree(database, "imported")
             assert tree is not None
             self.assertEqual([item[3] for item in embedding_documents(database)], ["old words", "other", "second"])
@@ -177,7 +177,7 @@ class MarkdownImportTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "T", "rough", body)
+            created = create_block_document(database, "T", body)
 
             first = created["children"][0]
             self.assertEqual((first["type"], first["text"]), ("check_item", "first paragraph"))
@@ -196,7 +196,7 @@ class MarkdownImportTests(unittest.TestCase):
             for text in ("first paragraph", "second paragraph", "heading inside", "raw html"):
                 self.assertIn(text, rendered)
             # The export imports back to the same shape.
-            again = create_block_document(database, "T2", "rough", rendered)
+            again = create_block_document(database, "T2", rendered)
             self.assertEqual(
                 render_markdown(again["children"], include_ids=False),
                 render_markdown(created["children"], include_ids=False),
@@ -207,7 +207,7 @@ class MarkdownImportTests(unittest.TestCase):
         body = "a\u2028b\n\nsecond\n\nx\x0cy\n\nthird\r\n\r\nfourth\n"
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "T", "rough", body)
+            created = create_block_document(database, "T", body)
 
             self.assertEqual(
                 [child["text"] for child in created["children"]],
@@ -240,13 +240,13 @@ class ConcurrentOrganizationTests(unittest.TestCase):
             database = Path(directory) / ".fortress.sqlite3"
             folder = create_folder(database, "F")
             ids = [
-                create_block_document(database, f"N{i}", "rough", "x")["id"]
+                create_block_document(database, f"N{i}", "x")["id"]
                 for i in range(8)
             ]
 
             errors = _run_together(
                 16,
-                lambda i: create_block_document(database, f"New{i}", "rough", "x")
+                lambda i: create_block_document(database, f"New{i}", "x")
                 if i % 2
                 else move_document(database, ids[i // 2], folder["id"], 0),
             )
@@ -274,7 +274,7 @@ class MirrorRaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)
             database = notes / ".fortress.sqlite3"
-            created = create_block_document(database, "T", "rough", "old text")
+            created = create_block_document(database, "T", "old text")
             real_tree = block_store.document_tree
             slow_read_done = threading.Event()
             release = threading.Event()

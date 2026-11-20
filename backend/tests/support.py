@@ -47,7 +47,7 @@ def mirror_file(notes: Path, document_id: str) -> Path:
 def add_markdown_notes(notes: Path, database: Path) -> None:
     """Each ``*.md`` file in ``notes`` as a note whose id is the file name.
 
-    Front matter gives the title, status and dates (a test's way to write notes).
+    Front matter gives the title and dates (a test's way to write notes).
     """
 
     import frontmatter
@@ -59,6 +59,6 @@ def add_markdown_notes(notes: Path, database: Path) -> None:
         meta = post.metadata
         create_document(
             database, path.stem, str(meta.get("title") or derive_title(post.content)),
-            str(meta.get("status", "rough")), post.content,
+            post.content,
             meta.get("created_at", utc_now()), meta.get("updated_at", utc_now()),
         )

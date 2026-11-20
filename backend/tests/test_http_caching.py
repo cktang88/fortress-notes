@@ -137,10 +137,10 @@ class DocumentValidatorTests(ApiCase):
         note = self.create("Note", "one\n\ntwo")
         url = f"/api/block-documents/{note['id']}"
         with patch.object(block_store, "document_tree", side_effect=AssertionError("built")):
-            response = self.client.patch(url, json={"title": "Renamed", "status": "polished"})
+            response = self.client.patch(url, json={"title": "Renamed"})
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertEqual((body["title"], body["status"], body["children"]), ("Renamed", "polished", []))
+        self.assertEqual((body["title"], body["children"]), ("Renamed", []))
         self.assertFalse(body["title_auto"])
         full = self.client.get(url)
         self.assertEqual(full.headers["etag"], response.headers["x-document-etag"])

@@ -253,13 +253,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.assertTrue(mirror.exists())
         self.assertEqual(self.client.get(f"/api/block-documents/{created['id']}").json()["title"], "Block doc")
 
-        self.client.patch(f"/api/block-documents/{created['id']}", json={"status": "polished"})
-        documents.flush_mirrors()
-        self.assertIn("status: polished", mirror.read_text())
-        self.assertEqual(
-            [note["id"] for note in self.documents() if note["status"] == "polished"],
-            [created["id"]],
-        )
+        self.assertEqual([note["id"] for note in self.documents()], [created["id"]])
 
         self.client.delete(f"/api/block-documents/{created['id']}")
         documents.flush_mirrors()
@@ -267,7 +261,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.assertEqual(self.documents(), [])
         self.assertEqual(
             self.client.patch(
-                f"/api/block-documents/{created['id']}", json={"status": "rough"}
+                f"/api/block-documents/{created['id']}", json={"title": "Gone"}
             ).status_code,
             404,
         )
@@ -291,7 +285,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         note_id = response.json()["imported"][0]["id"]
         note = self.client.get(f"/api/block-documents/{note_id}").json()
-        self.assertEqual(note["status"], "rough")
+        self.assertNotIn("status", note)
         self.assertTrue(note["created_at"].startswith("2020-05-01"))
 
 

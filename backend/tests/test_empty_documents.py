@@ -69,7 +69,7 @@ class EmptyDocumentTests(unittest.TestCase):
         from app import block_store, main
 
         db = self.settings.block_db_path
-        block_store.create_document(db, "legacy", "Legacy", "rough", "", "t", "t")
+        block_store.create_document(db, "legacy", "Legacy", "", "t", "t")
         state = block_store.change_state(db)
         self.assertEqual(self.client.get("/api/block-documents/legacy").json()["children"], [])
         self.assertEqual(block_store.change_state(db), state)  # reads never write

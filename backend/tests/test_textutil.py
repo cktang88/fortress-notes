@@ -55,7 +55,7 @@ class OneSearchableTextTests(unittest.TestCase):
     def test_fts_row_equals_corpus_row_including_picture_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
-            document = block_store.create_block_document(database, "Trip", "rough", "Tickets below")
+            document = block_store.create_block_document(database, "Trip", "Tickets below")
             names = []
             for name, data in (("01JBBBBBBBBBBBBBBBBBBBBBBB.png", b"b"), ("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"a")):
                 path = Path(directory) / name

@@ -112,7 +112,7 @@ class VaultMirrorTests(_Workspace):
         weekly = self.mirror(source["id"])
         self.assertEqual(mirror_file(self.notes, source["id"]), self.notes / "Weekly.md")
         post = frontmatter.loads(weekly)
-        self.assertEqual(list(post.metadata)[:6], ["title", "created", "updated", "id", "status", "fortress"])
+        self.assertEqual(list(post.metadata)[:5], ["title", "created", "updated", "id", "fortress"])
         self.assertEqual(post.metadata["fortress"], {"provenance": {"source": "manual"}})
         self.assertEqual(post.content, (
             "Intro\n\n"
@@ -210,8 +210,7 @@ class VaultMirrorTests(_Workspace):
                 [(node["type"], node["attrs"], node["content"], node["payload"]) for node in _walk(after["children"])],
                 [(node["type"], node["attrs"], node["content"], node["payload"]) for node in _walk(before["children"])],
             )
-            self.assertEqual((after["title"], after["status"], after["created_at"]),
-                             (before["title"], before["status"], before["created_at"]))
+            self.assertEqual((after["title"], after["created_at"]), (before["title"], before["created_at"]))
         # Referenced blocks keep their ids, so the links and backlinks do too.
         ids = {node["id"] for node in _walk(document_tree(database, target["id"])["children"])}
         self.assertLessEqual({goal["id"], heading["id"]}, ids)

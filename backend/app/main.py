@@ -46,7 +46,6 @@ from .block_schema import BlockShapeError
 from .config import get_settings
 from .models import (
     NoteCreate,
-    NoteStatus,
     NoteUpdate,
     BlockTransaction,
     BlockLinkTarget,
@@ -445,7 +444,7 @@ def create_block_document(data: NoteCreate):
 
 @app.patch("/api/block-documents/{document_id}")
 def update_block_document(document_id: str, data: NoteUpdate):
-    """Change a document's title and/or status (the body changes through transactions).
+    """Change a document's title (the body changes through transactions).
 
     Answers the metadata payload (``children`` empty, as ``?response=meta`` of a
     transaction) with ``X-Document-ETag``; the note's content did not change.
@@ -581,8 +580,7 @@ async def import_uploaded_markdown(
         for (name, note), (document_id, specs) in zip(readable, parsed):
             try:
                 created = documents.create(
-                    NoteCreate(title=note.title, body=note.body, status=note.status,
-                               folder_id=folder_id),
+                    NoteCreate(title=note.title, body=note.body, folder_id=folder_id),
                     created_at=note.created_at,
                     source=note.provenance,
                     document_id=document_id,
@@ -793,7 +791,6 @@ async def unified_search(
     limit: int = Query(30, ge=1, le=100),
     document_id: str | None = None,
     block_type: str | None = None,
-    status: NoteStatus | None = None,
     updated_after: str | None = None,
     updated_before: str | None = None,
 ):
@@ -807,7 +804,6 @@ async def unified_search(
         block_query.BlockSearchFilters(
             document_id=document_id,
             block_type=block_type,
-            status=status,
             updated_after=updated_after,
             updated_before=updated_before,
         ),

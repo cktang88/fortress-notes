@@ -3,7 +3,7 @@
 Each note is ``<folder>/<subfolder>/<title>.md``, the folders being the note's
 Fortress folders; stored files stay in ``assets/`` and are embedded with paths
 relative to the note. Front matter uses the keys other tools know (``title``,
-``aliases``, ``created``, ``updated``, ``id``, ``status``, ``source``); what has no
+``aliases``, ``created``, ``updated``, ``id``, ``source``); what has no
 common key is under ``fortress:``. Note links are wikilinks by file name, the
 shortest name that is unique in the vault, as Obsidian writes them.
 
@@ -157,9 +157,9 @@ def compute_layout(
 # --- Front matter -------------------------------------------------------------------------------
 
 # Keys the mirror writes (anything else a person adds to a mirror is kept).
-_MANAGED_KEYS = frozenset({"title", "aliases", "created", "updated", "id", "status", "source", "fortress"})
+_MANAGED_KEYS = frozenset({"title", "aliases", "created", "updated", "id", "source", "fortress"})
 # Keys older versions wrote.
-_RETIRED_KEYS = frozenset({"created_at", "updated_at", "provenance", "images", "tags"})
+_RETIRED_KEYS = frozenset({"created_at", "updated_at", "provenance", "images", "tags", "status"})
 
 
 def front_matter(tree: dict[str, Any], stem: str | None, picture_text: dict[str, str] | None,
@@ -173,7 +173,6 @@ def front_matter(tree: dict[str, Any], stem: str | None, picture_text: dict[str,
     meta["created"] = _plain(tree["created_at"])
     meta["updated"] = _plain(tree["updated_at"])
     meta["id"] = tree["id"]
-    meta["status"] = tree["status"]
     provenance = _provenance.front_matter(tree.get("provenance") or {"source": "manual"})
     if isinstance(provenance.get("source_url"), str):
         # What web clippers (Obsidian's included) call the page a note came from.
@@ -217,7 +216,6 @@ class NoteMetadata:
 
     id: str | None
     title: str | None
-    status: str
     created: Any
     updated: Any
     aliases: list[str]
@@ -238,12 +236,10 @@ def read_front_matter(metadata: dict[str, Any]) -> NoteMetadata:
     aliases = metadata.get("aliases", metadata.get("alias"))
     if isinstance(aliases, str):
         aliases = [aliases]
-    status = metadata.get("status")
     raw_id = metadata.get("id")
     return NoteMetadata(
         id=str(raw_id) if isinstance(raw_id, (str, int)) and str(raw_id).strip() else None,
         title=str(metadata["title"]).strip() or None if metadata.get("title") is not None else None,
-        status=status if status in ("rough", "polished") else "rough",
         created=_first(metadata, "created", "created_at", "date created", "date"),
         updated=_first(metadata, "updated", "updated_at", "modified", "date modified", "lastmod"),
         aliases=[str(alias) for alias in aliases if alias] if isinstance(aliases, list) else [],

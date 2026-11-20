@@ -16,7 +16,7 @@ def list_trash(path: Path) -> list[dict[str, object]]:
     initialize(path)
     with connection_scope(path) as connection:
         rows = connection.execute(
-            """SELECT id, title, status, deleted_at,
+            """SELECT id, title, deleted_at,
                       COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
                                 AND text <> '' ORDER BY parent_id IS NOT NULL, order_key
                                 LIMIT 1), '') AS snippet
@@ -28,7 +28,6 @@ def list_trash(path: Path) -> list[dict[str, object]]:
         {
             "id": row["id"],
             "title": row["title"],
-            "status": row["status"],
             "deleted_at": row["deleted_at"],
             "snippet": row["snippet"][:160],
         }

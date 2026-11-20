@@ -24,7 +24,7 @@ class RetireMathAndInkTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.db = Path(directory.name) / ".fortress.sqlite3"
-        block_store.create_document(self.db, "D1", "Note", "rough", "first\n\nsecond\n",
+        block_store.create_document(self.db, "D1", "Note", "first\n\nsecond\n",
                                     "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
         tree = block_store.document_tree(self.db, "D1")
         assert tree is not None

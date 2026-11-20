@@ -4,14 +4,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-NoteStatus = Literal["rough", "polished"]
 BlockOperationKind = Literal["insert", "update", "move", "delete"]
 
 
 class NoteSummary(BaseModel):
     id: str
     title: str
-    status: NoteStatus
     updated_at: datetime
     snippet: str = ""
 
@@ -21,7 +19,6 @@ class NoteSummary(BaseModel):
 class NoteCreate(BaseModel):
     title: str = ""
     body: str = ""
-    status: NoteStatus = "rough"
     folder_id: str | None = None
     # Where the note came from (see app/provenance.py), e.g.
     # {"source": "ai", "extra": {"question": "..."}} for a saved Ask answer or
@@ -34,7 +31,6 @@ class NoteUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = None
-    status: NoteStatus | None = None
 
 
 class BlockOperation(BaseModel):

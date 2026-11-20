@@ -17,7 +17,6 @@ from .block_store import connection_scope, initialize
 
 
 _FTS_TOKEN = textutil.WORD
-_VALID_STATUSES = frozenset({"rough", "polished"})
 
 
 @dataclass(frozen=True)
@@ -31,7 +30,6 @@ class BlockSearchFilters:
 
     document_id: str | None = None
     block_type: str | None = None
-    status: str | None = None
     updated_after: datetime | str | None = None
     updated_before: datetime | str | None = None
 
@@ -107,12 +105,6 @@ def _add_filters(
         return False
     if not _add_exact_filter(predicates, parameters, "blocks.type", filters.block_type):
         return False
-
-    if filters.status is not None:
-        if not isinstance(filters.status, str) or filters.status not in _VALID_STATUSES:
-            return False
-        predicates.append("documents.status = ?")
-        parameters.append(filters.status)
 
     updated_after = _normalize_timestamp(filters.updated_after)
     updated_before = _normalize_timestamp(filters.updated_before, upper_bound=True)
