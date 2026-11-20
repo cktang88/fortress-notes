@@ -172,6 +172,47 @@ import Testing
         dump("alone-narrow", host)
         host.close()
     }
+
+    private func variant<Row: View>(_ label: String, @ViewBuilder row: @escaping (NavigationDocument) -> Row) {
+        let items = DiagNotes()
+        let host = HostWindow(
+            NavigationSplitView { Text("Sidebar") } content: {
+                List(selection: .constant(String?.none)) {
+                    Section("Header") {
+                        ForEach(items.notes) { note in row(note) }
+                    }
+                }
+                .listStyle(.inset)
+            } detail: { Text("Detail") })
+        items.notes = Array(ShellFixtures.notes.prefix(5))
+        host.settle()
+        dump("variant-\(label)", host)
+        host.close()
+    }
+
+    @Test func diagVariants() {
+        variant("noterow") { NoteRow(note: $0, folderName: nil) }
+        variant("noterow-drag") { NoteRow(note: $0, folderName: nil).draggable(NoteDrag.payload(for: $0.id)) }
+        variant("noterow-menu") { NoteRow(note: $0, folderName: nil).contextMenu { Button("X") {} } }
+        variant("noterow-hover") { NoteRow(note: $0, folderName: nil).onHover { _ in } }
+        variant("reserves") { Text($0.snippet).lineLimit(2, reservesSpace: true) }
+        variant("linelimit") { Text($0.snippet).lineLimit(2) }
+        variant("wrapping") { Text($0.snippet) }
+        variant("two-texts") { VStack(alignment: .leading) { Text($0.title).font(.headline); Text("one\ntwo") } }
+        variant("access") { VStack(alignment: .leading) { Text($0.title); Text("one\ntwo") }.accessibilityElement(children: .combine) }
+    }
+
+    @Test func selectedRow() throws {
+        for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            let model = ShellFixtures.model(openNote: "n5")
+            let host = HostWindow(MainWindow().environment(model), appearance: appearance)
+            try host.capture(named: "diag-selected-unfocused-\(name)")
+            host.window.makeFirstResponder(host.tableViews[0])
+            host.settle()
+            try host.capture(named: "diag-selected-focused-\(name)")
+            host.close()
+        }
+    }
 }
 
 @Observable @MainActor final class DiagItems {
@@ -203,4 +244,8 @@ struct DiagSplitList: View {
             Text("Detail")
         }
     }
+}
+
+@Observable @MainActor final class DiagNotes {
+    var notes: [NavigationDocument] = []
 }
