@@ -5,8 +5,7 @@ Mac app, importers, and Markdown import/export and the mirror). The backend impl
 `backend/app/block_schema.py` (the type registry and inline content),
 `backend/app/order_keys.py` (sibling order), `backend/app/block_markdown.py`
 (Markdown in and out) and `backend/app/block_store.py` (storage and
-transactions). `GET /api/block-schema` serves the registry as JSON, so clients
-can check what they send against the server's own rules.
+transactions).
 
 The principles:
 

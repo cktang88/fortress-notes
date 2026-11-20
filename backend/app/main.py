@@ -42,7 +42,7 @@ from .portability import (
     safe_filename,
     import_markdown_if_empty,
 )
-from .block_schema import BlockShapeError, schema_json
+from .block_schema import BlockShapeError
 from .config import get_settings
 from .models import (
     NoteCreate,
@@ -174,8 +174,6 @@ class ResponseHeadersMiddleware:
 
 
 app.add_middleware(ResponseHeadersMiddleware)
-# gzip API JSON of 1 KB or more (not the Ask stream, not media).
-app.add_middleware(http_cache.ApiCompressionMiddleware, minimum_size=1024)
 # Keep last (outermost): token and browser checks run before anything else.
 from .auth import LocalAuthMiddleware  # noqa: E402
 
@@ -359,13 +357,6 @@ def ocr_store(content_hash: str, result: ExternalOcrResult) -> dict:
         )
     except KeyError:
         raise HTTPException(404, "No picture or PDF with that content") from None
-
-
-@app.get("/api/block-schema")
-def block_schema():
-    """The block type registry (docs/block-model.md): types, attrs, nesting, marks."""
-
-    return schema_json()
 
 
 @app.get("/api/navigation")

@@ -249,7 +249,7 @@ class ApiWorkTests(unittest.TestCase):
         ):
             fetched = self.client.get(f"/api/block-documents/{self.note['id']}")
         self.assertEqual(fetched.status_code, 200)
-        self.assertEqual(fetched.headers["etag"].replace("-gzip", ""), tag)
+        self.assertEqual(fetched.headers["etag"], tag)
         self.assertEqual(fetched.json(), response.json())
 
     def test_meta_response_has_no_children(self) -> None:
@@ -260,7 +260,7 @@ class ApiWorkTests(unittest.TestCase):
         full = self.client.get(f"/api/block-documents/{self.note['id']}")
         self.assertEqual(full.json()["revision"], body["revision"])
         self.assertEqual(
-            full.headers["etag"].replace("-gzip", ""), response.headers["x-document-etag"]
+            full.headers["etag"], response.headers["x-document-etag"]
         )
         self.assertEqual(full.json()["children"][0]["text"], "Meta")
 

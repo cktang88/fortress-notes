@@ -85,7 +85,7 @@ originals to a timestamped backup folder first.
 
 The block model is specified in **[docs/block-model.md](docs/block-model.md)**, the
 contract between the backend and every client. In short: a block is a `type`
-from one registry (`block_schema.py`, served at `GET /api/block-schema`), `attrs`,
+from one registry (`block_schema.py`), `attrs`,
 inline `content` (text blocks: text/link/docLink/blockRef nodes with marks) and a
 `payload` (math, html). Tables, columns, quotes and callouts are container blocks
 with child blocks. Siblings are ordered by fractional `order` keys
@@ -130,7 +130,7 @@ with **422**.
 - `main.py` — FastAPI app and routes.
 - `document_service.py` — rendered note bodies and the one document ETag, shared by
   the single GET, the batch read and the writes that answer with a tree.
-- `http_cache.py` — ETags, `If-None-Match` → 304, rendered-body caches, API gzip.
+- `http_cache.py` — ETags, `If-None-Match` → 304, rendered-body caches.
 - `media.py` — `/media` file serving (immutable caching, ranges, content types).
 - `batch.py` — batch reads and moves for the native app.
 - `onenote_import.py` — OneNote importer: runs `fortress-onenote`, imports its manifest as living documents, import jobs (§7b).
@@ -140,7 +140,6 @@ with **422**.
 | Method | Path | Body / Query | Returns |
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded, vision_enabled, vision_loaded, block_db_ready}` (open without the token) |
-| `GET` | `/api/block-schema` | — | the block type registry (docs/block-model.md) |
 | `GET` | `/api/navigation` | `?recent_limit=` | folder tree + recent notes |
 | `POST` · `PATCH` · `DELETE` | `/api/folders` · `/api/folders/{id}` | `{name, parent_id?, position?}` · `{name}` · — | folder (folders nest); `DELETE` answers 409 unless the folder is empty |
 | `POST` | `/api/folders/{id}/move` · `/api/block-documents/{id}/move` | `{parent_id, position?}` · `{folder_id, position?}` | the moved item |
@@ -205,11 +204,6 @@ with **422**.
   `X-Document-ETag` is the ETag the next GET of that note answers 304 to.
 - **Server caches.** Rendered bodies are cached per validator (documents: 256 entries
   / 64 MB; others: 256 / 32 MB), so repeated GETs skip SQLite and JSON encoding.
-- **gzip.** `/api` responses of 1 KB or more are gzipped when the client sends
-  `Accept-Encoding: gzip` (`Vary: Accept-Encoding`). A gzipped response's ETag gets a
-  `-gzip` suffix (`"abc-gzip"`); `If-None-Match` accepts either form. Never
-  compressed: the Ask NDJSON stream (stays unbuffered), media, octet-stream, PDF and
-  SQLite downloads.
 - **Media.** `/media/<name>` files named by a ULID (uploads) or SHA-256 (imports) never
   change: `Cache-Control: public, max-age=31536000, immutable`, `ETag` = the SHA-256
   for content-addressed names (else size/mtime), `Last-Modified`, `Accept-Ranges`

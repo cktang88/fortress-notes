@@ -99,7 +99,7 @@ def batch(ids: list[str], known: dict[str, str]) -> bytes:
         if tag is None:
             missing.append(document_id)
             continue
-        # As If-None-Match compares (a gzip variant's "-gzip" ETag matches too).
+        # As If-None-Match compares.
         if http_cache.if_none_match(known.get(document_id), tag):
             unchanged.append(document_id)
             continue

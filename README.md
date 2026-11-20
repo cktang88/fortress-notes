@@ -241,7 +241,7 @@ flowchart LR
     Vision[Apple Vision reader]
   end
   subgraph Backend["backend/ (FastAPI, 127.0.0.1)"]
-    API["REST API<br/>ETags · gzip · token auth"]
+    API["REST API<br/>ETags · token auth"]
     Store[("SQLite<br/>.fortress.sqlite3")]
     BG["background lanes:<br/>mirrors · imports · backups · ocr · index"]
     Corpus["search corpus<br/>FTS5 · ColBERT"]

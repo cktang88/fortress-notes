@@ -1,6 +1,5 @@
 """ETags, 304s, compression, media caching, batch reads and error shapes."""
 
-import gzip
 import hashlib
 import sqlite3
 import tempfile
@@ -144,7 +143,7 @@ class DocumentValidatorTests(ApiCase):
         self.assertEqual((body["title"], body["status"], body["children"]), ("Renamed", "polished", []))
         self.assertFalse(body["title_auto"])
         full = self.client.get(url)
-        self.assertEqual(full.headers["etag"].replace("-gzip", ""), response.headers["x-document-etag"])
+        self.assertEqual(full.headers["etag"], response.headers["x-document-etag"])
         self.assertEqual(len(full.json()["children"]), 2)
         cleared = self.client.patch(url, json={"title": ""}).json()
         self.assertEqual((cleared["title"], cleared["title_auto"]), ("one", True))
@@ -269,30 +268,8 @@ class WorkspaceValidatorTests(ApiCase):
         self.assertEqual(self.revalidate("/api/navigation", before), 200)
 
 
-class CompressionTests(ApiCase):
-    def test_large_json_is_gzipped_with_a_gzip_etag(self) -> None:
-        for number in range(30):
-            self.create(f"Note {number}", "words " * 40)
-        response = self.client.get("/api/navigation", headers={"Accept-Encoding": "gzip"})
-        self.assertEqual(response.headers["content-encoding"], "gzip")
-        tag = response.headers["etag"]
-        self.assertTrue(tag.endswith('-gzip"'))
-        self.assertIn("Accept-Encoding", response.headers["vary"])
-        self.assertEqual(
-            self.client.get(
-                "/api/navigation", headers={"If-None-Match": tag, "Accept-Encoding": "gzip"}
-            ).status_code,
-            304,
-        )
-        plain = self.client.get("/api/navigation", headers={"Accept-Encoding": "identity"})
-        self.assertNotIn("content-encoding", plain.headers)
-        self.assertEqual(plain.headers["etag"] + "", tag.replace("-gzip", ""))
-
-    def test_small_json_is_not_gzipped(self) -> None:
-        response = self.client.get("/api/health", headers={"Accept-Encoding": "gzip"})
-        self.assertNotIn("content-encoding", response.headers)
-
-    def test_ask_stream_is_never_gzipped(self) -> None:
+class AskStreamTests(ApiCase):
+    def test_ask_stream_is_never_cached(self) -> None:
         from app import ask
 
         async def stream(_question):
@@ -303,10 +280,9 @@ class CompressionTests(ApiCase):
             response = self.client.post(
                 "/api/ask",
                 json={"question": "What?"},
-                headers={"Accept": "application/x-ndjson", "Accept-Encoding": "gzip"},
+                headers={"Accept": "application/x-ndjson"},
             )
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn("content-encoding", response.headers)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(len(response.text.splitlines()), 200)
 
@@ -378,11 +354,9 @@ class ValidatorHelperTests(unittest.TestCase):
         tag = http_cache.etag("x", 1)
         self.assertTrue(http_cache.if_none_match(tag, tag))
         self.assertTrue(http_cache.if_none_match(f'"a", W/{tag}', tag))
-        self.assertTrue(http_cache.if_none_match(tag[:-1] + '-gzip"', tag))
         self.assertTrue(http_cache.if_none_match("*", tag))
         self.assertFalse(http_cache.if_none_match('"nope"', tag))
         self.assertFalse(http_cache.if_none_match(None, tag))
-        self.assertEqual(gzip.decompress(gzip.compress(b"x")), b"x")
 
 
 if __name__ == "__main__":

@@ -65,15 +65,7 @@ class RegistryTests(unittest.TestCase):
             {"url": "/media/a.png", "width": 20},
         )
 
-    def test_schema_json_describes_every_type(self) -> None:
-        described = schema.schema_json()
-        self.assertEqual(set(described["types"]), set(schema.TYPES))
-        self.assertEqual(described["types"]["table"]["children"], ["table_row"])
-        self.assertEqual(described["types"]["math"]["payload"]["latex"],
-                         {"type": "string", "required": True})
-        self.assertEqual(set(described["inline"]["nodes"]), {"text", "link", "docLink", "blockRef"})
-
-    def test_block_schema_route(self) -> None:
+    def test_the_api_refuses_illegal_nesting(self) -> None:
         from fastapi.testclient import TestClient
 
         from app import documents, main
@@ -84,9 +76,6 @@ class RegistryTests(unittest.TestCase):
             with use_settings(settings), \
                     use_settings(settings), \
                     TestClient(main.app) as client:
-                response = client.get("/api/block-schema")
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json(), schema.schema_json())
                 note = client.post("/api/block-documents", json={"title": "N", "body": "x"}).json()
                 refused = client.post(
                     f"/api/block-documents/{note['id']}/transactions",

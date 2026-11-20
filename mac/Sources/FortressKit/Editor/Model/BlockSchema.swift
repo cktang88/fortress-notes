@@ -1,7 +1,7 @@
 import Foundation
 
-/// The block type registry (docs/block-model.md §2): a bundled copy of what
-/// `GET /api/block-schema` serves (version 1). The editor uses it to decide which types
+/// The block type registry (docs/block-model.md §2): a copy of the server's
+/// (`backend/app/block_schema.py`). The editor uses it to decide which types
 /// it may change into each other with an `update` and which may nest where; a type it
 /// doesn't know (from a newer server) is shown read-only and never rewritten.
 public struct BlockSchema: Decodable, Hashable, Sendable {

@@ -3,7 +3,7 @@
 Everything that knows what a block *is* lives here: the canonical types, their
 category, attributes, payload and allowed children; the inline node form and its
 normalization; and the plain ``text`` the server derives from a block. Pure
-functions, no SQLite. ``schema_json()`` is what ``GET /api/block-schema`` serves.
+functions, no SQLite.
 
 Stored legacy shapes (BlockNote names and runs, ``[[id|Title]]`` links, table
 JSON) are converted once by the schema 14 migration, via :mod:`app.block_legacy`;
@@ -18,9 +18,6 @@ import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, Callable
-
-SCHEMA_VERSION = 1
-
 
 class BlockShapeError(ValueError):
     """A block, its attrs, content or nesting is not what the registry allows."""
@@ -45,18 +42,6 @@ class Attr:
     choices: tuple[str, ...] = ()
     default: Any = None
     exclusive_minimum: bool = False
-
-    def describe(self) -> dict[str, Any]:
-        result: dict[str, Any] = {"type": self.kind}
-        if self.minimum is not None:
-            result["exclusive_minimum" if self.exclusive_minimum else "minimum"] = self.minimum
-        if self.maximum is not None:
-            result["maximum"] = self.maximum
-        if self.choices:
-            result["choices"] = list(self.choices)
-        if self.default is not None:
-            result["default"] = self.default
-        return result
 
 
 def _number(value: object, name: str) -> int | float:
@@ -531,41 +516,3 @@ def canonical_hash(block: Block) -> str:
         sort_keys=True, ensure_ascii=False, separators=(",", ":"),
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:32]
-
-
-def schema_json() -> dict[str, Any]:
-    """The registry as JSON (``GET /api/block-schema``)."""
-
-    return {
-        "version": SCHEMA_VERSION,
-        "flow": sorted(FLOW),
-        "top_level": sorted(FLOW),
-        "types": {
-            definition.name: {
-                "category": definition.category,
-                "inline": definition.inline,
-                "attrs": {name: spec.describe() for name, spec in definition.attrs.items()},
-                "payload": None if definition.payload is None else {
-                    key: {"type": "string", "required": required}
-                    for key, required in definition.payload.items()
-                },
-                "children": sorted(definition.children),
-                "change_group": definition.change_group,
-            }
-            for definition in _DEFINITIONS
-        },
-        "inline": {
-            "nodes": {
-                "text": {"text": "string", "marks": "object (optional)"},
-                "link": {"href": "string", "content": "text nodes"},
-                "docLink": {"id": "document id"},
-                "blockRef": {"id": "block id"},
-            },
-            "marks": {
-                **{name: "true" for name in BOOLEAN_MARKS},
-                **{name: "color" for name in COLOR_MARKS},
-            },
-            "exclusive_marks": [["sup", "sub"]],
-        },
-        "extension_attrs": _EXTENSION_KEY_RE.pattern,
-    }
