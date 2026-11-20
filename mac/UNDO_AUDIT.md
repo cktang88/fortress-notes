@@ -80,6 +80,8 @@ The server's `/undo` and `/redo` endpoints stay unused. Undo is a local edit lik
 
 ## Notes and limits
 
+- **Performance note on root cause 9.** Before the caret fix, `keystroke.long50k` (typing inside a 50,000-character paragraph) only typed its first key there. That key moved the caret past the paragraph, so the other 19 keys landed in the short paragraph after it, and main reported a 4–10 ms median. Now every key really lands inside the long paragraph, and the median is about 25 ms on CI (budget 8 ms; not enforced). The cost was always there for real typing, and the old number hid it. `keystroke.afterLong50k` reproduces what the old test measured: 4.6 ms, the same as main. The other editor numbers stay within CI noise of main: keystroke.middle 3.1 ms vs 5.5 ms, Return 3.2 vs 3.6, table cell 0.52 vs 0.49, firstPaint 34 vs 46 ms, paste 5 MB 219 vs 225 ms. Typing inside a very long paragraph is worth a separate look.
+
 - Words don't split typing steps. NSTextView doesn't split on word boundaries or pauses, and TextEdit behaves the same. Return and caret moves do split steps.
 - A picture paste uploads first. Each block becomes its own "Paste" step when its upload finishes.
 - Load Latest, and a note that changed elsewhere while the window showed another, start the history over. Their text is replaced wholesale.

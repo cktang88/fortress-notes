@@ -156,7 +156,6 @@ struct UndoScript {
             let item = harness.menuItem("undo:")
             #expect(item.enabled, "step \(index) can be undone", sourceLocation: sourceLocation)
             #expect(item.title == "Undo \(states[index].name)", "step \(index)", sourceLocation: sourceLocation)
-            print("WALK undo \(index) '\(harness.menuItem("undo:").title)' responder \(String(describing: harness.window.firstResponder.map { Swift.type(of: $0) }))")
             harness.undo()
             #expect(harness.snapshot() == states[index - 1].blocks, "after undoing step \(index) (\(states[index].name))",
                     sourceLocation: sourceLocation)
@@ -166,7 +165,6 @@ struct UndoScript {
             let item = harness.menuItem("redo:")
             #expect(item.enabled, "step \(index) can be redone", sourceLocation: sourceLocation)
             #expect(item.title == "Redo \(states[index].name)", "redo step \(index)", sourceLocation: sourceLocation)
-            print("WALK redo \(index) '\(harness.menuItem("redo:").title)' responder \(String(describing: harness.window.firstResponder.map { Swift.type(of: $0) }))")
             harness.redo()
             #expect(harness.snapshot() == states[index].blocks, "after redoing step \(index) (\(states[index].name))",
                     sourceLocation: sourceLocation)
