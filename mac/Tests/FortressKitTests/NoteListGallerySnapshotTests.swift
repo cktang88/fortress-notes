@@ -82,4 +82,125 @@ import Testing
         dump("step-open", host)
         host.close()
     }
+
+    private func mainLoaded(_ label: String, poke: (HostWindow) -> Void) {
+        let model = launchingModel()
+        let host = HostWindow(MainWindow().environment(model))
+        load(model)
+        host.settle()
+        dump("\(label)-before", host)
+        poke(host)
+        host.settle()
+        dump("\(label)-after", host)
+        host.close()
+    }
+
+    @Test func diagPokeNoteHeights() {
+        mainLoaded("poke-noteheights") { host in
+            let table = host.tableViews[0]
+            table.noteHeightOfRows(withIndexesChanged: IndexSet(0..<table.numberOfRows))
+        }
+    }
+
+    @Test func diagPokeLayout() {
+        mainLoaded("poke-layout") { host in
+            host.tableViews[0].enclosingScrollView?.needsLayout = true
+            host.tableViews[0].enclosingScrollView?.tile()
+            host.window.contentView?.layoutSubtreeIfNeeded()
+        }
+    }
+
+    @Test func diagPokeResize() {
+        mainLoaded("poke-resize") { host in
+            host.window.setContentSize(CGSize(width: 1001, height: 660))
+        }
+    }
+
+    @Test func diagNonEmptyFirst() {
+        let model = launchingModel()
+        var one = ShellFixtures.navigation
+        one.items = one.items.filter { if case .document = $0 { true } else { false } }.prefix(1).map { $0 }
+        model.navigation = one
+        let host = HostWindow(MainWindow().environment(model))
+        dump("nonempty-first", host)
+        load(model)
+        host.settle()
+        dump("nonempty-loaded", host)
+        host.close()
+    }
+
+    @Test func diagPlainSplitView() {
+        let model = launchingModel()
+        let host = HostWindow(
+            NavigationSplitView {
+                Text("Sidebar")
+            } content: {
+                NoteListView()
+            } detail: {
+                Text("Detail")
+            }
+            .environment(model).fortressTheme())
+        load(model)
+        host.settle()
+        dump("plainsplit", host)
+        host.close()
+    }
+
+    @Test func diagGenericSplitList() {
+        let items = DiagItems()
+        let host = HostWindow(DiagSplitList(items: items))
+        items.ids = Array(0..<6)
+        host.settle()
+        dump("generic-split", host)
+        host.close()
+    }
+
+    @Test func diagGenericStackList() {
+        let items = DiagItems()
+        let host = HostWindow(NavigationStack { DiagList(items: items) }, size: CGSize(width: 300, height: 660))
+        items.ids = Array(0..<6)
+        host.settle()
+        dump("generic-stack", host)
+        host.close()
+    }
+
+    @Test func diagListAloneNarrow() {
+        let model = launchingModel()
+        let host = HostWindow(NavigationStack { NoteListView() }.environment(model).fortressTheme(), size: CGSize(width: 291, height: 660))
+        load(model)
+        host.settle()
+        dump("alone-narrow", host)
+        host.close()
+    }
+}
+
+@Observable @MainActor final class DiagItems {
+    var ids: [Int] = []
+}
+
+struct DiagList: View {
+    let items: DiagItems
+    var body: some View {
+        List(selection: .constant(Int?.none)) {
+            Section("Header") {
+                ForEach(items.ids, id: \.self) { id in
+                    Text("Row \(id)").frame(height: 80)
+                }
+            }
+        }
+        .listStyle(.inset)
+    }
+}
+
+struct DiagSplitList: View {
+    let items: DiagItems
+    var body: some View {
+        NavigationSplitView {
+            Text("Sidebar")
+        } content: {
+            DiagList(items: items)
+        } detail: {
+            Text("Detail")
+        }
+    }
 }
