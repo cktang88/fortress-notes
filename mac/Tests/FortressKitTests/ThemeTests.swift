@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import FortressKit
@@ -310,6 +311,46 @@ struct ThemeTests {
             let bad = directory.appendingPathComponent("bad.yaml")
             try Data("name: nope".utf8).write(to: bad)
             try store.importTheme(from: bad)
+        }
+    }
+}
+
+/// Theme text colours on a selected row: the system's selected text colour on an
+/// emphasized (focused, accent) selection, the theme's own on a grey one.
+@MainActor
+struct ThemeSelectionTests {
+    private func resolved(_ style: ThemeStyle, dark: Bool, prominence: BackgroundProminence) -> Color.Resolved {
+        var environment = EnvironmentValues()
+        environment.colorScheme = dark ? .dark : .light
+        environment.backgroundProminence = prominence
+        return style.resolve(in: environment).resolve(in: environment)
+    }
+
+    @Test(arguments: [false, true])
+    func emphasizedSelectionUsesSelectedTextColour(dark: Bool) {
+        var environment = EnvironmentValues()
+        environment.colorScheme = dark ? .dark : .light
+        let selected = Color(nsColor: .alternateSelectedControlTextColor).resolve(in: environment)
+        for (role, opacity) in [(Palette.Role.text, 1.0), (.secondaryText, 0.85), (.tertiaryText, 0.7)] {
+            let color = resolved(ThemeStyle(role), dark: dark, prominence: .increased)
+            #expect(abs(color.red - selected.red) < 0.01 && abs(color.green - selected.green) < 0.01
+                    && abs(color.blue - selected.blue) < 0.01, "\(role)")
+            #expect(abs(Double(color.opacity) - opacity) < 0.01, "\(role)")
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func standardProminenceKeepsThemeColours(dark: Bool) {
+        var environment = EnvironmentValues()
+        environment.colorScheme = dark ? .dark : .light
+        for role in [Palette.Role.text, .secondaryText, .tertiaryText, .accent, .sunken] {
+            let expected = environment.themePalette[role].color.resolve(in: environment)
+            #expect(resolved(ThemeStyle(role), dark: dark, prominence: .standard) == expected, "\(role)")
+        }
+        // Fills and the accent never change with the selection.
+        for role in [Palette.Role.accent, .sunken, .background, .border] {
+            #expect(resolved(ThemeStyle(role), dark: dark, prominence: .increased)
+                    == resolved(ThemeStyle(role), dark: dark, prominence: .standard), "\(role)")
         }
     }
 }

@@ -209,13 +209,35 @@ extension PaletteColor {
 
 /// A palette role as a SwiftUI style; it resolves against the window's appearance,
 /// Increase Contrast and the active theme.
+///
+/// On an emphasized selection (a selected row in the focused list, where SwiftUI sets
+/// `backgroundProminence` to `.increased`) the text roles turn to the system's selected
+/// text colour, as Mac lists do: the theme's dark greys are unreadable on the accent.
+/// An unfocused (grey) selection keeps the theme's colours.
 public struct ThemeStyle: ShapeStyle {
     public var role: Palette.Role
 
     public init(_ role: Palette.Role) { self.role = role }
 
     public func resolve(in environment: EnvironmentValues) -> Color {
-        environment.themePalette[role].color
+        if environment.backgroundProminence == .increased, let opacity = role.emphasizedSelectionOpacity {
+            return Color(nsColor: .alternateSelectedControlTextColor).opacity(opacity)
+        }
+        return environment.themePalette[role].color
+    }
+}
+
+extension Palette.Role {
+    /// For the text roles, the opacity of the selected text colour they take on an
+    /// emphasized selection (secondary and tertiary text stay a step quieter); nil for
+    /// the others (fills, borders and the accent keep the theme's colour).
+    var emphasizedSelectionOpacity: Double? {
+        switch self {
+        case .text: 1
+        case .secondaryText: 0.85
+        case .tertiaryText: 0.7
+        default: nil
+        }
     }
 }
 
