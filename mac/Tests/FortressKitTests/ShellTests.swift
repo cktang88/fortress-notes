@@ -166,7 +166,7 @@ private func fixtureData(_ name: String) throws -> Data {
     #expect(BackendLaunch.make(folder: URL(fileURLWithPath: "/elsewhere"), port: 8000, home: "/h", fileExists: { _ in false }) == nil)
 }
 
-@Test func missingUvIsSaidInWords() throws {
+@Test @MainActor func missingUvIsSaidInWords() throws {
     let bare = try #require(BackendLaunch.make(folder: URL(fileURLWithPath: "/repo"), port: 8000, home: "/h", fileExists: { $0 == "/repo/backend/app/main.py" }))
     #expect(!bare.canFindExecutable { _ in false })
     #expect(bare.canFindExecutable { $0 == "/usr/bin/uv" })
