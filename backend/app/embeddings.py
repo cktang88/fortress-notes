@@ -391,11 +391,17 @@ def _load_accelerator(kind: str, cpu_model, settings: Settings, precision: str):
     if kind == "mlx":
         from . import colbert_mlx
 
-        return colbert_mlx.load(cpu_model, settings.colbert_model, precision)
+        return colbert_mlx.load(
+            cpu_model, settings.colbert_model, precision, settings.colbert_model_revision
+        )
     import torch
     from pylate import models
 
-    model = models.ColBERT(model_name_or_path=settings.colbert_model, device="mps")
+    model = models.ColBERT(
+        model_name_or_path=settings.colbert_model,
+        revision=settings.colbert_model_revision,
+        device="mps",
+    )
     model.eval()
     return model.to(getattr(torch, precision))
 
@@ -582,7 +588,11 @@ def _get_model(wait: bool = False):
             torch.set_num_threads(Settings.default_threads(settings.embeddings_threads))
             # Explicitly on the CPU: PyLate would otherwise pick MPS by itself on a Mac
             # (with no check that it is faster or right). _accelerate decides that.
-            model = models.ColBERT(model_name_or_path=settings.colbert_model, device="cpu")
+            model = models.ColBERT(
+                model_name_or_path=settings.colbert_model,
+                revision=settings.colbert_model_revision,
+                device="cpu",
+            )
             _cache.dtype = torch.float32
             if isinstance(model, torch.nn.Module):
                 model.eval()
@@ -805,7 +815,12 @@ def _store_path() -> Path:
 
 def _store_key() -> str:
     dtype = str(_cache.dtype or "torch.float32")
-    return f"{_STORE_FORMAT}|{get_settings().colbert_model}|{dtype}"
+    settings = get_settings()
+    # The revision too: a new commit of the model may change its encodings.
+    model = settings.colbert_model
+    if settings.colbert_model_revision:
+        model += f"@{settings.colbert_model_revision}"
+    return f"{_STORE_FORMAT}|{model}|{dtype}"
 
 
 def _connect(path: Path) -> sqlite3.Connection:

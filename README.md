@@ -116,15 +116,15 @@ what it does.
 
 ```bash
 cd backend
-uv sync                      # creates backend/.venv with the locked dependencies
+uv sync --frozen             # creates backend/.venv with exactly the locked dependencies
 cp .env.example .env         # then set OPENROUTER_API_KEY in backend/.env
 ```
 
 Put your OpenRouter key in `backend/.env` (it is gitignored); never put it in a
 committed file. Without a key everything works except Ask.
 
-On first start the background indexer downloads `lightonai/Agent-ModernColBERT` from
-Hugging Face; until it has loaded, search and related notes use keyword matching. Set
+On first start the background indexer downloads `lightonai/Agent-ModernColBERT` (at the
+commit pinned in `backend/app/config.py`) from Hugging Face; until it has loaded, search and related notes use keyword matching. Set
 `EMBEDDINGS_ENABLED=false` to skip the model.
 
 ### 2. Mac app
@@ -141,7 +141,7 @@ You don't start the backend yourself. The app finds the repository it was built 
 starts it at launch and stops it when you quit:
 
 - command: `backend/.venv/bin/uvicorn app.main:app --port <port>` if the virtualenv
-  exists, otherwise `uv run uvicorn app.main:app --port <port>`, run in `backend/`;
+  exists, otherwise `uv run --frozen uvicorn app.main:app --port <port>`, run in `backend/`;
 - port: the one in Settings (default `http://127.0.0.1:8000`), or a free one if that is
   taken;
 - environment: a fresh random `FORTRESS_TOKEN` per launch (every request must carry it,
@@ -154,7 +154,7 @@ point Settings at its address:
 
 ```bash
 cd backend
-uv run uvicorn app.main:app --port 8000
+uv run --frozen uvicorn app.main:app --port 8000
 ```
 
 Without `FORTRESS_TOKEN` the backend accepts loopback requests only, and refuses
@@ -164,7 +164,7 @@ browser requests either way.
 
 ```bash
 cd tools/fortress-onenote
-cargo build --release        # -> target/release/fortress-onenote
+cargo build --release --locked   # -> target/release/fortress-onenote
 ```
 
 The app passes the built binary to the backend it starts. CI also builds a universal
@@ -209,6 +209,7 @@ relative to `backend/`. See [`backend/.env.example`](backend/.env.example).
 | `OPENROUTER_MODEL` | `anthropic/claude-haiku-5.5` | Fallback model for LLM calls that name none (Ask always names `ASK_MODEL`) |
 | `EMBEDDINGS_ENABLED` | `true` | ColBERT search and related notes (off: keyword matching) |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
+| `COLBERT_REVISION` | pinned commit | Commit of the model's Hugging Face repository (default: the one in `app/config.py` for the default model; see [docs/dependencies.md](docs/dependencies.md)) |
 | `EMBEDDINGS_PRECISION` | `auto` | `auto` (bfloat16 where the CPU supports it), `float32` or `bfloat16` |
 | `EMBEDDINGS_THREADS` | `0` | Torch threads (0 = half the cores, at most 4) |
 | `REINDEX_INTERVAL_S` | `5` | How often changed paragraphs are re-encoded |
@@ -269,9 +270,10 @@ flowchart LR
 
 | Component | Run tests | CI workflow |
 | --- | --- | --- |
-| Backend | `cd backend && uv run python -m unittest discover -s tests` | [`backend.yml`](.github/workflows/backend.yml): unit tests on Python 3.13, offline (no model download, no LLM key) |
+| Backend | `cd backend && uv run --frozen python -m unittest discover -s tests` | [`backend.yml`](.github/workflows/backend.yml): unit tests on Python 3.13, offline (no model download, no LLM key) |
 | Mac app | `cd mac && swift build && swift test` | [`mac.yml`](.github/workflows/mac.yml): build, tests and window snapshots (artifact `snapshots`), editor and finding performance, and integration tests against a real backend seeded by `mac/Scripts/seed_backend.py` |
-| OneNote converter | `cd tools/fortress-onenote && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` | [`onenote-tool.yml`](.github/workflows/onenote-tool.yml): Linux tests, plus a universal macOS binary |
+| OneNote converter | `cd tools/fortress-onenote && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked` | [`onenote-tool.yml`](.github/workflows/onenote-tool.yml): Linux tests, plus a universal macOS binary |
+| Dependency cooldown | `python3 .github/scripts/check_cooldown.py` | [`dependencies.yml`](.github/workflows/dependencies.yml): every pin released at least 7 days before it was pinned ([docs/dependencies.md](docs/dependencies.md)) |
 
 Mac test switches: `SNAPSHOT_DIR=<dir>` writes window snapshots there,
 `FINDING_PERF=1` enables the finding performance suite, and
@@ -320,6 +322,8 @@ spec.md               backend spec: data model, API, OCR, provenance, OneNote im
   content, transactions, Markdown form).
 - [docs/open-standards.md](docs/open-standards.md): the open-standards policy and the
   decision for every format Fortress reads or writes.
+- [docs/dependencies.md](docs/dependencies.md): the dependency policy (exact pins,
+  7-day cooldown enforced in CI) and how to update each kind of dependency.
 - [mac/DESIGN.md](mac/DESIGN.md): the Mac app's design system and screen-by-screen spec.
 - [docs/onenote-import.md](docs/onenote-import.md): OneNote migration research and design.
 - [tools/fortress-onenote/README.md](tools/fortress-onenote/README.md) and

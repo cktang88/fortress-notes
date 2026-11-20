@@ -640,6 +640,8 @@ class RealColbertTests(unittest.TestCase):
                 # Loads it (``_get_model()`` alone never does: it only returns a loaded
                 # model, so this test used to skip every time).
                 if embeddings.load_model() is None:
+                    if os.environ.get("FORTRESS_REAL_COLBERT"):
+                        self.fail("FORTRESS_REAL_COLBERT is set but the ColBERT model could not be loaded")
                     self.skipTest("ColBERT model could not be loaded")
                 self.assertEqual(embeddings.warm_index(queries=False), 2)
                 docs = [(b, v, t) for b, _d, v, t in corpus.embedding_documents(database)]

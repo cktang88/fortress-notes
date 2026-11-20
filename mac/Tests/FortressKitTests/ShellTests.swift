@@ -155,13 +155,13 @@ private func fixtureData(_ name: String) throws -> Data {
     // The backend folder itself works as well as the repository.
     let launch = try #require(BackendLaunch.make(folder: URL(fileURLWithPath: "/repo/backend"), port: 8123, home: "/Users/me", fileExists: files.contains))
     #expect(launch.executable.path == "/opt/homebrew/bin/uv")
-    #expect(launch.arguments == ["run", "uvicorn", "app.main:app", "--port", "8123"])
-    #expect(launch.displayCommand == "uv run uvicorn app.main:app --port 8123")
+    #expect(launch.arguments == ["run", "--frozen", "uvicorn", "app.main:app", "--port", "8123"])
+    #expect(launch.displayCommand == "uv run --frozen uvicorn app.main:app --port 8123")
 
     let bare = try #require(BackendLaunch.make(folder: URL(fileURLWithPath: "/repo"), port: 8000, home: "/h", fileExists: { $0 == "/repo/backend/app/main.py" }))
     #expect(bare.executable.path == "/usr/bin/env")
-    #expect(bare.arguments.prefix(3) == ["uv", "run", "uvicorn"])
-    #expect(bare.displayCommand == "uv run uvicorn app.main:app --port 8000")
+    #expect(bare.arguments.prefix(4) == ["uv", "run", "--frozen", "uvicorn"])
+    #expect(bare.displayCommand == "uv run --frozen uvicorn app.main:app --port 8000")
 
     #expect(BackendLaunch.make(folder: URL(fileURLWithPath: "/elsewhere"), port: 8000, home: "/h", fileExists: { _ in false }) == nil)
 }

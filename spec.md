@@ -309,7 +309,7 @@ model, never the whole workspace.
 The native macOS app in `mac/` (SwiftUI + TextKit 2, macOS 26) is the only client;
 see `mac/DESIGN.md`. It starts the backend itself (`mac/Sources/FortressKit/Shell/
 BackendController.swift`: the repository's `backend/.venv/bin/uvicorn`, else
-`uv run uvicorn`, with `FORTRESS_TOKEN`, `FORTRESS_PARENT_PID` and
+`uv run --frozen uvicorn`, with `FORTRESS_TOKEN`, `FORTRESS_PARENT_PID` and
 `FORTRESS_ONENOTE_BIN`) and reads pictures and PDFs with Apple Vision (§6).
 
 ## 6. Images & OCR (`ocr.py`, `images.py`)

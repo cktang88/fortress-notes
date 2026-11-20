@@ -153,7 +153,9 @@ def _run_backend(device: str, *, break_gpu: bool = False) -> dict:
                 assert response.status_code == 201, response.text
                 ids[title] = response.json()["id"]
             if embeddings.load_model() is None:
-                raise unittest.SkipTest("the ColBERT model could not be loaded")
+                # FORTRESS_REAL_MODEL=1 promises the model: a missing or broken download
+                # (e.g. a CI cache without its files) must fail, not quietly skip.
+                raise AssertionError("the ColBERT model could not be loaded")
             out["load_s"] = time.perf_counter() - started
             started = time.perf_counter()
             while embeddings.warm_index():

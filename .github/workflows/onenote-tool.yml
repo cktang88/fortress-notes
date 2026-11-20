@@ -19,13 +19,13 @@ jobs:
       run:
         working-directory: tools/fortress-onenote
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The version, profile and components pinned in rust-toolchain.toml.
       - name: Toolchain
         run: |
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt
-          rustup default stable
+          rustup toolchain install --no-self-update
           rustc --version
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -49,13 +49,13 @@ jobs:
       run:
         working-directory: tools/fortress-onenote
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install --no-self-update
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      - uses: actions/cache@v4
+          rustc --version
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -78,7 +78,7 @@ jobs:
           cp -R LICENSES dist/
       - name: Test (macOS)
         run: cargo test --locked --release --target aarch64-apple-darwin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fortress-onenote-macos-universal
           path: tools/fortress-onenote/dist
