@@ -168,21 +168,6 @@ class VaultMirrorTests(_Workspace):
         self.assertEqual((self.notes / "Ideas.md").read_text(encoding="utf-8"), "mine")
         self.assertEqual(mirror_file(self.notes, note["id"]), self.notes / "Ideas 2.md")
 
-    def test_mirrors_of_the_old_format_are_replaced_once(self) -> None:
-        note = documents.create(NoteCreate(title="Old style", body="text"))
-        legacy = self.notes / f"{note['id']}.md"
-        legacy.write_text(f"---\nid: {note['id']}\ncreated_at: x\ncustom: keep\n---\nold\n", encoding="utf-8")
-        (self.notes / documents.MIRROR_STATE).write_text(
-            json.dumps({"epoch": "e", "seq": 1}), encoding="utf-8"
-        )
-        documents.mirrors._states.clear()
-        text = self.mirror(note["id"])
-        self.assertFalse(legacy.exists())
-        self.assertIn("custom: keep", text)
-        self.assertNotIn("created_at", text)
-        state = json.loads((self.notes / documents.MIRROR_STATE).read_text(encoding="utf-8"))
-        self.assertEqual(state["format"], vault.FORMAT_VERSION)
-
     def test_the_vault_imports_back_losslessly(self) -> None:
         target, goal, heading, source = self.make_linked_notes()
         folder = block_store.create_folder(self.db, "Projects")

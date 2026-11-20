@@ -36,7 +36,7 @@ class BlockApiFlowTests(unittest.TestCase):
                         "/api/block-documents",
                         json={
                             "title": "Source",
-                            "body": f"Draft body (({target_block_id} \"target\"))",
+                            "body": f"Draft body [[#^{target_block_id}|target]]",
                         },
                     )
                     self.assertEqual(created.status_code, 201)

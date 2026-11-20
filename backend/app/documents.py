@@ -268,10 +268,6 @@ class MirrorWriter(background.Service):
                 "SELECT id, parent_id, name, position FROM folders"
             )]
             anchors = vault.referenced_blocks(connection)
-            legacy = (
-                [row[0] for row in connection.execute("SELECT id FROM documents")]
-                if not current else []
-            )
         layout = self._layout(notes_path, state, rows, folders)
         changed = (
             set(layout.paths) if full
@@ -295,11 +291,6 @@ class MirrorWriter(background.Service):
 
         # First take away what is stale (so a name can pass from one note to another)...
         kept: dict[str, dict] = {}
-        for document_id in legacy:  # the one-file-per-id layout of format 1
-            old = notes_path / f"{document_id}.md"
-            if old.is_file():
-                kept[document_id] = _hand_added(old, document_id)
-                old.unlink(missing_ok=True)
         for document_id in gone:
             _remove(notes_path, state.files[document_id])
         for document_id in moved & set(state.files):
@@ -332,10 +323,7 @@ class MirrorWriter(background.Service):
 
         active = {str(item["id"]) for item in block_store.list_documents(db_path)}
         state = self._state(notes_path)
-        if state.format == vault.FORMAT_VERSION:
-            stale = {path for document_id, path in state.files.items() if document_id not in active}
-        else:
-            stale = {path.name for path in notes_path.glob("*.md") if path.stem not in active}
+        stale = {path for document_id, path in state.files.items() if document_id not in active}
         for relative in sorted(stale):
             source = notes_path / relative
             if source.is_file():
@@ -362,10 +350,6 @@ class MirrorWriter(background.Service):
         layout = self._layout(notes_path, state, rows, folders)
         old = state.files.get(document_id)
         kept = None
-        legacy = notes_path / f"{document_id}.md"
-        if state.format != vault.FORMAT_VERSION and legacy.is_file():
-            kept = _hand_added(legacy, document_id)
-            legacy.unlink()
         if old and old != layout.paths.get(document_id):
             kept = _hand_added(notes_path / old, document_id)
             _remove(notes_path, old)
@@ -389,11 +373,6 @@ class MirrorWriter(background.Service):
             existing = notes_path / path
             if not existing.exists():
                 return False
-            # (an older mirror of this very note, e.g. "one.md" for "One.md" on macOS, is not)
-            if (notes_path / f"{document_id}.md").exists() and existing.samefile(
-                notes_path / f"{document_id}.md"
-            ):
-                return False
             try:
                 found = frontmatter.loads(existing.read_text(encoding="utf-8")).metadata.get("id")
             except Exception:
@@ -408,7 +387,7 @@ class MirrorWriter(background.Service):
             try:
                 saved = json.loads((notes_path / MIRROR_STATE).read_text(encoding="utf-8"))
                 state.position = (str(saved["epoch"]), int(saved["seq"]))
-                state.format = int(saved.get("format") or 1)
+                state.format = int(saved["format"])
             except (OSError, ValueError, KeyError, TypeError):
                 pass
             try:

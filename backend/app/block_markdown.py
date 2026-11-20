@@ -10,8 +10,7 @@ references, ``^id`` block identifiers on the blocks something refers to,
 ``> [!type]`` callouts, ``==highlight==``, task lists, GFM tables.
 Only what no standard can say (provenance, extension attributes, nesting under
 a paragraph, column layouts) goes in an invisible ``<!-- fortress:block {...} -->``
-comment. Reading accepts all of that, plain Obsidian notes, and every older
-Fortress form.
+comment. Reading accepts all of that and plain Obsidian notes.
 """
 
 from __future__ import annotations
@@ -48,8 +47,6 @@ class BlockSpec:
     children: list["BlockSpec"] = field(default_factory=list)
     id: str | None = None
     provenance: dict[str, Any] | None = None
-    # Parsing only: the id of the block a Markdown comment says this one belongs under.
-    parent_ref: str | None = field(default=None, repr=False, compare=False)
     # Parsing only: how deep a comment says this block is nested under the text block before it.
     indent: int = field(default=0, repr=False, compare=False)
 
@@ -100,7 +97,7 @@ def legalize(blocks: list[BlockSpec], parent_type: str | None = None) -> list[Bl
 # --- The fortress comment ------------------------------------------------------------------
 
 _COMMENT_RE = re.compile(r"^<!--\s*fortress:block\s+(\{.*\})\s*-->$", re.DOTALL)
-_MARKER_RE = re.compile(r"^<!--\s*(/?)fortress:(columns|column|file)\s*(\{.*\})?\s*-->$", re.DOTALL)
+_MARKER_RE = re.compile(r"^<!--\s*(/?)fortress:(columns|column)\s*(\{.*\})?\s*-->$", re.DOTALL)
 
 
 def _encode(value: dict[str, Any]) -> str:
@@ -128,11 +125,7 @@ def _parse_json(raw: str | None) -> dict[str, Any] | None:
 
 
 def parse_comment(source: str) -> dict[str, Any] | None:
-    """The metadata of a ``fortress:block`` comment (None: not one).
-
-    Older versions wrote the block's provenance itself (no ``id`` key); that is
-    read as ``{"provenance": ...}``.
-    """
+    """The metadata of a ``fortress:block`` comment (None: not one)."""
 
     match = _COMMENT_RE.match(source.strip())
     if not match:
@@ -140,8 +133,6 @@ def parse_comment(source: str) -> dict[str, Any] | None:
     value = _parse_json(match.group(1))
     if value is None:
         return None
-    if "id" not in value and "source" in value:
-        value = {"provenance": value}
     meta: dict[str, Any] = {}
     if isinstance(value.get("id"), str):
         meta["id"] = value["id"]
@@ -155,9 +146,8 @@ def parse_comment(source: str) -> dict[str, Any] | None:
     for key in ("attrs", "rows"):
         if isinstance(value.get(key), (dict, list)):
             meta[key] = value[key]
-    for key in ("type", "parent"):
-        if isinstance(value.get(key), str):
-            meta[key] = value[key]
+    if isinstance(value.get("type"), str):
+        meta["type"] = value["type"]
     indent = value.get("indent")
     if isinstance(indent, int) and not isinstance(indent, bool) and 0 < indent <= 64:
         meta["indent"] = indent
@@ -574,11 +564,8 @@ def inline_to_html(nodes: list[dict[str, Any]], links: RenderLinks | None = None
 
 # --- Markdown/HTML to inline content ------------------------------------------------------------
 
-# [[target#fragment|label]] and ![[embed]] (Obsidian); ((id)) from older Fortress versions.
+# [[target#fragment|label]] and ![[embed]] (Obsidian).
 _WIKILINK_RE = re.compile(r"(!?)\[\[([^\[\]|\n]*)(?:\|([^\[\]\n]*))?\]\]")
-_LEGACY_REF_RE = re.compile(
-    r"\(\(\s*([A-Za-z0-9_-]{1,128})(?:\s+(?:\"[^\"\n]*\"|'[^'\n]*'))?\s*\)\)"
-)
 _SIZE_RE = re.compile(r"^\s*(\d{1,5})(?:\s*x\s*(\d{1,5}))?\s*$")
 
 
@@ -626,7 +613,7 @@ def _link_children(tokens: list[Token], links: ParseLinks) -> list[Token]:
 
     def flush() -> None:
         source = "".join(token.content for token in run)
-        if "[[" not in source and "((" not in source:
+        if "[[" not in source:
             result.extend(run)
             run.clear()
             return
@@ -645,12 +632,6 @@ def _link_children(tokens: list[Token], links: ParseLinks) -> list[Token]:
             meta = _resolve_wikilink(links, embed, match.group(2), match.group(3))
             if meta is not None:
                 pieces.append((match.start() if embed else opening, match.end(), meta))
-        for match in _LEGACY_REF_RE.finditer(source):
-            if escaped & {match.start(), match.start() + 1}:
-                continue
-            if any(start < match.end() and match.start() < end for start, end, _ in pieces):
-                continue
-            pieces.append((match.start(), match.end(), {"kind": "blockRef", "id": match.group(1)}))
         if not pieces:
             result.extend(run)
             run.clear()
@@ -684,7 +665,7 @@ def _link_children(tokens: list[Token], links: ParseLinks) -> list[Token]:
 
 
 def _ref_tokens(state) -> None:
-    """Core rule: wikilinks (and older ``((id))`` references) become reference tokens."""
+    """Core rule: wikilinks become reference tokens."""
 
     links = state.env.get("links") if isinstance(state.env, dict) else None
     if links is None:
@@ -1004,13 +985,7 @@ def _number(value: str | None) -> int | float | None:
 
 
 def image_attrs_from_element(element: _Element) -> dict[str, Any]:
-    attrs: dict[str, Any] = {}
-    legacy = _parse_json(element.attrs.get("data-attrs"))
-    if legacy:
-        attrs.update(legacy)
-    if "previewWidth" in attrs:
-        attrs.setdefault("width", attrs.pop("previewWidth"))
-    attrs["url"] = media_url(element.attrs.get("src", ""))
+    attrs: dict[str, Any] = {"url": media_url(element.attrs.get("src", ""))}
     for html_name, key in (("alt", "alt"), ("title", "caption"), ("data-name", "name")):
         if element.attrs.get(html_name):
             attrs[key] = element.attrs[html_name]
@@ -1618,8 +1593,6 @@ def _apply_meta(block: BlockSpec, meta: dict[str, Any] | None) -> BlockSpec:
             block.attrs = schema.normalize_attrs(block.type, {**block.attrs, **meta["attrs"]})
         except BlockShapeError:
             pass
-    if isinstance(meta.get("parent"), str):
-        block.parent_ref = meta["parent"]
     if isinstance(meta.get("indent"), int):
         block.indent = meta["indent"]
     return block
@@ -1665,10 +1638,7 @@ class _Parser:
                 if found:
                     value = _parse_json(found.group(3)) or {}
                     kind = found.group(1) + found.group(2)
-                    if kind == "file":  # written by older versions
-                        pending = {"type": "file", "attrs": value}
-                        continue
-                    items.append(_Marker(kind, _marker_meta(value)))
+                    items.append(_Marker(kind, parse_comment(comment(value)) or {}))
                     continue
                 produced = self.html_block(token.content)
             elif token.type in ("bullet_list_open", "ordered_list_open"):
@@ -1903,14 +1873,6 @@ def _task_marker(nodes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], boo
     return nodes, None
 
 
-def _marker_meta(value: dict[str, Any]) -> dict[str, Any]:
-    """Metadata of a columns/column marker (older versions wrote plain attrs)."""
-
-    if "id" in value or "attrs" in value or "provenance" in value:
-        return parse_comment(comment(value)) or {}
-    return {"attrs": value}
-
-
 def _apply_table_ids(table: BlockSpec, rows_meta: list) -> None:
     if len(rows_meta) != len(table.children):
         return
@@ -1962,23 +1924,16 @@ def _fold_layout(items: list[BlockSpec | _Marker]) -> list[BlockSpec]:
 
 
 def _attach_parents(blocks: list[BlockSpec]) -> list[BlockSpec]:
-    """Blocks whose comment names a parent written just before them become its children."""
+    """Blocks whose comment says they are indented go under the text block before them."""
 
     result: list[BlockSpec] = []
-    by_id: dict[str, BlockSpec] = {}
     # The last block at each nesting depth: a block indented n goes under the one at n - 1.
     levels: list[BlockSpec] = []
 
-    def remember(block: BlockSpec) -> None:
-        if block.id:
-            by_id[block.id] = block
-        for child in block.children:
-            remember(child)
-
     for block in blocks:
-        parent = by_id.get(block.parent_ref) if block.parent_ref else None
+        parent = None
         depth = 0
-        if parent is None and 0 < block.indent <= len(levels):
+        if 0 < block.indent <= len(levels):
             depth = block.indent
             parent = levels[depth - 1]
         if parent is not None:
@@ -1987,7 +1942,6 @@ def _attach_parents(blocks: list[BlockSpec]) -> list[BlockSpec]:
             result.append(block)
         del levels[depth:]
         levels.append(block)
-        remember(block)
     return result
 
 
@@ -2144,9 +2098,6 @@ def _blocks_from_element(element: _Element, depth: int) -> list[BlockSpec]:
         return [_apply_meta(spec("image", image_attrs_from_element(element)), meta)]
     if tag == "div" and element.attrs.get("data-type") == "file":
         file_meta = meta or {}
-        if not file_meta.get("attrs"):
-            legacy = _parse_json(element.attrs.get("data-attrs")) or {}
-            file_meta = {**file_meta, "attrs": legacy}
         attrs = file_meta.get("attrs") or {}
         return [_apply_meta(spec("file", attrs), {k: v for k, v in file_meta.items() if k != "attrs"})]
     if tag == "div" and element.attrs.get("data-type") == "html":
@@ -2159,9 +2110,6 @@ def _blocks_from_element(element: _Element, depth: int) -> list[BlockSpec]:
 def table_from_element(element: _Element, depth: int) -> BlockSpec:
     meta = _element_meta(element) or {}
     attrs: dict[str, Any] = dict(meta.get("attrs") or {})
-    legacy = _parse_json(element.attrs.get("data-attrs"))
-    if legacy:
-        attrs.update(legacy)
     if element.attrs.get("data-borders") == "false" or element.attrs.get("border") == "0":
         attrs["borders"] = False
     widths: list[Any] = []

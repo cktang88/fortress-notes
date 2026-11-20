@@ -110,7 +110,7 @@ class TrashRestoreTests(unittest.TestCase):
             block_id = target["children"][0]["id"]
             delete_document(database, "target")
             create_document(
-                database, "source", "Source", "rough", f"See [[target]] and (({block_id}))", _T, _T,
+                database, "source", "Source", "rough", f"See [[target]] and [[#^{block_id}]]", _T, _T,
             )
 
             workspace.restore_document(database, "target")

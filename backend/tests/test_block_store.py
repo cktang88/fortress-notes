@@ -349,7 +349,7 @@ class BlockStoreTests(unittest.TestCase):
             )
             child = nested["children"][0]["children"][0]
             reference = create_block_document(
-                database, "Reference", "rough", f"Link (({parent['id']}))"
+                database, "Reference", "rough", f"Link [[#^{parent['id']}]]"
             )
             self.assertEqual(reference["children"][0]["text"], "Link Parent")
             deleted = apply_transaction(
@@ -718,7 +718,7 @@ class BlockStoreTests(unittest.TestCase):
             assert target is not None
             target_block_id = target["children"][0]["id"]
             create_document(
-                database, "source", "Source", "rough", f"(( {target_block_id} \"block label\" )) and [[target|document label]]",
+                database, "source", "Source", "rough", f"[[#^{target_block_id}|block label]] and [[target|document label]]",
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
 
@@ -868,43 +868,6 @@ class BlockStoreTests(unittest.TestCase):
                         "SELECT folder_id FROM documents WHERE id = 'three'"
                     ).fetchone()["folder_id"]
                 )
-
-    def test_compatibility_mirror_tracks_block_store_writes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            note_path = root / "one.md"
-            note_path.write_text(
-                "---\n"
-                "title: One\n"
-                "status: rough\n"
-                "tags: [demo]\n"
-                "custom: keep\n"
-                "---\n"
-                "Original\n",
-                encoding="utf-8",
-            )
-            database = root / ".fortress.sqlite3"
-            add_markdown_notes(root, database)
-            tree = document_tree(database, "one")
-            assert tree is not None
-            block_id = tree["children"][0]["id"]
-
-            apply_transaction(
-                database, "one",
-                [BlockOperation(operation="update", block_id=block_id, content=runs("Updated"))],
-                tree["revision"],
-            )
-            from app.documents import mirror_document
-
-            mirror_document(database, root, "one")
-
-            # The format-1 mirror "one.md" becomes "One.md" (named after the title).
-            self.assertFalse((root / "one.md").exists() and not (root / "one.md").samefile(root / "One.md"))
-            mirrored = (root / "One.md").read_text(encoding="utf-8")
-            self.assertIn("custom: keep", mirrored)
-            self.assertNotIn("tags:", mirrored)
-            self.assertIn("\nUpdated\n", mirrored)
-            self.assertNotIn("Original", mirrored)
 
 
 

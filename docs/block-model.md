@@ -331,9 +331,6 @@ consistently for every reference in the import), and Markdown links/images to
 Only `<table>`, `<img>` and Fortress `div[data-type]` HTML is read structurally;
 any other HTML block becomes an `html` block. An id is reused when it isn't
 already taken by another block in the workspace; otherwise a new id is made.
-Older Fortress forms are still read: ids in comments on every block,
-`[[<id>|Title]]`, `((<id>))`, `"type":"callout"` and `"parent"` in comments,
-`<!-- fortress:file {...} -->`, `<img src="/media/…">`.
 
 ## 8. Order keys
 

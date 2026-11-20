@@ -225,10 +225,10 @@ class NoteMetadata:
 
 
 def read_front_matter(metadata: dict[str, Any]) -> NoteMetadata:
-    """Front matter written by Fortress (this or an older format), Obsidian or anything else."""
+    """Front matter written by Fortress, Obsidian or anything else."""
 
     fortress = metadata.get("fortress") if isinstance(metadata.get("fortress"), dict) else {}
-    raw_provenance = fortress.get("provenance", metadata.get("provenance"))
+    raw_provenance = fortress.get("provenance")
     provenance = None
     if isinstance(raw_provenance, dict):
         try:
