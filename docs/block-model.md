@@ -351,8 +351,8 @@ with nothing of that cleanup left (`block_sync`, `blocks.provenance_json`,
 `documents.status`/`tags_json`, the undo history and other retired tables) is
 recorded as 16 and opens. This version no longer migrates: anything older (an
 older version, a 15 not yet cleaned up, or notes with no version) is refused at
-startup with a message saying to open the workspace once with a build of
-`last-migrating-release`, the last release with the migrations (BlockNote shapes
+startup with a message saying to run `./upgrade-database.sh`, which backs the
+file up and upgrades it with the code of `last-migrating-release`, the last release with the migrations (BlockNote shapes
 to canonical blocks in 14, math and ink retired in 15, then the cleanup); a
 database at a newer version is refused as before (`block_store.stored_version`).
 Restoring a backup checks the same. The Mac app shows the backend's reason (the
