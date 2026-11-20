@@ -170,15 +170,16 @@ extension BlockEditorController {
     /// Selects blocks as blocks (a highlight around them, no caret).
     func selectBlocks(anchor: String, head: String) {
         if blockSelection == nil {
-            savedSelectedTextAttributes = textView.selectedTextAttributes
-            textView.selectedTextAttributes = [.backgroundColor: NSColor.clear]
+            // No caret while blocks are selected (the highlight says what is selected).
+            savedInsertionPointColor = textView.insertionPointColor
+            textView.insertionPointColor = .clear
         }
         blockSelection = (anchor, head)
         showBlockSelection()
     }
 
-    /// Puts the text selection over the selected blocks (Copy, Cut and the menus use it)
-    /// and draws the highlight.
+    /// Draws the highlight round the selected blocks; the (hidden) caret waits at their
+    /// start. (A text selection over them would draw the text system's highlight too.)
     func showBlockSelection() {
         guard let range = blockSelectionRange() else { endBlockSelection(caret: nil); return }
         isSettingBlockSelection = true
@@ -186,7 +187,7 @@ extension BlockEditorController {
         let limit = max(0, string.length - 1)
         let start = min(range.location, limit)
         textView.window?.makeFirstResponder(textView)
-        textView.setSelectedRange(NSRange(location: start, length: max(0, min(NSMaxRange(range), limit) - start)))
+        textView.setSelectedRange(NSRange(location: start, length: 0))
         textView.scrollRangeToVisible(NSRange(location: start, length: 0))
         let overlay = blockSelectionOverlay ?? BlockSelectionOverlay()
         if overlay.superview !== textView { textView.addSubview(overlay) }
@@ -202,13 +203,26 @@ extension BlockEditorController {
         guard blockSelection != nil else { return }
         blockSelection = nil
         blockSelectionOverlay?.removeFromSuperview()
-        if let saved = savedSelectedTextAttributes { textView.selectedTextAttributes = saved }
-        savedSelectedTextAttributes = nil
+        if let saved = savedInsertionPointColor { textView.insertionPointColor = saved }
+        savedInsertionPointColor = nil
         if let caret {
             isSettingBlockSelection = true
             textView.setSelectedRange(NSRange(location: min(max(0, caret), max(0, string.length - 1)), length: 0))
             isSettingBlockSelection = false
         }
+    }
+
+    /// Runs `body` (Copy) with the text selection over the selected blocks, whole.
+    func withBlocksSelectedAsText(_ body: () -> Void) {
+        guard let range = blockSelectionRange() else { body(); return }
+        isSettingBlockSelection = true
+        let caret = textView.selectedRange()
+        let limit = max(0, string.length - 1)
+        let start = min(range.location, limit)
+        textView.setSelectedRange(NSRange(location: start, length: max(0, min(NSMaxRange(range), limit) - start)))
+        body()
+        textView.setSelectedRange(caret)
+        isSettingBlockSelection = false
     }
 
     /// Keeps the selected blocks' highlight on them after the view's size changed.

@@ -54,7 +54,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     var blockSelection: (anchor: String, head: String)?
     /// Draws the selected blocks' highlight.
     var blockSelectionOverlay: BlockSelectionOverlay?
-    var savedSelectedTextAttributes: [NSAttributedString.Key: Any]?
+    var savedInsertionPointColor: NSColor?
     var isSettingBlockSelection = false
     /// The editor of the columns block this column's editor sits in (nil for the note's own).
     weak var parentEditor: BlockEditorController?
@@ -1398,6 +1398,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     func indent(by delta: Int) {
+        if blockSelection != nil { indentSelectedBlocks(by: delta); return }
         undoStep(delta < 0 ? UndoNames.outdent : UndoNames.indent) {
             indent(paragraphs: paragraphs(in: textView.selectedRange()), by: delta)
         }
@@ -1634,6 +1635,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     func setKind(_ kind: BlockKind) {
+        if blockSelection != nil {
+            let all = selectedParagraphs()
+            let already = all.allSatisfy { storage.blockInfo(at: $0.location)?.kind == kind }
+            turnInto(.kind(already && kind != .paragraph ? .paragraph : kind))
+            return
+        }
         let paragraphs = paragraphs(in: textView.selectedRange())
         let textual = paragraphs.filter { storage.blockInfo(at: $0.location)?.kind.hasInlineText ?? false }
         let allAlready = textual.allSatisfy { storage.blockInfo(at: $0.location)?.kind == kind }
@@ -1644,10 +1651,13 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     func toggleChecked() {
-        let paragraphs = paragraphs(in: textView.selectedRange()).filter { storage.blockInfo(at: $0.location)?.kind == .check }
-        guard !paragraphs.isEmpty else { setKind(.check); return }
-        let allChecked = paragraphs.allSatisfy { storage.blockInfo(at: $0.location)?.checked == true }
-        undoStep(UndoNames.checkbox) { updateBlocks(paragraphs) { $0.with(checked: !allChecked) } }
+        let kept = blockSelection
+        defer { if let kept, blockSelection == nil { selectBlocks(anchor: kept.anchor, head: kept.head) } }
+        let chosen = kept != nil ? selectedParagraphs() : paragraphs(in: textView.selectedRange())
+        let checks = chosen.filter { storage.blockInfo(at: $0.location)?.kind == .check }
+        guard !checks.isEmpty else { setKind(.check); return }
+        let allChecked = checks.allSatisfy { storage.blockInfo(at: $0.location)?.checked == true }
+        undoStep(UndoNames.checkbox) { updateBlocks(checks) { $0.with(checked: !allChecked) } }
     }
 
     /// Moves the selected blocks (with their children) above the previous or below the

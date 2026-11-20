@@ -190,6 +190,12 @@ final class FortressTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
+    /// Copy of selected blocks: the blocks whole (blocks, Markdown, RTF, plain text).
+    override func copy(_ sender: Any?) {
+        guard let controller, controller.blockSelection != nil else { super.copy(sender); return }
+        controller.withBlocksSelectedAsText { super.copy(sender) }
+    }
+
     /// Cut of selected blocks: copied, then deleted as blocks (one "Cut" step).
     override func cut(_ sender: Any?) {
         if let controller, controller.blockSelection != nil {

@@ -67,10 +67,15 @@ extension BlockEditorController {
                 let local = editor.textView.convert(point, from: textView)
                 guard let (inner, innerFrame) = editor.blockFrame(at: CGPoint(x: editor.textView.textContainerOrigin.x + 1, y: local.y)),
                       let id = editor.storage.blockInfo(at: inner.location)?.id else { return nil }
-                return HandleTarget(editor: editor, blockId: id, frame: editor.textView.convert(innerFrame, to: textView), inColumn: true)
+                let depth = CGFloat(editor.storage.blockInfo(at: inner.location)?.depth ?? 0)
+                let innerLeft = editor.textView.textContainerOrigin.x + depth * theme.indentStep
+                let edged = CGRect(x: innerLeft, y: innerFrame.minY, width: innerFrame.maxX - innerLeft, height: innerFrame.height)
+                return HandleTarget(editor: editor, blockId: id, frame: editor.textView.convert(edged, to: textView), inColumn: true)
             }
         }
-        return HandleTarget(editor: self, blockId: info.id, frame: frame, inColumn: false)
+        // The handle stands left of the block's own left edge (its list marker included).
+        let left = origin.x + CGFloat(info.depth) * theme.indentStep
+        return HandleTarget(editor: self, blockId: info.id, frame: CGRect(x: left, y: frame.minY, width: frame.maxX - left, height: frame.height), inColumn: false)
     }
 
     // MARK: Dropping (the note's editor works out where, for its own text and its columns)
