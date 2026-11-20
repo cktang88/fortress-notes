@@ -199,8 +199,8 @@ class MarkdownImportTests(unittest.TestCase):
             # The export imports back to the same shape.
             again = create_block_document(database, "T2", "rough", rendered)
             self.assertEqual(
-                render_markdown(again["children"], include_ids=False),
-                render_markdown(created["children"], include_ids=False),
+                render_markdown(again["children"]),
+                render_markdown(created["children"]),
             )
 
     def test_unicode_line_separators_do_not_shift_block_text(self) -> None:
@@ -396,6 +396,26 @@ class InitializeTests(unittest.TestCase):
             database = self._database_at(directory, SCHEMA_VERSION + 1)
             with self.assertRaisesRegex(RuntimeError, "Unsupported block database version"):
                 initialize(database)
+
+    def test_a_new_workspace_starts_with_the_welcome_note_once(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app import main
+        from support import make_settings, use_settings
+
+        with tempfile.TemporaryDirectory() as directory:
+            settings = make_settings(Path(directory), welcome_note=True)
+            with use_settings(settings):
+                with TestClient(main.app):
+                    pass
+                [note] = block_store.list_documents(settings.block_db_path)
+                self.assertEqual(note["title"], "Welcome to Fortress Notes")
+                tree = block_store.document_tree(settings.block_db_path, note["id"])
+                self.assertEqual(tree["children"][0]["text"], "Welcome to Fortress Notes")
+                block_store.delete_document(settings.block_db_path, note["id"])
+                with TestClient(main.app):
+                    pass  # an existing workspace is never seeded again
+                self.assertEqual(block_store.list_documents(settings.block_db_path), [])
 
     def test_the_backend_does_not_start_on_an_old_database_and_says_why(self) -> None:
         from fastapi.testclient import TestClient

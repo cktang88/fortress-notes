@@ -10,7 +10,7 @@ from app.config import Settings
 
 # Off unless a test turns them on: no model, no OCR, no daily snapshot, no LLM key.
 DEFAULTS = {
-    "block_db_import_on_startup": False,
+    "welcome_note": False,
     "embeddings_enabled": False,
     "vision_enabled": False,
     "auto_backup_enabled": False,
@@ -62,3 +62,22 @@ def add_markdown_notes(notes: Path, database: Path) -> None:
             str(meta.get("status", "rough")), post.content,
             meta.get("created_at", utc_now()), meta.get("updated_at", utc_now()),
         )
+
+
+def import_markdown_files(database: Path, root: Path) -> list[str]:
+    """The Markdown files under ``root`` uploaded together, as the upload API reads them;
+    their new notes' ids."""
+
+    from app import block_store
+    from app.block_store import create_document
+    from app.portability import parse_uploaded_batch, parse_uploaded_markdown
+
+    block_store.initialize(database)
+    paths = sorted(root.rglob("*.md"))
+    notes = [parse_uploaded_markdown(path.relative_to(root).as_posix(), path.read_bytes()) for path in paths]
+    ids = []
+    for note, (document_id, specs) in zip(notes, parse_uploaded_batch(database, notes, block_store.new_id)):
+        create_document(database, document_id, note.title, note.status, note.body,
+                        note.created_at or "t", "t", provenance=note.provenance, specs=specs)
+        ids.append(document_id)
+    return ids

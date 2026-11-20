@@ -37,12 +37,7 @@ $$
 
 <div class="weird">raw <b>html</b></div>
 
-<!-- fortress:columns -->
-<!-- fortress:column {"attrs":{"width":0.3}} -->
-left
-<!-- fortress:column -->
-right
-<!-- /fortress:columns -->
+<!-- a comment: hidden in Obsidian, not a block -->
 
 <table><tr><th>h</th></tr><tr><td style="background-color:#ff0000" colspan="2"><p>p1</p><ul><li>li</li></ul></td></tr></table>
 

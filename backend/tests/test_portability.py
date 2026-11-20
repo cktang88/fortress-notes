@@ -3,10 +3,9 @@ import unittest
 from pathlib import Path
 
 from app.block_store import create_document, document_tree
-from app.portability import (
-    export_document_markdown,
-    import_markdown_directory,
-)
+from app.portability import export_document_markdown
+
+from support import import_markdown_files
 
 
 class PortabilityTests(unittest.TestCase):
@@ -55,10 +54,9 @@ class PortabilityTests(unittest.TestCase):
             assert source_tree is not None
             (root / "round-trip.md").write_text(markdown, encoding="utf-8")
 
-            report = import_markdown_directory(imported_database, root)
+            [imported_id] = import_markdown_files(imported_database, root)
 
-            self.assertEqual(report.imported_count, 1)
-            imported_tree = document_tree(imported_database, "round-trip")
+            imported_tree = document_tree(imported_database, imported_id)
             assert imported_tree is not None
             self.assertEqual(imported_tree["title"], source_tree["title"])
             self.assertEqual(imported_tree["status"], source_tree["status"])
@@ -88,10 +86,9 @@ class PortabilityTests(unittest.TestCase):
                 export_document_markdown(source_database, "empty"), encoding="utf-8"
             )
 
-            report = import_markdown_directory(imported_database, root)
+            [imported_id] = import_markdown_files(imported_database, root)
 
-            self.assertEqual(report.imported_count, 1)
-            imported_tree = document_tree(imported_database, "empty")
+            imported_tree = document_tree(imported_database, imported_id)
             assert imported_tree is not None
             self.assertEqual(imported_tree["title"], "Empty")
             # Something to type into, created at import (reads never write).
@@ -99,81 +96,6 @@ class PortabilityTests(unittest.TestCase):
                 [(block["type"], block["text"]) for block in imported_tree["children"]],
                 [("paragraph", "")],
             )
-
-    def test_import_creates_backups_and_preserves_originals(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database = root / ".fortress.sqlite3"
-            original = "---\ntitle: Imported\ntags: [portable]\n---\n# Imported\n\nBody\n"
-            source = root / "imported.md"
-            source.write_text(original, encoding="utf-8")
-
-            report = import_markdown_directory(database, root)
-
-            self.assertEqual(report.imported_count, 1)
-            self.assertEqual(report.error_count, 0)
-            self.assertEqual(source.read_text(encoding="utf-8"), original)
-            self.assertEqual((report.backup_directory / "imported.md").read_text(encoding="utf-8"), original)
-            tree = document_tree(database, "imported")
-            assert tree is not None
-            self.assertEqual(tree["title"], "Imported")
-            self.assertNotIn("tags", tree)
-
-    def test_repeated_import_reports_existing_document_and_makes_new_backup(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database = root / ".fortress.sqlite3"
-            source = root / "one.md"
-            source.write_text("First body\n", encoding="utf-8")
-
-            first = import_markdown_directory(database, root)
-            source.write_text("Changed source body\n", encoding="utf-8")
-            second = import_markdown_directory(database, root)
-
-            self.assertEqual(first.imported_count, 1)
-            self.assertEqual(second.skipped_count, 1)
-            self.assertNotEqual(first.backup_directory, second.backup_directory)
-            self.assertEqual(
-                (second.backup_directory / "one.md").read_text(encoding="utf-8"),
-                "Changed source body\n",
-            )
-            tree = document_tree(database, "one")
-            assert tree is not None
-            self.assertEqual(tree["children"][0]["text"], "First body")
-
-    def test_malformed_input_is_reported_and_source_is_left_intact(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database = root / ".fortress.sqlite3"
-            source = root / "broken.md"
-            original = b"\xff not valid UTF-8\n"
-            source.write_bytes(original)
-
-            report = import_markdown_directory(database, root)
-
-            self.assertEqual(report.error_count, 1)
-            self.assertEqual(report.items[0].document_id, "broken")
-            self.assertEqual(source.read_bytes(), original)
-            self.assertEqual((report.backup_directory / "broken.md").read_bytes(), original)
-            self.assertIsNone(document_tree(database, "broken"))
-
-    def test_malformed_frontmatter_is_reported_and_source_is_left_intact(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database = root / ".fortress.sqlite3"
-            source = root / "broken-frontmatter.md"
-            original = b"---\ntitle: [unterminated\n---\nBody\n"
-            source.write_bytes(original)
-
-            report = import_markdown_directory(database, root)
-
-            self.assertEqual(report.error_count, 1)
-            self.assertEqual(report.items[0].document_id, "broken-frontmatter")
-            self.assertEqual(source.read_bytes(), original)
-            self.assertEqual(
-                (report.backup_directory / "broken-frontmatter.md").read_bytes(), original
-            )
-            self.assertIsNone(document_tree(database, "broken-frontmatter"))
 
 
 class NestedBlockRoundTripTests(unittest.TestCase):
@@ -192,17 +114,17 @@ class NestedBlockRoundTripTests(unittest.TestCase):
                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
             )
             first_tree = document_tree(root / "0.sqlite3", "doc")
-            first = export_document_markdown(root / "0.sqlite3", "doc")
+            first = _body(export_document_markdown(root / "0.sqlite3", "doc"))
             markdown = first
             for round_trip in range(1, 4):
                 source = root / f"source{round_trip}"
                 source.mkdir()
                 (source / "doc.md").write_text(markdown, encoding="utf-8")
                 database = root / f"{round_trip}.sqlite3"
-                import_markdown_directory(database, source)
-                markdown = export_document_markdown(database, "doc")
+                [document_id] = import_markdown_files(database, source)
+                markdown = _body(export_document_markdown(database, document_id))
                 self.assertEqual(markdown, first, f"round trip {round_trip}")
-            tree = document_tree(database, "doc")
+            tree = document_tree(database, document_id)
             assert tree is not None and first_tree is not None
             self.assertEqual(_block_shape(tree["children"]), _block_shape(first_tree["children"]))
             item = first_tree["children"][0]
@@ -212,6 +134,12 @@ class NestedBlockRoundTripTests(unittest.TestCase):
             )
             self.assertEqual(item["children"][0]["attrs"], {"language": "bash"})
             self.assertEqual(item["children"][2]["children"][0]["text"], "deep code")
+
+
+def _body(markdown: str) -> str:
+    """A Markdown file without its front matter."""
+
+    return markdown.split("\n---\n", 1)[1]
 
 
 def _block_shape(blocks: list[dict]) -> list[tuple[str, str, list]]:

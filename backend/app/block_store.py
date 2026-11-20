@@ -563,17 +563,10 @@ MARKDOWN_IMPORTER = {"name": "fortress-markdown", "version": "1"}
 def markdown_import_provenance(
     metadata: dict, source_path: str, now: str
 ) -> dict[str, object]:
-    """Provenance for a note read from a Markdown file.
-
-    Our own export and mirror write the note's provenance in front matter
-    (``fortress.provenance``; older versions ``provenance``); it is restored as
-    it was (so export -> import -> export is stable). Any other file is a
-    ``markdown_import`` (with its ``source`` URL, as web clippers write it).
-    """
+    """Provenance for a note read from a Markdown file: a ``markdown_import``
+    (with its ``source`` URL, as web clippers write it)."""
 
     note = vault.read_front_matter(metadata)
-    if note.provenance:
-        return note.provenance
     value: dict[str, object] = {
         "source": "markdown_import",
         "source_path": source_path,
@@ -1804,12 +1797,10 @@ def document_write(path: Path, immediate: bool = True):
 # --- Reading -------------------------------------------------------------------------------------
 
 
-def render_markdown(
-    nodes: list[dict], depth: int = 0, include_ids: bool = True, links=None,
-) -> str:
+def render_markdown(nodes: list[dict], links=None) -> str:
     """A block tree as Markdown (see ``block_markdown.render_markdown``)."""
 
-    return _render_markdown(nodes, include_ids=include_ids, links=links)
+    return _render_markdown(nodes, links=links)
 
 
 def document_tree(path: Path, document_id: str) -> dict | None:

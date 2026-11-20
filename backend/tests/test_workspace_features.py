@@ -18,7 +18,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
         self.addCleanup(self._directory.cleanup)
         notes = Path(self._directory.name)
         self.notes = notes
-        self.settings = make_settings(notes, block_db_import_on_startup=True, reindex_interval_s=5.0)
+        self.settings = make_settings(notes, reindex_interval_s=5.0)
         patches = [
             use_settings(self.settings),
         ]

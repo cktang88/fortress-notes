@@ -49,15 +49,6 @@ class EmptyDocumentTests(unittest.TestCase):
         self.assertEqual([child["text"] for child in saved["children"]], [text])
         return saved
 
-    def test_an_imported_empty_file_can_be_typed_into(self) -> None:
-        from app.portability import import_markdown_directory
-
-        source = Path(self._directory.name) / "import"
-        source.mkdir()
-        (source / "blank.md").write_text("---\ntitle: Blank\n---\n", encoding="utf-8")
-        import_markdown_directory(self.settings.block_db_path, source)
-        self.open_and_type("blank", "Now it has words")
-
     def test_an_uploaded_empty_file_can_be_typed_into(self) -> None:
         result = self.client.post(
             "/api/markdown-import/files",

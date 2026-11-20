@@ -4,10 +4,8 @@ __pycache__/
 *.pyc
 backend/.env
 
-# Notes are personal data — keep only the sample welcome note in the repo
-notes/*
-!notes/Welcome to Fortress Notes.md
-notes/.fortress.sqlite3*
+# Notes are personal data (the Welcome note is backend/app/welcome.md)
+notes/
 
 # OS
 .DS_Store

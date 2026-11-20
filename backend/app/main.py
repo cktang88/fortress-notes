@@ -40,7 +40,7 @@ from .portability import (
     parse_uploaded_batch,
     parse_uploaded_markdown,
     safe_filename,
-    import_markdown_if_empty,
+    seed_welcome_note,
 )
 from .block_schema import BlockShapeError
 from .config import get_settings
@@ -119,17 +119,15 @@ STARTUP_ERROR_PREFIX = "Fortress can't start: "
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = get_settings()
+    new_workspace = not settings.block_db_path.exists()
     try:
-        if settings.block_db_import_on_startup:
-            await asyncio.to_thread(
-                import_markdown_if_empty, settings.block_db_path, settings.notes_path
-            )
-        else:
-            await asyncio.to_thread(block_store.initialize, settings.block_db_path)
+        await asyncio.to_thread(block_store.initialize, settings.block_db_path)
     except block_store.WorkspaceTooOld as error:
         # One plain line the app shows (BackendController.startupError) before the traceback.
         logging.getLogger("fortress").error("%s%s", STARTUP_ERROR_PREFIX, error)
         raise
+    if new_workspace and settings.welcome_note:
+        await asyncio.to_thread(seed_welcome_note, settings.block_db_path)
     await asyncio.to_thread(block_store.ensure_fts_integrity, settings.block_db_path)
     _start_background(settings)
     try:

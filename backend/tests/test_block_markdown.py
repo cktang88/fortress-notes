@@ -8,9 +8,10 @@ from pathlib import Path
 from ulid import ULID
 
 from app.block_markdown import RenderLinks, parse_markdown, render_markdown
-from app.block_store import create_block_document, create_document, document_tree
-from app.portability import import_markdown_directory
+from app.block_store import create_block_document, document_tree
 from app import block_store
+
+from support import import_markdown_files
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -57,7 +58,7 @@ class MarkdownImportTests(unittest.TestCase):
             [spec.type for spec in specs],
             ["heading", "paragraph", "quote", "bullet_item", "check_item", "check_item",
              "numbered_item", "numbered_item", "code", "divider", "table", "code", "image", "image",
-             "html", "columns", "table", "heading"],
+             "html", "table", "heading"],
         )
         para = specs[1].content
         self.assertIn({"type": "link", "href": "https://x.y", "content": [{"type": "text", "text": "link"}]}, para)
@@ -72,26 +73,27 @@ class MarkdownImportTests(unittest.TestCase):
                          [{"type": "text", "text": "2", "marks": {"bold": True}}])
         self.assertEqual((specs[11].attrs, specs[11].content), ({"language": "latex"}, [{"type": "text", "text": "a^2"}]))
         self.assertEqual(specs[12].attrs, {"url": "/media/x.png", "alt": "pic", "width": 100})
-        columns = specs[15]
-        self.assertEqual([column.attrs.get("width") for column in columns.children], [0.3, None])
-        html_table = specs[16]
+        html_table = specs[15]
         cell = html_table.children[1].children[0]
         self.assertEqual(cell.attrs["colspan"], 2)
         self.assertEqual([child.type for child in cell.children], ["paragraph", "bullet_item"])
-        self.assertEqual(specs[17].attrs, {"level": 6})
+        self.assertEqual(specs[16].attrs, {"level": 6})
 
-    def test_render_then_parse_is_lossless_and_keeps_ids(self) -> None:
-        # Every block's id written (no anchors given): ^id or a comment, all read back.
-        nodes = _nodes(parse_markdown((FIXTURES / "every_block.md").read_text(encoding="utf-8")))
-        markdown = render_markdown(nodes)
-        again = _nodes(parse_markdown(markdown))
-        self.assertEqual(_shape(again), _shape(nodes))
-        self.assertEqual(render_markdown(again), markdown)
+    def test_only_referenced_blocks_get_an_id(self) -> None:
+        nodes = _nodes(parse_markdown("Plain\n\nReferenced\n\n```\ncode\n```\n\n# Heading"))
+        anchors = {nodes[1]["id"], nodes[2]["id"], nodes[3]["id"]}
+        markdown = render_markdown(nodes, links=RenderLinks(anchors=anchors))
+        self.assertEqual(markdown, f"Plain\n\nReferenced ^{nodes[1]['id']}\n\n```\ncode\n```\n\n"
+                                   f"^{nodes[2]['id']}\n\n# Heading")  # headings are linked by text
+        again = parse_markdown(markdown)
+        self.assertEqual([spec.id for spec in again[1:3]], [nodes[1]["id"], nodes[2]["id"]])
+        self.assertNotIn("^", render_markdown(nodes))  # no RenderLinks: nothing is referred to
 
-    def test_without_references_the_markdown_is_plain_and_still_lossless(self) -> None:
+    def test_the_markdown_is_plain_and_reads_back_as_the_same_blocks(self) -> None:
         nodes = _nodes(parse_markdown((FIXTURES / "every_block.md").read_text(encoding="utf-8")))
         markdown = render_markdown(nodes, links=RenderLinks(anchors=set()))
-        self.assertNotIn("fortress:block", markdown)
+        self.assertNotIn("fortress", markdown)
+        self.assertNotIn("data-", markdown)
         # (the only "^" left is the reference to a block this note doesn't have)
         self.assertEqual(markdown.replace("x^2", "").replace("a^2", "").count("^"), 1)
         self.assertIn("[[#^01J00000000000000000000B10]]", markdown)
@@ -151,20 +153,28 @@ class ObsidianSyntaxTests(unittest.TestCase):
     def test_escaped_obsidian_syntax_stays_text(self) -> None:
         text = [{"type": "text", "text": "a == b, x==y==, ^tag at end ^id, %%c%%, [[no]] [!note]"}]
         markdown = render_markdown([{"id": "p", "type": "paragraph", "attrs": {}, "content": text,
-                                     "payload": None, "children": []}], include_ids=False)
+                                     "payload": None, "children": []}])
         [spec] = parse_markdown(markdown)
         self.assertEqual(spec.content, text)
         self.assertIsNone(spec.id)
 
-    def test_nesting_under_a_paragraph_reads_back(self) -> None:
+    def test_blocks_nested_under_a_paragraph_follow_it(self) -> None:
         tree = _nodes(parse_markdown("Parent\n\n- item"))
         tree[0]["children"] = _nodes(parse_markdown("Child\n\n> quoted"))
         tree[0]["children"][0]["children"] = _nodes(parse_markdown("Grandchild"))
         markdown = render_markdown(tree, links=RenderLinks(anchors=set()))
-        self.assertIn('Child <!-- fortress:block {"indent":1} -->', markdown)
-        self.assertIn('Grandchild <!-- fortress:block {"indent":2} -->', markdown)
-        again = _nodes(parse_markdown(markdown))
-        self.assertEqual(_shape(again, ids=False), _shape(tree, ids=False))
+        self.assertEqual(markdown, "Parent\n\nChild\n\nGrandchild\n\n> quoted\n\n- item")
+
+    def test_columns_are_their_contents_in_order(self) -> None:
+        def paragraph(text):
+            return {"id": text, "type": "paragraph", "attrs": {}, "payload": None, "children": [],
+                    "content": [{"type": "text", "text": text}]}
+
+        columns = {"id": "c", "type": "columns", "attrs": {}, "content": None, "payload": None,
+                   "children": [{"id": f"col{n}", "type": "column", "attrs": {"width": 0.5},
+                                 "content": None, "payload": None, "children": [paragraph(text)]}
+                                for n, text in enumerate(("left", "right"))]}
+        self.assertEqual(render_markdown([columns]), "left\n\nright")
 
     def test_highlight_colours_and_html_marks(self) -> None:
         content = [
@@ -175,13 +185,13 @@ class ObsidianSyntaxTests(unittest.TestCase):
             {"type": "text", "text": "up", "marks": {"sup": True}},
         ]
         markdown = render_markdown([{"id": "p", "type": "paragraph", "attrs": {}, "content": content,
-                                     "payload": None, "children": []}], include_ids=False)
+                                     "payload": None, "children": []}])
         self.assertEqual(markdown, '==yellow== <mark style="background:#00ff00">green</mark> <sup>up</sup>')
         self.assertEqual(parse_markdown(markdown)[0].content, content)
 
 
 class MarkdownExportTests(unittest.TestCase):
-    def test_an_export_read_back_keeps_block_ids_and_types_markdown_cannot_say(self) -> None:
+    def test_what_markdown_cannot_say_is_not_written(self) -> None:
         from app.block_store import apply_transaction
         from app.models import BlockOperation
 
@@ -193,16 +203,19 @@ class MarkdownExportTests(unittest.TestCase):
                 BlockOperation(operation="update", block_id=quote["id"], type="callout",
                                attrs={"icon": "!"}),
             ], created["revision"])
-            body = render_markdown(tree["children"])
-            self.assertIn('<!-- fortress:block {"attrs":{"icon":"!"}} -->\n> [!note]\n> note', body)
+            # The callout's icon (an extension attribute) has no Markdown form.
+            self.assertEqual(render_markdown(tree["children"]), "Intro\n\n> [!note]\n> note")
 
-            copy = Path(directory) / "copy.sqlite3"
-            create_document(copy, "doc", "Doc", "rough", body, "t", "t")
-            after = document_tree(copy, "doc")
-            self.assertEqual([node["id"] for node in after["children"]], [intro["id"], quote["id"]])
-            self.assertEqual((after["children"][1]["type"], after["children"][1]["attrs"]),
-                             ("callout", {"icon": "!"}))
-            self.assertEqual(after["children"][1]["children"][0]["id"], quote["children"][0]["id"])
+    def test_a_table_gfm_cannot_show_is_plain_html(self) -> None:
+        [table] = _nodes(parse_markdown(
+            '<table><tr><th>h</th><th>i</th></tr>'
+            '<tr><td style="background-color:#ff0000" colspan="2"><p>p1</p><ul><li>li</li></ul></td></tr></table>'
+        ))
+        markdown = render_markdown([table])
+        self.assertEqual(markdown, '<table>\n<tr><th><p>h</p></th><th><p>i</p></th></tr>\n'
+                                   '<tr><td style="background-color:#ff0000" colspan="2"><p>p1</p>'
+                                   '<ul><li>li</li></ul></td></tr>\n</table>')
+        self.assertEqual(_shape(_nodes(parse_markdown(markdown)), ids=False), _shape([table], ids=False))
 
 
 class ObsidianVaultImportTests(unittest.TestCase):
@@ -213,18 +226,13 @@ class ObsidianVaultImportTests(unittest.TestCase):
         self.vault = directory / "vault"
         shutil.copytree(FIXTURES / "obsidian_vault", self.vault)
         self.db = directory / ".fortress.sqlite3"
-        report = import_markdown_directory(self.db, self.vault)
-        self.assertEqual((report.imported_count, report.error_count), (3, 0), report.items)
         self.notes = {
-            document_tree(self.db, item.document_id)["title"]: document_tree(self.db, item.document_id)
-            for item in report.items
+            document_tree(self.db, document_id)["title"]: document_tree(self.db, document_id)
+            for document_id in import_markdown_files(self.db, self.vault)
         }
 
-    def test_notes_folders_and_front_matter(self) -> None:
+    def test_notes_and_front_matter(self) -> None:
         self.assertEqual(sorted(self.notes), ["People", "Project Alpha", "Roadmap"])
-        folders = block_store.navigation(self.db)["items"]
-        team = next(item for item in folders if item.get("kind") == "folder")
-        self.assertEqual((team["name"], [child["title"] for child in team["children"]]), ("Team", ["People"]))
         alpha = self.notes["Project Alpha"]["provenance"]
         self.assertEqual((alpha["source"], alpha["source_url"], alpha["source_created_at"]),
                          ("markdown_import", "https://example.com/alpha-brief", "2024-03-01T09:30"))

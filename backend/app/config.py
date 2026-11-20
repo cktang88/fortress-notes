@@ -65,7 +65,8 @@ class Settings(BaseSettings):
     # content) so it is searchable. OCR_THREADS 0 = half the cores, at most 4.
     vision_enabled: bool = True
     ocr_threads: int = 0
-    block_db_import_on_startup: bool = True
+    # A new workspace (no database yet) starts with the Welcome note (app/welcome.md).
+    welcome_note: bool = True
     # Keep a daily SQLite snapshot in NOTES_DIR/.fortress-backups (last 7 kept).
     auto_backup_enabled: bool = True
     # The OneNote converter (tools/fortress-onenote): an explicit binary, else it is

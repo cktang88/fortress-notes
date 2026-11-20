@@ -138,9 +138,3 @@ def document_provenance(raw: object, source_kind: object = None) -> dict[str, An
     value = loads(raw)
     value.setdefault("source", str(source_kind or DEFAULT_SOURCE))
     return value
-
-
-def front_matter(value: dict[str, Any]) -> dict[str, Any]:
-    """Document provenance as YAML front matter (plain types only)."""
-
-    return {key: item for key, item in value.items() if item not in (None, "", {}, [])}

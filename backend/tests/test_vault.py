@@ -1,6 +1,5 @@
 """The notes folder as an Obsidian vault (app/vault.py, documents.MirrorWriter)."""
 
-import json
 import shutil
 import tempfile
 import unittest
@@ -12,8 +11,7 @@ from fastapi.testclient import TestClient
 from app import block_store, documents, vault
 from app.block_store import apply_transaction, document_tree
 from app.models import BlockOperation, NoteCreate
-from app.portability import import_markdown_directory
-from support import make_settings, mirror_file, use_settings
+from support import import_markdown_files, make_settings, mirror_file, use_settings
 
 
 def _walk(nodes):
@@ -112,21 +110,18 @@ class VaultMirrorTests(_Workspace):
         weekly = self.mirror(source["id"])
         self.assertEqual(mirror_file(self.notes, source["id"]), self.notes / "Weekly.md")
         post = frontmatter.loads(weekly)
-        self.assertEqual(list(post.metadata)[:6], ["title", "created", "updated", "id", "status", "fortress"])
-        self.assertEqual(post.metadata["fortress"], {"provenance": {"source": "manual"}})
+        # Plain keys only: nothing Fortress-only (provenance, block metadata) is written.
+        self.assertEqual(list(post.metadata), ["title", "created", "updated", "id", "status"])
         self.assertEqual(post.content, (
             "Intro\n\n"
             f"See [[Roadmap]], [[Roadmap#^{goal['id']}|Ship the beta.]] and [[Roadmap#Q3 goals|Q3 goals]]\n\n"
             "==Mark==\n\n"
-            '<!-- fortress:block {"attrs":{"icon":"💡"}} -->\n> [!note]\n> Inside\n\n'
+            "> [!note]\n> Inside\n\n"
             "![chart|300](assets/01J00000000000000000000AB1.png)"
         ))
         roadmap = frontmatter.loads(self.mirror(target["id"])).content
-        # Only the blocks something refers to carry an id: ^id, or (a heading) a comment.
-        self.assertEqual(roadmap, (
-            f'# Q3 goals <!-- fortress:block {{"id":"{heading["id"]}"}} -->\n\n'
-            f"Ship the beta. ^{goal['id']}\n\nOther"
-        ))
+        # Only the blocks something refers to carry an id (a heading is linked by its text).
+        self.assertEqual(roadmap, f"# Q3 goals\n\nShip the beta. ^{goal['id']}\n\nOther")
 
     def test_renames_and_moves_rename_files_and_rewrite_the_links_to_them(self) -> None:
         target, _goal, _heading, source = self.make_linked_notes()
@@ -168,44 +163,25 @@ class VaultMirrorTests(_Workspace):
         self.assertEqual((self.notes / "Ideas.md").read_text(encoding="utf-8"), "mine")
         self.assertEqual(mirror_file(self.notes, note["id"]), self.notes / "Ideas 2.md")
 
-    def test_the_vault_imports_back_losslessly(self) -> None:
+    def test_the_vault_reads_back_as_plain_markdown(self) -> None:
         target, goal, heading, source = self.make_linked_notes()
-        folder = block_store.create_folder(self.db, "Projects")
-        block_store.move_document(self.db, target["id"], folder["id"], position=0)
-        from app.sources import SourceBlock
-
-        onenote = documents.upsert_from_source(
-            source="onenote_import", external_id="{P}", title="Imported",
-            blocks=[SourceBlock("From OneNote", external_id="{B}")],
-            provenance={"source_path": "Book › Page"},
-        )
         documents.flush_mirrors()
-
         copy = self.notes.parent / f"{self.notes.name}-copy"
         self.addCleanup(shutil.rmtree, copy, True)
         shutil.copytree(self.notes, copy, ignore=shutil.ignore_patterns(".fortress*", "assets"))
         database = copy / ".fortress.sqlite3"
-        report = import_markdown_directory(database, copy)
-        self.assertEqual(report.error_count, 0, report.items)
-
+        imported = {
+            document_tree(database, document_id)["title"]: document_tree(database, document_id)
+            for document_id in import_markdown_files(database, copy)
+        }
         for original in (target, source):
             before = document_tree(self.db, original["id"])
-            after = document_tree(database, original["id"])  # the note id is kept
-            self.assertEqual(
-                [(node["type"], node["attrs"], node["content"], node["payload"]) for node in _walk(after["children"])],
-                [(node["type"], node["attrs"], node["content"], node["payload"]) for node in _walk(before["children"])],
-            )
-            self.assertEqual((after["title"], after["status"], after["created_at"]),
-                             (before["title"], before["status"], before["created_at"]))
-        # Referenced blocks keep their ids, so the links and backlinks do too.
-        ids = {node["id"] for node in _walk(document_tree(database, target["id"])["children"])}
-        self.assertLessEqual({goal["id"], heading["id"]}, ids)
-        self.assertEqual(len(block_store.document_backlinks(database, target["id"])), 3)
-        moved = next(item for item in block_store.navigation(database)["items"] if item.get("kind") == "folder")
-        self.assertEqual(moved["name"], "Projects")
-        imported = document_tree(database, onenote.document_id)
-        self.assertEqual(imported["provenance"]["source"], "onenote_import")
-        self.assertEqual(imported["provenance"]["source_path"], "Book › Page")
+            after = imported[before["title"]]
+            self.assertEqual([(node["type"], node["text"]) for node in _walk(after["children"])],
+                             [(node["type"], node["text"]) for node in _walk(before["children"])])
+        # The links between the notes are links again.
+        roadmap = imported["Roadmap"]
+        self.assertEqual(len(block_store.document_backlinks(database, roadmap["id"])), 3)
 
 
 class LinkedBodyTests(_Workspace):

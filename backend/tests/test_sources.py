@@ -15,10 +15,10 @@ from app.block_store import (
     rename_document,
 )
 from app.models import BlockOperation
-from app.portability import export_document_markdown, import_markdown_directory
+from app.portability import export_document_markdown
 from app.sources import SourceBlock, document_info, upsert_document_from_source
 
-from support import make_settings, use_settings, mirror_file
+from support import import_markdown_files, make_settings, use_settings, mirror_file
 
 
 def _texts(nodes):
@@ -84,61 +84,38 @@ class SourceStoreTests(unittest.TestCase):
         self.assertEqual(len(block_store.search_blocks(self.db, "Plain")), 1)
         self.assertTrue(block_store.fts_is_consistent(self.db))
 
-    # --- Markdown round trip -----------------------------------------------
+    # --- Markdown export (one way) -------------------------------------------
 
-    def test_markdown_export_and_reimport_restore_document_provenance(self) -> None:
+    def test_the_markdown_export_carries_no_provenance(self) -> None:
         self.page([
             SourceBlock("# Agenda", external_id="{H}"),
             SourceBlock("- Item", external_id="{L}", children=[
                 SourceBlock("- Child", external_id="{C}"),
             ]),
-            SourceBlock("```\ncode\n```", external_id="{K}"),
         ])
         document_id = self._page_id()
-        tree = document_tree(self.db, document_id)
-        apply_transaction(self.db, document_id, [
-            _paragraph("Typed here", block_id="01J00000000000000000000003"),
-        ], tree["revision"])
         markdown = export_document_markdown(self.db, document_id)
-        self.assertIn("source: onenote_import", markdown)
-        self.assertIn("external_id: '{PAGE-1}'", markdown)
-        self.assertNotIn("fortress:block", markdown)  # blocks carry no provenance
-        self.assertIn("  - Child", markdown)
+        self.assertEqual(markdown.split("\n---\n", 1)[1], "\n# Agenda\n\n- Item\n  - Child\n")
+        for fortress_only in ("onenote_import", "external_id", "{PAGE-1}", "fortress", "provenance"):
+            self.assertNotIn(fortress_only, markdown)
         self.assertIn(f"\nid: {document_id}\n", markdown.split("---", 2)[1])
-        # Nothing refers to these blocks: no ids in the body.
-        self.assertNotIn("^01", markdown)
-        self.assertNotIn('"id"', markdown)
 
+        # Read back, it is a new note from a Markdown file.
         other = self.root / "other"
         other.mkdir()
         (other / "page.md").write_text(markdown, encoding="utf-8")
-        target = other / ".fortress.sqlite3"
-        import_markdown_directory(target, other)
-        # The note keeps its id (front matter "id").
-        restored = document_tree(target, document_id)
-        self.assertEqual(restored["provenance"]["source"], "onenote_import")
-        self.assertEqual(restored["provenance"]["external_id"], "{PAGE-1}")
-        self.assertEqual(restored["provenance"]["source_path"], "Work › Meetings › Meeting")
-        self.assertEqual(_texts(restored["children"]), ["Agenda", "Item", "code", "Typed here"])
-        self.assertEqual(restored["children"][1]["children"][0]["text"], "Child")
-        # No comment line became a block, and a second export is identical.
-        self.assertEqual(export_document_markdown(target, document_id), markdown)
-
-        # Re-importing the export into a database that has the source page reuses
-        # nothing: the copy gives up the source id instead of stealing it.
-        (other / "copy.md").write_text(markdown.replace(f"id: {document_id}\n", ""), encoding="utf-8")
-        import_markdown_directory(self.db, other)
-        copy = document_tree(self.db, "copy")
-        self.assertNotIn("external_id", copy["provenance"])
-        self.assertEqual(copy["provenance"]["extra"]["copy_of_external_id"], "{PAGE-1}")
-
+        [copy_id] = import_markdown_files(self.db, other)
+        self.assertNotEqual(copy_id, document_id)
+        copy = document_tree(self.db, copy_id)
+        self.assertEqual(copy["provenance"]["source"], "markdown_import")
+        self.assertEqual(_texts(copy["children"]), ["Agenda", "Item"])
 
     def test_plain_markdown_imports_are_marked_markdown_import(self) -> None:
         (self.root / "note.md").write_text(
             "---\ntitle: Hi\ncreated_at: '2019-05-01T00:00:00+00:00'\n---\nBody\n", encoding="utf-8"
         )
-        import_markdown_directory(self.db, self.root)
-        tree = document_tree(self.db, "note")
+        [note_id] = import_markdown_files(self.db, self.root)
+        tree = document_tree(self.db, note_id)
         self.assertEqual(tree["provenance"]["source"], "markdown_import")
         self.assertEqual(tree["provenance"]["source_path"], "note.md")
         self.assertEqual(tree["provenance"]["source_created_at"], "2019-05-01T00:00:00+00:00")
@@ -420,7 +397,7 @@ class SourceApiTests(unittest.TestCase):
         self.assertEqual(body["counts"]["words"], 2)
         self.assertEqual(self.client.get("/api/block-documents/nope/info").status_code, 404)
 
-    def test_uploaded_markdown_restores_exported_provenance_and_mirrors_carry_it(self) -> None:
+    def test_uploaded_exports_are_new_markdown_imports_and_mirrors_carry_no_provenance(self) -> None:
         from app import documents
 
         result = documents.upsert_from_source(
@@ -430,15 +407,15 @@ class SourceApiTests(unittest.TestCase):
         exported = self.client.get(f"/api/block-documents/{result.document_id}/markdown").text
         documents.flush_mirrors()
         mirror = mirror_file(self.notes, result.document_id).read_text(encoding="utf-8")
-        self.assertIn("onenote_import", mirror)
-        self.assertNotIn("fortress:block", mirror)  # blocks carry no provenance
+        self.assertEqual(mirror, exported)
+        self.assertNotIn("onenote_import", mirror)
         response = self.client.post(
             "/api/markdown-import/files",
             files=[("files", ("Page.md", exported.encode(), "text/markdown"))],
         ).json()
         [imported] = response["imported"]
         tree = self.client.get(f"/api/block-documents/{imported['id']}").json()
-        self.assertEqual(tree["provenance"]["source"], "onenote_import")
+        self.assertEqual(tree["provenance"]["source"], "markdown_import")
         self.assertEqual(tree["children"][0]["text"], "Para")
 
 

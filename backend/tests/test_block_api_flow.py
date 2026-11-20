@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 # A block reference reads as its target's current text.
 EDITED = "Edited searchable phrase A migrated searchable block"
 
-from support import make_settings, use_settings
+from support import add_markdown_notes, make_settings, use_settings
 
 
 class BlockApiFlowTests(unittest.TestCase):
@@ -22,7 +22,8 @@ class BlockApiFlowTests(unittest.TestCase):
                 "---\ntitle: Target\n---\nA migrated searchable block\n",
                 encoding="utf-8",
             )
-            settings = make_settings(notes, block_db_import_on_startup=True, reindex_interval_s=5.0)
+            settings = make_settings(notes, reindex_interval_s=5.0)
+            add_markdown_notes(notes, settings.block_db_path)
 
             from app import documents
 
@@ -80,7 +81,6 @@ class BlockApiFlowTests(unittest.TestCase):
                     self.assertEqual(malformed.status_code, 422)
 
                 # A fresh lifespan initializes a new connection to the same database.
-                settings.block_db_import_on_startup = False
                 with TestClient(main.app) as restarted:
                     recovered = restarted.get(f"/api/block-documents/{source['id']}")
                     self.assertEqual(recovered.status_code, 200)

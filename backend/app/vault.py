@@ -2,15 +2,15 @@
 
 Each note is ``<folder>/<subfolder>/<title>.md``, the folders being the note's
 Fortress folders; stored files stay in ``assets/`` and are embedded with paths
-relative to the note. Front matter uses the keys other tools know (``title``,
-``aliases``, ``created``, ``updated``, ``id``, ``status``, ``source``); what has no
-common key is under ``fortress:``. Note links are wikilinks by file name, the
+relative to the note. Front matter uses only plain keys (``title``, ``aliases``,
+``created``, ``updated``, ``id``, ``status``, ``source``, ``picture_text``). The
+vault is a one-way export: nothing reads it back as Fortress notes. Note links are wikilinks by file name, the
 shortest name that is unique in the vault, as Obsidian writes them.
 
-This module holds the naming (:func:`compute_layout`), the front matter both
-ways (:func:`front_matter`, :func:`read_front_matter`) and the link resolution
-of an import (:class:`ImportLinks`). ``documents.MirrorWriter`` writes the vault;
-``portability`` and the upload API read Markdown with these.
+This module holds the naming (:func:`compute_layout`), the front matter written
+(:func:`front_matter`) and read from any Markdown file (:func:`read_front_matter`),
+and the link resolution of an import (:class:`ImportLinks`).
+``documents.MirrorWriter`` writes the vault; the upload API reads Markdown with these.
 """
 
 from __future__ import annotations
@@ -24,18 +24,16 @@ from typing import Any
 
 import yaml
 
-from . import provenance as _provenance
 from .block_markdown import (
     BlockSpec,
     ParseLinks,
     RenderLinks,
-    _OWN_ID_RE,
     heading_key,
     new_block_id,
 )
 
 # Bump to rewrite every mirror in the new format (the mirror writer compares it).
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 
 # Characters no file name may hold on macOS/Windows/Linux, plus those Obsidian
 # refuses in note names because links use them (# ^ [ ] |).
@@ -156,15 +154,10 @@ def compute_layout(
 
 # --- Front matter -------------------------------------------------------------------------------
 
-# Keys the mirror writes (anything else a person adds to a mirror is kept).
-_MANAGED_KEYS = frozenset({"title", "aliases", "created", "updated", "id", "status", "source", "fortress"})
-# Keys older versions wrote.
-_RETIRED_KEYS = frozenset({"created_at", "updated_at", "provenance", "images", "tags"})
-
-
-def front_matter(tree: dict[str, Any], stem: str | None, picture_text: dict[str, str] | None,
-                 existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The YAML front matter of a note's Markdown (key order as written)."""
+def front_matter(tree: dict[str, Any], stem: str | None,
+                 picture_text: dict[str, str] | None) -> dict[str, Any]:
+    """The YAML front matter of a note's Markdown (key order as written): plain keys
+    other tools know, nothing Fortress-only."""
 
     title = str(tree["title"])
     meta: dict[str, Any] = {"title": title}
@@ -174,18 +167,13 @@ def front_matter(tree: dict[str, Any], stem: str | None, picture_text: dict[str,
     meta["updated"] = _plain(tree["updated_at"])
     meta["id"] = tree["id"]
     meta["status"] = tree["status"]
-    provenance = _provenance.front_matter(tree.get("provenance") or {"source": "manual"})
-    if isinstance(provenance.get("source_url"), str):
+    source_url = (tree.get("provenance") or {}).get("source_url")
+    if isinstance(source_url, str):
         # What web clippers (Obsidian's included) call the page a note came from.
-        meta["source"] = provenance["source_url"]
-    fortress: dict[str, Any] = {"provenance": provenance}
+        meta["source"] = source_url
     if picture_text:
         # Text read from the pictures and PDFs the note shows, so other tools find it too.
-        fortress["picture_text"] = picture_text
-    meta["fortress"] = fortress
-    for key, value in (existing or {}).items():
-        if key not in _MANAGED_KEYS and key not in _RETIRED_KEYS and key not in meta:
-            meta[key] = value
+        meta["picture_text"] = picture_text
     return meta
 
 
@@ -215,39 +203,26 @@ def _yaml_safe(value: Any) -> Any:
 class NoteMetadata:
     """What a Markdown file's front matter says about its note."""
 
-    id: str | None
     title: str | None
     status: str
     created: Any
     updated: Any
     aliases: list[str]
-    provenance: dict[str, Any] | None  # exactly as Fortress wrote it, else None
 
 
 def read_front_matter(metadata: dict[str, Any]) -> NoteMetadata:
     """Front matter written by Fortress, Obsidian or anything else."""
 
-    fortress = metadata.get("fortress") if isinstance(metadata.get("fortress"), dict) else {}
-    raw_provenance = fortress.get("provenance")
-    provenance = None
-    if isinstance(raw_provenance, dict):
-        try:
-            provenance = _provenance.normalize(raw_provenance, trusted=True) or None
-        except _provenance.ProvenanceError:
-            provenance = None
     aliases = metadata.get("aliases", metadata.get("alias"))
     if isinstance(aliases, str):
         aliases = [aliases]
     status = metadata.get("status")
-    raw_id = metadata.get("id")
     return NoteMetadata(
-        id=str(raw_id) if isinstance(raw_id, (str, int)) and str(raw_id).strip() else None,
         title=str(metadata["title"]).strip() or None if metadata.get("title") is not None else None,
         status=status if status in ("rough", "polished") else "rough",
         created=_first(metadata, "created", "created_at", "date created", "date"),
         updated=_first(metadata, "updated", "updated_at", "modified", "date modified", "lastmod"),
         aliases=[str(alias) for alias in aliases if alias] if isinstance(aliases, list) else [],
-        provenance=provenance,
     )
 
 
@@ -265,7 +240,7 @@ def _first(metadata: dict[str, Any], *keys: str) -> Any:
 class ImportLinks(ParseLinks):
     """Wikilinks across a set of Markdown files read together (a vault, an upload).
 
-    ``[[Name]]`` resolves by file name, path, title, alias or id among the files
+    ``[[Name]]`` resolves by file name, path, title or alias among the files
     (then ``fallback``: notes already in the workspace); ``[[Name#^id]]`` and
     ``[[Name#Heading]]`` resolve to the block with that ``^id`` / heading in
     that file, whichever file is read first. Set ``document_id`` to the note
@@ -292,8 +267,6 @@ class ImportLinks(ParseLinks):
         found = self._names.get(key) or self._names.get(key.rsplit("/", 1)[-1])
         if found is None and self._fallback is not None:
             found = self._fallback(name.strip())
-        if found is None and _OWN_ID_RE.match(name.strip()):
-            found = name.strip()
         return found
 
     def heading(self, document_id: str | None, text: str) -> str | None:

@@ -1,9 +1,9 @@
 """Note lifecycle over the canonical SQLite store, plus the Markdown mirrors.
 
-SQLite is the only source of truth. The notes folder is a read-only mirror of
+SQLite is the only source of truth. The notes folder is a one-way export of
 every note as plain Markdown, laid out as an Obsidian vault (``vault.py``), kept so
-notes stay readable outside the app; nothing reads the mirrors back except the
-explicit importer. Writers never touch mirrors: the
+notes stay readable outside the app; nothing reads the mirrors back, and each is
+overwritten whenever its note changes. Writers never touch mirrors: the
 background :class:`MirrorWriter` is their only writer and remover, and it
 follows SQLite's change log, so every write (here, transactions, imports,
 restores) is mirrored without its writer asking.
@@ -290,18 +290,15 @@ class MirrorWriter(background.Service):
         rewrite = (changed | moved | anchored | linking) & set(layout.paths)
 
         # First take away what is stale (so a name can pass from one note to another)...
-        kept: dict[str, dict] = {}
         for document_id in gone:
             _remove(notes_path, state.files[document_id])
         for document_id in moved & set(state.files):
-            old = notes_path / state.files[document_id]
-            kept.setdefault(document_id, _hand_added(old, document_id))
             _remove(notes_path, state.files[document_id])
         # ... then write.
         for document_id in sorted(rewrite):
             try:
                 _mirror_document(db_path, notes_path, document_id, layout,
-                                 anchors.get(document_id, ()), kept.get(document_id))
+                                 anchors.get(document_id, ()))
             except Exception:  # logged; one bad note must not stop the others
                 _log.exception("mirror write failed for %s", document_id)
         new_anchors = {key: sorted(value) for key, value in anchors.items() if key in layout.paths}
@@ -349,13 +346,11 @@ class MirrorWriter(background.Service):
             anchors = vault.referenced_blocks(connection)
         layout = self._layout(notes_path, state, rows, folders)
         old = state.files.get(document_id)
-        kept = None
         if old and old != layout.paths.get(document_id):
-            kept = _hand_added(notes_path / old, document_id)
             _remove(notes_path, old)
         if document_id in layout.paths:
             _mirror_document(db_path, notes_path, document_id, layout,
-                             anchors.get(document_id, ()), kept)
+                             anchors.get(document_id, ()))
             state.files[document_id] = layout.paths[document_id]
             state.targets[document_id] = layout.targets[document_id]
         else:
@@ -441,16 +436,6 @@ def _documents_linking_to(db_path: Path, document_ids: set[str]) -> set[str]:
     return found
 
 
-def _hand_added(path: Path, document_id: str) -> dict:
-    """The front matter of a note's existing mirror (a person may have added keys)."""
-
-    try:
-        metadata = dict(frontmatter.loads(path.read_text(encoding="utf-8")).metadata)
-    except Exception:  # missing or damaged: simply rewritten
-        return {}
-    return metadata if str(metadata.get("id") or document_id) == document_id else {}
-
-
 def _remove(notes_path: Path, relative: str) -> None:
     path = notes_path / relative
     path.unlink(missing_ok=True)
@@ -501,7 +486,7 @@ def mirror_path(document_id: str, notes_path: Path | None = None) -> Path | None
 
 
 def _mirror_document(db_path: Path, notes_path: Path, document_id: str, layout: vault.Layout,
-                     anchors, kept: dict | None) -> None:
+                     anchors) -> None:
     tree = block_store.document_tree(db_path, document_id)
     if tree is None or document_id not in layout.paths:
         return
@@ -512,10 +497,9 @@ def _mirror_document(db_path: Path, notes_path: Path, document_id: str, layout: 
     )
     relative = layout.paths[document_id]
     target = notes_path / relative
-    # Keep any extra front matter a person added to the file by hand.
-    existing = kept if kept is not None else _hand_added(target, document_id)
+    # Always overwritten: the mirror is an export, never edited in place.
     metadata = vault.front_matter(
-        tree, Path(relative).stem, images.collect_image_texts(db_path, body), existing
+        tree, Path(relative).stem, images.collect_image_texts(db_path, body)
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(target, vault.dump(metadata, body))
