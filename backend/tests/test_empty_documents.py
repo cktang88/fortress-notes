@@ -65,18 +65,6 @@ class EmptyDocumentTests(unittest.TestCase):
         ).json()
         self.open_and_type(result["imported"][0]["id"], "Typed after import")
 
-    def test_older_empty_notes_get_their_paragraph_at_startup_not_on_read(self) -> None:
-        from app import block_store, main
-
-        db = self.settings.block_db_path
-        block_store.create_document(db, "legacy", "Legacy", "rough", "", "t", "t")
-        state = block_store.change_state(db)
-        self.assertEqual(self.client.get("/api/block-documents/legacy").json()["children"], [])
-        self.assertEqual(block_store.change_state(db), state)  # reads never write
-        with TestClient(main.app):
-            pass  # startup repairs it
-        self.open_and_type("legacy", "Typed after a restart")
-
     def test_an_empty_note_still_exports_as_empty(self) -> None:
         from app.portability import export_document_markdown
 

@@ -1,4 +1,4 @@
-"""Regression tests for storage-core bugs (block moves, positions, trash, migrations)."""
+"""Regression tests for storage-core bugs (block moves, positions, trash, initialize)."""
 
 import hashlib
 import tempfile
@@ -20,6 +20,7 @@ from app.block_store import (
     document_backlinks,
     document_tree,
     fts_is_consistent,
+    SCHEMA_VERSION,
     initialize,
     move_document,
     navigation,
@@ -331,6 +332,71 @@ class InitializeTests(unittest.TestCase):
                     mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
                 self.assertEqual(len(versions), 1)
                 self.assertEqual(mode, "wal")
+
+    def _database_at(self, directory: str, version: int) -> Path:
+        """A database written by an earlier build, recorded at schema ``version``."""
+
+        database = Path(directory) / ".fortress.sqlite3"
+        block_store.create_block_document(database, "Kept", "rough", "Some text")
+        with connection_scope(database) as connection:
+            connection.execute("UPDATE schema_migrations SET version = ?", (version,))
+        block_store._ready_files.pop(database, None)
+        return database
+
+    def test_a_schema_14_database_is_refused_with_how_to_upgrade_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = self._database_at(directory, 14)
+            with self.assertRaises(block_store.WorkspaceTooOld) as raised:
+                initialize(database)
+            message = str(raised.exception)
+            self.assertIn("schema version 14", message)
+            self.assertIn("last-migrating-release", message)
+            with connection_scope(database) as connection:  # left as it was
+                version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+            self.assertEqual(version, 14)
+
+    def test_notes_without_a_schema_version_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            with connection_scope(database) as connection:
+                connection.execute("CREATE TABLE documents (id TEXT PRIMARY KEY, title TEXT)")
+            with self.assertRaises(block_store.WorkspaceTooOld):
+                initialize(database)
+
+    def test_a_schema_15_database_opens(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = self._database_at(directory, SCHEMA_VERSION)
+            initialize(database)
+            self.assertEqual([item["title"] for item in block_store.list_documents(database)], ["Kept"])
+
+    def test_a_backup_of_an_older_schema_is_not_restored(self) -> None:
+        from app import backups
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = self._database_at(directory, 14)
+            with self.assertRaisesRegex(ValueError, "last-migrating-release"):
+                backups._verify_snapshot(database)
+
+    def test_a_newer_database_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = self._database_at(directory, SCHEMA_VERSION + 1)
+            with self.assertRaisesRegex(RuntimeError, "Unsupported block database version"):
+                initialize(database)
+
+    def test_the_backend_does_not_start_on_an_old_database_and_says_why(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app import main
+        from support import make_settings, use_settings
+
+        with tempfile.TemporaryDirectory() as directory:
+            self._database_at(directory, 14)
+            with use_settings(make_settings(Path(directory))), \
+                    self.assertLogs("fortress", "ERROR") as logged, \
+                    self.assertRaises(block_store.WorkspaceTooOld):
+                with TestClient(main.app):
+                    pass
+            self.assertIn(main.STARTUP_ERROR_PREFIX + "This notes database", logged.output[0])
 
 
 if __name__ == "__main__":

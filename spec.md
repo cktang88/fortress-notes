@@ -104,15 +104,14 @@ with **422**.
   parent-process watch (see "Local auth" below).
 - `models.py` — Pydantic schemas (`NoteCreate`, `NoteUpdate`, `BlockTransaction`,
   `RelatedResult`, `ExternalOcrResult`, ...).
-- `block_store.py` — SQLite schema, migrations, blocks, transactions, FTS, change log.
+- `block_store.py` — SQLite schema (version 15; older databases are refused, see
+  `docs/block-model.md` §10), blocks, transactions, FTS, change log.
 - `block_schema.py` — the block type registry and inline content rules (§2a).
 - `block_query.py` — filtered block-level full-text queries.
 - `order_keys.py` — fractional sibling order keys.
 - `block_markdown.py` — Markdown (CommonMark/GFM/Obsidian) in and out of canonical blocks.
 - `vault.py` — the notes folder as an Obsidian vault: file names, front matter,
   wikilink resolution across an import.
-- `block_legacy.py`, `block_migration.py` — the schema-14 migration of stored
-  data in older block shapes (the API accepts canonical shapes only).
 - `documents.py` — note lifecycle (create/update/trash/restore/purge/capture)
   and the Markdown mirror writer.
 - `workspace.py` — the Trash listing. `backups.py` — snapshots and restore.
@@ -345,8 +344,6 @@ BackendController.swift`: the repository's `backend/.venv/bin/uvicorn`, else
   older versions, then the newest. While an external reader is active the CPU queue
   leaves the backlog to it, and it never reads an asset a preferred reader has
   finished.
-- Older `<id>.txt` sidecars are migrated into `assets.text` once by
-  `backfill_assets` (until the queue re-reads the file).
 
 ## 7. Workspace safety and organization
 

@@ -9,7 +9,6 @@ from unittest.mock import patch
 from app import block_store
 from app.models import BlockOperation
 from app.block_store import (
-    backfill_assets,
     connection_scope,
     create_document,
     fts_is_consistent,
@@ -56,33 +55,6 @@ class StartupTests(unittest.TestCase):
                 "INSERT INTO blocks_fts(block_id, document_id, text) VALUES ('gone', 'x', 'y')"
             )
         self.assertFalse(fts_is_consistent(self.database))
-
-    def test_backfill_does_not_rehash_and_reindex_everything_on_every_start(self) -> None:
-        media = self.root / "assets"
-        media.mkdir()
-        (media / "01J00000000000000000000000.png").write_bytes(b"png")
-        _document(self.database, "doc", 10)
-        self.assertEqual(backfill_assets(self.database, media), 1)
-        with (
-            patch.object(block_store, "rebuild_fts") as rebuild,
-            patch.object(block_store, "rebuild_document_derived") as relink,
-            patch.object(Path, "read_bytes", side_effect=AssertionError("re-read")),
-        ):
-            self.assertEqual(backfill_assets(self.database, media), 1)
-        rebuild.assert_not_called()
-        relink.assert_not_called()
-
-    def test_backfill_still_picks_up_a_new_sidecar_for_a_registered_asset(self) -> None:
-        media = self.root / "assets"
-        media.mkdir()
-        image = media / "01J00000000000000000000000.png"
-        image.write_bytes(b"png")
-        backfill_assets(self.database, media)
-        image.with_suffix(".txt").write_text("late OCR", encoding="utf-8")
-        backfill_assets(self.database, media)
-        with connection_scope(self.database) as connection:
-            text = connection.execute("SELECT text FROM assets").fetchone()["text"]
-        self.assertEqual(text, "late OCR")
 
     def test_initialize_runs_the_schema_script_once_per_database(self) -> None:
         initialize(self.database)
@@ -173,9 +145,9 @@ class LargeDocumentTransactionTests(unittest.TestCase):
         self.assertEqual(block_store.document_backlinks(self.database, "big"), [])
         self.assertTrue(fts_is_consistent(self.database))
 
-    def test_fts_rows_follow_their_block_rowid_and_old_layouts_are_rebuilt(self) -> None:
+    def test_fts_rows_out_of_step_with_their_block_rowid_are_rebuilt(self) -> None:
         with connection_scope(self.database) as connection:
-            # A database indexed before FTS rows shared their block's rowid.
+            # FTS rows that don't share their block's rowid (``_fts_insert`` relies on it).
             rows = connection.execute(
                 "SELECT block_id, document_id, text FROM blocks_fts"
             ).fetchall()
@@ -185,8 +157,7 @@ class LargeDocumentTransactionTests(unittest.TestCase):
                 [(100000 + n, *row) for n, row in enumerate(rows)],
             )
         self.assertFalse(fts_is_consistent(self.database))
-        initialize(self.database, force=True)
-        self.assertTrue(fts_is_consistent(self.database))
+        self.assertTrue(block_store.ensure_fts_integrity(self.database))
 
 
 class ApiWorkTests(unittest.TestCase):

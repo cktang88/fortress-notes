@@ -5,9 +5,7 @@ category, attributes, payload and allowed children; the inline node form and its
 normalization; and the plain ``text`` the server derives from a block. Pure
 functions, no SQLite.
 
-Stored legacy shapes (BlockNote names and runs, ``[[id|Title]]`` links, table
-JSON) are converted once by the schema 14 migration, via :mod:`app.block_legacy`;
-the API accepts only this module's canonical form.
+The API accepts only this module's canonical form.
 """
 
 from __future__ import annotations

@@ -6,8 +6,8 @@ contract. This module stores blocks, applies transactions,
 and keeps the derived data in step: text, links, asset links and full-text
 search.
 
-Other modules that write documents with SQL of their own (sources, workspace,
-migrations) use only the public names here, mostly
+Other modules that write documents with SQL of their own (sources, workspace)
+use only the public names here, mostly
 :func:`document_write`. Everything that must follow a write follows from it:
 
 * derived rows (text, links, asset links, the FTS row) of the documents a
@@ -43,25 +43,6 @@ from .models import BlockOperation
 
 SCHEMA_VERSION = 15
 DB_FILENAME = ".fortress.sqlite3"
-
-_UPLOAD_ID_RE = re.compile(r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$")
-_MIME_BY_EXTENSION = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".mp3": "audio/mpeg",
-    ".wav": "audio/wav",
-    ".ogg": "audio/ogg",
-    ".webm": "audio/webm",
-    ".m4a": "audio/mp4",
-    ".mp4": "video/mp4",
-    ".ogv": "video/ogg",
-    ".mov": "video/quicktime",
-    ".pdf": "application/pdf",
-}
-
 
 def new_id() -> str:
     """Generate a stable-format ID for records created by the block store."""
@@ -102,8 +83,17 @@ CREATE TABLE IF NOT EXISTS documents (
     source_kind TEXT NOT NULL DEFAULT 'manual',
     source_external_id TEXT,
     sync_json TEXT NOT NULL DEFAULT '{}',
-    last_opened_at TEXT
+    last_opened_at TEXT,
+    -- The change_log seq of the last change to this note's own rows.
+    change_seq INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS documents_folder_position ON documents(folder_id, position);
+-- Re-imports find "the note this source page became" by its source key.
+CREATE UNIQUE INDEX IF NOT EXISTS documents_source_key
+    ON documents(source_kind, source_external_id) WHERE source_external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS folders_source_key
+    ON folders(source_kind, source_external_id) WHERE source_external_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS folders_parent_position ON folders(parent_id, position);
 
@@ -210,83 +200,34 @@ CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
     document_id UNINDEXED,
     text
 );
-"""
 
-_MIGRATIONS = {
-    2: """
-    CREATE TABLE IF NOT EXISTS document_refs (
-        source_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
-        target_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        label TEXT NOT NULL DEFAULT '',
-        PRIMARY KEY (source_block_id, target_document_id, label)
-    );
-    """,
-    3: """
-    CREATE TABLE IF NOT EXISTS folders (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT REFERENCES folders(id) ON DELETE RESTRICT,
-        name TEXT NOT NULL,
-        position INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS folders_parent_position ON folders(parent_id, position);
-    CREATE INDEX IF NOT EXISTS documents_folder_position ON documents(folder_id, position);
-    """,
-    4: "",
-    5: """
-    CREATE TABLE IF NOT EXISTS block_user_attrs (
-        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
-        name TEXT NOT NULL,
-        value TEXT NOT NULL,
-        PRIMARY KEY (block_id, name)
-    );
-    """,
-    6: """
-    CREATE TABLE IF NOT EXISTS assets (
-        content_hash TEXT NOT NULL,
-        media_name TEXT NOT NULL,
-        mime_type TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        text TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (content_hash, media_name)
-    );
-    CREATE TABLE IF NOT EXISTS block_assets (
-        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
-        content_hash TEXT NOT NULL,
-        media_name TEXT NOT NULL,
-        PRIMARY KEY (block_id, content_hash, media_name),
-        FOREIGN KEY (content_hash, media_name)
-            REFERENCES assets(content_hash, media_name) ON DELETE CASCADE
-    );
-    """,
-    7: "",
-    # 8 made the server-side undo history, later retired (``_drop_retired_schema``).
-    8: "",
-    9: """
-    CREATE TABLE IF NOT EXISTS transaction_receipts (
-        transaction_id TEXT PRIMARY KEY,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        request_hash TEXT NOT NULL,
-        created_at TEXT NOT NULL
-    );
-    """,
-    # 10 (link-check cache) and 11 (saved searches) made tables that were later
-    # retired; ``_drop_retired_schema`` removes them.
-    10: "",
-    12: "",
-    13: "",
-    11: "",
-    14: "",
-    15: "",
-}
+-- Change tracking for HTTP validators (ETags) and the background followers
+-- (see _CHANGE_TRIGGERS).
+CREATE TABLE IF NOT EXISTS change_log (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    seq INTEGER NOT NULL,
+    epoch TEXT NOT NULL
+);
+INSERT OR IGNORE INTO change_log(id, seq, epoch) VALUES (1, 0, lower(hex(randomblob(8))));
+
+-- Lookups that EXPLAIN QUERY PLAN showed as full scans: backlinks (by target),
+-- the foreign-key checks of every block delete (children by parent_id, refs by
+-- target), asset links by media name, and a purge's receipts.
+CREATE UNIQUE INDEX IF NOT EXISTS blocks_sibling_order
+    ON blocks(document_id, COALESCE(parent_id, ''), order_key);
+CREATE INDEX IF NOT EXISTS block_refs_target ON block_refs(target_block_id);
+CREATE INDEX IF NOT EXISTS document_refs_target ON document_refs(target_document_id);
+CREATE INDEX IF NOT EXISTS blocks_parent ON blocks(parent_id);
+CREATE INDEX IF NOT EXISTS assets_media_name ON assets(media_name);
+CREATE INDEX IF NOT EXISTS block_assets_asset ON block_assets(content_hash, media_name);
+CREATE INDEX IF NOT EXISTS transaction_receipts_document ON transaction_receipts(document_id);
+"""
 
 _ready_paths: set[Path] = set()
 # Databases whose schema is current, keyed by the path as given, with the file
 # identity checked (a deleted or replaced file is initialized again).
 _ready_files: dict[Path, tuple[Path, tuple[int, int], int]] = {}
-# Creating or migrating a database is check-then-write; concurrent first use from
+# Creating a database is check-then-write; concurrent first use from
 # several threads would otherwise race (duplicate version rows, lock errors).
 _initialize_lock = threading.Lock()
 UNSET = object()
@@ -409,11 +350,11 @@ def read_scope(path: Path):
 
 
 def initialize(path: Path, force: bool = False) -> None:
-    """Create or migrate the schema; a cheap check once a file is current.
+    """Create the schema or check its version; a cheap check once a file is known.
 
     The check is the file's identity (a deleted or replaced file starts over)
     and SQLite's schema cookie (anything else that changed the schema, e.g. an
-    older snapshot copied over it, runs the migrations again).
+    older snapshot copied over it, is checked again).
     """
 
     if not force:
@@ -437,81 +378,49 @@ def _schema_cookie(path: Path) -> int:
         _checkin(path, connection, identity)
 
 
+class WorkspaceTooOld(RuntimeError):
+    """The database predates SCHEMA_VERSION; only an older build can upgrade it."""
+
+
+UPGRADE_BRANCH = "last-migrating-release"
+
+
 def _initialize(path: Path) -> None:
+    """Create a new database at SCHEMA_VERSION, or check an existing one is at it.
+
+    Older databases are not migrated any more: the ``last-migrating-release``
+    build (schema 15) is the last that upgrades them.
+    """
+
     with connection_scope(path) as connection:
+        tables = {
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        version = None
+        if "schema_migrations" in tables:
+            version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+        if version is None and "documents" in tables:
+            version = 0  # notes without a version: older than any migration
+        if version is not None and version < SCHEMA_VERSION:
+            raise WorkspaceTooOld(
+                f"This notes database ({path}) is at schema version {version}; this version "
+                f"of Fortress Notes opens only version {SCHEMA_VERSION} and no longer upgrades "
+                f"older ones. Open the workspace once with the app and backend built from the "
+                f"'{UPGRADE_BRANCH}' branch (it upgrades the database), then return to this version."
+            )
+        if version is not None and version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Unsupported block database version {version} (expected {SCHEMA_VERSION})"
+            )
         connection.executescript(_SCHEMA)
-        row = connection.execute(
-            "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone()
-        if row is None:
+        for name, (event, body) in _CHANGE_TRIGGERS.items():
+            connection.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {event} BEGIN {body} END")
+        if version is None:
             connection.execute(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, utc_now()),
             )
-        elif row["version"] > SCHEMA_VERSION:
-            raise RuntimeError(
-                f"Unsupported block database version {row['version']} (expected {SCHEMA_VERSION})"
-            )
-        else:
-            current = int(row["version"])
-            while current < SCHEMA_VERSION:
-                current += 1
-                # Each step commits with its version row. Rebuilding a table
-                # (version 14) needs foreign keys off, which only works outside
-                # a transaction.
-                connection.commit()
-                connection.execute("PRAGMA foreign_keys = OFF")
-                try:
-                    connection.execute("BEGIN")
-                    _apply_migration(connection, current)
-                    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-                        raise RuntimeError(f"migration {current} broke a foreign key")
-                    connection.execute(
-                        "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                        (current, utc_now()),
-                    )
-                    connection.commit()
-                except BaseException:
-                    connection.rollback()
-                    raise
-                finally:
-                    connection.execute("PRAGMA foreign_keys = ON")
-        # Migration 3 creates this index; _SCHEMA can't (older documents tables have
-        # no folder_id until that migration runs), so fresh databases get it here.
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS documents_folder_position ON documents(folder_id, position)"
-        )
-        # Re-imports find "the note this source page became" by its source key.
-        connection.execute(
-            """CREATE UNIQUE INDEX IF NOT EXISTS documents_source_key
-                   ON documents(source_kind, source_external_id)
-                WHERE source_external_id IS NOT NULL"""
-        )
-        connection.execute(
-            """CREATE UNIQUE INDEX IF NOT EXISTS folders_source_key
-                   ON folders(source_kind, source_external_id)
-                WHERE source_external_id IS NOT NULL"""
-        )
-        connection.executescript(_PERFORMANCE_INDEXES)
-        _drop_retired_schema(connection)
-        _ensure_change_tracking(connection)
-        if not _fts_rowids_aligned(connection):
-            rebuild_fts_rows(connection)
 
-
-# Lookups that EXPLAIN QUERY PLAN showed as full scans: backlinks (by target),
-# the foreign-key checks of every block delete (children by parent_id, refs by
-# target), asset links by media name, and a purge's receipts.
-_PERFORMANCE_INDEXES = """
-CREATE UNIQUE INDEX IF NOT EXISTS blocks_sibling_order
-    ON blocks(document_id, COALESCE(parent_id, ''), order_key);
-CREATE INDEX IF NOT EXISTS block_refs_target ON block_refs(target_block_id);
-CREATE INDEX IF NOT EXISTS document_refs_target ON document_refs(target_document_id);
-CREATE INDEX IF NOT EXISTS blocks_parent ON blocks(parent_id);
-CREATE INDEX IF NOT EXISTS assets_media_name ON assets(media_name);
-CREATE INDEX IF NOT EXISTS block_assets_asset ON block_assets(content_hash, media_name);
-CREATE INDEX IF NOT EXISTS transaction_receipts_document ON transaction_receipts(document_id);
-"""
 
 # Change tracking for HTTP validators (ETags) and server-side response caches.
 # ``change_log.seq`` grows with every change to anything a cached response
@@ -584,54 +493,6 @@ for _table, _column in (
         )
 
 
-def _drop_retired_schema(connection: sqlite3.Connection) -> None:
-    """Remove what retired features stored: tags, saved searches, link checks and
-    the server-side undo history (the app undoes locally).
-
-    Idempotent and version-free (runs on every initialize, a no-op once done).
-    The documents update trigger names ``tags_json``, so it is dropped first;
-    ``_ensure_change_tracking`` recreates it without the column.
-    """
-
-    columns = {row["name"] for row in connection.execute("PRAGMA table_info(documents)")}
-    if "tags_json" in columns:
-        connection.execute("DROP TRIGGER IF EXISTS documents_changed_update")
-        connection.execute("ALTER TABLE documents DROP COLUMN tags_json")
-    connection.execute("DROP TABLE IF EXISTS saved_searches")
-    connection.execute("DROP TABLE IF EXISTS link_check_cache")
-    # Its triggers (document_history_changed_*) go with it.
-    connection.execute("DROP TABLE IF EXISTS document_history")
-
-
-def _ensure_change_tracking(connection: sqlite3.Connection) -> None:
-    _add_columns(connection, "documents", {"change_seq": "INTEGER NOT NULL DEFAULT 0"})
-    connection.execute(
-        """CREATE TABLE IF NOT EXISTS change_log (
-               id INTEGER PRIMARY KEY CHECK (id = 1),
-               seq INTEGER NOT NULL,
-               epoch TEXT NOT NULL
-           )"""
-    )
-    connection.execute(
-        "INSERT OR IGNORE INTO change_log(id, seq, epoch)"
-        " VALUES (1, 0, lower(hex(randomblob(8))))"
-    )
-    for name, (event, body) in _CHANGE_TRIGGERS.items():
-        connection.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {event} BEGIN {body} END")
-
-
-def _fts_rowids_aligned(connection: sqlite3.Connection) -> bool:
-    """Whether every FTS row has its block's rowid (``_fts_insert`` relies on it).
-
-    Databases indexed before that rule get their FTS rebuilt once.
-    """
-
-    return connection.execute(
-        """SELECT 1 FROM blocks_fts LEFT JOIN blocks ON blocks.rowid = blocks_fts.rowid
-            WHERE blocks.id IS NOT blocks_fts.block_id LIMIT 1"""
-    ).fetchone() is None
-
-
 def new_change_epoch(path: Path) -> None:
     """Invalidate every validator handed out so far (e.g. after a restore)."""
 
@@ -686,237 +547,6 @@ def store_asset_text(path: Path, content_hash: str, text: str) -> None:
             _refresh_fts(connection, row["id"], row["document_id"], row["text"])
 
 
-def backfill_assets(db_path: Path, assets_path: Path) -> int:
-    """Register older generated media files and migrate their text sidecars.
-
-    Only ULID-named upload files with a supported media extension are considered.
-    A ``<id>.txt`` sidecar (written by the OCR before ``ocr.py``) fills an empty
-    row's text until the OCR queue reads the file again. Existing rows are
-    preserved, making startup retries safe.
-    """
-    initialize(db_path)
-    if not assets_path.is_dir():
-        return 0
-    registered = 0
-    changed = False
-    with connection_scope(db_path) as connection:
-        # Registered files are not read again (this runs at every startup, and
-        # attachments can be large): only a sidecar text an empty row lacks.
-        known = {
-            row["media_name"]: (row["content_hash"], row["text"])
-            for row in connection.execute("SELECT media_name, content_hash, text FROM assets")
-        }
-        for asset_path in sorted(assets_path.iterdir()):
-            mime_type = _MIME_BY_EXTENSION.get(asset_path.suffix.lower())
-            if (
-                not mime_type
-                or not _UPLOAD_ID_RE.fullmatch(asset_path.stem)
-                or asset_path.is_symlink()
-                or not asset_path.is_file()
-            ):
-                continue
-            old_sidecar = asset_path.with_suffix(".txt")
-            existing = known.get(asset_path.name)
-            if existing is not None and (existing[1] or not old_sidecar.is_file()):
-                registered += 1
-                continue
-            try:
-                text = (
-                    old_sidecar.read_text(encoding="utf-8")
-                    if old_sidecar.is_file() and not old_sidecar.is_symlink()
-                    else ""
-                )
-            except (OSError, UnicodeError):
-                text = ""
-            if existing is not None:
-                content_hash = existing[0]
-                if not text:
-                    registered += 1
-                    continue
-            else:
-                try:
-                    content_hash = _file_sha256(asset_path)
-                except OSError:
-                    continue
-            changed = True
-            registered_at = utc_now()
-            connection.execute(
-                """INSERT INTO assets(
-                       content_hash, media_name, mime_type, file_path, text,
-                       text_updated_at, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(content_hash, media_name) DO UPDATE SET
-                     mime_type = excluded.mime_type, file_path = excluded.file_path,
-                     text = CASE WHEN assets.text = '' THEN excluded.text ELSE assets.text END,
-                     text_updated_at = CASE WHEN assets.text = '' AND excluded.text <> ''
-                                            THEN excluded.text_updated_at
-                                            ELSE assets.text_updated_at END""",
-                (
-                    content_hash,
-                    asset_path.name,
-                    mime_type,
-                    str(asset_path),
-                    text,
-                    registered_at if text else None,
-                    registered_at,
-                ),
-            )
-            registered += 1
-        if changed:
-            document_ids = connection.execute("SELECT id FROM documents").fetchall()
-            for row in document_ids:
-                rebuild_document_derived(connection, row["id"])
-    if changed:
-        rebuild_fts(db_path)
-    return registered
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
-    if version == 3:
-        columns = {
-            row["name"]
-            for row in connection.execute("PRAGMA table_info(documents)").fetchall()
-        }
-        if "folder_id" not in columns:
-            connection.execute(
-                "ALTER TABLE documents ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE RESTRICT"
-            )
-        if "position" not in columns:
-            connection.execute(
-                "ALTER TABLE documents ADD COLUMN position INTEGER NOT NULL DEFAULT 0"
-            )
-        if "deleted_at" not in columns:
-            connection.execute("ALTER TABLE documents ADD COLUMN deleted_at TEXT")
-        connection.execute(
-            """WITH ordered AS (
-                   SELECT id,
-                          ROW_NUMBER() OVER (
-                              PARTITION BY folder_id ORDER BY updated_at ASC, id ASC
-                          ) - 1 AS sibling_position
-                     FROM documents
-                    WHERE deleted_at IS NULL
-               )
-               UPDATE documents
-                  SET position = (
-                      SELECT sibling_position FROM ordered WHERE ordered.id = documents.id
-                  )
-                WHERE deleted_at IS NULL"""
-        )
-    if version == 4:
-        columns = {
-            row["name"]
-            for row in connection.execute("PRAGMA table_info(documents)").fetchall()
-        }
-        if "revision" not in columns:
-            connection.execute(
-                "ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
-            )
-    if version == 7:
-        columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(assets)").fetchall()
-        }
-        if "text_updated_at" not in columns:
-            connection.execute("ALTER TABLE assets ADD COLUMN text_updated_at TEXT")
-        connection.execute(
-            "UPDATE assets SET text_updated_at = created_at "
-            "WHERE text <> '' AND text_updated_at IS NULL"
-        )
-    if version == 12:
-        columns = {
-            row["name"]
-            for row in connection.execute("PRAGMA table_info(documents)").fetchall()
-        }
-        if "title_auto" not in columns:
-            connection.execute(
-                "ALTER TABLE documents ADD COLUMN title_auto INTEGER NOT NULL DEFAULT 0"
-            )
-    if version == 13:
-        _migrate_provenance(connection)
-    if version == 14:
-        from . import block_migration
-
-        block_migration.migrate(connection)
-        return
-    if version == 15:
-        from . import block_migration
-
-        block_migration.retire_math_and_ink(connection)
-    connection.executescript(_MIGRATIONS[version])
-
-
-def _add_columns(connection: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
-    existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
-    for name, definition in columns.items():
-        if name not in existing:
-            connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
-
-
-def _migrate_provenance(connection: sqlite3.Connection) -> None:
-    """Version 13: provenance on documents, blocks and folders, plus block revisions.
-
-    Existing notes are backfilled with the best guess available (marked
-    ``backfilled``): notes in the top-level Uncategorized folder came from quick
-    capture, notes whose file sits in an import backup came from Markdown import,
-    and everything else was written by hand. Blocks keep NULL provenance, which
-    means "same as the document".
-    """
-
-    _add_columns(
-        connection,
-        "documents",
-        {
-            "provenance_json": "TEXT NOT NULL DEFAULT '{}'",
-            "source_kind": "TEXT NOT NULL DEFAULT 'manual'",
-            "source_external_id": "TEXT",
-            "sync_json": "TEXT NOT NULL DEFAULT '{}'",
-            "last_opened_at": "TEXT",
-        },
-    )
-    _add_columns(connection, "blocks", {"provenance_json": "TEXT", "revision": "INTEGER"})
-    _add_columns(
-        connection,
-        "folders",
-        {"source_kind": "TEXT", "source_external_id": "TEXT", "source_name": "TEXT"},
-    )
-    imported_ids: set[str] = set()
-    database_file = next(
-        (row["file"] for row in connection.execute("PRAGMA database_list") if row["name"] == "main"),
-        "",
-    )
-    if database_file:
-        backups_root = Path(database_file).parent / ".fortress-import-backups"
-        if backups_root.is_dir():
-            imported_ids = {path.stem for path in backups_root.glob("*/*.md")}
-    capture_folders = {
-        row["id"]
-        for row in connection.execute(
-            "SELECT id FROM folders WHERE parent_id IS NULL AND name = 'Uncategorized'"
-        )
-    }
-    rows = connection.execute(
-        "SELECT id, folder_id, created_at FROM documents WHERE provenance_json = '{}'"
-    ).fetchall()
-    for row in rows:
-        if row["folder_id"] in capture_folders:
-            kind = "capture"
-        elif row["id"] in imported_ids:
-            kind = "markdown_import"
-        else:
-            kind = "manual"
-        connection.execute(
-            "UPDATE documents SET provenance_json = ?, source_kind = ? WHERE id = ?",
-            (_provenance.dumps({"source": kind, "backfilled": True}), kind, row["id"]),
-        )
-
-
 def is_ready(path: Path) -> bool:
     return path.resolve() in _ready_paths
 
@@ -964,12 +594,14 @@ def create_document(
     body: str,
     created_at: object,
     updated_at: object,
-    ensure_empty_paragraph: bool = False,
     folder_id: str | None = None,
     provenance: dict[str, object] | None = None,
     specs: list[BlockSpec] | None = None,
 ) -> None:
-    """Create a note from Markdown ``body`` (or already parsed ``specs``)."""
+    """Create a note from Markdown ``body`` (or already parsed ``specs``).
+
+    A note with no blocks gets one empty paragraph: the editor types into a
+    block the server knows."""
 
     initialize(path)
     with connection_scope(path, immediate=True) as connection:
@@ -986,7 +618,6 @@ def create_document(
             body,
             _iso(created_at),
             _iso(updated_at),
-            ensure_empty_paragraph,
             provenance,
             specs,
         )
@@ -1152,41 +783,6 @@ def document_info_validator(path: Path, document_id: str) -> tuple | None:
     return None if row is None else tuple(row)
 
 
-def ensure_editable_block(path: Path, document_id: str | None = None) -> int:
-    """Give live documents with no blocks one empty paragraph; how many got one.
-
-    One document, or every live document when ``document_id`` is None (startup
-    repairs older data). Called where a note can end up empty - create, import,
-    restore - never on a read. The editor needs a paragraph with a stable ID the
-    server knows; the content is unchanged (an empty paragraph exports as
-    nothing), so the revision stays as it is.
-    """
-
-    initialize(path)
-    with connection_scope(path) as connection:
-        if not _needs_editable_block(connection, document_id):
-            return 0
-    with connection_scope(path, immediate=True) as connection:
-        ids = _needs_editable_block(connection, document_id)
-        now = utc_now()
-        for empty_id in ids:
-            _insert_markdown_body(connection, empty_id, "", now, now, ensure_empty_paragraph=True)
-    return len(ids)
-
-
-def _needs_editable_block(connection: sqlite3.Connection, document_id: str | None) -> list[str]:
-    only = "" if document_id is None else "AND id = ?"
-    return [
-        row[0]
-        for row in connection.execute(
-            f"""SELECT id FROM documents
-                 WHERE deleted_at IS NULL {only}
-                   AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.document_id = documents.id)""",
-            () if document_id is None else (document_id,),
-        )
-    ]
-
-
 def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, object]]:
     """Active documents, newest first; only ``ids`` when given (one query either way)."""
 
@@ -1228,7 +824,6 @@ def create_block_document(
     create_document(
         path, document_id, title, status, body,
         _iso(created_at) if created_at is not None else now, now,
-        ensure_empty_paragraph=True,
         folder_id=folder_id,
         provenance=provenance,
         specs=specs,
@@ -1831,7 +1426,6 @@ def _insert_document(
     body: str,
     created_at: str,
     updated_at: str,
-    ensure_empty_paragraph: bool = False,
     provenance: dict[str, object] | None = None,
     specs: list[BlockSpec] | None = None,
 ) -> None:
@@ -1850,9 +1444,7 @@ def _insert_document(
     _set_document_provenance(
         connection, document_id, _unclaimed_source_key(connection, provenance or {"source": "manual"})
     )
-    _insert_markdown_body(
-        connection, document_id, body, created_at, updated_at, ensure_empty_paragraph, specs
-    )
+    _insert_markdown_body(connection, document_id, body, created_at, updated_at, specs)
 
 
 def _unclaimed_source_key(
@@ -1920,14 +1512,13 @@ def _insert_markdown_body(
     body: str,
     created_at: str,
     updated_at: str,
-    ensure_empty_paragraph: bool = False,
     specs: list[BlockSpec] | None = None,
 ) -> None:
     """A document's blocks from a Markdown body (ids from it when free) or parsed specs."""
 
     if specs is None:
         specs = parse_markdown(body)
-    if not specs and ensure_empty_paragraph:
+    if not specs:
         # The editor always has a paragraph to type into; give it a stable id.
         specs = [BlockSpec("paragraph", content=[])]
     written = insert_specs(

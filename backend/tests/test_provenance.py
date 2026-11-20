@@ -214,11 +214,11 @@ class ProvenanceStoreTests(unittest.TestCase):
             BlockOperation(operation="update", block_id=target_block, content=_runs("Edited target")),
         ], 0)
         tree = document_tree(self.db, "source")
-        node = tree["children"][0]
+        node = tree["children"][1]  # after the empty paragraph a new note starts with
         # Links are ids; their text is the target's current title and text.
         self.assertEqual(node["text"], "See New | title and Edited target or custom words")
         self.assertEqual(node["content"][1], {"type": "docLink", "id": "target"})
-        self.assertEqual(tree["children"][1]["text"], "Plain New | title")
+        self.assertEqual(tree["children"][2]["text"], "Plain New | title")
         self.assertEqual(tree["resolved_links"]["documents"], {"target": {"title": "New | title"}})
         self.assertEqual(tree["resolved_links"]["blocks"][target_block]["text"], "Edited target")
         self.assertIn("New | title", [hit["text"] for hit in block_store.search_blocks(self.db, "title")][0])
@@ -299,7 +299,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(tree["children"][2]["id"], ids["Old text"])
         self.assertEqual(tree["children"][2]["revision"], tree["revision"])
         self.assertEqual(len(block_store.document_backlinks(self.db, first.document_id)), 2)
-        self.assertEqual(document_tree(self.db, "linker")["children"][0]["text"], "Meeting New text")
+        self.assertEqual(document_tree(self.db, "linker")["children"][-1]["text"], "Meeting New text")
         self.assertTrue(block_store.fts_is_consistent(self.db))
         self.assertEqual(len(block_store.search_blocks(self.db, "Keep me")), 1)
         self.assertEqual(tree["provenance"]["source_modified_at"], "2020-02-01T00:00:00+00:00")
@@ -495,31 +495,6 @@ class ProvenanceStoreTests(unittest.TestCase):
 
 
     # --- Migration and backups -------------------------------------------------
-
-    def test_migration_backfills_capture_markdown_import_and_manual(self) -> None:
-        # A schema-12 database written by the code of that time.
-        with closing(sqlite3.connect(self.db)) as connection:
-            connection.executescript(
-                (Path(__file__).parent / "fixtures" / "legacy_v12.sql").read_text(encoding="utf-8")
-            )
-        backup = self.root / ".fortress-import-backups" / "20260101T000000000000Z"
-        backup.mkdir(parents=True)
-        (backup / "imported.md").write_text("x", encoding="utf-8")
-
-        initialize(self.db)
-        sources_by_id = {
-            item["id"]: item["source"] for item in block_store.list_documents(self.db)
-        }
-        self.assertEqual(
-            sources_by_id, {"captured": "capture", "imported": "markdown_import", "written": "manual"}
-        )
-        tree = document_tree(self.db, "captured")
-        self.assertEqual(tree["provenance"], {"source": "capture", "backfilled": True})
-        self.assertEqual(tree["children"][0]["provenance"]["source"], "capture")
-        with connection_scope(self.db) as connection:
-            self.assertEqual(
-                connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], block_store.SCHEMA_VERSION
-            )
 
 
 

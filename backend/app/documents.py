@@ -109,10 +109,7 @@ def trash(document_id: str) -> None:
 
 def restore(document_id: str) -> dict[str, object]:
     db_path, _ = _paths()
-    result = workspace.restore_document(db_path, document_id)
-    # A note trashed with no blocks (emptied by the former move-into) gets one to type in.
-    block_store.ensure_editable_block(db_path, document_id)
-    return result
+    return workspace.restore_document(db_path, document_id)
 
 
 def purge(document_id: str) -> None:

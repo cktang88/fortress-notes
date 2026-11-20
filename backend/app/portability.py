@@ -159,8 +159,6 @@ def import_markdown_directory(database_path: Path, source_directory: Path) -> Im
                 post.content,
                 note.created or now,
                 note.updated or now,
-                # The editor always has a paragraph to type into, even in an empty file.
-                ensure_empty_paragraph=True,
                 folder_id=folder_id,
                 provenance=markdown_import_provenance(post.metadata, relative, now),
                 specs=specs,

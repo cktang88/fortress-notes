@@ -307,7 +307,7 @@ public final class BackendController {
             exitedUnexpectedly = false
         } else {
             exitedUnexpectedly = wasRunning
-            state = .failed(Self.exitMessage(status: status))
+            state = .failed(Self.exitMessage(status: status, log: logTail()))
             if wasRunning { onUnexpectedExit?() }
         }
     }
@@ -315,11 +315,24 @@ public final class BackendController {
     static let uvMissingMessage =
         "Fortress runs its backend with uv, which isn't installed on this Mac. Install uv (docs.astral.sh/uv), then click Start Backend."
 
-    /// What to tell someone when the started backend stops with `status`.
-    static func exitMessage(status: Int32) -> String {
+    /// What to tell someone when the started backend stops with `status`: the reason the
+    /// backend gave at startup, if its `log` has one.
+    static func exitMessage(status: Int32, log: String = "") -> String {
         // 127: the shell's "command not found" (`env uv` without uv).
         if status == 127 { return uvMissingMessage }
+        if let reason = startupError(log: log) { return reason }
         return "The backend stopped (exit code \(status)). Click Show Log to see why."
+    }
+
+    /// The backend's own one-line reason for not starting (`STARTUP_ERROR_PREFIX` in
+    /// backend/app/main.py), from the log of the last start.
+    static func startupError(log: String) -> String? {
+        let prefix = "Fortress can't start: "
+        let lastStart = log.range(of: "starting backend ---", options: .backwards).map { String(log[$0.upperBound...]) } ?? log
+        guard let line = lastStart.split(separator: "\n").last(where: { $0.contains(prefix) }),
+              let range = line.range(of: prefix) else { return nil }
+        let reason = line[range.upperBound...].trimmingCharacters(in: .whitespaces)
+        return reason.isEmpty ? nil : reason
     }
 
     /// Called when the backend this app started stops by itself.

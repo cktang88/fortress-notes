@@ -113,21 +113,25 @@ def _stop_background() -> None:
     documents.flush_mirrors()
 
 
+# The Mac app shows the text after this prefix when the backend stops at startup.
+STARTUP_ERROR_PREFIX = "Fortress can't start: "
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = get_settings()
-    if settings.block_db_import_on_startup:
-        await asyncio.to_thread(
-            import_markdown_if_empty, settings.block_db_path, settings.notes_path
-        )
-    else:
-        await asyncio.to_thread(block_store.initialize, settings.block_db_path)
-    await asyncio.to_thread(
-        block_store.backfill_assets, settings.block_db_path, settings.assets_path
-    )
+    try:
+        if settings.block_db_import_on_startup:
+            await asyncio.to_thread(
+                import_markdown_if_empty, settings.block_db_path, settings.notes_path
+            )
+        else:
+            await asyncio.to_thread(block_store.initialize, settings.block_db_path)
+    except block_store.WorkspaceTooOld as error:
+        # One plain line the app shows (BackendController.startupError) before the traceback.
+        logging.getLogger("fortress").error("%s%s", STARTUP_ERROR_PREFIX, error)
+        raise
     await asyncio.to_thread(block_store.ensure_fts_integrity, settings.block_db_path)
-    # Older data may hold notes with no blocks; reads never add the paragraph.
-    await asyncio.to_thread(block_store.ensure_editable_block, settings.block_db_path)
     _start_background(settings)
     try:
         yield

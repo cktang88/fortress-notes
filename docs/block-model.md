@@ -366,54 +366,16 @@ is refused with HTTP 422 (nothing is written):
 - fields outside §4 — `position` (use `after_id`/`before_id`/`parent_id`),
   `text`, `expected_updated_at`, ... — are refused, not ignored.
 
-The `position` in responses (§1) is still served, read-only. Stored data in the
-old shapes is converted once by the schema 14 migration (§10,
-`backend/app/block_migration.py` with `block_legacy.py`), which stays.
+The `position` in responses (§1) is still served, read-only.
 
-## 10. Migration of stored data
+## 10. Stored data and older databases
 
-Schema version 14 converts every stored block once, at startup, in one SQLite
-transaction:
-
-- types to canonical names (`bulletListItem`, `toggleListItem` → `bullet_item`;
-  `numberedListItem` → `numbered_item`; `checkListItem` → `check_item`; `list`
-  → by `attrs.checked`/`attrs.ordered`; `codeBlock` → `code`; `thematic_break`,
-  `hr` → `divider`; `blockquote` → `quote`; `audio`, `video`, `pdf` → `file`;
-  BlockNote `styles` → marks, image `previewWidth` → `width`; `math` and
-  `mathPlaceholder` → a `code` block with `language: "latex"` holding the
-  formula, as schema 15 does). BlockNote's default props (`textColor`/`backgroundColor:
-  "default"`, `textAlignment: "left"`, `isToggleable: false`, `showPreview: true`,
-  empty `caption`/`name`/`url`, code `language: "text"`) are dropped; other
-  BlockNote props stay as snake_case extension attrs (`text_alignment`, ...).
-  Markdown-only blocks are parsed into canonical content (a heading's `#`, a
-  list item's marker, a code fence, a sole image), but the stored type
-  wins where the Markdown lost its syntax (a code block without its fence keeps
-  its text verbatim, a quote or callout without `>` stays a container, a check
-  item keeps its `checked`); `raw` HTML becomes `html` blocks;
-- blockquotes become quote containers (and the blocks a quote swallowed by the
-  old importer bug are dropped, since they were duplicates of the blocks after
-  it); inline quotes/callouts become containers with a paragraph;
-- table JSON becomes `table_row`/`table_cell` blocks with paragraph (and
-  nested) children; table and cell properties become attrs;
-- `[[id|Title]]` / `((id "label"))` links become `docLink`/`blockRef` nodes;
-- integer positions become order keys; the `UNIQUE(document_id, parent_id,
-  position)` constraint becomes the order-key index (which also covers
-  top-level blocks);
-- re-import state moves from provenance to `block_sync` (and from document
-  provenance to `documents.sync_json`); source hashes of untouched imported
-  blocks are recomputed over the canonical content;
-- `text` is re-derived for every block, then links, asset links and the
-  full-text index are rebuilt;
-- the dead `revisions` and `block_attrs` tables are dropped.
-
-Schema version 15 (`retire_math_and_ink` in `backend/app/block_migration.py`)
-retires math and ink, losing no content:
-
-- a `math` block becomes a `code` block whose text is its LaTeX, `language:
-  "latex"` (an equation stored with MathML only keeps the MathML, `language:
-  "xml"`); its id, place, provenance and extension attributes stay;
-- an `image` imported from ink stays an ordinary image of the drawing (its SVG
-  and `alt` text); only its `ink` attribute is dropped;
-- re-import conflicts holding such blocks are converted the same way, and the
-  re-import hash of an unedited imported block follows its new
-  shape (so a re-import doesn't report it as edited).
+A new database is created at schema version 15 with every table, index and
+trigger (`block_store._SCHEMA`); a database at 15 opens as it is. This version
+no longer migrates: a database at an older version (or with notes but no
+version) is refused at startup with a message saying to open the workspace
+once with a build of the `last-migrating-release` branch, the last release
+with the migrations (BlockNote shapes to canonical blocks in 14, math and ink
+retired in 15); a database at a newer version is refused as before. Restoring a
+backup checks the same versions. The Mac app shows the backend's reason (the
+line after `Fortress can't start: ` in its log) instead of the exit code.

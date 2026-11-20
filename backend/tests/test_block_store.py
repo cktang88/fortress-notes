@@ -9,7 +9,6 @@ from app.block_store import (
     DocumentRevisionConflict,
     apply_transaction,
     backup_database,
-    backfill_assets,
     block_link_targets,
     connection_scope,
     create_folder,
@@ -74,7 +73,7 @@ class BlockStoreTests(unittest.TestCase):
             self.assertNotIn("position", columns)
 
 
-    def test_fresh_database_has_the_folder_position_index_migrations_create(self) -> None:
+    def test_fresh_database_has_the_folder_position_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             initialize(database)
@@ -98,58 +97,6 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(block["type"], "paragraph")
             self.assertEqual(block["text"], "")
             self.assertRegex(block["id"], r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$")
-
-    def test_backfills_supported_legacy_media_and_sidecar_once(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database = root / ".fortress.sqlite3"
-            media_dir = root / "assets"
-            media_dir.mkdir()
-            image_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
-            image = media_dir / f"{image_id}.png"
-            image.write_bytes(b"legacy image")
-            (media_dir / f"{image_id}.txt").write_text("old OCR", encoding="utf-8")
-            audio_id = "01ARZ3NDEKTSV4RRFFQ69G5FAW"
-            (media_dir / f"{audio_id}.mp3").write_bytes(b"audio")
-            linked_id = "01ARZ3NDEKTSV4RRFFQ69G5FAX"
-            (media_dir / f"{linked_id}.png").write_bytes(b"linked image")
-            outside_text = root / "outside.txt"
-            outside_text.write_text("outside OCR", encoding="utf-8")
-            linked_sidecar = media_dir / f"{linked_id}.txt"
-            try:
-                linked_sidecar.symlink_to(outside_text)
-            except OSError:
-                self.skipTest("symlinks are unavailable")
-            (media_dir / "unknown.bin").write_bytes(b"ignore")
-            (media_dir / "readme.txt").write_text("ignore", encoding="utf-8")
-            create_document(
-                database,
-                "legacy-image-note",
-                "Legacy image",
-                "rough",
-                f"![legacy](/media/{image.name})",
-                "2026-01-01T00:00:00+00:00",
-                "2026-01-01T00:00:00+00:00",
-            )
-
-            count = backfill_assets(database, media_dir)
-            repeated_count = backfill_assets(database, media_dir)
-
-            with connection_scope(database) as connection:
-                rows = connection.execute(
-                    "SELECT media_name, mime_type, text FROM assets ORDER BY media_name"
-                ).fetchall()
-            self.assertEqual(count, 3)
-            self.assertEqual(repeated_count, 3)
-            self.assertEqual(
-                [(row["media_name"], row["mime_type"], row["text"]) for row in rows],
-                [
-                    (f"{image_id}.png", "image/png", "old OCR"),
-                    (f"{audio_id}.mp3", "audio/mpeg", ""),
-                    (f"{linked_id}.png", "image/png", ""),
-                ],
-            )
-            self.assertEqual(len(search_blocks(database, "old OCR")), 1)
 
     def test_ocr_text_updates_block_search_and_embedding_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -469,7 +416,7 @@ class BlockStoreTests(unittest.TestCase):
             )
             empty = document_tree(database, "user-attrs")
             assert empty is not None
-            self.assertEqual(empty["children"], [])
+            self.assertEqual([child["text"] for child in empty["children"]], [""])
             inserted = apply_transaction(
                 database,
                 "user-attrs",
@@ -486,7 +433,7 @@ class BlockStoreTests(unittest.TestCase):
                 ],
                 empty["revision"],
             )
-            heading_id = inserted["children"][0]["id"]
+            heading_id = inserted["children"][1]["id"]
 
             updated = apply_transaction(
                 database,
@@ -495,7 +442,7 @@ class BlockStoreTests(unittest.TestCase):
                                 user_attrs={"topic": "final", "labels": None})],
                 inserted["revision"],
             )
-            heading, image = updated["children"]
+            _paragraph, heading, image = updated["children"]
 
             self.assertEqual(heading["user_attrs"], {"topic": "final"})
             self.assertEqual(heading["attrs"], {"level": 2})
@@ -800,100 +747,6 @@ class BlockStoreTests(unittest.TestCase):
                 source["revision"],
             )
             self.assertEqual(document_backlinks(database, "target"), [])
-
-
-    def test_upgrades_legacy_documents_table_to_current_schema(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / ".fortress.sqlite3"
-            with connection_scope(database) as connection:
-                connection.execute(
-                    "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
-                )
-                connection.execute(
-                    """CREATE TABLE documents(
-                           id TEXT PRIMARY KEY,
-                           title TEXT NOT NULL,
-                           status TEXT NOT NULL,
-                           tags_json TEXT NOT NULL,
-                           created_at TEXT NOT NULL,
-                           updated_at TEXT NOT NULL
-                       )"""
-                )
-                connection.execute(
-                    """CREATE TABLE blocks (
-                           id TEXT PRIMARY KEY,
-                           document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                           parent_id TEXT REFERENCES blocks(id) ON DELETE CASCADE,
-                           position INTEGER NOT NULL,
-                           type TEXT NOT NULL,
-                           attrs_json TEXT NOT NULL DEFAULT '{}',
-                           content_json TEXT NOT NULL DEFAULT '{}',
-                           text TEXT NOT NULL DEFAULT '',
-                           created_at TEXT NOT NULL,
-                           updated_at TEXT NOT NULL,
-                           UNIQUE (document_id, parent_id, position))"""
-                )
-                connection.executemany(
-                    """INSERT INTO documents(
-                           id, title, status, tags_json, created_at, updated_at
-                       ) VALUES (?, ?, 'rough', '[]', ?, ?)""",
-                    [
-                        ("older", "Older", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
-                        ("newer", "Newer", "2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"),
-                    ],
-                )
-                connection.executemany(
-                    """INSERT INTO blocks(id, document_id, parent_id, position, type, content_json,
-                           text, created_at, updated_at)
-                       VALUES (?, 'older', NULL, ?, ?, ?, ?, '2026-01-01', '2026-01-01')""",
-                    [
-                        ("b1", 0, "heading", '{"markdown": "## Hello **world**"}', "## Hello **world**"),
-                        ("b2", 1, "list", '{"markdown": "- [x] done"}', "- [x] done"),
-                    ],
-                )
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?)",
-                    ("2026-01-01T00:00:00+00:00",),
-                )
-            initialize(database)
-            with connection_scope(database) as connection:
-                versions = connection.execute(
-                    "SELECT version FROM schema_migrations ORDER BY version"
-                ).fetchall()
-                self.assertEqual([row["version"] for row in versions], list(range(2, SCHEMA_VERSION + 1)))
-                tables = {
-                    row["name"] for row in connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'"
-                    )
-                }
-                self.assertTrue(
-                    {"document_refs", "folders", "block_user_attrs", "block_assets", "block_sync"} <= tables
-                )
-                columns = {
-                    row["name"] for row in connection.execute("PRAGMA table_info(documents)")
-                }
-                self.assertTrue({"folder_id", "position", "deleted_at", "revision"} <= columns)
-                asset_columns = {
-                    row["name"] for row in connection.execute("PRAGMA table_info(assets)")
-                }
-                self.assertIn("text_updated_at", asset_columns)
-                self.assertEqual(
-                    [row["revision"] for row in connection.execute(
-                        "SELECT revision FROM documents ORDER BY id"
-                    )],
-                    [0, 0],
-                )
-                self.assertEqual(
-                    [row["position"] for row in connection.execute(
-                        "SELECT position FROM documents ORDER BY position"
-                    )],
-                    [0, 1],
-                )
-            tree = document_tree(database, "older")
-            self.assertEqual(
-                [(node["id"], node["type"], node["attrs"], node["text"]) for node in tree["children"]],
-                [("b1", "heading", {"level": 2}, "Hello world"), ("b2", "check_item", {"checked": True}, "done")],
-            )
 
 
     def test_navigation_excludes_soft_deleted_documents(self) -> None:

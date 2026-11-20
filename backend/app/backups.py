@@ -119,7 +119,6 @@ def restore_backup(db_path: Path, directory: Path, name: str) -> Path:
         db_path
     ) as live:
         snapshot.backup(live)
-    # Older snapshots may predate later migrations; bring them up to date.
     block_store.initialize(db_path, force=True)
     # The snapshot's change counter went back too: hand out validators (ETags)
     # that can never match ones issued before the restore.
@@ -144,6 +143,11 @@ def _verify_snapshot(path: Path) -> None:
         raise ValueError("backup failed its integrity check")
     if version is None or version[0] is None or version[0] > block_store.SCHEMA_VERSION:
         raise ValueError("backup was made by a newer version of Fortress Notes")
+    if version[0] < block_store.SCHEMA_VERSION:
+        raise ValueError(
+            "backup was made by an older version of Fortress Notes; restore it with a build "
+            f"of the '{block_store.UPGRADE_BRANCH}' branch, which upgrades it"
+        )
 
 
 def _open_read_only(path: Path) -> sqlite3.Connection:

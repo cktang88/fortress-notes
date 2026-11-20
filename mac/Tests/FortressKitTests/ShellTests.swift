@@ -179,6 +179,21 @@ private func fixtureData(_ name: String) throws -> Data {
     #expect(BackendController.exitMessage(status: 1).contains("Show Log"))
 }
 
+@Test func showsTheReasonTheBackendGaveForNotStarting() {
+    let log = """
+    --- 2026-11-20T10:00:00Z starting backend ---
+    Fortress can't start: an earlier start
+    --- 2026-11-20T11:00:00Z starting backend ---
+    Fortress can't start: This notes database is at schema version 14. Open it with last-migrating-release.
+    Traceback (most recent call last):
+    ERROR:    Application startup failed. Exiting.
+    """
+    #expect(BackendController.exitMessage(status: 3, log: log)
+        == "This notes database is at schema version 14. Open it with last-migrating-release.")
+    #expect(BackendController.startupError(log: "--- x starting backend ---\nTraceback") == nil)
+    #expect(BackendController.exitMessage(status: 3, log: "").contains("Show Log"))
+}
+
 @Test func findsTheRepositoryAboveTheBuiltApp() {
     let found = BackendLaunch.repository(
         containing: URL(fileURLWithPath: "/src/fortress/mac/.build/debug"),
