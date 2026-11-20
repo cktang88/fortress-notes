@@ -388,14 +388,16 @@ fn third_party_tables_of_contents_give_the_order() {
 }
 
 #[test]
-fn equations_from_other_writers_render() {
+fn equations_from_other_writers_become_latex_code() {
     let Some(c) = corpus() else { return };
     let m = run(&c, "notecraft-joshmaster2165/onenote-equations.one");
-    let math = blocks_of(&m, "math");
-    assert_eq!(math.len(), 13);
-    for b in math {
-        assert!(b["latex"].is_string(), "{b}");
-        assert!(b["mathml"].is_string(), "{b}");
+    let latex: Vec<_> = blocks_of(&m, "code")
+        .into_iter()
+        .filter(|b| b["language"] == "latex")
+        .collect();
+    assert_eq!(latex.len(), 13);
+    for b in latex {
+        assert!(!b["text"].as_str().unwrap().trim().is_empty(), "{b}");
     }
 }
 
@@ -494,7 +496,8 @@ fn paragraph_style_formatting_becomes_marks() {
 #[test]
 fn bridging_items_do_not_stack_side_by_side_outlines() {
     let Some(c) = corpus() else { return };
-    // An ink drawing over the Cornell template's cue column and notes area.
+    // The Cornell template's cue column and notes area (the ink drawing of
+    // its lines, which bridged them, is not imported).
     let m = run(
         &c,
         "onenotegem-extracted/studentnotebook/Note-Taking Tips.one",

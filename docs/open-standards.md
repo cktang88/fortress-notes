@@ -58,7 +58,7 @@ delete the old `<id>.md` files.
 | Highlight | `<mark style="background:…">` | Obsidian `==text==` | `==text==` for the default highlight; other colours stay `<mark style>` (no standard for colour) |
 | Text colour, underline | `<span style="color">`, `<u>` | none in Markdown; inline HTML is allowed by CommonMark | unchanged |
 | Super/subscript | `<sup>`, `<sub>` | Pandoc `^x^`/`~x~` (not read by Obsidian/GFM) | unchanged: HTML, which CommonMark, GFM and Obsidian all render |
-| Math | `$$…$$` blocks | `$`/`$$` (Obsidian, GitHub, Pandoc, MathJax/KaTeX) | unchanged; inline `$…$` written by others is kept as typed text (the model has no inline math yet) |
+| Math | `$$…$$` blocks | `$`/`$$` (Obsidian, GitHub, Pandoc, MathJax/KaTeX) | Fortress has no math (product decision): a `$$…$$` block reads as a `latex` code block (written as a ```` ```latex ```` fence) so its source is kept; inline `$…$` stays typed text |
 | Task lists | `- [ ]` / `- [x]` | GFM task lists | unchanged |
 | Tables | GFM, or HTML with `data-block` on every row/cell | GFM tables | GFM whenever the table fits (one header row, one paragraph per cell, no spans/colours/widths, nothing inside referred to); per-cell provenance in the table's comment. Otherwise an HTML `<table>` (standard HTML, `data-block` attributes only where needed). |
 | Images | `<img src="/media/x.png" width=…>` | CommonMark `![alt](path "title")`, Obsidian `![alt\|300](path)` for size | `![alt\|300](assets/x.png "caption")` with a path relative to the note (`../assets/…` in folders) |
@@ -97,7 +97,8 @@ Reads everything the mirror writes, every older Fortress form (`[[id]]`,
 `((id))`, `<!-- fortress:block -->` with ids, `<img>`, `<!-- fortress:file -->`), and
 what Obsidian writes: wikilinks by file name, path, title or alias (`aliases`),
 `[[Note#Heading]]`, `[[Note#^id]]`, `![[image.png|300]]`, `![[file.pdf]]`, callouts
-with titles and folding, `==highlight==`, task lists, `$$` math, block ids
+with titles and folding, `==highlight==`, task lists, `$$` formulas (as `latex`
+code blocks: Fortress has no math), block ids
 (`^id`, also on a line of its own after a list/quote/table). A folder import
 recreates the folder tree, skips hidden folders (`.obsidian`, `.trash`) and
 `assets/`, and resolves links across all the files and to notes already in the
@@ -106,7 +107,7 @@ way. Front matter: `created`/`created_at`/`date`, `updated`/`updated_at`/`modifi
 `aliases`/`alias`, `source` (a URL becomes the note's `source_url`). Not yet: Obsidian
 attachments are not copied in (an upload has only the `.md` files; the folder import
 leaves `![[x.png]]` pointing at `x.png`), `#tags` stay text (tags are not a feature),
-`%%comments%%` stay visible text, inline `$math$` stays text, transclusion
+`%%comments%%` stay visible text, inline `$…$` stays text, transclusion
 `![[Note]]` becomes a note link.
 
 ### Single-note export — done
@@ -151,7 +152,6 @@ would fix that (below).
 | **Copy Obsidian attachments on import** (folder import: copy `![[x.png]]` targets into `assets/`, register them, OCR them) | Obsidian vaults import with their pictures | S–M: 1 day |
 | **Evernote ENEX import** (XML; ENML → HTML → blocks; base64 resources → assets; `created`/`updated`/`source-url`/`tag`) | the most common legacy notes export | M: 2–3 days (ENML is XHTML; the HTML-to-blocks reader exists) |
 | **OpenAPI document**: check in `openapi.json`, document the transaction model in it, turn `/api/block-schema` into JSON Schema | other tools and clients can use the API | S: ½ day for the dump + CI check; M: 2 days to make `block-schema` JSON Schema |
-| **Inline math** (`$…$`) as an inline node or mark | Obsidian/LaTeX users' notes keep their math | M: 2 days (schema, editor rendering, Markdown both ways) |
 | **Notion export import** (strip the hex ids from file names and links, CSV databases → tables) | Notion migration | S: 1 day |
 | **HTML export** (one note or the folder as standalone HTML) | sharing, printing, archiving | S: 1 day (markdown-it renders our output; add CSS) |
 | **RFC 9457 problem details** for API errors | consistency for third-party clients | S: ½ day |

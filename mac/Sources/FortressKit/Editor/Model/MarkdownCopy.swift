@@ -35,7 +35,7 @@ enum MarkdownCopy {
             case .file: line = "[\(name(block))](\(url(block)))"
             case .table: line = table(block.table)
             case .paragraph: line = text
-            case .columns, .math, .embed: line = block.origin?.text ?? ""
+            case .columns, .embed: line = block.origin?.text ?? ""
             }
             // Blocks are separated by a blank line, except consecutive list items and quote lines.
             if let previousKind, !(previousKind.isList && block.kind.isList), !(previousKind == .quote && block.kind == .quote) {

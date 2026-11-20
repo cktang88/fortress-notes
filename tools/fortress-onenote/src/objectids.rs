@@ -28,7 +28,6 @@
 //! - files / images: the node whose file name / alt text matches, else the
 //!   only node of that type on the page;
 //! - tables: the only `TableNode` with that row and column count;
-//! - ink: the only ink container on the page.
 //!
 //! Anything ambiguous gets no id (the importer falls back to content hashes).
 
@@ -263,7 +262,7 @@ pub struct PageIds {
 /// Object ids assigned to one piece of content.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Ids {
-    /// The content node (rich text, table, image, file, ink).
+    /// The content node (rich text, table, image, file).
     pub object_id: Option<String>,
     /// The outline element (paragraph) containing it; what paragraph links name.
     pub element_id: Option<String>,
@@ -294,9 +293,7 @@ impl PageIds {
                     v.push((id.n, mtime));
                 }
             }
-            "TableNode" | "ImageNode" | "EmbeddedFileNode" | "InkContainer" => {
-                self.push_node(id, o, mtime)
-            }
+            "TableNode" | "ImageNode" | "EmbeddedFileNode" => self.push_node(id, o, mtime),
             _ => {}
         }
     }
@@ -445,11 +442,6 @@ impl PageIds {
         let id = self
             .unique(|n| n.kind == "TableNode" && n.rows == Some(rows) && n.cols == Some(cols))
             .or_else(|| self.unique(|n| n.kind == "TableNode"));
-        self.finish(id)
-    }
-
-    pub fn ink(&mut self) -> Ids {
-        let id = self.unique(|n| n.kind == "InkContainer");
         self.finish(id)
     }
 }
@@ -680,8 +672,7 @@ mod tests {
                     (P_ROW_COUNT, "U32(2)".into()),
                     (P_COL_COUNT, "U32(3)".into()),
                 ],
-            )
-            + &obj(80, "InkContainer", &[]);
+            );
         let mut p = SectionIds::from_dump(&sample(&[], &extra))
             .page(PAGE)
             .unwrap();
@@ -691,7 +682,6 @@ mod tests {
             Some(format!("{{{G}}}&3C"))
         );
         assert_eq!(p.table(2, 3).object_id, Some(format!("{{{G}}}&46")));
-        assert_eq!(p.ink().object_id, Some(format!("{{{G}}}&50")));
     }
 
     #[test]

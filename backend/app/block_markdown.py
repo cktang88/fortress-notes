@@ -7,7 +7,7 @@ into canonical :class:`BlockSpec` trees (imports, capture, importer sources).
 What is written is CommonMark + GFM + Obsidian Flavored Markdown: wikilinks for
 note links (``[[Note]]``), ``[[Note#^id]]`` / ``[[Note#Heading]]`` for block
 references, ``^id`` block identifiers on the blocks something refers to,
-``> [!type]`` callouts, ``==highlight==``, ``$$`` math, task lists, GFM tables.
+``> [!type]`` callouts, ``==highlight==``, task lists, GFM tables.
 Only what no standard can say (provenance, extension attributes, nesting under
 a paragraph, column layouts) goes in an invisible ``<!-- fortress:block {...} -->``
 comment. Reading accepts all of that, plain Obsidian notes, and every older
@@ -1218,10 +1218,6 @@ class _Renderer:
                 meta = {**meta, "type": "file", "attrs": node.get("attrs") or {}}
                 source = ""
             inline_caret = bool(source)
-        elif kind == "math":
-            latex = str((node.get("payload") or {}).get("latex", ""))
-            body = "\n".join(line for line in latex.split("\n") if line.strip())
-            source = f"$$\n{body}\n$$"
         elif kind == "html":
             source = str((node.get("payload") or {}).get("html", "")).strip() or "<div></div>"
         else:  # pragma: no cover - every flow type is handled above
@@ -1572,9 +1568,6 @@ def _block_html(node: dict[str, Any], renderer: _Renderer) -> str:
         name = _html_escape(str(attrs.get("name") or attrs.get("url") or "file"), quote=False)
         return (f'<div data-type="file" data-block="{_json_attr(meta)}">'
                 f'<a href="{_attr(links.media(str(attrs.get("url", ""))))}">{name}</a></div>')
-    if kind == "math":
-        latex = _html_escape(str((node.get("payload") or {}).get("latex", "")), quote=False)
-        return f'<div data-type="math"{data}>{latex.replace(chr(10), "&#10;")}</div>'
     if kind == "html":
         raw = str((node.get("payload") or {}).get("html", ""))
         return f'<div data-type="html" data-html="{_attr(raw)}"{data}></div>'
@@ -1778,9 +1771,11 @@ class _Parser:
         return nodes, images, meta
 
     def paragraph(self, token: Token) -> list[BlockSpec]:
-        latex = _math_source(token.content)
-        if latex is not None:
-            return [spec("math", payload={"latex": latex})]
+        formula = _DISPLAY_MATH_RE.match(token.content.strip())
+        if formula:
+            # Fortress has no math blocks; a ``$$…$$`` formula keeps its source verbatim.
+            source = formula.group(1)
+            return [spec("code", {"language": "latex"}, [text_node(source)] if source else [])]
         nodes, images, meta = self.inline(token)
         blocks: list[BlockSpec] = []
         if not images and len(nodes) == 1 and nodes[0]["type"] == "link" \
@@ -1899,12 +1894,7 @@ def _copy_token(token: Token, content: str) -> Token:
     return copy
 
 
-_MATH_RE = re.compile(r"^\$\$\s*(.*?)\s*\$\$$", re.DOTALL)
-
-
-def _math_source(source: str) -> str | None:
-    match = _MATH_RE.match(source.strip())
-    return match.group(1) if match else None
+_DISPLAY_MATH_RE = re.compile(r"^\$\$\s*(.*?)\s*\$\$$", re.DOTALL)
 
 
 def _task_marker(nodes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool | None]:
@@ -2163,8 +2153,6 @@ def _blocks_from_element(element: _Element, depth: int) -> list[BlockSpec]:
             file_meta = {**file_meta, "attrs": legacy}
         attrs = file_meta.get("attrs") or {}
         return [_apply_meta(spec("file", attrs), {k: v for k, v in file_meta.items() if k != "attrs"})]
-    if tag == "div" and element.attrs.get("data-type") == "math":
-        return [_apply_meta(spec("math", payload={"latex": _all_text(element)}), meta)]
     if tag == "div" and element.attrs.get("data-type") == "html":
         return [_apply_meta(spec("html", payload={"html": element.attrs.get("data-html", "")}), meta)]
     if tag == "div":

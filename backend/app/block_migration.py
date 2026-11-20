@@ -1,6 +1,7 @@
-"""Schema version 14: every stored block becomes canonical (docs/block-model.md §10).
+"""Block migrations: version 14 makes every stored block canonical
+(docs/block-model.md §10); version 15 retires math and ink (:func:`retire_math_and_ink`).
 
-Runs once, inside the migration's transaction, with foreign keys off (the
+Version 14 runs once, inside the migration's transaction, with foreign keys off (the
 blocks table is rebuilt). Blocks keep their ids, timestamps, revisions,
 provenance and user attributes; blocks that were JSON inside another block
 (table cells) or Markdown inside another block (quoted paragraphs) become child
@@ -313,3 +314,128 @@ def _dumps(value: object) -> str:
 
 def _dumps_nullable(value: object) -> str | None:
     return None if value is None else _dumps(value)
+
+
+# --- Version 15: no math or ink --------------------------------------------------------
+
+
+def retire_math_and_ink(connection: sqlite3.Connection) -> None:
+    """Fortress no longer has math blocks or ink drawings; nothing written is lost.
+
+    A ``math`` block becomes a ``code`` block whose text is its LaTeX (language
+    ``latex``; MathML only: the MathML, language ``xml``), keeping its id,
+    position, provenance and extension attributes. An image imported from ink
+    stays an ordinary image of the drawing; only its ``ink`` marker goes. Undo
+    steps and re-import conflicts holding such blocks are converted the same
+    way, and the re-import hash of an unedited block follows its new shape.
+    """
+
+    from . import block_store
+
+    touched: dict[str, list[str]] = {}
+    for row in connection.execute(
+        """SELECT id, document_id, type, attrs_json, content_json, payload_json FROM blocks
+            WHERE type = 'math' OR (type = 'image' AND attrs_json LIKE '%"ink"%')"""
+    ).fetchall():
+        old = _row_block(row)
+        new = _retired(old)
+        if new is None:
+            continue
+        connection.execute(
+            """UPDATE blocks SET type = ?, attrs_json = ?, content_json = ?, payload_json = ?,
+                   text = ? WHERE id = ?""",
+            (new.type, _dumps(new.attrs), _dumps_nullable(new.content),
+             _dumps_nullable(new.payload), schema.derive_text(new), row["id"]),
+        )
+        touched.setdefault(row["document_id"], []).append(row["id"])
+        _follow_sync(connection, row["id"], old, new)
+    for sync in connection.execute(
+        "SELECT block_id, conflict_json FROM block_sync WHERE conflict_json LIKE '%math%'"
+        " OR conflict_json LIKE '%ink%'"
+    ).fetchall():
+        conflict = _loads(sync["conflict_json"])
+        source = conflict.get("source")
+        if not isinstance(source, dict):
+            continue
+        new = _retired(schema.Block(
+            str(source.get("type")), source.get("attrs") or {}, source.get("content"),
+            source.get("payload"),
+        ))
+        if new is None:
+            continue
+        conflict["source"] = {"type": new.type, "attrs": new.attrs, "content": new.content,
+                              "payload": new.payload}
+        conflict["source_hash"] = schema.canonical_hash(new)
+        connection.execute(
+            "UPDATE block_sync SET conflict_json = ? WHERE block_id = ?",
+            (json.dumps(conflict, sort_keys=True), sync["block_id"]),
+        )
+    for history in connection.execute(
+        "SELECT id, patches_json FROM document_history"
+        " WHERE patches_json LIKE '%math%' OR patches_json LIKE '%ink%'"
+    ).fetchall():
+        entries = json.loads(history["patches_json"])
+        changed = False
+        for entry in entries:
+            for key in ("before", "after"):
+                state = entry.get(key)
+                if isinstance(state, dict):
+                    changed |= _retire_snapshot(state)
+        if changed:
+            connection.execute(
+                "UPDATE document_history SET patches_json = ? WHERE id = ?",
+                (json.dumps(entries), history["id"]),
+            )
+    for document_id, block_ids in touched.items():
+        block_store.refresh_derived(connection, document_id, block_ids)
+
+
+def _row_block(row: Any) -> schema.Block:
+    def parsed(raw: object) -> Any:
+        try:
+            return None if raw is None else json.loads(str(raw))
+        except ValueError:
+            return None
+
+    attrs = parsed(row["attrs_json"])
+    return schema.Block(str(row["type"]), attrs if isinstance(attrs, dict) else {},
+                        parsed(row["content_json"]), parsed(row["payload_json"]))
+
+
+def _retired(block: schema.Block) -> schema.Block | None:
+    """``block`` without math or ink (None: it had neither)."""
+
+    if block.type == "math":
+        payload = block.payload if isinstance(block.payload, dict) else {}
+        return block_legacy.math_as_code(payload.get("latex"), payload.get("mathml"),
+                                         dict(block.attrs)).block()
+    if block.type == "image" and "ink" in block.attrs:
+        return schema.Block("image", {k: v for k, v in block.attrs.items() if k != "ink"},
+                            block.content, block.payload)
+    return None
+
+
+def _retire_snapshot(state: dict[str, Any]) -> bool:
+    """Convert one undo snapshot (a stored row) in place; whether it changed."""
+
+    old = _row_block(state)
+    new = _retired(old)
+    if new is None:
+        return False
+    state.update(type=new.type, attrs_json=_dumps(new.attrs),
+                 content_json=_dumps_nullable(new.content),
+                 payload_json=_dumps_nullable(new.payload), text=schema.derive_text(new))
+    sync = state.get("sync")
+    if isinstance(sync, dict) and sync.get("source_hash") == schema.canonical_hash(old):
+        sync["source_hash"] = schema.canonical_hash(new)
+    return True
+
+
+def _follow_sync(connection: sqlite3.Connection, block_id: str, old: schema.Block,
+                 new: schema.Block) -> None:
+    """An unedited imported block still counts as unedited in its new shape."""
+
+    connection.execute(
+        "UPDATE block_sync SET source_hash = ? WHERE block_id = ? AND source_hash = ?",
+        (schema.canonical_hash(new), block_id, schema.canonical_hash(old)),
+    )

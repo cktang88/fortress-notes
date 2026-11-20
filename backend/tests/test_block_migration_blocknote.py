@@ -172,7 +172,7 @@ WEB_EDITOR = [
         "content": [{"type": "text", "text": "print('[[not a link]]')\nx = 1"}],
     },
     {"type": "code"},
-    {"type": "math", "payload": {"latex": ""}},
+    {"type": "code", "attrs": {"language": "latex"}},
     {
         "type": "image",
         "attrs": {
@@ -457,11 +457,9 @@ ONENOTE = [
         ],
     },
     {
-        "type": "math",
-        "payload": {
-            "latex": "\\frac{a}{b}",
-            "mathml": "<math><mfrac><mi>a</mi><mi>b</mi></mfrac></math>",
-        },
+        "type": "code",
+        "attrs": {"language": "latex"},
+        "content": [{"type": "text", "text": "\\frac{a}{b}"}],
     },
     {
         "type": "file",
@@ -1009,14 +1007,20 @@ class LegacyShapeTests(unittest.TestCase):
                 }
             ],
         )
-        # Math stored as Markdown only, and the web editor's placeholder.
+        # Math (Fortress has none now) keeps its formula as a LaTeX code block: stored
+        # as Markdown only, the web editor's placeholder, and MathML only.
         self.assertEqual(
             _convert("math", {}, {"markdown": "$$\nx^2\n$$"}),
-            [{"type": "math", "payload": {"latex": "x^2"}}],
+            [{"type": "code", "attrs": {"language": "latex"}, "content": [_text("x^2")]}],
         )
         self.assertEqual(
             _convert("mathPlaceholder", {}, {"markdown": "Math placeholder"}),
-            [{"type": "math", "payload": {"latex": ""}}],
+            [{"type": "code", "attrs": {"language": "latex"}}],
+        )
+        self.assertEqual(
+            _convert("math", {}, {"mathml": "<math><mi>x</mi></math>"}),
+            [{"type": "code", "attrs": {"language": "xml"},
+              "content": [_text("<math><mi>x</mi></math>")]}],
         )
 
 

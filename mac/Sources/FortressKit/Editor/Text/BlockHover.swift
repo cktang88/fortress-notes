@@ -333,7 +333,6 @@ enum BlockMenu {
         case .file: String(localized: "File")
         case .table: String(localized: "Table")
         case .columns: String(localized: "Columns")
-        case .math: String(localized: "Math")
         case .embed: String(localized: "Embedded")
         }
     }
@@ -395,10 +394,6 @@ enum BlockMenu {
             add(String(localized: "Remove Column"), #selector(BlockMenuActions.removeColumn(_:)))
             add(String(localized: "Unwrap Columns"), #selector(BlockMenuActions.unwrapColumns(_:)))
         }
-        if info.kind == .math {
-            menu.addItem(.separator())
-            add(String(localized: "Edit Math…"), #selector(BlockMenuActions.editMath(_:)))
-        }
         menu.addItem(.separator())
         add(String(localized: "Info…"), #selector(BlockMenuActions.info(_:)), enabled: hover != nil)
         return menu
@@ -439,7 +434,6 @@ final class BlockMenuActions: NSObject {
     @objc func addColumn(_ sender: Any?) { editor?.addColumn() }
     @objc func removeColumn(_ sender: Any?) { editor?.removeColumn() }
     @objc func unwrapColumns(_ sender: Any?) { editor?.unwrapColumns() }
-    @objc func editMath(_ sender: Any?) { editor?.editSelectedMath() }
     @objc func info(_ sender: Any?) { hover?.showInfo() }
 }
 

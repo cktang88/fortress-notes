@@ -65,7 +65,6 @@ public enum BlockCodec {
         case "divider": block.kind = .divider
         case "image": block.kind = .image
         case "file": block.kind = .file
-        case "math": block.kind = .math
         case "table":
             if let table = TableContent(node: node) {
                 block.kind = .table
@@ -148,12 +147,11 @@ public enum BlockCodec {
             return BlockFields(type: "table", attrs: block.table?.attrs ?? origin?.attrs ?? [:])
         case .columns:
             return BlockFields(type: "columns", attrs: origin?.attrs ?? [:])
-        case .divider, .image, .file, .math, .embed:
+        case .divider, .image, .file, .embed:
             if let origin, origin.kind == block.kind || block.kind == .embed {
                 return BlockFields(type: origin.type, attrs: origin.attrs, content: origin.content, payload: origin.payload)
             }
             switch block.kind {
-            case .math: return BlockFields(type: "math", payload: origin?.payload ?? .object(["latex": .string("")]))
             case .embed: return BlockFields(type: "paragraph", content: .array([]))
             default: return BlockFields(type: block.kind.canonicalType, attrs: origin?.attrs ?? [:])
             }

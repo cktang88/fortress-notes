@@ -3,7 +3,7 @@
 ``fixtures/legacy_v13.sql`` is a database written by the code before the block
 model (schema 13): a Markdown import (with the quote that swallowed the rest of
 the note), a note written through the editor's BlockNote-shaped transactions
-(tables with nested blocks, columns, callouts, math, user attributes, links and
+(tables with nested blocks, columns, callouts, math (now LaTeX code blocks), user attributes, links and
 block references), and a OneNote-style source page with a conflict that was then
 removed from its source. Search rows are left out: the migration rebuilds them.
 """
@@ -78,7 +78,7 @@ class LegacyMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM blocks WHERE content_json LIKE '%\"markdown\"%'"
             ).fetchone()[0]
         connection.close()
-        self.assertEqual(version, 14)
+        self.assertEqual(version, block_store.SCHEMA_VERSION)
         self.assertIn("block_sync", tables)
         self.assertFalse({"revisions", "block_attrs"} & tables)
         self.assertNotIn("position", columns)
@@ -96,7 +96,7 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertEqual(
             [node["type"] for node in tree["children"]],
             ["heading", "paragraph", "quote", "paragraph", "bullet_item", "check_item",
-             "code", "divider", "table", "math", "image", "html"],
+             "code", "divider", "table", "code", "image", "html"],
         )
         quote = tree["children"][2]
         self.assertEqual(_shape(quote["children"]), [("paragraph", {}, "quoted one\nquoted two")])
@@ -113,7 +113,9 @@ class LegacyMigrationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(tree["children"][8]["attrs"], {"header_rows": 1})
-        self.assertEqual(tree["children"][9]["payload"], {"latex": "e=mc^2"})
+        # Math became its LaTeX source in a code block (Fortress has no math blocks).
+        self.assertEqual((tree["children"][9]["attrs"], tree["children"][9]["text"]),
+                         ({"language": "latex"}, "e=mc^2"))
         self.assertEqual(tree["children"][10]["attrs"]["alt"], "pic")
         self.assertEqual(tree["children"][11]["payload"], {"html": '<div class="raw">raw</div>'})
 
@@ -124,7 +126,7 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertEqual(
             [node["type"] for node in children],
             ["heading", "paragraph", "check_item", "bullet_item", "quote", "callout", "code",
-             "math", "image", "file", "divider", "table", "columns", "bullet_item"],
+             "code", "image", "file", "divider", "table", "columns", "bullet_item"],
         )
         self.assertEqual(children[0]["attrs"], {"level": 5})
         mixed = children[1]["content"]
@@ -135,7 +137,7 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertEqual(_shape(children[4]["children"]), [("paragraph", {}, "inline quote")])
         self.assertEqual(children[5]["attrs"], {"icon": "!"})
         self.assertEqual((children[6]["attrs"], children[6]["text"]), ({"language": "py"}, "x = '```'"))
-        self.assertEqual(children[7]["payload"], {"latex": "a^2+b^2"})
+        self.assertEqual((children[7]["attrs"], children[7]["text"]), ({"language": "latex"}, "a^2+b^2"))
         # BlockNote's previewWidth is the width; an unknown attribute is kept.
         self.assertEqual(children[8]["attrs"], {"url": "/media/a.png", "alt": "A", "custom": "k", "width": 100})
         self.assertEqual(children[9]["attrs"], {"url": "/media/f.pdf", "name": "f.pdf", "size": 2048})

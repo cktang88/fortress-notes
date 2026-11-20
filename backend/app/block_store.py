@@ -42,7 +42,7 @@ from .block_markdown import render_markdown as _render_markdown
 from .block_schema import BlockShapeError
 from .models import BlockOperation
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 DB_FILENAME = ".fortress.sqlite3"
 
 _UPLOAD_ID_RE = re.compile(r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$")
@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS blocks (
     attrs_json TEXT NOT NULL DEFAULT '{}',
     -- Inline nodes of text types, NULL otherwise.
     content_json TEXT,
-    -- Structured data (math, html), NULL otherwise.
+    -- Structured data (html), NULL otherwise.
     payload_json TEXT,
     -- Derived plain text (block_schema.derive_text).
     text TEXT NOT NULL DEFAULT '',
@@ -301,6 +301,7 @@ _MIGRATIONS = {
     13: "",
     11: "",
     14: "",
+    15: "",
 }
 
 _ready_paths: set[Path] = set()
@@ -872,6 +873,10 @@ def _apply_migration(connection: sqlite3.Connection, version: int) -> None:
 
         block_migration.migrate(connection)
         return
+    if version == 15:
+        from . import block_migration
+
+        block_migration.retire_math_and_ink(connection)
     connection.executescript(_MIGRATIONS[version])
 
 

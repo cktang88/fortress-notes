@@ -43,7 +43,9 @@ one JSON summary line is printed to stdout; see SCHEMA.md for exit codes.
   the notebook still converts.
 - Names from the notebook (attachment file names, image names) are untrusted
   and only appear as display strings; assets are named by SHA-256.
-- Ink is rendered to standalone SVG; equations to LaTeX and MathML.
+- Equations become their LaTeX (a `latex` code block, or inline `$…$` code):
+  Fortress has no math. Ink drawings are skipped (Fortress has no ink) and
+  counted in the report, with a warning per page.
 - Blocks carry OneNote's own object ids (`object_id`, `element_id`: ExGUIDs
   that survive edits) where they can be matched unambiguously, and paragraph
   links carry their target id (`onenote.object_ref`), so an importer can

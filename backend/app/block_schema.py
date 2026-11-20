@@ -131,7 +131,7 @@ _PX = Attr("number", minimum=0)
 
 _TEXT_TYPES = ("paragraph", "heading", "bullet_item", "numbered_item", "check_item", "code")
 FLOW: frozenset[str] = frozenset(
-    _TEXT_TYPES + ("quote", "callout", "columns", "table", "divider", "image", "file", "math", "html")
+    _TEXT_TYPES + ("quote", "callout", "columns", "table", "divider", "image", "file", "html")
 )
 _IN_COLUMN = FLOW - {"columns"}
 
@@ -166,7 +166,6 @@ _DEFINITIONS = (
     BlockType("file", ATOMIC, attrs={
         "url": _STR, "name": _STR, "mime": _STR, "caption": _STR, "size": _PX,
     }),
-    BlockType("math", ATOMIC, payload={"latex": True, "mathml": False}),
     BlockType("html", ATOMIC, payload={"html": True}),
 )
 TYPES: dict[str, BlockType] = {definition.name: definition for definition in _DEFINITIONS}
@@ -503,8 +502,6 @@ def derive_text(block: Block, label: Labeler = _no_label) -> str:
         return "\n".join(str(attrs[key]) for key in ("alt", "caption") if attrs.get(key))
     if kind == "file":
         return "\n".join(str(attrs[key]) for key in ("name", "caption") if attrs.get(key))
-    if kind == "math":
-        return str((block.payload or {}).get("latex", ""))
     if kind == "html":
         return html_text(str((block.payload or {}).get("html", "")))
     return ""

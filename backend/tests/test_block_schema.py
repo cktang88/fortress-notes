@@ -69,8 +69,10 @@ class RegistryTests(unittest.TestCase):
         described = schema.schema_json()
         self.assertEqual(set(described["types"]), set(schema.TYPES))
         self.assertEqual(described["types"]["table"]["children"], ["table_row"])
-        self.assertEqual(described["types"]["math"]["payload"]["latex"],
+        self.assertEqual(described["types"]["html"]["payload"]["html"],
                          {"type": "string", "required": True})
+        self.assertNotIn("math", described["types"])  # Fortress has no math blocks
+        self.assertNotIn("math", described["flow"])
         self.assertEqual(set(described["inline"]["nodes"]), {"text", "link", "docLink", "blockRef"})
 
     def test_block_schema_route(self) -> None:
@@ -139,9 +141,8 @@ class InlineTests(unittest.TestCase):
             schema.normalize_block("code", {}, [{"type": "docLink", "id": "x"}])
         with self.assertRaises(BlockShapeError):
             schema.normalize_block("image", {"url": "/media/a.png"}, [{"type": "text", "text": "x"}])
-        math = schema.normalize_block("math", {}, None, {"latex": "a^2"})
-        self.assertEqual((math.content, math.payload), (None, {"latex": "a^2"}))
-        self.assertEqual(schema.derive_text(math), "a^2")
+        with self.assertRaises(BlockShapeError):
+            schema.normalize_block("math", {}, None, {"latex": "a^2"})
         html = schema.normalize_block("html", {}, None, {"html": "<b>bold</b> words"})
         self.assertEqual(schema.derive_text(html), "bold words")
 

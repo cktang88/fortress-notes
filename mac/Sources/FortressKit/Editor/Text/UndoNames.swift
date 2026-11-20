@@ -26,7 +26,6 @@ enum UndoNames {
     static let delete = "Delete"
     static let cut = "Cut"
     static let insertBlock = "Insert Block"
-    static let math = "Math"
     static let title = "Title Change"
     static let status = "Status Change"
 

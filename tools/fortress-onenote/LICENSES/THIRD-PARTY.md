@@ -27,7 +27,7 @@ in `vendor/PATCHES.md`. Reads `.onepkg` packages (CAB archives).
 
 ## one2html (MIT)
 
-`src/math/` (the OneNote equation parser and its LaTeX/MathML renderers) is
+`src/math/` (the OneNote equation parser and its LaTeX renderer) is
 adapted from one2html 2.0.1, <https://github.com/msiemens/one2html>,
 Copyright 2020 Markus Siemens, MIT licence: see `one2html-MIT.txt`.
 

@@ -338,7 +338,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         case .table: return CGFloat(block.table?.rows.count ?? 3) * 34
         case .columns: return 240
         case .image: return 320
-        case .divider, .file, .math, .embed: return 50
+        case .divider, .file, .embed: return 50
         default:
             let characters = block.runs.reduce(0) { $0 + $1.text.utf16.count }
             return 26 * CGFloat(1 + characters / 70) + 10

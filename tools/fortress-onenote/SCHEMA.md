@@ -24,8 +24,15 @@ importer. Rules for evolving it:
 Additions without a version bump: converter 0.2.0 added block `object_id` /
 `element_id` and link `onenote.object_ref` (see *Object ids*); 0.2.1 added
 `embed.alt_text` and keeps an equation that is alone in a list item / to-do as
-that list item (with a `math` mark) instead of a `math` block. Older
-manifests simply lack them.
+that list item instead of an equation block. Older manifests simply lack them.
+
+Converter 0.3.0 follows Fortress, which supports neither math nor ink: it no
+longer emits `math` blocks, `math` marks, `ink` blocks/items or the page's
+`ink_text`. An equation is its LaTeX in a `code` block (`language: "latex"`)
+or, inline, `$…$` with a `code` mark; ink is skipped and counted
+(`counts.ink_skipped`, one warning per page). These removals keep format
+version 1: the only importer (Fortress) handles both forms by ignoring the
+retired ones as unknown.
 
 ## Conventions
 
@@ -48,7 +55,7 @@ manifests simply lack them.
 {
   "format": "fortress-onenote-manifest",
   "format_version": 1,
-  "generator": {"name": "fortress-onenote", "version": "0.2.1", "parser": "onenote_parser 2.1"},
+  "generator": {"name": "fortress-onenote", "version": "0.3.0", "parser": "onenote_parser 2.1"},
   "units": {"text_offsets": "code_points", "geometry": "half_inch", "px_per_geometry_unit": 48.0},
   "input": {"kind": "zip|directory|onetoc2|one|onepkg", "name": "<input base name>"},
   "notebooks": [Notebook],
@@ -105,7 +112,6 @@ listed entries. Table-of-contents entries are matched to files by name
 | `source_path` | [string] | notebook, groups…, section, page title (provenance). |
 | `source_url` | string \| null | First "Pasted from <url>" / "Clipped from: url" source found on the page. |
 | `height` | number \| null | Page height (geometry units) if stored. |
-| `ink_text` | string \| null | Handwriting recognised by OneNote for Windows (lines joined by `\n`). |
 | `items` | [Item] | Positioned top-level containers, in OneNote's stored order (not reading order). |
 | `layout` | [LayoutRow] | Reading order computed from geometry (see below). |
 | `stats` | `{"blocks": int, "text_chars": int}` | Including table cells. |
@@ -114,20 +120,21 @@ The page title and its date/time line are not repeated as blocks.
 
 ### Item
 
-Every outline (OneNote "note container") and every free-floating image,
-attachment and ink drawing on the page is an item.
+Every outline (OneNote "note container") and every free-floating image and
+attachment on the page is an item. Ink drawings are not converted (Fortress
+does not support ink): they are counted in `report.counts.ink_skipped`.
 
 | field | type | notes |
 |---|---|---|
 | `id` | string | `i0`, `i1`, … unique within the page. |
-| `kind` | string | `outline`, `image`, `file`, `ink`. |
+| `kind` | string | `outline`, `image`, `file`. |
 | `x`, `y` | number \| null | Offset from page origin (geometry units). `null` when OneNote stored none. |
 | `width` | number \| null | Declared width: outline max width, picture width. |
 | `width_set_by_user` | bool | Outline width was dragged by the user (otherwise it is a max width). |
 | `est_width`, `est_height` | number | Estimated rendered size used by the layout algorithm (OneNote never stores heights). |
 | `is_background` | bool | Background image ("Set picture as background"). |
 | `source_url` | string \| null | Source citation found inside this outline. |
-| `blocks` | [Block] | The content. Floating image/file/ink items hold exactly one block (an `embed` replaces the image for video embeds). Empty outlines are dropped. |
+| `blocks` | [Block] | The content. Floating image/file items hold exactly one block (an `embed` replaces the image for video embeds). Empty outlines are dropped. |
 
 ### Layout
 
@@ -148,8 +155,7 @@ by horizontal overlap (> 0.1 units) into columns, ordered by x; a band whose
 items overlap in both directions is stacked by top; columns are laid out
 recursively. Before clustering, *bridges* are set aside: an item that
 overlaps (in both directions) two items that are side by side, such as a
-picture floating across the gap between two columns, an ink drawing over
-a page area, or a wide outline whose estimated height reaches into columns
+picture floating across the gap between two columns, or a wide outline whose estimated height reaches into columns
 below it. The rest of the band is laid out without them and each bridge
 becomes a row of its own at its top (before rows starting below it). Background images are excluded from banding and emitted as rows
 at their own top. Raw `x`/`y`/`width` stay on the items so an importer can
@@ -170,7 +176,7 @@ Common fields on every block:
 | `tags` | [Tag] | *(omitted when empty)* Note tags on this paragraph/object. |
 | `align` | string | *(omitted when left)* `center` or `right`. |
 | `source_url` | string | *(omitted when none)* Source citation of the outline this block belongs to. |
-| `object_id` | string | *(omitted when unknown)* OneNote ExGUID of the content node (rich text, table, image, attachment, ink), `{GUID}&N` (see *Object ids*). Stable across edits of the paragraph: **use it as the block's idempotency key.** Unique within a page. |
+| `object_id` | string | *(omitted when unknown)* OneNote ExGUID of the content node (rich text, table, image, attachment), `{GUID}&N` (see *Object ids*). Stable across edits of the paragraph: **use it as the block's idempotency key.** Unique within a page. |
 | `element_id` | string | *(omitted when unknown)* ExGUID of the enclosing outline element (the paragraph); this is what paragraph links (`object-id=`) name. |
 
 Text-bearing blocks (`paragraph`, `heading`, `list_item`, `check_item`,
@@ -184,13 +190,11 @@ vertical tab/CR normalised to `\n`) and `marks` (*omitted when empty*).
 | `list_item` | `list`: ListInfo; rich text. |
 | `check_item` | To Do style tag (any checkable tag shape): `checked` bool, `checked_at` (string \| null), `list` (ListInfo \| null); rich text. The tag is also in `tags`. |
 | `quote` | OneNote "Quote"/"Citation" style: `variant` `quote` \| `cite`; rich text. |
-| `code` | `text` (plain). OneNote "Code" style or all-monospace (Consolas, Courier…) paragraphs; consecutive code paragraphs at the same indent are merged with `\n`. |
-| `math` | Paragraph that is only an equation: `text` (OneNote's linear form, markers removed), `latex` (string \| null, `\[…\]`), `mathml` (string \| null). Inline equations are `math` marks instead. |
+| `code` | `text` (plain); `language` *(omitted for code)*: `latex` for an equation. OneNote "Code" style or all-monospace (Consolas, Courier…) paragraphs; consecutive code paragraphs at the same indent are merged with `\n`. A paragraph that is only an equation is a `code` block with its LaTeX (no delimiters) and `language: "latex"`, or its linear text (no `language`) when it could not be converted. Inline equations are `$…$` LaTeX with a `code` mark instead. |
 | `table` | `row_count`, `col_count`, `column_widths` ([number], geometry units), `borders_visible` bool, `rows`: [{`cells`: [{`background`: colour \| null, `blocks`: [Block]}]}]. Cells hold any blocks, including nested tables. OneNote has no merged cells. |
 | `image` | `asset` (string \| null), `data_status` (`available` \| `missing` \| `invalid` \| `empty`; see below), `alt_text` (string \| null — usually OneNote's OCR text), `width`/`height` (geometry units \| null), `hyperlink` (string \| null), `is_printout_page` bool, `printout_page_number` (int \| null, as stored; may be 0-based), `is_background` bool, `original_name` (sanitised display name \| null), `original_asset` (string \| null: the original when `asset` is OneNote's browser-friendly fallback picture, e.g. for EMF images or XPS printout pages). |
 | `embed` | Online video/iframe: `url`, `thumbnail_asset` (string \| null), `alt_text` (string \| null, alt/OCR text of the poster picture; converter 0.2.1). |
 | `file` | Attachment: `asset` (string \| null), `filename` (sanitised display name), `extension` (string \| null), `mime`, `size` (bytes as recorded), `data_status` (`available` \| `missing` \| `invalid` \| `empty`), `media_kind` (`audio` \| `video` \| `other` — OneNote recordings are audio/video), `icon_asset` (string \| null). |
-| `ink` | Drawing/handwriting rendered to SVG: `asset` (string \| null, `image/svg+xml`), `recognized_text` (string \| null), `width`, `height` (geometry units), `stroke_count`. |
 
 `data_status` of images and attachments, identical in the block and in
 `report.missing_data`: `available` — `asset` holds the data; `missing` —
@@ -237,12 +241,12 @@ their look is expressed by the block type.
 | `type` | fields |
 |---|---|
 | `bold`, `italic`, `underline`, `strikethrough`, `superscript`, `subscript` | — |
+| `code` | — (an inline equation's LaTeX, `$…$`) |
 | `highlight` | `color` (text background/highlighter) |
 | `color` | `color` (font colour) |
 | `font` | `family` — only when not the default `Calibri` |
 | `font_size` | `pt` — only when not the default 11 pt |
 | `link` | `href` (as stored); `onenote` *(only for OneNote links)*: `{"page_id", "section_id", "object_id", "object_ref", "section_file", "page_title"}` (GUIDs normalised, all nullable; `object_id` is the GUID of `object-id=` alone, `object_ref` the full target `{GUID}&N` when the link carries the counter); `auto: true` *(omitted when false)* when the URL was found in plain text rather than stored as a link. |
-| `math` | inline equation: `latex`, `mathml` *(each omitted when rendering failed)* |
 
 **Rewriting OneNote links**: for a link mark with `onenote.page_id`, look up
 the page whose `link_target_id` equals it (case-insensitive) — in this
@@ -271,10 +275,9 @@ matches them to the converted content per page:
 
 | field | how it is found |
 |---|---|
-| `object_id` of rich text (paragraph, heading, list/check item, quote, code, math) | the page's `RichTextNode` whose text equals the paragraph text (whitespace-normalised), when exactly one does |
+| `object_id` of rich text (paragraph, heading, list/check item, quote, code) | the page's `RichTextNode` whose text equals the paragraph text (whitespace-normalised), when exactly one does |
 | `object_id` of a file / image | the `EmbeddedFileNode` / `ImageNode` with that file name / alt text (or file name), else the page's only one |
 | `object_id` of a table | the page's only `TableNode` with that row and column count |
-| `object_id` of ink | the page's only ink container (page-level drawings merged from several ink objects get none) |
 | `element_id` | the `OutlineElementNode` OneNote created with the content: same GUID and last-modified time; within such a group, elements and content nodes pair up in counter order (or by counter `n − 1` when the numbers differ) |
 
 Anything ambiguous (two paragraphs with identical text on a page, a merged
@@ -296,7 +299,7 @@ must fall back to their own keys (e.g. a content hash) when a block has no
   "counts": {"section_groups", "sections", "sections_failed", "pages", "subpages", "blocks",
              "paragraphs", "headings", "list_items", "check_items", "code_blocks", "quotes",
              "tables", "images", "printout_pages", "attachments", "attachments_missing",
-             "ink", "math", "embeds", "links_web", "links_onenote", "tags", "column_layouts",
+             "ink_skipped", "embeds", "links_web", "links_onenote", "tags", "column_layouts",
              "text_chars"},
   "tags_by_label": {"To Do": 4, "Important": 1},
   "warnings": [Warning],          // parser warnings and lossy-conversion notes

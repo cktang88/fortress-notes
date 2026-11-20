@@ -11,7 +11,7 @@ can check what they send against the server's own rules.
 The principles:
 
 - **One canonical shape.** A block is a `type`, `attrs`, inline `content` (text
-  blocks only) and a `payload` (structured data, math and HTML only). Structure
+  blocks only) and a `payload` (structured data, HTML only). Structure
   (lists of rows, cells, columns, quoted paragraphs) is always child blocks,
   never JSON inside a block.
 - **The server derives everything else**: plain `text`, Markdown, links and
@@ -39,7 +39,7 @@ document order):
     {"type": "text", "text": "Hello "},
     {"type": "text", "text": "world", "marks": {"bold": true}}
   ],
-  "payload": null,                        // structured data: math and html only, else null
+  "payload": null,                        // structured data: html only, else null
   "text": "Hello world",                 // derived plain text (read-only)
   "user_attrs": {},                       // the person's own key/values (see §5)
   "provenance": {"source": "manual"},     // where it came from (spec §7a)
@@ -66,8 +66,12 @@ Categories:
 - **atomic**: no inline content and no children.
 
 "flow" below means every type a document body may hold: all text types plus
-`quote`, `callout`, `columns`, `table`, `divider`, `image`, `file`, `math`,
-`html`. Top-level blocks must be flow types.
+`quote`, `callout`, `columns`, `table`, `divider`, `image`, `file`, `html`.
+Top-level blocks must be flow types.
+
+Fortress has no math or ink (drawings, handwriting): there is no `math` block
+and no ink attribute. Formulas are kept as `code` blocks with `language: "latex"` (schema
+15 converted stored ones, §10).
 
 | type | category | attrs | payload | children |
 |---|---|---|---|---|
@@ -87,7 +91,6 @@ Categories:
 | `divider` | atomic | — | — | none |
 | `image` | atomic | `url`, `alt`, `caption`, `name`: string; `width`, `height`: number ≥ 0 (px) | — | none |
 | `file` | atomic | `url`, `name`, `mime`, `caption`: string; `size`: number ≥ 0 (bytes) | — | none |
-| `math` | atomic | — | `{"latex": string, "mathml"?: string}` | none |
 | `html` | atomic | — | `{"html": string}` (raw HTML kept from an import) | none |
 
 A colour is `#rgb`/`#rrggbb`/`#rrggbbaa`, a CSS colour name, or `rgb()/rgba()/hsl()/hsla()`.
@@ -226,7 +229,7 @@ operation with a field not listed above is refused (422).
 
 | derived | from |
 |---|---|
-| `text` | the block's own content: text nodes; `docLink` → the note's title, `blockRef` → the block's first line; image `alt`/`caption`; file `name`/`caption`; math `latex`; html → its text without tags; containers → `""`. No Markdown syntax, ever. Search, Ask, embeddings, titles and snippets read this. Kept current when a linked note is renamed or a referenced block changes. |
+| `text` | the block's own content: text nodes; `docLink` → the note's title, `blockRef` → the block's first line; image `alt`/`caption`; file `name`/`caption`; html → its text without tags; containers → `""`. No Markdown syntax, ever. Search, Ask, embeddings, titles and snippets read this. Kept current when a linked note is renamed or a referenced block changes. |
 | `order`, `position` | placement in operations |
 | Markdown | rendered from the canonical blocks on export and for the mirror (§7) |
 | links and backlinks | `docLink`/`blockRef` nodes in `content` (block_refs, document_refs tables) |
@@ -276,8 +279,7 @@ Writing (`render_markdown`, with `RenderLinks` naming notes and blocks):
 
 - Text: `#` headings; `- `, `1. `, `- [ ] `/`- [x] ` lists, children indented
   under their item by its bullet's width (a task's `[ ] ` doesn't count); `code`
-  as a fence longer than any backtick run inside; `divider` as `---`; `math` as
-  `$$ … $$`; `html` as itself.
+  as a fence longer than any backtick run inside; `divider` as `---`; `html` as itself.
 - `quote`: `> ` before each line of its children. `callout`: an Obsidian callout,
   `> [!type]` (attrs `callout_type`, default `note`; `callout_fold` `+`/`-`; with
   `callout_title` its first paragraph is the title on the marker line).
@@ -295,7 +297,7 @@ Writing (`render_markdown`, with `RenderLinks` naming notes and blocks):
 - Block ids: written only for blocks something refers to (`RenderLinks.anchors`;
   all blocks when no `RenderLinks` is given). Obsidian's `^id` at the end of a
   text block's line, or on its own line after a quote, callout, table, code,
-  math, divider or HTML block; a heading's id (Obsidian links headings by text)
+  divider or HTML block; a heading's id (Obsidian links headings by text)
   and ids Obsidian can't hold (`_`) go in the comment.
 - The comment, `<!-- fortress:block {...} -->` (trailing on a text block's line,
   otherwise on the line before the block), carries only what no syntax can say:
@@ -323,7 +325,8 @@ importer sources) produces canonical blocks directly (`parse_markdown`, with
 `ParseLinks` resolving names). It reads everything above and what Obsidian writes:
 wikilinks by file name, path, title or alias, `[[Note#Heading]]`,
 `[[Note#^id]]`, embeds `![[file.png|300]]` / `![[file.pdf]]`, callouts,
-`==highlight==`, block ids (Obsidian's short ids become new workspace-unique ids,
+`==highlight==`, a `$$ … $$` formula (a `code` block, `language: "latex"`, so
+its source is kept verbatim), block ids (Obsidian's short ids become new workspace-unique ids,
 consistently for every reference in the import), and Markdown links/images to
 `assets/<name>` (read as `/media/<name>`). An unresolved wikilink stays text.
 Only `<table>`, `<img>` and Fortress `div[data-type]` HTML is read structurally;
@@ -357,8 +360,7 @@ is refused with HTTP 422 (nothing is written):
   `checkListItem`, `list`, `codeBlock`, `blockquote`, `hr`, ...) are unknown
   types;
 - `content` must be a list of inline nodes (or null): `{"blocknote": runs}`,
-  `{"markdown": …}` and `{"latex": …}` objects are refused (math LaTeX goes in
-  `payload`); `[[id|Title]]`/`((id))` typed as text stay text (send `docLink`/
+  `{"markdown": …}` and `{"latex": …}` objects are refused; `[[id|Title]]`/`((id))` typed as text stay text (send `docLink`/
   `blockRef` nodes);
 - inline content on a `quote`/`callout` (a container: send paragraph children),
   BlockNote attrs such as image `previewWidth` (use `width`);
@@ -378,13 +380,14 @@ transaction:
   `numberedListItem` → `numbered_item`; `checkListItem` → `check_item`; `list`
   → by `attrs.checked`/`attrs.ordered`; `codeBlock` → `code`; `thematic_break`,
   `hr` → `divider`; `blockquote` → `quote`; `audio`, `video`, `pdf` → `file`;
-  BlockNote `styles` → marks, image `previewWidth` → `width`, `mathPlaceholder`
-  → empty `math`). BlockNote's default props (`textColor`/`backgroundColor:
+  BlockNote `styles` → marks, image `previewWidth` → `width`; `math` and
+  `mathPlaceholder` → a `code` block with `language: "latex"` holding the
+  formula, as schema 15 does). BlockNote's default props (`textColor`/`backgroundColor:
   "default"`, `textAlignment: "left"`, `isToggleable: false`, `showPreview: true`,
   empty `caption`/`name`/`url`, code `language: "text"`) are dropped; other
   BlockNote props stay as snake_case extension attrs (`text_alignment`, ...).
   Markdown-only blocks are parsed into canonical content (a heading's `#`, a
-  list item's marker, a code fence, a sole image, `$$` math), but the stored type
+  list item's marker, a code fence, a sole image), but the stored type
   wins where the Markdown lost its syntax (a code block without its fence keeps
   its text verbatim, a quote or callout without `>` stays a container, a check
   item keeps its `checked`); `raw` HTML becomes `html` blocks;
@@ -404,3 +407,15 @@ transaction:
   full-text index are rebuilt;
 - the dead `revisions` and `block_attrs` tables are dropped, and undo history
   (stored in the old snapshot format) is cleared.
+
+Schema version 15 (`retire_math_and_ink` in `backend/app/block_migration.py`)
+retires math and ink, losing no content:
+
+- a `math` block becomes a `code` block whose text is its LaTeX, `language:
+  "latex"` (an equation stored with MathML only keeps the MathML, `language:
+  "xml"`); its id, place, provenance and extension attributes stay;
+- an `image` imported from ink stays an ordinary image of the drawing (its SVG
+  and `alt` text); only its `ink` attribute is dropped;
+- undo steps and re-import conflicts holding such blocks are converted the same
+  way, and the re-import hash of an unedited imported block follows its new
+  shape (so a re-import doesn't report it as edited).

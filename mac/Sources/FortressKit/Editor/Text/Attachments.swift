@@ -117,7 +117,7 @@ final class BlockAttachment: NSTextAttachment {
     let info: BlockInfo
     nonisolated(unsafe) weak var context: AttachmentContext?
     nonisolated(unsafe) var live: (any LiveBlock)?
-    /// Last measured (width, height) of a hosted embed or math view (measuring hosts a view).
+    /// Last measured (width, height) of a hosted embed view (measuring hosts a view).
     nonisolated(unsafe) private var measured: (width: CGFloat, height: CGFloat)?
     /// See `blockView`.
     nonisolated(unsafe) private var shownView: NSView?
@@ -152,7 +152,7 @@ final class BlockAttachment: NSTextAttachment {
     /// keystroke); a fresh view each time re-rendered it each time. Pictures and dividers
     /// are drawn by AppKit, because a hosting view re-renders its SwiftUI whenever it
     /// moves to a window (and TextKit's re-adding is such a move); the rarer kinds
-    /// (files, math, embeds) keep one hosting view each.
+    /// (files, embeds) keep one hosting view each.
     @MainActor var blockView: NSView {
         if let live { return live.view }
         if let shownView { return shownView }
@@ -395,7 +395,7 @@ final class BlockAttachmentViewProvider: NSTextAttachmentViewProvider {
     }
 }
 
-/// The SwiftUI view inside a file, math or embed block's attachment (pictures and
+/// The SwiftUI view inside a file or embed block's attachment (pictures and
 /// dividers are AppKit views: `BlockAttachment.blockView`).
 struct BlockEmbedView: View {
     let info: BlockInfo
@@ -416,8 +416,6 @@ struct BlockEmbedView: View {
             case .file:
                 FileChip(name: fileName, url: attrs["url"]?.stringValue.flatMap { context?.url(for: $0) },
                          size: fileSize, context: context)
-            case .math:
-                MathBlockView(latex: origin?.payload?["latex"]?.stringValue ?? origin?.text ?? "")
             default:
                 EmbedSummary(origin: origin)
             }
@@ -434,56 +432,6 @@ struct BlockEmbedView: View {
         if let name = attrs["name"]?.stringValue, !name.isEmpty { return name }
         if let url = attrs["url"]?.stringValue { return (url as NSString).lastPathComponent }
         return "File"
-    }
-}
-
-/// A math block: the LaTeX set in a math style (symbols, raised and lowered parts),
-/// with the source on hover. Saved untouched.
-struct MathBlockView: View {
-    let latex: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "function")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.themeTertiary)
-            Text(MathText.attributed(latex, size: 19))
-                .textSelection(.enabled)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(ThemeStyle(.surface)))
-        .help(latex)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Math: \(MathFormatter.plain(MathFormatter.format(latex)))")
-        .frame(maxHeight: .infinity, alignment: .center)
-    }
-}
-
-enum MathText {
-    /// The formula in New York italic with raised and lowered pieces.
-    static func attributed(_ latex: String, size: CGFloat) -> AttributedString {
-        var output = AttributedString()
-        func append(_ pieces: [MathFormatter.Piece], size: CGFloat, offset: CGFloat) {
-            for piece in pieces {
-                switch piece {
-                case .text(let text):
-                    var run = AttributedString(text)
-                    run.swiftUI.font = .system(size: size, design: .serif).italic()
-                    run.swiftUI.baselineOffset = offset
-                    output += run
-                case .sup(let inner):
-                    append(inner, size: size * 0.72, offset: offset + size * 0.38)
-                case .sub(let inner):
-                    append(inner, size: size * 0.72, offset: offset - size * 0.2)
-                }
-            }
-        }
-        append(MathFormatter.format(latex), size: size, offset: 0)
-        return output
     }
 }
 
@@ -572,7 +520,6 @@ struct EmbedSummary: View {
         case "html": "chevron.left.forwardslash.chevron.right"
         case "quote", "callout": "text.quote"
         case "columns", "column": "rectangle.split.2x1"
-        case "math": "function"
         default: "square.dashed"
         }
     }

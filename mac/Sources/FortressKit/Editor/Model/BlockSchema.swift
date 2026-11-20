@@ -27,7 +27,7 @@ public struct BlockSchema: Decodable, Hashable, Sendable {
     /// The registry this app was built against.
     public static let bundled: BlockSchema = {
         let flow = ["bullet_item", "callout", "check_item", "code", "columns", "divider", "file", "heading", "html",
-                    "image", "math", "numbered_item", "paragraph", "quote", "table"]
+                    "image", "numbered_item", "paragraph", "quote", "table"]
         let inner = flow.filter { $0 != "columns" }
         func type(_ category: String, _ children: [String] = [], _ group: String? = nil) -> TypeInfo {
             TypeInfo(category: category, children: children, changeGroup: group)
@@ -41,7 +41,7 @@ public struct BlockSchema: Decodable, Hashable, Sendable {
             "table": type("container", ["table_row"]), "table_row": type("container", ["table_cell"]),
             "table_cell": type("container", inner),
             "divider": type("atomic"), "image": type("atomic"), "file": type("atomic"),
-            "math": type("atomic"), "html": type("atomic"),
+            "html": type("atomic"),
         ])
     }()
 

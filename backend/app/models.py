@@ -59,7 +59,7 @@ class BlockOperation(BaseModel):
     user_attrs: dict[str, Any] | None = None
     # Inline nodes (text types).
     content: list[dict[str, Any]] | None = None
-    # Structured data (math, html).
+    # Structured data (html).
     payload: dict[str, Any] | None = None
     # Insert: where the content came from (pasted, web, ai, ...; default manual).
     # Update: merged into the block's provenance.

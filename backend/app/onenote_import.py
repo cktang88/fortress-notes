@@ -59,7 +59,7 @@ Design choices:
   -> ``table_cell`` -> blocks, quotes as containers holding a paragraph.
   OneNote-only details stay as extension attributes (``onenote_tags``,
   ``list_format``, ``list_style``, ``list_start``, ``checked_at``,
-  ``text_alignment``, an image's ``link``/``original_url``/``ink``...).
+  ``text_alignment``, an image's ``link``/``original_url``...).
 * **Assets** are copied once into ``NOTES_DIR/assets/<sha256>.<ext>`` (deduped by
   hash). Extensions a browser would render as active content (html, svg from
   attachments, ...) are stored as ``.bin`` (served as a download).
@@ -164,7 +164,7 @@ def safe_link(href: object) -> str | None:
 _OCR_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
 # Images shown as images; any other image asset (.bin, ...) is kept as a file.
 _IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif",
-                               "emf", "wmf", "svg"})
+                               "emf", "wmf"})
 # Pages whose imported text covers less of the manifest's text are reported.
 COVERAGE_THRESHOLD = 0.98
 # Extensions served as themselves from /media; anything else is stored as .bin.
@@ -434,20 +434,9 @@ def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
         if mark.get("type") == "link":
             hrefs[index] = _link_href(mark, text[start:end], ctx, block_links)
     bounds = sorted({0, length, *(s for s, _, _ in usable), *(e for _, e, _ in usable)})
-    equations = {index: latex for index, (_, _, mark) in enumerate(usable)
-                 if mark.get("type") == "math" and (latex := _inline_latex(mark)) is not None}
     runs: list[dict[str, Any]] = []
-    emitted: set[int] = set()
     refs_emitted: set[int] = set()
     for a, b in zip(bounds, bounds[1:]):
-        equation = next((index for index in equations if usable[index][0] <= a and usable[index][1] >= b), None)
-        if equation is not None:
-            # OneNote's linear text of an equation loses its structure (a/b, x², ∮…):
-            # keep the LaTeX instead, as inline code ``$…$`` (there is no inline math run).
-            if equation not in emitted:
-                emitted.add(equation)
-                runs.append({"type": "text", "text": f"${equations[equation]}$", "marks": {"code": True}})
-            continue
         marks: dict[str, Any] = {}
         href: str | None = None
         ref: dict[str, str] | None = None
@@ -472,7 +461,7 @@ def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
                     ref, ref_index = target, index
                 elif target:
                     href = target
-            # font_size is dropped; equations with LaTeX were written above.
+            # font_size is dropped.
         if marks.get("sup") and marks.get("sub"):
             del marks["sub"]
         # Monospace runs keep their other marks (colour, highlight, bold...): the Markdown
@@ -496,7 +485,7 @@ def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
 
 
 _MARK_NAMES = {"bold": "bold", "italic": "italic", "underline": "underline", "strikethrough": "strike",
-               "strike": "strike", "superscript": "sup", "subscript": "sub"}
+               "strike": "strike", "superscript": "sup", "subscript": "sub", "code": "code"}
 
 
 def _text_nodes(text: str, **marks: Any) -> list[dict[str, Any]]:
@@ -551,35 +540,6 @@ def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext,
     if safe is None and href:
         ctx.dropped_links.append(href[:MAX_LINK_LENGTH])
     return safe
-
-
-def _inline_latex(mark: dict[str, Any]) -> str | None:
-    latex = mark.get("latex")
-    if not isinstance(latex, str) or not latex.strip():
-        return None
-    return " ".join(_strip_math_delimiters(latex).split()) or None
-
-
-def _text_without_equations(block: dict[str, Any]) -> str:
-    """A text block's text minus the inline equations the importer writes as LaTeX."""
-
-    text = str(block.get("text") or "")
-    spans = sorted(
-        (mark["start"], mark["end"]) for mark in block.get("marks") or []
-        if isinstance(mark, dict) and mark.get("type") == "math" and _inline_latex(mark) is not None
-        and isinstance(mark.get("start"), int) and isinstance(mark.get("end"), int)
-    )
-    for start, end in reversed(spans):
-        text = text[:start] + " " + text[end:]
-    return text
-
-
-def _strip_math_delimiters(latex: str) -> str:
-    latex = latex.strip()
-    for opening, closing in (("\\[", "\\]"), ("$$", "$$"), ("\\(", "\\)")):
-        if latex.startswith(opening) and latex.endswith(closing) and len(latex) >= len(opening) + len(closing):
-            return latex[len(opening):-len(closing)].strip()
-    return latex
 
 
 def _apply_tag_colors(runs: list[dict[str, Any]], tags: object) -> None:
@@ -682,28 +642,13 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
             ctx.count("check_items")
     elif kind == "code":
         result = {"type": "code", "content": _text_nodes(str(block.get("text") or ""))}
-    elif kind == "math":
-        latex = block.get("latex")
-        if isinstance(latex, str) and latex.strip():
-            latex = _strip_math_delimiters(latex)
-        else:
-            latex = str(block.get("text") or "")
-            if not (isinstance(block.get("mathml"), str) and block["mathml"]):
-                # Third-party writers store equations without LaTeX/MathML: only the
-                # flattened text is left (x=−b±b2−4ac2a), so say the structure is lost.
-                ctx.warn_once("an equation had no LaTeX or MathML; its plain text was kept "
-                              "(fractions, powers and roots may read flattened)")
-        result = {"type": "math", "payload": {"latex": latex}}
-        if isinstance(block.get("mathml"), str) and block["mathml"]:
-            result["payload"]["mathml"] = block["mathml"]
-        ctx.count("math")
+        if isinstance(block.get("language"), str) and block["language"]:
+            result["attrs"] = {"language": block["language"]}
     elif kind == "table":
         result = _table(block, ctx)
         ctx.count("tables")
     elif kind == "image":
         result = _image(block, ctx)
-    elif kind == "ink":
-        result = _ink(block, ctx)
     elif kind == "file":
         result = _file(block, ctx)
     elif kind == "embed":
@@ -947,24 +892,6 @@ def _image(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
     return {"type": "image", "attrs": attrs}
 
 
-def _ink(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any] | None:
-    ctx.count("ink")
-    url = ctx.importer.asset_url(block.get("asset"), allow_svg=True)
-    text = str(block.get("recognized_text") or "").strip()
-    if url is None:
-        return {"type": "paragraph", "content": _text_nodes(text)} if text else None
-    attrs: dict[str, Any] = {"url": url, "name": "Ink drawing"}
-    if text:
-        attrs["alt"] = text
-        ctx.count("ink_text")
-    for key in ("width", "height"):
-        value = _px(block.get(key))
-        if value:
-            attrs[key] = value
-    attrs["ink"] = True
-    return {"type": "image", "attrs": attrs}
-
-
 def _file(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
     ctx.count("files")
     name = _file_name(block.get("filename"))
@@ -1076,25 +1003,7 @@ def page_blocks(page: dict[str, Any], ctx: _PageContext) -> list[dict[str, Any]]
         if item_id not in used:
             used.add(item_id)
             blocks.extend(_tree(item.get("blocks") or [], ctx))
-    ink_text = str(page.get("ink_text") or "").strip()
-    if ink_text and not ctx.stats.get("ink_text"):
-        first_ink = _find_ink(blocks)
-        if first_ink is not None:
-            first_ink["attrs"]["alt"] = ink_text
-        else:
-            blocks.append({"id": f"{ctx.page_guid}/ink_text", "type": "paragraph", "content": _text_nodes(ink_text)})
     return blocks
-
-
-def _find_ink(blocks: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for block in blocks:
-        attrs = block.get("attrs") or {}
-        if block.get("type") == "image" and attrs.get("ink") and not attrs.get("alt"):
-            return block
-        found = _find_ink(block.get("children") or [])
-        if found is not None:
-            return found
-    return None
 
 
 def _subpage_blocks(page_guid: str, children: list[dict[str, Any]], ctx: _PageContext) -> list[dict[str, Any]]:
@@ -1139,8 +1048,7 @@ class ImportCancelled(Exception):
 
 
 def _manifest_text(blocks: list[Any]) -> list[str]:
-    """The text a reader sees in manifest blocks (tables included; math excluded,
-    since it is imported as LaTeX)."""
+    """The text a reader sees in manifest blocks (tables included)."""
 
     parts: list[str] = []
     for block in blocks or []:
@@ -1149,11 +1057,9 @@ def _manifest_text(blocks: list[Any]) -> list[str]:
         kind = block.get("type")
         if kind in {"paragraph", "heading", "list_item", "check_item", "quote", "code"}:
             if not block.get("is_source_citation"):
-                parts.append(_text_without_equations(block))
+                parts.append(str(block.get("text") or ""))
         elif kind == "image":
             parts.append(str(block.get("alt_text") or ""))
-        elif kind == "ink":
-            parts.append(str(block.get("recognized_text") or ""))
         elif kind == "table":
             for row in block.get("rows") or []:
                 for cell in (row or {}).get("cells") or []:
@@ -1216,7 +1122,7 @@ class _Importer:
                 "update Fortress Notes or use a matching converter."
             )
         self.assets: dict[str, Any] = self.manifest.get("assets") or {}
-        self._copied: dict[tuple[str, bool], str | None] = {}
+        self._copied: dict[str, str | None] = {}
         self.warnings: list[str] = []
         self.targets: dict[str, _Target] = {}
         self.manifest_pages: set[str] = set()
@@ -1235,17 +1141,16 @@ class _Importer:
         if len(self.warnings) < MAX_WARNINGS:
             self.warnings.append(message)
 
-    def asset_url(self, name: object, allow_svg: bool = False) -> str | None:
+    def asset_url(self, name: object) -> str | None:
         if not isinstance(name, str) or not name:
             return None
-        key = (name, allow_svg)
-        if key in self._copied:
-            return self._copied[key]
-        url = self._copy_asset(name, allow_svg)
-        self._copied[key] = url
+        if name in self._copied:
+            return self._copied[name]
+        url = self._copy_asset(name)
+        self._copied[name] = url
         return url
 
-    def _copy_asset(self, name: str, allow_svg: bool) -> str | None:
+    def _copy_asset(self, name: str) -> str | None:
         info = self.assets.get(name)
         match = _ASSET_NAME_RE.match(name)
         if not isinstance(info, dict) or match is None:
@@ -1256,7 +1161,7 @@ class _Importer:
             self.warn(f"asset {name} is missing from the converter output")
             return None
         digest, extension = match.group(1), match.group(2).lower()
-        if extension == "svg" and not allow_svg or extension != "svg" and extension not in _SAFE_EXTENSIONS:
+        if extension not in _SAFE_EXTENSIONS:
             extension = "bin"
         target = self.assets_path / f"{digest}.{extension}"
         if not target.is_file():
@@ -1335,7 +1240,9 @@ class _Importer:
                 "name": nb_segment[1], "folder_id": nb_folder, "sections": 0,
                 "pages_created": 0, "pages_updated": 0, "pages_unchanged": 0, "pages_skipped": 0,
                 "images": 0, "files": 0, "tables": 0, "columns_pages": 0,
-                "ink": 0, "math": 0, "check_items": 0, "conflicts": 0,
+                "check_items": 0, "conflicts": 0,
+                # Ink drawings are not imported (Fortress has no ink); the converter counts them.
+                "ink_skipped": int((report.get("counts") or {}).get("ink_skipped") or 0),
                 "images_ocr_queued": 0, "low_coverage_pages": [],
                 "pages_removed_in_source": [], "sections_removed_in_source": [],
                 "warnings": [], "failed_sections": [
@@ -1417,7 +1324,7 @@ class _Importer:
             state["notebook"] = index
             page_state[state["guid"]] = state
             entry[f"pages_{state['status']}"] += 1
-            for key in ("images", "files", "tables", "ink", "math", "check_items"):
+            for key in ("images", "files", "tables", "check_items"):
                 entry[key] += state["ctx"].stats.get(key, 0)
             if state["ctx"].stats.get("columns"):
                 entry["columns_pages"] += 1
@@ -1561,7 +1468,7 @@ class _Importer:
             imported = []
             for row in rows:
                 external = str(provenance.loads(row["provenance_json"]).get("external_id") or "")
-                if "/subpage" in external or "/ink_text" in external:
+                if "/subpage" in external:
                     continue  # added by the importer, not page text
                 imported.append(str(row["text"] or ""))
                 try:

@@ -815,46 +815,6 @@ extension BlockEditorController {
         }
     }
 
-    // MARK: Math
-
-    /// Shows the LaTeX of a math block for editing (or of a new one, put in with `apply`).
-    func editMath(at paragraph: NSRange?, initial: String, apply: @escaping (String) -> Void) {
-        let rect: NSRect
-        if let paragraph, let frame = blockFrame(at: CGPoint(x: textView.textContainerOrigin.x + 1, y: selectionFrame(paragraph).minY + 2))?.1 {
-            rect = frame
-        } else {
-            rect = caretRect()
-        }
-        MathEditor.show(relativeTo: rect, of: textView, initial: initial) { [weak self] result in
-            guard let self else { return }
-            self.textView.window?.makeFirstResponder(self.textView)
-            if let result { apply(result) }
-        }
-    }
-
-    /// Edit Math… for the selected math block.
-    func editSelectedMath() {
-        let current = paragraph(at: targetBlocksRange().location)
-        guard let info = storage.blockInfo(at: current.location), info.kind == .math else { NSSound.beep(); return }
-        let latex = info.origin?.origin.payload?["latex"]?.stringValue ?? ""
-        editMath(at: current, initial: latex) { [weak self] latex in
-            guard let self, let range = self.range(ofBlock: info.id) else { return }
-            var block = self.block(at: range)
-            var origin = block.origin ?? BlockOrigin(type: "math", kind: .math)
-            origin.payload = .object(["latex": .string(latex)])
-            block.origin = origin
-            self.endBlockSelection(caret: nil)
-            self.undoStep(UndoNames.math) {
-                self.replace(range, with: self.text(for: [block]), selecting: NSRange(location: range.location, length: 0))
-            }
-        }
-    }
-
-    static func mathBlock(_ latex: String, depth: Int = 0) -> EditorBlock {
-        let origin = BlockOrigin(type: "math", payload: .object(["latex": .string(latex)]), text: latex, kind: .math)
-        return EditorBlock(kind: .math, depth: depth, origin: origin)
-    }
-
     // MARK: Files
 
     /// The open panel for Image… and File… in the `/` menu.

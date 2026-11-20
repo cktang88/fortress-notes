@@ -90,7 +90,7 @@ public final class MediaCache: Sendable {
     }
 
     /// Decodes fully now (not lazily at first draw on the main thread). Formats ImageIO
-    /// can't read (SVG ink drawings) fall back to NSImage.
+    /// can't read (SVG pictures) fall back to NSImage.
     static func decode(_ data: Data) -> Image? {
         let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
         if let source = CGImageSourceCreateWithData(data as CFData, nil),

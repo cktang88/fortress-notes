@@ -87,7 +87,8 @@ The block model is specified in **[docs/block-model.md](docs/block-model.md)**, 
 contract between the backend and every client. In short: a block is a `type`
 from one registry (`block_schema.py`, served at `GET /api/block-schema`), `attrs`,
 inline `content` (text blocks: text/link/docLink/blockRef nodes with marks) and a
-`payload` (math, html). Tables, columns, quotes and callouts are container blocks
+`payload` (html). Fortress supports neither math nor ink drawings (formulas are
+LaTeX `code` blocks). Tables, columns, quotes and callouts are container blocks
 with child blocks. Siblings are ordered by fractional `order` keys
 (`order_keys.py`). The server derives `text` (plain, no Markdown: FTS, embeddings,
 Ask and titles read it), Markdown (`block_markdown.py`), links, backlinks and asset
@@ -463,7 +464,6 @@ source_blocks([
      {"id": "{O1b}", "width": 0.5, "blocks": [{"type": "image", "url": "/media/…",
                                                 "alt": "OCR", "width": 300}]}]},
   {"id": "{F1}", "type": "file", "url": "/media/….pdf", "name": "a.pdf", "size": 1, "mime": "application/pdf"},
-  {"id": "{M1}", "type": "math", "latex": "a^2"},
 ])
 ```
 
@@ -540,20 +540,20 @@ README.
   the manifest; "scattered" bands (> 4 columns) are stacked.
 - Blocks (flat with `indent` → nested children): heading (`level`), paragraph,
   `list_item` → `list` (`ordered`, `list_format` = OneNote marker), `check_item` →
-  `list` with `checked`/`checked_at`, quote, code, math (`latex` without `\[ \]`,
-  `mathml`), table (column widths ×48 px, `borders`, cell backgrounds, the first
+  `list` with `checked`/`checked_at`, quote, code (an equation arrives as a code
+  block with `language: "latex"`: Fortress has no math), table (column widths ×48 px, `borders`, cell backgrounds, the first
   plain paragraph of a cell as its inline content, the rest — lists, images,
   nested tables — as cell `blocks`), image (asset copied, `alt` = OneNote OCR text
   → searchable, width/height in px, `name`, `attrs.link`/`printout_page`/
   `original_url` for EMF/XPS originals), file (asset, name, size, mime;
-  `attrs.caption` when the export lacks the data), ink → image of the SVG with
-  `attrs.ink` and `alt` = recognised handwriting, embed → paragraph link. Other
+  `attrs.caption` when the export lacks the data), embed → paragraph link. Ink is
+  not imported (Fortress has no ink): the converter skips it and counts it
+  (`ink_skipped`, with a warning per page). Other
   note tags → `attrs.onenote_tags` (labels). Unknown block types keep their text
   and are reported.
 - Marks → runs: bold/italic/underline/strike/superscript/subscript, `color`,
-  `highlight`, links; monospace fonts → `code`; inline equations become inline
-  code `$<LaTeX>$` (there is no inline math node; OneNote's linear text is kept only
-  when an equation has no LaTeX); font sizes are dropped.
+  `highlight`, links, `code` (inline equations arrive as `$<LaTeX>$` code); monospace
+  fonts → `code`; font sizes are dropped.
 - Block source ids: `<page>/obj:<object_id>` when the manifest block has a
   OneNote object id (ExGUID `{GUID}&N`, stable across edits — SCHEMA.md
   "Object ids"), so a paragraph edited in OneNote updates the **same** Fortress
@@ -580,8 +580,9 @@ README.
   `provenance.extra.unresolved_links`) and are listed in the report.
 - Assets are copied once to `NOTES_DIR/assets/<sha256>.<ext>` and registered in
   `assets` (dedup by hash). Extensions outside an allowlist (html, js, attachment
-  svg, ...) are stored as `.bin` (served as a download); ink `.svg` is served
-  with `Content-Security-Policy: sandbox`.
+  svg, ...) are stored as `.bin` (served as a download); a stored `.svg` (pictures
+  imported from ink by earlier versions) is served with
+  `Content-Security-Policy: sandbox`.
 - The same page GUID in two different exports is the same note: the later import
   updates it (and moves it to its folder unless moved locally).
 - **Removed in OneNote**: for each notebook in the export, notes imported from
@@ -600,7 +601,7 @@ README.
   (`images_ocr_queued` counts them), pictures that have OneNote's text are read
   last.
 - **Text coverage**: per page, the words of the manifest's text (text blocks,
-  table cells, image alt/OCR and ink text; math excluded) are compared with the
+  table cells, image alt/OCR text) are compared with the
   imported note's blocks (case-folded words weighted by length, as a multiset;
   importer-added subpage lists excluded). Pages below 98 % are listed in
   `low_coverage_pages` so nothing is lost silently (a page edited here can show
@@ -639,7 +640,8 @@ ended.
       "name", "folder_id", "sections",
       "pages_created", "pages_updated", "pages_unchanged", "pages_skipped",  // skipped: trashed here or failed
       "images", "files", "tables", "columns_pages",
-      "ink", "math", "check_items", "conflicts",                            // extras
+      "check_items", "conflicts",                                           // extras
+      "ink_skipped",                       // ink drawings not imported (Fortress has no ink)
       "images_ocr_queued": 2,
       "low_coverage_pages": [{"page": "Work › A › Page", "document_id", "coverage": 0.93,
                               "manifest_chars": 1200, "imported_chars": 1116}],
