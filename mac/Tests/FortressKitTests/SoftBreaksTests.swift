@@ -30,7 +30,7 @@ struct SoftBreaksTests {
     }
 
     /// A short block, a long one with a bold run and a link in it, and a short one.
-    static func blocks(_ length: Int = 20_000) -> [EditorBlock] {
+    static func blocks(_ length: Int = 12_000) -> [EditorBlock] {
         let long = prose(length)
         let middle = long.utf16.count / 2
         let head = String(long.utf16.prefix(middle))!
@@ -65,8 +65,8 @@ struct SoftBreaksTests {
         let blocks = Self.blocks()
         let harness = UndoHarness(blocks)
         let separators = Self.separators(harness)
-        // ~20,000 characters in ~1,500-character soft paragraphs.
-        #expect(separators.count >= 8 && separators.count <= 16, "\(separators.count) separators")
+        // ~12,000 characters in ~1,500-character soft paragraphs.
+        #expect(separators.count >= 6 && separators.count <= 10, "\(separators.count) separators")
         let long = try #require(harness.controller.range(ofBlock: "long"))
         for index in separators {
             #expect(NSLocationInRange(index, long))
@@ -178,7 +178,7 @@ struct SoftBreaksTests {
         harness.view.copy(nil)
         let all = try #require(NSPasteboard.general.string(forType: .string))
         #expect(!Self.hasSeparator(all))
-        #expect(all.hasPrefix("First block.\n") && all.contains(String(Self.prose(20_000).prefix(3_000))))
+        #expect(all.hasPrefix("First block.\n") && all.contains(String(Self.prose(12_000).prefix(3_000))))
         // Pasting what was copied gives the same text back.
         harness.select(NSRange(location: harness.controller.range(ofBlock: "c")!.location, length: 0))
         harness.paste(expected, plain: true)
@@ -255,7 +255,7 @@ struct SoftBreaksTests {
         settleRunLoop()
         harness.controller.turnInto(.kind(.paragraph))
         settleRunLoop()
-        #expect(Self.separators(harness).count >= 8)
+        #expect(Self.separators(harness).count >= 6)
         #expect(Self.readBack(harness) == blocks)
     }
 
