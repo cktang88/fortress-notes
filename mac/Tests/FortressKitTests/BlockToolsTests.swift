@@ -90,7 +90,7 @@ extension UndoHarness {
     }
 
     /// The operations a save would send from `base` to what is shown.
-    func operations(from base: [EditorBlock]) -> [BlockOperation] {
+    func operations(from base: [EditorBlock]) -> [FortressKit.BlockOperation] {
         BlockDiff.operations(from: SyncedTree(base), to: controller.currentBlocks()).operations
     }
 }

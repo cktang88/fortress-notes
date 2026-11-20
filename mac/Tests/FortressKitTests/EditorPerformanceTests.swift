@@ -481,8 +481,9 @@ final class PerfEditor {
                         content.textStorage?.replaceCharacters(in: NSRange(location: at, length: 0), with: "b")
                     }
                     if let start = content.location(content.documentRange.location, offsetBy: at - 1500),
-                       let end = content.location(start, offsetBy: 3000) {
-                        manager.ensureLayout(for: NSTextRange(location: start, end: end))
+                       let end = content.location(start, offsetBy: 3000),
+                       let range = NSTextRange(location: start, end: end) {
+                        manager.ensureLayout(for: range)
                     }
                 })
                 calls.append(Double(delegate.calls))

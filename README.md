@@ -52,6 +52,15 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
 - Block editor with Markdown shortcuts; headings, bulleted/numbered/check lists, quotes,
   callouts, code, dividers, tables, columns, math, pictures and file attachments.
   Paste or drop a picture or file to attach it.
+- Blocks you can see and move, Craft/Notion style, on a calm page: hover a block for its
+  **⠿ handle** (drag to move it with its children, between blocks, nested, into a column,
+  beside a block to make columns, into a table cell; click for **Turn Into**, Duplicate,
+  Delete, **Copy Link to Block** as `[[Note#^id]]`, Move Up/Down, Info) and a **+** that
+  adds a block. Type **`/`** at the start of a line for the insert menu (headings, lists,
+  quote, callout, code, divider, `table 4x5`, 2/3 columns, image, file, math, note link).
+  **Esc** selects blocks: ⇧↑/⇧↓ extend, ⌥⇧↑/⌥⇧↓ move, ⌘C/⌘X/⌫/Tab/⌘D act on them.
+  View ▸ **Show Blocks** (⌥⌘B) keeps faint outlines and handles on every block. Every
+  action is one named undo step and saves as ordinary block operations.
 - Links to notes (type `[[` to pick one) and references to individual paragraphs,
   with backlinks in the inspector. Links always show the target's current title or text.
 - Nested folders (drag notes and folders to move them), a **Rough / Polished** status

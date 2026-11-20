@@ -64,6 +64,11 @@ Evidence: code under `mac/Sources/FortressKit/Editor/` and the tests in `mac/Tes
 | Typing in table cells | ❌ lost after a shape change; stack fell back to the window's when the editor was out of the view tree | ✅ "Typing", grouped as NSTextView groups it, restored with the caret | `cellEdits…` |
 | Typing in columns | ❌ building a columns block cleared the note's stack | ✅ same stack, in order with the note's text | `columnEdits…` |
 | `[[` note link insertion | own step, unnamed | ✅ "Note Link" | — (same step code) |
+| Block handle and Format ▸ Block: Turn Into, Duplicate (⌘D), Delete, Move Up/Down (with children), columns (turn into, add, remove, unwrap), Edit Math | — (new) | ✅ one step each, named ("Heading 2", "Callout", "Duplicate", "Delete", "Move", "Columns", "Add Column", "Remove Column", "Unwrap Columns", "Math") | `BlockToolsTests` |
+| Dragging blocks by the handle (between blocks, nested, into/out of columns, beside a block, into a cell) | — (new) | ✅ "Move", one step however many editors it touches (columns blocks are rewritten in the note's text) | `draggingMoves…`, `draggingBeside…`, `draggingTextIntoATableCell` |
+| Block selection (Esc) keys: ⌥⇧↑/↓, Tab/⇧Tab, ⌫, ⌘X, ⌘D | — (new) | ✅ "Move", "Indent"/"Outdent", "Delete", "Cut", "Duplicate" | `escSelectsBlocks…`, `copyingSelectedBlocks…` |
+| `/` menu, `+` | — (new) | ✅ the typed `/…` is typing; the insert is its own step named after it; `+` is "Insert Block" | `slashMenuInserts…`, `plusAdds…` |
+| Paste of a copied block link | — (new) | ✅ "Paste" (a block reference) | `aCopiedBlockLinkPastesAsABlockReference` |
 | Find & Replace, Replace All | NSTextView (Replace All is one step) | unchanged; now reachable from the menu | — |
 | Writing Tools, spelling and autocorrect | NSTextView | unchanged; reachable from the menu | — |
 | Title edits | window's stack while editing, dropped after | ✅ "Title Change" on the note's stack | `titleAndStatus…` |
