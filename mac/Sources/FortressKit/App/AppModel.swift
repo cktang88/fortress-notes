@@ -142,19 +142,8 @@ public final class AppModel {
     /// How many notes Recent holds (the size asked of the server).
     public static let recentLimit = 20
 
-    /// A local change to the tree, re-applied over any fetch that started before it.
-    struct NavigationPatch {
-        var sequence: Int
-        var apply: (inout NavigationResponse) -> Void
-    }
-
     var navigationFetches: Int { get { library.navigationFetches } set { library.navigationFetches = newValue } }
     var newestAppliedFetch: Int { get { library.newestAppliedFetch } set { library.newestAppliedFetch = newValue } }
-    var navigationFetchesInFlight: Int {
-        get { library.navigationFetchesInFlight } set { library.navigationFetchesInFlight = newValue }
-    }
-    var patchSequence: Int { get { library.patchSequence } set { library.patchSequence = newValue } }
-    var navigationPatches: [NavigationPatch] { get { library.navigationPatches } set { library.navigationPatches = newValue } }
     /// Reconnects after the backend goes away (see `startReconnecting`); one for all windows.
     var reconnectTask: Task<Void, Never>? { get { library.reconnectTask } set { library.reconnectTask = newValue } }
     /// Delays between reconnection attempts (doubling up to the last).
@@ -167,25 +156,18 @@ public final class AppModel {
 
     /// Reloads the sidebar tree and recent notes.
     ///
-    /// Safe to call often: concurrent calls share one request, an answer that arrives
-    /// after a newer one is dropped, and local changes made while it was in flight (an
-    /// edit, a move) are re-applied over it instead of being overwritten.
+    /// Every change to notes and folders ends with one (the server's tree is the truth).
+    /// Safe to call often: concurrent calls share one request, a call after a change
+    /// never joins a request sent before it, and an answer that arrives after a newer
+    /// one is dropped.
     public func refreshNavigation() async {
         navigationFetches += 1
         let fetch = navigationFetches
-        let mark = patchSequence
-        navigationFetchesInFlight += 1
-        defer {
-            navigationFetchesInFlight -= 1
-            if navigationFetchesInFlight == 0 { navigationPatches.removeAll() }
-        }
         do {
-            var fresh = try await api.navigation(recentLimit: Self.recentLimit)
+            let fresh = try await api.navigation(recentLimit: Self.recentLimit)
             isConnected = true
             guard fetch > newestAppliedFetch else { return }
             newestAppliedFetch = fetch
-            for patch in navigationPatches where patch.sequence > mark { patch.apply(&fresh) }
-            navigationPatches.removeAll { $0.sequence <= mark }
             if fresh != navigation { navigation = fresh }
             api.store.reconcile(with: fresh)
         } catch {
@@ -193,26 +175,9 @@ public final class AppModel {
         }
     }
 
-    /// Applies a change to the tree now, and keeps it so a fetch already in flight
-    /// doesn't undo it.
-    /// `replay` (default: `apply`) is what runs over a fetched tree that started before
-    /// the change; it may skip what the fetched tree already has newer.
-    func patchNavigation(
-        _ apply: @escaping (inout NavigationResponse) -> Void,
-        replay: ((inout NavigationResponse) -> Void)? = nil
-    ) {
-        patchSequence += 1
-        var updated = navigation
-        apply(&updated)
-        if updated != navigation { navigation = updated }
-        if navigationFetchesInFlight > 0 {
-            navigationPatches.append(NavigationPatch(sequence: patchSequence, apply: replay ?? apply))
-        }
-    }
-
     // MARK: Prefetching
 
-    /// Loads these notes ahead of time (cheap: one request, skipped when cached).
+    /// Loads these notes ahead of time (skipped when cached).
     public func prefetch(noteIds: [String]) async {
         guard isConnected, !noteIds.isEmpty else { return }
         await api.prefetchDocuments(ids: noteIds)

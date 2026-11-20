@@ -55,12 +55,12 @@ final class SpyProtocol: URLProtocol, @unchecked Sendable {
     }
 
     /// An API client whose session answers through this protocol.
-    static func client(options: APIStore.Options = APIStore.Options()) -> APIClient {
+    static func client(documentMaxAge: TimeInterval = 2) -> APIClient {
         let configuration = APIClient.sessionConfiguration()
         configuration.protocolClasses = [SpyProtocol.self]
         return APIClient(
             baseURL: URL(string: "http://spy.local")!, session: URLSession(configuration: configuration),
-            store: APIStore(options: options))
+            store: APIStore(documentMaxAge: documentMaxAge))
     }
 
     /// (answered, stopped by the client)

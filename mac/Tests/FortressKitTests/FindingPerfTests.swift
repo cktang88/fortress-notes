@@ -118,7 +118,7 @@ extension FindingPerf {
         print("PERF search.fastTyping.sent: \(sent) longGaps=\(longGaps)")
         perf("search.requests.fastTyping(13 keys)", count: stub.count("/api/unified-search"))
         perf("search.cancelled.fastTyping", count: stub.cancelledCount("/api/unified-search"))
-        perf("search.store.requests.fastTyping", count: api.store.stats.requests)
+        perf("search.store.requests.fastTyping", count: api.store.requests)
         #expect(controller.results.count == 5)
         // "r" at once, then "ryokan gion" (plus one per pause longer than the debounce).
         #expect(stub.count("/api/unified-search") <= 2 + longGaps)

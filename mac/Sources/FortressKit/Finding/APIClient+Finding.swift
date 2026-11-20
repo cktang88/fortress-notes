@@ -47,8 +47,7 @@ public struct DocumentInfo: Decodable, Hashable, Sendable {
 
 /// Endpoints only Finding uses (kept out of `APIClient.swift`).
 extension APIClient {
-    /// Through the client's store: coalesced with identical requests in flight, answered
-    /// from the stored body on a 304, and counted in `store.stats`.
+    /// Through the client's store: coalesced with identical requests in flight.
     public func documentInfo(id: String) async throws -> DocumentInfo {
         try await get("api/block-documents/\(id)/info")
     }

@@ -27,12 +27,9 @@ public final class Library {
     /// Reads the text in pictures and PDFs with Apple Vision (Finding/PictureText).
     public let pictureText = PictureTextReader()
 
-    // Data layer bookkeeping (see AppModel.refreshNavigation / patchNavigation).
+    // Data layer bookkeeping (see AppModel.refreshNavigation).
     @ObservationIgnored var navigationFetches = 0
     @ObservationIgnored var newestAppliedFetch = 0
-    @ObservationIgnored var navigationFetchesInFlight = 0
-    @ObservationIgnored var patchSequence = 0
-    @ObservationIgnored var navigationPatches: [AppModel.NavigationPatch] = []
     @ObservationIgnored var reconnectTask: Task<Void, Never>?
     @ObservationIgnored public var reconnectDelays: (first: Duration, max: Duration) = (.milliseconds(500), .seconds(30))
     @ObservationIgnored var backendRestarts = 0
