@@ -60,7 +60,6 @@ from .models import (
     FolderRename,
     AskRequest,
     CaptureRequest,
-    SourceConflictResolution,
     ExternalOcrResult,
 )
 
@@ -494,7 +493,7 @@ def record_opened(document_id: str):
 
 @app.get("/api/block-documents/{document_id}/info")
 def get_block_document_info(document_id: str, request: Request):
-    """Metadata for an info panel: dates, provenance, counts, re-import conflicts."""
+    """Metadata for an info panel: dates, where the note came from, counts."""
 
     validator = block_store.document_info_validator(_db(), document_id)
     if validator is None:
@@ -513,23 +512,6 @@ def get_block_document_info(document_id: str, request: Request):
         _api_cache,
         (_db(), "info", document_id),
     )
-
-
-@app.post("/api/block-documents/{document_id}/blocks/{block_id}/source-conflict")
-def resolve_block_source_conflict(
-    document_id: str, block_id: str, data: SourceConflictResolution
-):
-    """Settle a re-import conflict: take the source's version or keep the local edit."""
-
-    try:
-        tree = sources.resolve_block_conflict(
-            _db(), document_id, block_id, data.keep
-        )
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    return tree
 
 
 @app.get("/api/block-documents/{document_id}/markdown")

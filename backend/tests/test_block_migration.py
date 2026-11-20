@@ -79,9 +79,8 @@ class LegacyMigrationTests(unittest.TestCase):
             ).fetchone()[0]
         connection.close()
         self.assertEqual(version, block_store.SCHEMA_VERSION)
-        self.assertIn("block_sync", tables)
-        self.assertFalse({"revisions", "block_attrs"} & tables)
-        self.assertNotIn("position", columns)
+        self.assertFalse({"revisions", "block_attrs", "block_sync"} & tables)
+        self.assertFalse({"position", "provenance_json"} & columns)
         self.assertEqual((foreign_keys, integrity, legacy_markdown), ([], "ok", 0))
         self.assertTrue(block_store.fts_is_consistent(self.db))
         self.assertEqual(
@@ -156,11 +155,9 @@ class LegacyMigrationTests(unittest.TestCase):
 
     def test_source_page_keeps_its_sync_state_and_reimports_cleanly(self) -> None:
         document_id = self.ids["OneNote page"]
-        info = sources.document_info(self.db, document_id)
-        [conflict] = info["conflicts"]
-        self.assertEqual((conflict["kind"], conflict["local_text"], conflict["source_text"]),
-                         ("block", "edited locally", "changed in source"))
-        self.assertIsNotNone(info["sync"]["source_removed_at"])
+        state = sources.sync_state(self.db, document_id)
+        self.assertEqual(state["revision"], -1)  # it had a block edited here
+        self.assertIsNotNone(state["source_removed_at"])
         self.assertEqual(
             _shape(self.tree("OneNote page")["children"][2]["children"][1]["children"][1]["children"]),
             [("paragraph", {}, "d"), ("bullet_item", {}, "inner")],
@@ -174,11 +171,9 @@ class LegacyMigrationTests(unittest.TestCase):
             )
             self.assertEqual(result.document_id, document_id)
             self.assertEqual(
-                (result.blocks_created, result.blocks_updated, result.blocks_deleted,
-                 len(result.conflicts)),
-                (0, 0, 0, 0),
+                (result.status, result.blocks_created, result.blocks_updated, result.blocks_deleted),
+                ("skipped_edited", 0, 0, 0),
             )
-        self.assertEqual(result.status, "unchanged")
         self.assertEqual(self.tree("OneNote page")["children"][5]["text"], "edited locally")
 
 

@@ -31,10 +31,6 @@ class RetireMathAndInkTests(unittest.TestCase):
         self.first, self.math = (node["id"] for node in tree["children"])
         self.ink = block_store.new_id()
         old_math = schema.Block("math", {"onenote_object": "x"}, None, MATH)
-        self.old_math_hash = schema.canonical_hash(old_math)
-        conflict = {"detected_at": "2026-01-02", "source_hash": "old",
-                    "source": {"type": "math", "attrs": {}, "content": None,
-                               "payload": {"latex": "a+b"}}}
         # What version 14 could store: written with SQL, as the API no longer can.
         with sqlite3.connect(self.db) as connection:
             connection.row_factory = sqlite3.Row
@@ -50,13 +46,10 @@ class RetireMathAndInkTests(unittest.TestCase):
                            '2026-01-01', '2026-01-01')""",
                 (self.ink, json.dumps(INK)),
             )
+            # Version 14 had re-import state per block (retired since).
             connection.execute(
-                "INSERT INTO block_sync(block_id, source_hash, conflict_json) VALUES (?, ?, NULL)",
-                (self.math, self.old_math_hash),
-            )
-            connection.execute(
-                "INSERT INTO block_sync(block_id, source_hash, conflict_json) VALUES (?, 'x', ?)",
-                (self.ink, json.dumps(conflict)),
+                """CREATE TABLE block_sync (block_id TEXT PRIMARY KEY, source_hash TEXT,
+                       dismissed_hash TEXT, conflict_json TEXT, source_removed INTEGER NOT NULL DEFAULT 0)"""
             )
             connection.execute("DELETE FROM schema_migrations")
             connection.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (14, '')")
@@ -82,10 +75,6 @@ class RetireMathAndInkTests(unittest.TestCase):
         self.assertEqual(code["text"], "e=mc^2")
         self.assertEqual(self.rows("SELECT COUNT(*) AS n FROM blocks WHERE type = 'math'")[0]["n"], 0)
         self.assertTrue(block_store.fts_is_consistent(self.db))
-        # Unedited, it still matches its source.
-        [sync] = self.rows("SELECT source_hash FROM block_sync WHERE block_id = ?", self.math)
-        self.assertEqual(sync["source_hash"], schema.canonical_hash(schema.Block(
-            "code", code["attrs"], code["content"], None)))
 
     def test_ink_image_keeps_its_picture_and_text(self) -> None:
         tree = block_store.document_tree(self.db, "D1")
@@ -94,15 +83,6 @@ class RetireMathAndInkTests(unittest.TestCase):
         self.assertEqual(image["type"], "image")
         self.assertEqual(image["attrs"], {k: v for k, v in INK.items() if k != "ink"})
         self.assertEqual(image["text"], "handwritten words")
-
-    def test_conflicts_follow(self) -> None:
-        [sync] = self.rows("SELECT conflict_json FROM block_sync WHERE block_id = ?", self.ink)
-        conflict = json.loads(sync["conflict_json"])
-        self.assertEqual(conflict["source"], {"type": "code", "attrs": {"language": "latex"},
-                                              "content": [{"type": "text", "text": "a+b"}],
-                                              "payload": None})
-        self.assertEqual(conflict["source_hash"], schema.canonical_hash(schema.Block(
-            "code", {"language": "latex"}, [{"type": "text", "text": "a+b"}], None)))
 
 
 if __name__ == "__main__":

@@ -67,11 +67,10 @@ class BlockStoreTests(unittest.TestCase):
                 ).fetchone()["version"]
                 columns = {row["name"] for row in connection.execute("PRAGMA table_info(blocks)")}
             self.assertIn("transaction_receipts", tables)
-            self.assertIn("block_sync", tables)
-            self.assertFalse({"revisions", "block_attrs"} & tables)
+            self.assertFalse({"revisions", "block_attrs", "block_sync"} & tables)
             self.assertEqual(version, SCHEMA_VERSION)
             self.assertTrue({"order_key", "payload_json", "content_json"} <= columns)
-            self.assertNotIn("position", columns)
+            self.assertFalse({"position", "provenance_json"} & columns)
 
 
     def test_fresh_database_has_the_folder_position_index_migrations_create(self) -> None:
@@ -867,7 +866,7 @@ class BlockStoreTests(unittest.TestCase):
                     )
                 }
                 self.assertTrue(
-                    {"document_refs", "folders", "block_user_attrs", "block_assets", "block_sync"} <= tables
+                    {"document_refs", "folders", "block_user_attrs", "block_assets"} <= tables
                 )
                 columns = {
                     row["name"] for row in connection.execute("PRAGMA table_info(documents)")

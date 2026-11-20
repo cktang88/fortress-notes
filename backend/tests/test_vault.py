@@ -220,7 +220,7 @@ class VaultMirrorTests(_Workspace):
         self.assertEqual(moved["name"], "Projects")
         imported = document_tree(database, onenote.document_id)
         self.assertEqual(imported["provenance"]["source"], "onenote_import")
-        self.assertEqual(imported["children"][0]["provenance"]["external_id"], "{B}")
+        self.assertEqual(imported["provenance"]["source_path"], "Book › Page")
 
 
 class LinkedBodyTests(_Workspace):

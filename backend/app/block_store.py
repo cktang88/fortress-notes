@@ -123,7 +123,6 @@ CREATE TABLE IF NOT EXISTS blocks (
     text TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    provenance_json TEXT,
     revision INTEGER
 );
 
@@ -151,15 +150,6 @@ CREATE TABLE IF NOT EXISTS document_refs (
     source_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
     target_document_id TEXT NOT NULL,
     PRIMARY KEY (source_block_id, target_document_id)
-);
-
--- Re-import state of blocks that came from a living source (sources.py).
-CREATE TABLE IF NOT EXISTS block_sync (
-    block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
-    source_hash TEXT,
-    dismissed_hash TEXT,
-    conflict_json TEXT,
-    source_removed INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS assets (
@@ -573,7 +563,6 @@ _CHANGE_TRIGGERS["assets_text_changed_update"] = (
 )
 for _table, _column in (
     ("block_user_attrs", "block_id"),
-    ("block_sync", "block_id"),
     ("block_refs", "source_block_id"),
     ("document_refs", "source_block_id"),
 ):
@@ -585,8 +574,9 @@ for _table, _column in (
 
 
 def _drop_retired_schema(connection: sqlite3.Connection) -> None:
-    """Remove what retired features stored: tags, saved searches, link checks and
-    the server-side undo history (the app undoes locally).
+    """Remove what retired features stored: tags, saved searches, link checks,
+    the server-side undo history (the app undoes locally) and per-block
+    re-import state (``_retire_block_sync``).
 
     Idempotent and version-free (runs on every initialize, a no-op once done).
     The documents update trigger names ``tags_json``, so it is dropped first;
@@ -597,10 +587,68 @@ def _drop_retired_schema(connection: sqlite3.Connection) -> None:
     if "tags_json" in columns:
         connection.execute("DROP TRIGGER IF EXISTS documents_changed_update")
         connection.execute("ALTER TABLE documents DROP COLUMN tags_json")
+    _retire_block_sync(connection)
     connection.execute("DROP TABLE IF EXISTS saved_searches")
     connection.execute("DROP TABLE IF EXISTS link_check_cache")
     # Its triggers (document_history_changed_*) go with it.
     connection.execute("DROP TABLE IF EXISTS document_history")
+
+
+def _retire_block_sync(connection: sqlite3.Connection) -> None:
+    """Re-imports used to merge block by block, with per-block provenance and
+    ``block_sync`` rows; they now refresh whole notes (sources.py). Each
+    imported note's block state becomes its ``sync_json`` (source id -> block,
+    and OneNote ids -> block for links), and a note with any block edited,
+    added or deleted here counts as edited since its last import (never
+    refreshed). Then the table and the column go.
+    """
+
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'block_sync'"
+    ).fetchone() is not None:
+        documents = connection.execute(
+            """SELECT id, revision, source_kind, sync_json FROM documents
+                WHERE source_external_id IS NOT NULL"""
+        ).fetchall()
+        for document in documents:
+            sync = _provenance.loads(document["sync_json"])
+            if not sync or "revision" in sync:
+                continue
+            blocks: dict[str, str] = {}
+            anchors: dict[str, str] = {}
+            edited = bool(sync.get("title_conflict"))
+            for row in connection.execute(
+                """SELECT blocks.*, block_sync.source_hash, block_sync.conflict_json
+                     FROM blocks LEFT JOIN block_sync ON block_sync.block_id = blocks.id
+                    WHERE blocks.document_id = ? ORDER BY blocks.order_key""",
+                (document["id"],),
+            ):
+                value = _provenance.loads(row["provenance_json"])
+                external = value.get("external_id")
+                if not external or value.get("source") != document["source_kind"]:
+                    edited = True  # added here
+                    continue
+                blocks.setdefault(external, row["id"])
+                ids = (value.get("extra") or {}).get("onenote") or {}
+                for key in ("element_id", "object_id", "nested"):
+                    items = ids.get(key)
+                    for item in items if isinstance(items, list) else [items]:
+                        if isinstance(item, str):
+                            anchors.setdefault(item, row["id"])
+                if row["conflict_json"] or row["source_hash"] != schema.canonical_hash(_row_block(row)):
+                    edited = True
+            if set(sync.get("block_ids") or []) - set(blocks):
+                edited = True  # deleted here
+            new = {"revision": -1 if edited else document["revision"],
+                   "imported_at": sync.get("synced_at"), "blocks": blocks, "anchors": anchors}
+            if sync.get("source_removed_at"):
+                new["source_removed_at"] = sync["source_removed_at"]
+            connection.execute(
+                "UPDATE documents SET sync_json = ? WHERE id = ?", (json.dumps(new), document["id"])
+            )
+        connection.execute("DROP TABLE block_sync")
+    if "provenance_json" in {row["name"] for row in connection.execute("PRAGMA table_info(blocks)")}:
+        connection.execute("ALTER TABLE blocks DROP COLUMN provenance_json")
 
 
 def _ensure_change_tracking(connection: sqlite3.Connection) -> None:
@@ -1946,7 +1994,6 @@ def insert_specs(
     created_at: str,
     updated_at: str,
     revision: int | None,
-    default_provenance: dict[str, object] | None = None,
 ) -> list[str]:
     """Insert canonical block trees between two sibling keys; returns the new ids.
 
@@ -1969,17 +2016,14 @@ def insert_specs(
             "SELECT 1 FROM blocks WHERE id = ?", (block_id,)
         ).fetchone():
             block_id = new_id()
-        provenance = block_spec.provenance or default_provenance
         connection.execute(
             """INSERT INTO blocks(id, document_id, parent_id, order_key, type, attrs_json,
-                   content_json, payload_json, text, created_at, updated_at, provenance_json,
-                   revision)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)""",
+                   content_json, payload_json, text, created_at, updated_at, revision)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)""",
             (
                 block_id, document_id, parent_id, key, block_spec.type,
                 _dumps(block_spec.attrs), _dumps_nullable(block_spec.content),
-                _dumps_nullable(block_spec.payload), created_at, updated_at,
-                _provenance.dumps(provenance), revision,
+                _dumps_nullable(block_spec.payload), created_at, updated_at, revision,
             ),
         )
         written.append(block_id)
@@ -2212,14 +2256,11 @@ def document_write(path: Path, immediate: bool = True):
 
 
 def render_markdown(
-    nodes: list[dict], depth: int = 0, document_provenance: dict | None = None,
-    include_ids: bool = True, links=None,
+    nodes: list[dict], depth: int = 0, include_ids: bool = True, links=None,
 ) -> str:
     """A block tree as Markdown (see ``block_markdown.render_markdown``)."""
 
-    return _render_markdown(
-        nodes, document_provenance=document_provenance, include_ids=include_ids, links=links
-    )
+    return _render_markdown(nodes, include_ids=include_ids, links=links)
 
 
 def document_tree(path: Path, document_id: str) -> dict | None:
@@ -2229,10 +2270,10 @@ def document_tree(path: Path, document_id: str) -> dict | None:
 
 
 _BLOCK_COLUMNS = """id, document_id, parent_id, order_key, type, attrs_json, content_json,
-                   payload_json, text, created_at, updated_at, provenance_json, revision"""
+                   payload_json, text, created_at, updated_at, revision"""
 
 
-def _node(row: sqlite3.Row, user_attrs: dict, document_provenance: dict) -> dict:
+def _node(row: sqlite3.Row, user_attrs: dict) -> dict:
     return {
         "id": row["id"],
         "document_id": row["document_id"],
@@ -2245,10 +2286,6 @@ def _node(row: sqlite3.Row, user_attrs: dict, document_provenance: dict) -> dict
         "payload": _loads(row["payload_json"]),
         "text": row["text"],
         "user_attrs": user_attrs,
-        # Where this block came from; ``inherited`` when it is the document's.
-        "provenance": _provenance.effective_block_provenance(
-            row["provenance_json"], document_provenance
-        ),
         # The document revision that last changed this block (null: never since
         # it was created or imported).
         "revision": row["revision"],
@@ -2268,9 +2305,6 @@ def _document_tree(
     ).fetchone()
     if document is None:
         return None
-    document_provenance = _provenance.document_provenance(
-        document["provenance_json"], document["source_kind"]
-    )
     roots: list[dict] = []
     if include_children:
         user_attrs_by_block: dict[str, dict[str, object]] = {}
@@ -2287,8 +2321,7 @@ def _document_tree(
             (document_id,),
         ).fetchall()
         nodes = {
-            row["id"]: _node(row, user_attrs_by_block.get(row["id"], {}), document_provenance)
-            for row in rows
+            row["id"]: _node(row, user_attrs_by_block.get(row["id"], {})) for row in rows
         }
         for node in nodes.values():
             parent = nodes.get(node["parent_id"])
@@ -2303,7 +2336,9 @@ def _document_tree(
         "updated_at": document["updated_at"],
         "revision": document["revision"],
         "title_auto": bool(document["title_auto"]),
-        "provenance": document_provenance,
+        "provenance": _provenance.document_provenance(
+            document["provenance_json"], document["source_kind"]
+        ),
         # Current titles/text of every note and block this document links to.
         "resolved_links": _resolved_links(connection, document_id),
         "children": roots,
@@ -2366,21 +2401,6 @@ class DocumentRevisionConflict(RuntimeError):
             "base_revision": self.base_revision,
             "current_revision": self.current_revision,
         }
-
-
-def write_block_sync(connection: sqlite3.Connection, block_id: str, sync: dict | None) -> None:
-    if sync is None:
-        connection.execute("DELETE FROM block_sync WHERE block_id = ?", (block_id,))
-        return
-    connection.execute(
-        """INSERT INTO block_sync(block_id, source_hash, dismissed_hash, conflict_json, source_removed)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(block_id) DO UPDATE SET source_hash = excluded.source_hash,
-               dismissed_hash = excluded.dismissed_hash, conflict_json = excluded.conflict_json,
-               source_removed = excluded.source_removed""",
-        (block_id, sync.get("source_hash"), sync.get("dismissed_hash"),
-         sync.get("conflict_json"), int(bool(sync.get("source_removed")))),
-    )
 
 
 def _delete_fts(connection: sqlite3.Connection, block_ids: list[str]) -> None:
@@ -2565,27 +2585,22 @@ class _Writer:
             raise ValueError(f"block already exists: {block_id}")
         parent_id, key = self.placement(operation)
         schema.check_nesting(self.parent_type(parent_id), block.type)
-        provenance = (
-            _provenance.normalize(operation.provenance)
-            if operation.provenance is not None else {"source": "manual"}
-        )
         self.connection.execute(
             """INSERT INTO blocks(id, document_id, parent_id, order_key, type, attrs_json,
-                   content_json, payload_json, text, created_at, updated_at, provenance_json,
-                   revision)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)""",
+                   content_json, payload_json, text, created_at, updated_at, revision)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)""",
             (
                 block_id, self.document_id, parent_id, key, block.type, _dumps(block.attrs),
                 _dumps_nullable(block.content), _dumps_nullable(block.payload),
-                self.now, self.now, _provenance.dumps(provenance), self.revision,
+                self.now, self.now, self.revision,
             ),
         )
         self.set_user_attrs(block_id, {}, operation.user_attrs)
         self.content_changed.append(block_id)
 
     def update(self, operation: BlockOperation) -> None:
-        if not operation.model_fields_set & {"type", "attrs", "content", "payload", "user_attrs", "provenance"}:
-            raise BlockShapeError("an update names what to change: type, attrs, content, payload, user_attrs or provenance")
+        if not operation.model_fields_set & {"type", "attrs", "content", "payload", "user_attrs"}:
+            raise BlockShapeError("an update names what to change: type, attrs, content, payload or user_attrs")
         row = self.row(operation.block_id)
         current = _row_block(row)
         new_type = current.type
@@ -2609,18 +2624,12 @@ class _Writer:
             content = schema.plain_content(content)
         content = schema.normalize_content(new_type, content)
         payload = schema.normalize_payload(new_type, payload)
-        provenance_json = row["provenance_json"]
-        if operation.provenance:
-            supplied = _provenance.normalize(operation.provenance)
-            if "source" not in operation.provenance:
-                supplied.pop("source", None)
-            provenance_json = _provenance.dumps({**_provenance.loads(provenance_json), **supplied})
         self.connection.execute(
             """UPDATE blocks SET type = ?, attrs_json = ?, content_json = ?, payload_json = ?,
-                      provenance_json = ?, updated_at = ?, revision = ? WHERE id = ?""",
+                      updated_at = ?, revision = ? WHERE id = ?""",
             (
                 new_type, _dumps(attrs), _dumps_nullable(content), _dumps_nullable(payload),
-                provenance_json, self.now, self.revision, row["id"],
+                self.now, self.revision, row["id"],
             ),
         )
         if operation.user_attrs is not None:
@@ -2696,15 +2705,6 @@ def _is_descendant(
             "SELECT parent_id FROM blocks WHERE id = ?", (row["parent_id"],)
         ).fetchone()
     return False
-
-
-def stored_document_provenance(connection: sqlite3.Connection, document_id: str) -> dict:
-    row = connection.execute(
-        "SELECT provenance_json, source_kind FROM documents WHERE id = ?", (document_id,)
-    ).fetchone()
-    if row is None:
-        return {"source": _provenance.DEFAULT_SOURCE}
-    return _provenance.document_provenance(row["provenance_json"], row["source_kind"])
 
 
 def _refresh_fts(

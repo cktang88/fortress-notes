@@ -1,35 +1,27 @@
-"""Provenance: where a note, or a block inside it, came from.
+"""Provenance: where a note came from.
 
-Every document stores one provenance object (``documents.provenance_json``), and
-every block may store its own (``blocks.provenance_json``). A block without one
-inherits its document's: the blocks a note was created with came from the same
-place as the note. Blocks typed later, pasted, imported or folded in from another
-note carry their own.
+Every document stores one provenance object (``documents.provenance_json``;
+its ``source`` and ``external_id`` are also the ``source_kind`` and
+``source_external_id`` columns re-imports find the note by). Blocks have none.
 
 The JSON shape (all keys but ``source`` are optional)::
 
     {
       "source": "onenote_import",          # kind, see SOURCE_KINDS (any [a-z0-9_] word)
-      "external_id": "{GUID}",             # id in the source (page/object GUID, ...)
+      "external_id": "{GUID}",             # id in the source (page GUID, ...)
       "source_path": "Notebook › Section › Page",   # or a file path
-      "source_url": "https://...",          # pasted/web content
+      "source_url": "https://...",          # captured/web content
       "source_created_at": "...",           # timestamps from the source
       "source_modified_at": "...",
       "imported_at": "...",                 # first import into Fortress
-      "synced_at": "...",                   # last re-import that changed something
+      "synced_at": "...",                   # last re-import that refreshed it
       "importer": {"name": "onenote", "version": "1.0"},
-      "origin": {"operation": "move_into" | "duplicate" | "split",
-                 "document_id": "...", "document_title": "...", "block_id": "...",
-                 "at": "..."},             # derived from another note/block
-      "via": {"source": "markdown_import", "source_path": "x.md", "at": "..."},
       "extra": {...},                       # importer-specific details
       "backfilled": true                    # guessed by a schema migration
     }
 
-Re-import (sync) state is not provenance: it lives in the ``block_sync`` table
-and ``documents.sync_json`` (see sources.py), so edits never touch it.
-
-Provenance is never indexed for search and never part of a block's text.
+Re-import state is not provenance: it lives in ``documents.sync_json`` (see
+sources.py). Provenance is never indexed for search.
 """
 
 from __future__ import annotations
@@ -61,7 +53,6 @@ _STRING_FIELDS = {
     "imported_at": 64,
     "synced_at": 64,
 }
-_ORIGIN_OPERATIONS = {"move_into", "duplicate", "split"}
 # Written only by the server (migrations), never accepted from clients.
 INTERNAL_FIELDS = ("backfilled",)
 _MAX_EXTRA_BYTES = 16_384
@@ -111,25 +102,6 @@ def normalize(value: object, *, trusted: bool = False) -> dict[str, Any]:
             result["importer"] = clean
     elif importer is not None:
         raise ProvenanceError("provenance.importer must be an object")
-    origin = value.get("origin")
-    if isinstance(origin, dict):
-        operation = origin.get("operation")
-        if operation not in _ORIGIN_OPERATIONS:
-            raise ProvenanceError("provenance.origin.operation is unknown")
-        result["origin"] = {
-            key: str(origin[key])[:512]
-            for key in ("operation", "document_id", "document_title", "block_id", "at")
-            if origin.get(key) not in (None, "")
-        }
-    elif origin is not None:
-        raise ProvenanceError("provenance.origin must be an object")
-    via = value.get("via")
-    if isinstance(via, dict):
-        result["via"] = {
-            key: str(via[key])[:2000]
-            for key in ("source", "source_path", "at")
-            if via.get(key) not in (None, "")
-        }
     for name in ("extra",) + (INTERNAL_FIELDS if trusted else ()):
         item = value.get(name)
         if item is None:
@@ -165,36 +137,6 @@ def dumps(value: dict[str, Any] | None) -> str | None:
 def document_provenance(raw: object, source_kind: object = None) -> dict[str, Any]:
     value = loads(raw)
     value.setdefault("source", str(source_kind or DEFAULT_SOURCE))
-    return value
-
-
-def effective_block_provenance(
-    block_raw: object, document_provenance_value: dict[str, Any]
-) -> dict[str, Any]:
-    """A block's own provenance, or its document's (marked ``inherited``)."""
-
-    own = loads(block_raw)
-    if own:
-        own.setdefault("source", DEFAULT_SOURCE)
-        return own
-    inherited = {
-        key: value
-        for key, value in document_provenance_value.items()
-        # The document's source id names the document, not this block.
-        if key not in {"external_id", "origin"} and key not in INTERNAL_FIELDS
-    }
-    inherited.setdefault("source", DEFAULT_SOURCE)
-    inherited["inherited"] = True
-    return inherited
-
-
-def materialize(
-    block_raw: object, document_provenance_value: dict[str, Any]
-) -> dict[str, Any]:
-    """The block's provenance as stored data (before it leaves its document)."""
-
-    value = effective_block_provenance(block_raw, document_provenance_value)
-    value.pop("inherited", None)
     return value
 
 

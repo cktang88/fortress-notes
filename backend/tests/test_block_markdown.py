@@ -21,7 +21,7 @@ def _nodes(specs):
     return [
         {
             "id": spec.id or str(ULID()), "type": spec.type, "attrs": spec.attrs,
-            "content": spec.content, "payload": spec.payload, "provenance": spec.provenance,
+            "content": spec.content, "payload": spec.payload,
             "children": _nodes(spec.children),
         }
         for spec in specs

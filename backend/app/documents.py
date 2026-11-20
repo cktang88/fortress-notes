@@ -531,7 +531,7 @@ def _mirror_document(db_path: Path, notes_path: Path, document_id: str, layout: 
         return
     resolved = (tree.get("resolved_links") or {}).get("blocks") or {}
     body = block_store.render_markdown(
-        tree["children"], document_provenance=tree["provenance"],
+        tree["children"],
         links=layout.render_links(document_id, anchors, resolved.get),
     )
     relative = layout.paths[document_id]

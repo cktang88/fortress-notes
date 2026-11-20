@@ -11,21 +11,23 @@ Pipeline (docs/onenote-import.md, F3):
 2. **import** -- notebooks, section groups and sections become folders
    (``sources.ensure_folder_path``, keyed by their OneNote file identities);
    every page becomes one note through ``sources.upsert_document_from_source``
-   keyed by the page GUID, so re-importing the same export updates notes in
-   place, keeps local edits, and reports untouched pages as ``unchanged``.
+   keyed by the page GUID, so re-importing the same export refreshes changed
+   pages in place (same note, same block ids where the OneNote object is the
+   same), leaves pages edited in Fortress since the last import alone (reported
+   as not refreshed), and reports untouched pages as ``unchanged``.
 3. **link** -- ``onenote:`` links become ``docLink`` nodes (they read as the
    target note's current title; docs/block-model.md §3). A link
    whose target page was not imported yet is kept as plain text in the first
    pass; once every page exists, the pages that had such links are upserted again
-   with the links resolved (an ordinary "untouched blocks follow the source"
-   update). On a re-import every target already exists, so nothing changes.
+   with the links resolved (an ordinary refresh). On a re-import every target
+   already exists, so nothing changes.
 
 Design choices:
 
 * **Subpages** stay in their section folder, in OneNote's order (a subpage comes
   right after its parent, as in OneNote's page list). The parent page gets a
-  trailing "Subpages" list linking to its direct subpages, and every page keeps
-  ``level`` / ``parent_page_id`` in ``provenance.extra.onenote`` so a future
+  trailing "Subpages" list linking to its direct subpages, and every note keeps
+  ``level`` / ``parent_page_id`` in its ``provenance.extra.onenote`` so a future
   nested-page tree can be rebuilt without re-importing. (Folders always list
   before notes in the sidebar, so a folder per parent page would separate a
   parent from its subpages.)
@@ -36,14 +38,13 @@ Design choices:
   grid) are stacked instead.
 * **Block ids**: a block with a OneNote object id (manifest ``object_id``, the
   content's ExGUID, stable across edits) gets the source id
-  ``<page GUID>/obj:<object_id>``, so a paragraph edited in OneNote updates the
-  same Fortress block (same id, links and backlinks; a block edited here keeps
-  the local text and records a conflict). Blocks without one (format-1
+  ``<page GUID>/obj:<object_id>``, so a paragraph edited in OneNote refreshes
+  the same Fortress block (same id, links and backlinks). Blocks without one (format-1
   manifests, ambiguous content) fall back to ``<page GUID>/<type>:<hash of its
   content>`` (duplicates get ``#2``, ``#3``); the hash id is also passed as the
   block's previous id, so notes imported before object ids existed are matched
-  and migrated in place. The ids go to ``provenance.extra.onenote``
-  (``object_id``, ``element_id``; a table lists its cells' ids as ``nested``).
+  and migrated in place. The OneNote ids (``element_id``, ``object_id``; a
+  table's also those of its cells) are the block's ``anchors``.
 * **Paragraph links** (``onenote:…&object-id={GUID}&N``): when the target page
   is imported and has a block whose ``element_id``/``object_id`` equals the
   link's ``object_ref``, the link becomes a ``blockRef`` node
@@ -106,7 +107,7 @@ _MONOSPACE = ("consolas", "courier", "courier new", "lucida console", "menlo", "
 _NUMBER_STYLES = frozenset({"upper_roman", "lower_roman", "upper_alpha", "lower_alpha"})
 _BAD_LINK_SCHEMES = ("javascript:", "vbscript:", "data:")
 # Link targets kept as links; anything else (file:, UNC paths, ms-word:, javascript:, ...)
-# stays plain text and is listed in the block's provenance (``dropped_links``).
+# stays plain text and is listed in the import's warnings.
 _SAFE_LINK_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps", "sftp", "news", "sms", "geo"})
 MAX_LINK_LENGTH = 2048
 MAX_TAG_LABEL = 100
@@ -411,8 +412,7 @@ class _PageContext:
             self.warn(message)
 
 
-def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
-          block_links: list[str]) -> list[dict[str, Any]]:
+def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext) -> list[dict[str, Any]]:
     """Canonical inline nodes (docs/block-model.md §3) from text + code-point mark spans."""
 
     if not text:
@@ -432,7 +432,7 @@ def _runs(text: str, marks: list[dict[str, Any]] | None, ctx: _PageContext,
     hrefs: dict[int, str | dict[str, str] | None] = {}
     for index, (start, end, mark) in enumerate(usable):
         if mark.get("type") == "link":
-            hrefs[index] = _link_href(mark, text[start:end], ctx, block_links)
+            hrefs[index] = _link_href(mark, text[start:end], ctx)
     bounds = sorted({0, length, *(s for s, _, _ in usable), *(e for _, e, _ in usable)})
     runs: list[dict[str, Any]] = []
     refs_emitted: set[int] = set()
@@ -500,8 +500,7 @@ def _text_nodes(text: str, **marks: Any) -> list[dict[str, Any]]:
     return [node]
 
 
-def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext,
-               block_links: list[str]) -> str | dict[str, str] | None:
+def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext) -> str | dict[str, str] | None:
     """A web link's href, a ``docLink``/``blockRef`` node for a OneNote link to an
     imported page / paragraph, or None (kept as text)."""
 
@@ -534,7 +533,6 @@ def _link_href(mark: dict[str, Any], label: str, ctx: _PageContext,
             "target": href or label,
             "title": str(onenote.get("page_title") or label),
         })
-        block_links.append(href)
         return None
     safe = safe_link(href)
     if safe is None and href:
@@ -569,11 +567,10 @@ def _apply_tag_colors(runs: list[dict[str, Any]], tags: object) -> None:
                 node["marks"] = marks
 
 
-def _text_block(block: dict[str, Any], ctx: _PageContext) -> tuple[dict[str, Any], list[str]]:
+def _text_block(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
     """A canonical text block (or a quote holding one paragraph) for a manifest text block."""
 
-    block_links: list[str] = []
-    runs = _runs(str(block.get("text") or ""), block.get("marks"), ctx, block_links)
+    runs = _runs(str(block.get("text") or ""), block.get("marks"), ctx)
     _apply_tag_colors(runs, block.get("tags"))
     kind = block.get("type")
     attrs: dict[str, Any] = {}
@@ -606,10 +603,10 @@ def _text_block(block: dict[str, Any], ctx: _PageContext) -> tuple[dict[str, Any
         # A quote is a container: its line is its first paragraph.
         ctx.count("text_blocks")
         return {"type": "quote", "attrs": attrs,
-                "children": [{"type": "paragraph", "attrs": {}, "content": runs}]}, block_links
+                "children": [{"type": "paragraph", "attrs": {}, "content": runs}]}
     result: dict[str, Any] = {"type": block_type, "attrs": attrs, "content": runs}
     ctx.count("text_blocks")
-    return result, block_links
+    return result
 
 
 def _note_tags(block: dict[str, Any]) -> list[str]:
@@ -633,11 +630,9 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
     """One manifest block -> a source block dict (no children). None to drop it."""
 
     kind = block.get("type")
-    block_links: list[str] = []
-    dropped_before = len(ctx.dropped_links)
     result: dict[str, Any]
     if kind in {"paragraph", "heading", "list_item", "check_item", "quote"}:
-        result, block_links = _text_block(block, ctx)
+        result = _text_block(block, ctx)
         if kind == "check_item":
             ctx.count("check_items")
     elif kind == "code":
@@ -682,30 +677,18 @@ def _convert_block(block: dict[str, Any], ctx: _PageContext, nested: bool = Fals
     if tags:
         result.setdefault("attrs", {})["onenote_tags"] = tags
     if not nested:
-        dropped = ctx.dropped_links[dropped_before:]
         result["id"], previous = _block_external_id(ctx.page_guid, block)
         if previous:
             result["previous_ids"] = previous
-        extra: dict[str, Any] = {}
-        if block_links:
-            extra["unresolved_links"] = block_links
-        if dropped:
-            extra["dropped_links"] = dropped
-        ids = _onenote_ids(block)
+        # Element ids (what links name) first, then content and nested ids.
+        anchors = list(dict.fromkeys(_onenote_ids(block).values()))
         if kind == "table":
-            nested_ids = sorted(_nested_object_ids(block))[:200]
-            if nested_ids:
-                ids["nested"] = nested_ids
-        if ids:
-            extra["onenote"] = ids
-        if block.get("source_url") and str(block["source_url"]).lower().startswith(("http://", "https://")):
-            result["provenance"] = {"source_url": str(block["source_url"])}
-        if extra:
-            result.setdefault("provenance", {})["extra"] = extra
+            anchors += sorted(_nested_object_ids(block) - set(anchors))[:200]
+        if anchors:
+            result["anchors"] = anchors
     return result
 
 
-_ID_KEYS = ("object_id", "element_id")
 _OBJECT_ID_RE = re.compile(r"^\{[0-9A-Fa-f-]{36}\}&[0-9A-Fa-f]{1,8}$")
 
 
@@ -719,7 +702,7 @@ def _object_id(value: object) -> str | None:
 
 
 def _onenote_ids(block: dict[str, Any]) -> dict[str, str]:
-    return {key: oid for key in _ID_KEYS if (oid := _object_id(block.get(key)))}
+    return {key: oid for key in ("element_id", "object_id") if (oid := _object_id(block.get(key)))}
 
 
 def _nested_object_ids(block: dict[str, Any]) -> set[str]:
@@ -837,7 +820,7 @@ def _table(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
 def _nested_safe(block: dict[str, Any]) -> dict[str, Any]:
     """Blocks in cells are named by their position in the cell: drop source-only keys."""
 
-    block = {key: value for key, value in block.items() if key not in {"id", "previous_ids", "provenance"}}
+    block = {key: value for key, value in block.items() if key not in {"id", "previous_ids", "anchors"}}
     if block.get("children"):
         block["children"] = [_nested_safe(child) for child in block["children"]]
     return block
@@ -1185,20 +1168,7 @@ class _Importer:
             return None
         index = self._block_index.get(document_id)
         if index is None:
-            index = {}
-            with block_store.connection_scope(self.db_path) as connection:
-                rows = connection.execute(
-                    "SELECT id, provenance_json FROM blocks WHERE document_id = ?", (document_id,)
-                ).fetchall()
-            # Element ids (what links name) first, then content and nested ids.
-            for key in ("element_id", "object_id", "nested"):
-                for row in rows:
-                    ids = ((provenance.loads(row["provenance_json"]).get("extra") or {}).get("onenote") or {})
-                    values = ids.get(key)
-                    for value in values if isinstance(values, list) else [values]:
-                        canonical = _object_id(value)
-                        if canonical and canonical not in index:
-                            index[canonical] = row["id"]
+            index = sources.sync_state(self.db_path, document_id).get("anchors") or {}
             self._block_index[document_id] = index
         return index.get(oid)
 
@@ -1240,7 +1210,7 @@ class _Importer:
                 "name": nb_segment[1], "folder_id": nb_folder, "sections": 0,
                 "pages_created": 0, "pages_updated": 0, "pages_unchanged": 0, "pages_skipped": 0,
                 "images": 0, "files": 0, "tables": 0, "columns_pages": 0,
-                "check_items": 0, "conflicts": 0,
+                "check_items": 0, "pages_not_refreshed": [],
                 # Ink drawings are not imported (Fortress has no ink); the converter counts them.
                 "ink_skipped": int((report.get("counts") or {}).get("ink_skipped") or 0),
                 "images_ocr_queued": 0, "low_coverage_pages": [],
@@ -1323,12 +1293,16 @@ class _Importer:
                 continue
             state["notebook"] = index
             page_state[state["guid"]] = state
-            entry[f"pages_{state['status']}"] += 1
+            if state["status"] == "not_refreshed":
+                entry["pages_not_refreshed"].append(
+                    {"page": label, "document_id": state["document_id"]})
+                entry["warnings"].append(f"{label}: edited here since the last import, not refreshed")
+            else:
+                entry[f"pages_{state['status']}"] += 1
             for key in ("images", "files", "tables", "check_items"):
                 entry[key] += state["ctx"].stats.get(key, 0)
             if state["ctx"].stats.get("columns"):
                 entry["columns_pages"] += 1
-            entry["conflicts"] += state["conflicts"]
 
         # Pass 2: pages whose links/subpage lists point at pages created after them.
         self.progress(status="linking", pages_total=total, pages_done=total, current=None)
@@ -1440,11 +1414,11 @@ class _Importer:
                 # The first copy of a page in this export is the link target.
                 self._linked_this_run.add(link_guid)
                 self.targets[link_guid] = target
-        status = "skipped" if result.status == "skipped_deleted" else result.status
+        status = {"skipped_deleted": "skipped", "skipped_edited": "not_refreshed"}.get(
+            result.status, result.status)
         return {
             "guid": guid, "status": status, "document_id": result.document_id, "ctx": ctx,
             "page": page, "segments": segments, "folder_id": folder_id, "label": label,
-            "conflicts": len(result.conflicts),
         }
 
     # checks after the import
@@ -1453,23 +1427,28 @@ class _Importer:
         """List pages whose imported text lost more than 2 % of the manifest's letters."""
 
         for state in page_state.values():
-            if state["status"] == "skipped":
+            if state["status"] in {"skipped", "not_refreshed"}:
                 continue
             page = state["page"]
             expected = "\n".join(
                 part for item in page.get("items") or [] if isinstance(item, dict)
                 for part in _manifest_text(item.get("blocks") or [])
             )
+            # The importer's own "Subpages" list is not page text.
+            subpages = {
+                block_id for external, block_id in
+                (sources.sync_state(self.db_path, state["document_id"]).get("blocks") or {}).items()
+                if "/subpage" in external
+            }
             with block_store.connection_scope(self.db_path) as connection:
                 rows = connection.execute(
-                    "SELECT text, attrs_json, provenance_json FROM blocks WHERE document_id = ?",
+                    "SELECT id, text, attrs_json FROM blocks WHERE document_id = ?",
                     (state["document_id"],),
                 ).fetchall()
             imported = []
             for row in rows:
-                external = str(provenance.loads(row["provenance_json"]).get("external_id") or "")
-                if "/subpage" in external:
-                    continue  # added by the importer, not page text
+                if row["id"] in subpages:
+                    continue
                 imported.append(str(row["text"] or ""))
                 try:
                     attrs = json.loads(row["attrs_json"] or "{}")

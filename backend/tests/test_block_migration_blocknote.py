@@ -579,28 +579,12 @@ class BlockNoteMigrationTests(unittest.TestCase):
             ],
         )
 
-    def test_a_conflict_on_a_markdown_block_becomes_canonical_and_resolves(self) -> None:
+    def test_a_page_with_a_conflict_counts_as_edited_here(self) -> None:
         document_id = self.ids["OneNote import"]
-        edited = self.tree("OneNote import")["children"][-1]["id"]
-        [conflict] = sources.document_info(self.db, document_id)["conflicts"]
-        self.assertEqual(
-            (
-                conflict["kind"],
-                conflict["block_id"],
-                conflict["local_text"],
-                conflict["source_text"],
-                conflict["source_modified_at"],
-            ),
-            ("block", edited, "Edited here", "Changed source line", "2026-11-02T10:00:00Z"),
-        )
-        changed = [_text("Changed "), _text("source", italic=True), _text(" line")]
-        self.assertEqual(
-            conflict["source"],
-            {"type": "paragraph", "attrs": {}, "content": changed, "payload": None},
-        )
-        sources.resolve_block_conflict(self.db, document_id, edited, "source")
-        self.assertEqual(self.tree("OneNote import")["children"][-1]["content"], changed)
-        self.assertEqual(sources.document_info(self.db, document_id)["conflicts"], [])
+        state = sources.sync_state(self.db, document_id)
+        # Never refreshed over the local edit; its blocks keep their source ids.
+        self.assertEqual(state["revision"], -1)
+        self.assertIn(self.tree("OneNote import")["children"][-1]["id"], state["blocks"].values())
 
     def test_links_and_references_are_indexed(self) -> None:
         links_block = "00000000-0000-4000-8000-000000000002"
@@ -691,15 +675,6 @@ class CorruptRowTests(unittest.TestCase):
             self.assertEqual(
                 (list_attrs["attrs"], list_attrs["content"]), ({}, [_text("list attrs")])
             )
-            # Its re-import state moves to block_sync; the old hash no longer matches what
-            # it holds, so it is kept (it counts as edited here).
-            connection = sqlite3.connect(db)
-            sync = connection.execute(
-                "SELECT source_hash FROM block_sync WHERE block_id = ?",
-                ("01M7PJWSD9167NF1G544ZM7EZZ",),
-            ).fetchall()
-            connection.close()
-            self.assertEqual(sync, [("h",)])
 
 
 class LegacyShapeTests(unittest.TestCase):

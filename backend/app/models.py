@@ -61,9 +61,6 @@ class BlockOperation(BaseModel):
     content: list[dict[str, Any]] | None = None
     # Structured data (html).
     payload: dict[str, Any] | None = None
-    # Insert: where the content came from (pasted, web, ai, ...; default manual).
-    # Update: merged into the block's provenance.
-    provenance: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_insert_block_id(self) -> "BlockOperation":
@@ -191,8 +188,3 @@ class ExternalOcrResult(BaseModel):
     pages: int | None = Field(default=None, ge=0, le=100_000)
     error: str | None = Field(default=None, max_length=2_000)
     duration_ms: int | None = Field(default=None, ge=0)
-
-
-class SourceConflictResolution(BaseModel):
-    # "source": take the source's newer version; "local": keep the local edit.
-    keep: Literal["source", "local"]
