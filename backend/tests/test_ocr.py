@@ -653,7 +653,7 @@ class RealColbertTests(unittest.TestCase):
                                          "Grocery receipt: milk, eggs, bread, total 6.20")
             settings = make_settings(
                 Path(directory), embeddings_enabled=True, colbert_model="lightonai/Agent-ModernColBERT",
-                embeddings_precision="float32", precompute_query_embeddings=False,
+                precompute_query_embeddings=False,
             )
             with use_settings(settings), patch.object(
                 embeddings, "_cache", embeddings._Cache()

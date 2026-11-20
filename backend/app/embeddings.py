@@ -10,15 +10,11 @@ Fast enough to run on every keystroke over tens of thousands of paragraphs, on C
 * Embeddings are persisted next to the notes database
   (``.fortress-embeddings.sqlite3``, keyed by block ID and a hash of the text),
   so a restart loads them in about a second instead of re-encoding everything.
-* On CPUs with bfloat16 support (AVX512-BF16/AMX) the model and the index run
-  in bfloat16: encoding is several times faster and scores match float32 to
-  about three decimals. Elsewhere everything stays float32.
-* On Apple Silicon a second encoder may run on the GPU (MLX, else torch MPS), for
-  queries, for indexing or both: only where it measured faster than the CPU on this
-  machine at load time, and only if its encodings match the CPU's (token cosine
-  >= ``ACCEL_MIN_COSINE``). Any error on the GPU moves everything back to the CPU
-  model (always kept loaded) for good. ``EMBEDDINGS_DEVICE=cpu`` turns it off.
-  Encodings always come back to the CPU: the index and every score live there.
+* On Apple Silicon the model runs on the GPU with MLX (app/colbert_mlx.py) when
+  it is installed; elsewhere on the CPU. Any error on the GPU moves everything
+  back to the CPU model (always kept loaded) for good. ``EMBEDDINGS_DEVICE=cpu``
+  turns MLX off. Encodings always come back to the CPU as float32: the index and
+  every score live there.
 * Query encodings are cached (LRU), so refetching the same related list or
   search costs only the scoring. Typed queries, paragraph texts (related to a
   paragraph or a note) and whole notes each have their own cache, so opening a
@@ -244,18 +240,9 @@ def _maxsim_rows(rows, query_t, weights=None):
 
 
 @dataclass
-class _Routes:
-    """Which model encodes queries and which encodes documents (paragraph batches)."""
-
-    query: object
-    documents: object
-    devices: dict[str, str] = field(default_factory=lambda: {"query": "cpu", "documents": "cpu"})
-
-
-@dataclass
 class _Cache:
     model: object | None = None
-    routes: _Routes | None = None
+    gpu: object | None = None  # the MLX encoder, while it works
     loaded: bool = False
     failed: bool = False
     index: _Index = field(default_factory=_Index)
@@ -266,7 +253,6 @@ class _Cache:
     paragraph_queries: OrderedDict = field(default_factory=OrderedDict)
     note_queries: OrderedDict = field(default_factory=OrderedDict)
     query_hashes: set[str] = field(default_factory=set)
-    dtype: object | None = None
 
 
 _cache = _Cache()
@@ -327,223 +313,64 @@ def model_loaded() -> bool:
     return _cache.loaded
 
 
-# --- Apple Silicon GPU (MLX, torch MPS) ---------------------------------------------------
+# --- Apple Silicon GPU (MLX) ---------------------------------------------------------
 #
-# Chosen per machine at load time (an M1 Air and an M4 Max differ, and a GPU's fixed
-# cost per call could lose to the CPU on a short query). Candidates, best first: MLX
-# (app/colbert_mlx.py: 4-16x faster than the CPU on GitHub's virtual M1), then
-# torch MPS. A candidate is used only if its encodings
-# of the probe texts match the CPU model's (mean token cosine >= ACCEL_MIN_COSINE per
-# text, same token count; float16 first, then float32), and only for the roles
-# (queries, document batches) where it is ACCEL_MIN_SPEEDUP times faster. The CPU
-# model always stays loaded: any GPU error routes everything back to it for good.
+# On Apple Silicon the transformer runs in MLX on the GPU (app/colbert_mlx.py: 4-16x
+# faster than the CPU on GitHub's virtual M1, with token cosine >= 0.9999 to the CPU's
+# encodings), for queries and indexing alike. Everywhere else, or without MLX, the CPU
+# model encodes. The CPU model always stays loaded: any MLX error routes everything
+# back to it for good. EMBEDDINGS_DEVICE: auto (MLX where available), mlx (the same,
+# but says so when it is unavailable) or cpu.
 
-ACCEL_MIN_COSINE = 0.999
-ACCEL_MIN_SPEEDUP = 1.15
-ACCELERATORS = ("mlx", "mps")
-_PROBE_QUERIES = ["quarterly budget review", "notes from the design meeting about search latency"]
-_PROBE_DOCUMENTS = [
-    "The release checklist is owned by the platform team; the database backup runs nightly "
-    "at two and is copied to cold storage every Sunday.",
-    "Flight and hotel for the Kyoto conference are booked. Receipts go to the travel folder "
-    "so the tax refund can be claimed in April.",
-    "Search latency regressed after the index change: related paragraphs took 400 ms on a "
-    "cold cache. Precomputing paragraph queries fixed most of it.",
-    "Invoice 2231 is still pending; payment terms are thirty days and the customer asked "
-    "for a summary of the shipping costs by order.",
-    # Long enough for local attention windows and padding far from any real token.
-    " ".join(f"Step {i}: check the {word} before the review." for i, word in enumerate(
-        ("budget", "schedule", "owner", "server", "backup", "contract", "receipt", "policy") * 3
-    )),
-]
+DEVICES = ("auto", "mlx", "cpu")
 
 
-def _mps_available() -> bool:
+def _apple_silicon() -> bool:
+    import platform
     import sys
 
-    if sys.platform != "darwin":
-        return False
-    try:
-        import torch
-
-        return bool(torch.backends.mps.is_available())
-    except Exception:  # noqa: BLE001 - a torch without MPS
-        return False
+    return sys.platform == "darwin" and platform.machine() == "arm64"
 
 
-def _mlx_available() -> bool:
-    import sys
+def _load_mlx(cpu_model, settings: Settings):
+    """The MLX encoder where the setting and the machine allow it, else None.
 
-    if sys.platform != "darwin":
-        return False
-    from . import colbert_mlx
-
-    return colbert_mlx.available()
-
-
-def _accelerator_available(kind: str) -> bool:
-    return _mlx_available() if kind == "mlx" else _mps_available()
-
-
-def _load_accelerator(kind: str, cpu_model, settings: Settings, precision: str):
-    """Another encoder for ``kind`` ("mlx" or "mps") in ``precision`` (float16/float32)."""
-
-    if kind == "mlx":
-        from . import colbert_mlx
-
-        return colbert_mlx.load(
-            cpu_model, settings.colbert_model, precision, settings.colbert_model_revision
-        )
-    import torch
-    from pylate import models
-
-    model = models.ColBERT(
-        model_name_or_path=settings.colbert_model,
-        revision=settings.colbert_model_revision,
-        device="mps",
-    )
-    model.eval()
-    return model.to(getattr(torch, precision))
-
-
-def _encode_now(model, texts: list[str], *, is_query: bool) -> list:
-    """Encode with ``model`` on the calling thread; CPU tensors back."""
-
-    import torch
-
-    with torch.inference_mode():
-        out = model.encode(
-            texts,
-            is_query=is_query,
-            batch_size=ENCODE_BATCH,
-            show_progress_bar=False,
-            convert_to_numpy=False,
-        )
-    return [_tensor(embedding) for embedding in out]
-
-
-def _agreement(reference, candidate) -> float:
-    """Lowest mean token cosine between two encoders' encodings of the probe texts
-    (0 if any text gets a different number of tokens)."""
-
-    import torch
-
-    worst = 1.0
-    for is_query, texts in ((True, _PROBE_QUERIES), (False, _PROBE_DOCUMENTS)):
-        for a, b in zip(
-            _encode_now(reference, texts, is_query=is_query),
-            _encode_now(candidate, texts, is_query=is_query),
-        ):
-            if a.shape != b.shape:
-                return 0.0
-            cosine = torch.nn.functional.cosine_similarity(a.float(), b.float(), dim=-1)
-            worst = min(worst, float(cosine.mean()))
-    return worst
-
-
-def _timings(model) -> tuple[float, float]:
-    """Median seconds for one short query and for one background-sized document batch."""
-
-    import statistics
-
-    def timed(fn) -> float:
-        started = time.perf_counter()
-        fn()
-        return time.perf_counter() - started
-
-    query = statistics.median(
-        timed(lambda: _encode_now(model, [_PROBE_QUERIES[0]], is_query=True)) for _ in range(3)
-    )
-    # Two rounds: the probe batch takes ~1-2 s on a slow CPU, and loading waits for this.
-    documents = min(
-        timed(lambda: _encode_now(model, _PROBE_DOCUMENTS, is_query=False)) for _ in range(2)
-    )
-    return query, documents
-
-
-def _accelerate(cpu_model, settings: Settings, load=_load_accelerator) -> None:
-    """Route queries and/or document batches to a GPU encoder where it wins here.
-
-    ``load(kind, cpu_model, settings, precision)`` builds a candidate. Never raises:
-    any problem leaves everything on the CPU.
+    Never raises: any problem leaves everything on the CPU.
     """
 
     mode = (settings.embeddings_device or "auto").lower()
-    if mode == "cpu":
-        return
-    if mode not in ("auto", *ACCELERATORS):
+    if mode not in DEVICES:
         _log.warning("Unknown EMBEDDINGS_DEVICE=%s; ColBERT runs on the CPU", mode)
-        return
-    kinds = ACCELERATORS if mode == "auto" else (mode,)
-    precisions = ["float32"] if settings.embeddings_precision == "float32" else ["float16", "float32"]
-    cpu_timings = None
-    for kind in kinds:
-        if not _accelerator_available(kind):
-            if mode != "auto":
-                _log.warning("EMBEDDINGS_DEVICE=%s is unavailable; ColBERT runs on the CPU", kind)
-            continue
-        try:
-            for precision in precisions:
-                candidate = load(kind, cpu_model, settings, precision)
-                _encode_now(candidate, ["warm up"], is_query=True)
-                _encode_now(candidate, ["warm up the documents"], is_query=False)
-                cosine = _agreement(cpu_model, candidate)
-                if cosine >= ACCEL_MIN_COSINE:
-                    break
-                candidate = None
-            if candidate is None:
-                _log.warning("ColBERT on %s disagrees with the CPU (cosine %.4f); not used", kind, cosine)
-                continue
-            if mode == "auto":
-                _timings(candidate)  # one more round of set-up for these shapes
-                cpu_timings = cpu_timings or _timings(cpu_model)
-                gpu_timings = _timings(candidate)
-                roles = {
-                    role
-                    for role, cpu_s, gpu_s in zip(("query", "documents"), cpu_timings, gpu_timings)
-                    if gpu_s * ACCEL_MIN_SPEEDUP <= cpu_s
-                }
-            else:
-                gpu_timings, roles = None, {"query", "documents"}
-            _log.info(
-                "ColBERT %s %s: cosine %.5f, seconds (query, 4 paragraphs) CPU %s / GPU %s; "
-                "used for %s",
-                kind, precision, cosine, cpu_timings, gpu_timings, sorted(roles) or "nothing",
-            )
-            if not roles:
-                continue
-            devices = {role: kind if role in roles else "cpu" for role in ("query", "documents")}
-            _cache.routes = _Routes(
-                candidate if "query" in roles else cpu_model,
-                candidate if "documents" in roles else cpu_model,
-                devices,
-            )
-            return
-        except Exception:  # noqa: BLE001 - the CPU always works
-            _log.warning("ColBERT on %s unavailable; trying the next option", kind, exc_info=True)
-        finally:
-            _empty_mps_cache()
-
-
-def _empty_mps_cache() -> None:
+        return None
+    if mode == "cpu":
+        return None
     try:
-        import torch
+        from . import colbert_mlx
 
-        if _mps_available():
-            torch.mps.empty_cache()
-    except Exception:  # noqa: BLE001
-        pass
+        if not (_apple_silicon() and colbert_mlx.available()):
+            if mode == "mlx":
+                _log.warning("EMBEDDINGS_DEVICE=mlx is unavailable; ColBERT runs on the CPU")
+            return None
+        encoder = colbert_mlx.load(
+            cpu_model, settings.colbert_model, revision=settings.colbert_model_revision
+        )
+        encoder.encode(["warm up"], is_query=True)
+        encoder.encode(["warm up the documents"], is_query=False)
+    except Exception:  # noqa: BLE001 - the CPU always works
+        _log.warning("ColBERT on MLX unavailable; ColBERT runs on the CPU", exc_info=True)
+        return None
+    _log.info("ColBERT encodes on the GPU (MLX)")
+    return encoder
 
 
 def _fall_back_to_cpu(error: BaseException) -> None:
-    """A GPU encoder failed mid-run: everything goes to the CPU model, for good."""
+    """The MLX encoder failed mid-run: everything goes to the CPU model, for good."""
 
-    if _cache.routes is None:
+    if _cache.gpu is None:
         return
     _log.warning("ColBERT on the GPU failed (%s: %s); using the CPU from now on",
                  type(error).__name__, error)
-    _cache.routes = None
-    _empty_mps_cache()
+    _cache.gpu = None
 
 
 def device_info() -> dict[str, str] | None:
@@ -551,17 +378,8 @@ def device_info() -> dict[str, str] | None:
 
     if not _cache.loaded:
         return None
-    if _cache.routes is None:
-        return {"query": "cpu", "documents": "cpu"}
-    return dict(_cache.routes.devices)
-
-
-def _bf16_supported() -> bool:
-    try:
-        flags = Path("/proc/cpuinfo").read_text()
-    except OSError:
-        return False
-    return "avx512_bf16" in flags or "amx_bf16" in flags
+    device = "cpu" if _cache.gpu is None else "mlx"
+    return {"query": device, "documents": device}
 
 
 def _get_model(wait: bool = False):
@@ -586,28 +404,22 @@ def _get_model(wait: bool = False):
             # One encode at a time runs (the encoder thread); more threads than
             # this oversubscribe the cores that requests and OCR also need.
             torch.set_num_threads(Settings.default_threads(settings.embeddings_threads))
-            # Explicitly on the CPU: PyLate would otherwise pick MPS by itself on a Mac
-            # (with no check that it is faster or right). _accelerate decides that.
+            # Explicitly on the CPU: PyLate would otherwise pick MPS by itself on a Mac.
             model = models.ColBERT(
                 model_name_or_path=settings.colbert_model,
                 revision=settings.colbert_model_revision,
                 device="cpu",
             )
-            _cache.dtype = torch.float32
             if isinstance(model, torch.nn.Module):
                 model.eval()
-                precision = settings.embeddings_precision
-                if precision == "bfloat16" or (precision == "auto" and _bf16_supported()):
-                    model = model.to(torch.bfloat16)
-                    _cache.dtype = torch.bfloat16
                 with torch.inference_mode():  # First calls pay one-off kernel set-up.
                     model.encode(["warm up"], is_query=True, show_progress_bar=False)
                     model.encode(["warm up the documents"], is_query=False, show_progress_bar=False)
             _cache.model = model
-            _cache.routes = None
+            _cache.gpu = None
             if isinstance(model, torch.nn.Module):
                 # On the model thread: MLX state stays on the thread that uses it.
-                _encoder.run(lambda: _accelerate(model, settings), _FOREGROUND)
+                _cache.gpu = _encoder.run(lambda: _load_mlx(model, settings), _FOREGROUND)
             _cache.loaded = True
             return _cache.model
         except Exception:
@@ -678,11 +490,7 @@ def _tensor(embedding):
     else:
         tensor = torch.from_numpy(np.asarray(embedding, dtype=np.float32))
     tensor = tensor.reshape(-1, tensor.shape[-1]) if tensor.dim() != 2 else tensor
-    dtype = _cache.dtype
-    if dtype is None:
-        dtype = torch.bfloat16 if tensor.dtype == torch.bfloat16 else torch.float32
-        _cache.dtype = dtype
-    return tensor.to(dtype).contiguous()
+    return tensor.to(torch.float32).contiguous()
 
 
 def _encode(model, texts: list[str], *, is_query: bool, background: bool | None = None) -> list:
@@ -708,15 +516,12 @@ def _encode(model, texts: list[str], *, is_query: bool, background: bool | None 
             )
 
     def run(batch: list[str]) -> list:
-        routes = _cache.routes
-        if routes is None or model is not _cache.model:
-            return encode_with(model, batch)
-        target = routes.query if is_query else routes.documents
-        if target is model:
+        gpu = _cache.gpu
+        if gpu is None or model is not _cache.model:
             return encode_with(model, batch)
         try:
             # Back on the CPU here, on the model thread, while the GPU encoder is in use.
-            return [embedding.detach().cpu() for embedding in encode_with(target, batch)]
+            return [embedding.detach().cpu() for embedding in encode_with(gpu, batch)]
         except Exception as error:  # noqa: BLE001 - the CPU model takes over
             _fall_back_to_cpu(error)
             return encode_with(model, batch)
@@ -814,13 +619,14 @@ def _store_path() -> Path:
 
 
 def _store_key() -> str:
-    dtype = str(_cache.dtype or "torch.float32")
     settings = get_settings()
     # The revision too: a new commit of the model may change its encodings.
     model = settings.colbert_model
     if settings.colbert_model_revision:
         model += f"@{settings.colbert_model_revision}"
-    return f"{_STORE_FORMAT}|{model}|{dtype}"
+    # The dtype stays in the key so existing stores remain valid (and bfloat16 ones,
+    # from before everything was float32, are rebuilt).
+    return f"{_STORE_FORMAT}|{model}|torch.float32"
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -864,10 +670,6 @@ def _saved_query(query: str):
 
 
 def _to_bytes(embedding) -> bytes:
-    import torch
-
-    if embedding.dtype == torch.bfloat16:
-        return embedding.contiguous().view(torch.int16).numpy().tobytes()
     return embedding.float().numpy().tobytes()
 
 
@@ -875,9 +677,6 @@ def _from_bytes(blob: bytes, tokens: int, dim: int):
     import numpy as np
     import torch
 
-    if len(blob) == tokens * dim * 2:
-        array = np.frombuffer(blob, dtype=np.int16).reshape(tokens, dim)
-        return torch.from_numpy(array.copy()).view(torch.bfloat16)
     array = np.frombuffer(blob, dtype=np.float32).reshape(tokens, dim)
     return torch.from_numpy(array.copy())
 

@@ -614,169 +614,91 @@ class LongQueryCalibrationTests(unittest.TestCase):
 
 
 class _DeviceModel:
-    """A torch-like ColBERT stand-in that knows its device: word vectors (+ optional noise)."""
+    """A ColBERT stand-in that knows its device: word vectors, and an error on demand."""
 
-    def __init__(self, device: str = "cpu", noise: float = 0.0) -> None:
+    def __init__(self, device: str = "cpu") -> None:
         self.device_type = device
-        self.noise = noise
         self.fail = False
         self.calls: list[tuple[str, bool]] = []
-
-    def parameters(self):
-        import types
-
-        yield types.SimpleNamespace(device=types.SimpleNamespace(type=self.device_type))
-
-    def eval(self):
-        return self
-
-    def to(self, *args, device=None, dtype=None, **_kwargs):
-        if device is None and args and isinstance(args[0], str):
-            device = args[0]
-        if device is not None:
-            self.device_type = device
-        return self
 
     def encode(self, texts, *, is_query, **_kwargs):
         import torch
 
         self.calls.append((self.device_type, is_query))
-        if self.fail and self.device_type != "cpu":
-            raise RuntimeError("MPS backend failure")
-        out = []
-        for index, vectors in enumerate(_WordModel().encode(texts, is_query=is_query)):
-            tensor = torch.from_numpy(vectors)
-            if self.noise:
-                tensor = tensor + self.noise * torch.randn(tensor.shape, generator=torch.Generator().manual_seed(index))
-            out.append(tensor)
-        return out
+        if self.fail:
+            raise RuntimeError("Metal failure")
+        return [torch.from_numpy(v) for v in _WordModel().encode(texts, is_query=is_query)]
 
 
 class AcceleratorTests(unittest.TestCase):
-    """GPU encoders (Apple Silicon: MLX, torch MPS): used only where they win, only if
-    they match the CPU, and replaced by the CPU model on any error."""
+    """MLX on Apple Silicon when available, else the CPU; the CPU after any MLX error."""
 
     def setUp(self) -> None:
-        import torch
+        from app import colbert_mlx
 
-        cache = embeddings._Cache()
-        cache.dtype = torch.float32
-        self.enterContext(patch.object(embeddings, "_cache", cache))
-        self.available = {"mlx": True, "mps": True}
-        self.enterContext(patch.object(
-            embeddings, "_accelerator_available", side_effect=lambda kind: self.available[kind]
-        ))
+        self.enterContext(patch.object(embeddings, "_cache", embeddings._Cache()))
         self.cpu = _DeviceModel("cpu")
+        self.gpu = _DeviceModel("mlx")
         embeddings._cache.model = self.cpu
         embeddings._cache.loaded = True
+        self.apple_silicon = True
+        self.mlx_available = True
+        self.loads = 0
 
-    def _accelerate(self, gpus, timings, **settings):
-        """``gpus``: kind -> model, error, or a list (one per precision tried);
-        ``timings``: "cpu" or a model's device -> (query s, documents s)."""
+        def load(*_args, **_kwargs):
+            self.loads += 1
+            return self.gpu
 
-        loads = []
+        self.enterContext(patch.object(
+            embeddings, "_apple_silicon", side_effect=lambda: self.apple_silicon
+        ))
+        self.enterContext(patch.object(
+            colbert_mlx, "available", side_effect=lambda: self.mlx_available
+        ))
+        self.enterContext(patch.object(colbert_mlx, "load", side_effect=load))
 
-        def load(kind, _cpu, _settings, precision):
-            loads.append((kind, precision))
-            model = gpus[kind]
-            if isinstance(model, list):
-                model = model.pop(0)
-            if isinstance(model, Exception):
-                raise model
-            return model
+    def _route(self, **settings) -> None:
+        embeddings._cache.gpu = embeddings._load_mlx(self.cpu, _scratch_settings(self, **settings))
 
-        def timed(model):
-            return timings["cpu" if model is self.cpu else model.device_type]
-
-        with patch.object(embeddings, "_timings", side_effect=timed):
-            embeddings._accelerate(self.cpu, _scratch_settings(self, **settings), load)
-        return loads
-
-    def test_the_gpu_takes_only_the_roles_where_it_is_faster(self) -> None:
-        gpu = _DeviceModel("mlx")
-        # Indexing 5x faster on the GPU, a short query slower: queries stay on the CPU.
-        self._accelerate({"mlx": gpu}, {"cpu": (0.05, 0.5), "mlx": (0.06, 0.1)})
-        self.assertEqual(embeddings.device_info(), {"query": "cpu", "documents": "mlx"})
-        self.cpu.calls.clear(), gpu.calls.clear()
+    def test_apple_silicon_with_mlx_encodes_on_the_gpu(self) -> None:
+        self._route()
+        self.assertEqual(embeddings.device_info(), {"query": "mlx", "documents": "mlx"})
+        self.cpu.calls.clear(), self.gpu.calls.clear()
         embeddings._encode(self.cpu, ["paragraph text"], is_query=False)
         embeddings._encode(self.cpu, ["query"], is_query=True)
-        self.assertEqual(gpu.calls, [("mlx", False)])
-        self.assertEqual(self.cpu.calls, [("cpu", True)])
+        self.assertEqual(self.gpu.calls, [("mlx", False), ("mlx", True)])
+        self.assertEqual(self.cpu.calls, [])
 
-    def test_mlx_is_preferred_and_mps_is_the_next_option(self) -> None:
-        mlx, mps = _DeviceModel("mlx"), _DeviceModel("mps")
-        loads = self._accelerate({"mlx": mlx, "mps": mps},
-                                 {"cpu": (0.05, 0.5), "mlx": (0.01, 0.1), "mps": (0.02, 0.2)})
-        self.assertEqual(embeddings.device_info(), {"query": "mlx", "documents": "mlx"})
-        self.assertEqual(loads, [("mlx", "float16")])
-        embeddings._cache.routes = None
-        self.available["mlx"] = False
-        loads = self._accelerate({"mlx": mlx, "mps": mps},
-                                 {"cpu": (0.05, 0.5), "mlx": (0.01, 0.1), "mps": (0.02, 0.2)})
-        self.assertEqual(loads, [("mps", "float16")])
-        self.assertEqual(embeddings.device_info(), {"query": "mps", "documents": "mps"})
+    def test_the_cpu_everywhere_else(self) -> None:
+        for apple_silicon, available, device in (
+            (False, True, "auto"),  # another platform
+            (True, False, "auto"),  # no MLX installed
+            (True, True, "cpu"),  # turned off
+            (True, True, "mps"),  # not a choice any more
+        ):
+            with self.subTest(apple_silicon=apple_silicon, available=available, device=device):
+                self.apple_silicon, self.mlx_available, self.loads = apple_silicon, available, 0
+                self._route(embeddings_device=device)
+                self.assertEqual(self.loads, 0)
+                self.assertEqual(embeddings.device_info(), {"query": "cpu", "documents": "cpu"})
 
-    def test_a_slower_gpu_is_not_used(self) -> None:
-        self._accelerate({"mlx": _DeviceModel("mlx"), "mps": _DeviceModel("mps")},
-                         {"cpu": (0.05, 0.5), "mlx": (0.05, 0.48), "mps": (0.06, 0.6)})
-        self.assertEqual(embeddings.device_info(), {"query": "cpu", "documents": "cpu"})
-        self.assertIsNone(embeddings._cache.routes)
-
-    def test_float32_is_tried_when_float16_disagrees_with_the_cpu(self) -> None:
-        noisy, exact = _DeviceModel("mlx", noise=0.3), _DeviceModel("mlx")
-        with self.assertLogs("fortress", "INFO"):
-            loads = self._accelerate({"mlx": [noisy, exact]}, {"cpu": (0.05, 0.5), "mlx": (0.01, 0.1)})
-        self.assertEqual(loads, [("mlx", "float16"), ("mlx", "float32")])
-        self.assertIs(embeddings._cache.routes.query, exact)
-
-    def test_a_gpu_that_disagrees_with_the_cpu_is_not_used(self) -> None:
-        self.available["mps"] = False
+    def test_a_load_failure_stays_on_the_cpu(self) -> None:
+        self.gpu.fail = True
         with self.assertLogs("fortress", "WARNING"):
-            self._accelerate({"mlx": [_DeviceModel("mlx", noise=0.3), _DeviceModel("mlx", noise=0.3)]},
-                             {"cpu": (0.05, 0.5), "mlx": (0.01, 0.1)})
-        self.assertIsNone(embeddings._cache.routes)
+            self._route()
+        self.assertEqual(embeddings.device_info(), {"query": "cpu", "documents": "cpu"})
 
     def test_a_gpu_error_moves_everything_back_to_the_cpu(self) -> None:
         import torch
 
-        gpu = _DeviceModel("mlx")
-        self._accelerate({"mlx": gpu}, {"cpu": (0.05, 0.5), "mlx": (0.01, 0.1)})
-        self.assertEqual(embeddings.device_info(), {"query": "mlx", "documents": "mlx"})
+        self._route()
         expected = _DeviceModel("cpu").encode(["kyoto temples"], is_query=False)
-        gpu.fail = True
+        self.gpu.fail = True
         with self.assertLogs("fortress", "WARNING"):
             got = embeddings._encode(self.cpu, ["kyoto temples"], is_query=False)
         self.assertTrue(torch.equal(got[0], expected[0]))
         self.assertEqual(embeddings.device_info(), {"query": "cpu", "documents": "cpu"})
         # Later encodes go to the CPU model without trying the GPU again.
-        gpu.calls.clear()
+        self.gpu.calls.clear()
         embeddings._encode(self.cpu, ["more"], is_query=True)
-        self.assertEqual(gpu.calls, [])
-
-    def test_device_cpu_never_loads_a_gpu_encoder(self) -> None:
-        loads = self._accelerate({"mlx": _DeviceModel("mlx")}, {"cpu": (1, 1), "mlx": (0, 0)},
-                                 embeddings_device="cpu")
-        self.assertEqual(loads, [])
-        self.assertIsNone(embeddings._cache.routes)
-
-    def test_without_a_gpu_nothing_is_loaded(self) -> None:
-        self.available = {"mlx": False, "mps": False}
-        loads = self._accelerate({}, {"cpu": (1, 1)})
-        self.assertEqual(loads, [])
-
-    def test_a_forced_device_skips_the_timing_but_not_the_parity_check(self) -> None:
-        self._accelerate({"mps": _DeviceModel("mps")}, {"cpu": (0.01, 0.01), "mps": (1, 1)},
-                         embeddings_device="mps")
-        self.assertEqual(embeddings.device_info(), {"query": "mps", "documents": "mps"})
-        embeddings._cache.routes = None
-        with self.assertLogs("fortress", "WARNING"):
-            self._accelerate({"mps": [_DeviceModel("mps", noise=0.3), _DeviceModel("mps", noise=0.3)]},
-                             {"cpu": (1, 1), "mps": (0, 0)}, embeddings_device="mps")
-        self.assertIsNone(embeddings._cache.routes)
-
-    def test_a_load_failure_moves_on_to_the_next_option(self) -> None:
-        mps = _DeviceModel("mps")
-        with self.assertLogs("fortress", "WARNING"):
-            self._accelerate({"mlx": RuntimeError("no Metal"), "mps": mps},
-                             {"cpu": (0.05, 0.5), "mps": (0.01, 0.1)})
-        self.assertEqual(embeddings.device_info(), {"query": "mps", "documents": "mps"})
+        self.assertEqual(self.gpu.calls, [])
