@@ -29,6 +29,7 @@ from . import (
     llm,
     media,
     ocr,
+    onenote_graph,
     onenote_import,
     search,
     sources,
@@ -678,6 +679,83 @@ def cancel_onenote_import(job_id: str):
         raise HTTPException(404, "import job not found")
     if not accepted:
         raise HTTPException(409, f"The import already ended ({record.get('status')}).")
+    return record
+
+
+# --- OneNote download from Microsoft (jobs; app/onenote_graph.py) ------------------
+
+
+@app.get("/api/import/onenote-graph")
+def onenote_graph_status():
+    """Whether the download can run (tools/fortress-onenote-graph and uv are there;
+    ``problem`` says how to fix it) and the latest download job, if any."""
+
+    return {**onenote_graph.availability(), "job": onenote_graph.downloads.latest()}
+
+
+async def _start_onenote_graph(request: Request, kind: str) -> dict:
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "Send JSON {\"client_id\": ..., \"account\": ...}.") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("client_id"), str):
+        raise HTTPException(400, "Send JSON {\"client_id\": ..., \"account\": ...}.")
+    account = payload.get("account") or "personal"
+    notebooks = payload.get("notebooks")
+    folder_id = payload.get("folder_id") or None
+    if notebooks is not None and not (isinstance(notebooks, list) and all(isinstance(n, str) for n in notebooks)):
+        raise HTTPException(400, "notebooks must be a list of names")
+    if folder_id is not None and not isinstance(folder_id, str):
+        raise HTTPException(400, "folder_id must be a string")
+    await run_in_threadpool(_check_import_folder, folder_id)
+    settings = get_settings()
+    try:
+        return await run_in_threadpool(
+            lambda: onenote_graph.downloads.submit(
+                kind=kind, client_id=payload["client_id"], account=str(account), notebooks=notebooks,
+                folder_id=folder_id, db_path=_db(), notes_path=settings.notes_path,
+                assets_path=settings.assets_path))
+    except onenote_graph.GraphUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/import/onenote-graph", status_code=202)
+async def start_onenote_graph_download(request: Request):
+    """Sign in, download notebooks from Microsoft, then import them:
+    ``{"client_id", "account": "personal"|"work", "notebooks"?: [names], "folder_id"?}``.
+    When the job is ``done`` its ``import_job_id`` is an ordinary OneNote import job."""
+
+    return await _start_onenote_graph(request, "download")
+
+
+@app.post("/api/import/onenote-graph/notebooks", status_code=202)
+async def list_onenote_graph_notebooks(request: Request):
+    """Sign in and list the notebooks (the job's ``notebooks`` when ``done``)."""
+
+    return await _start_onenote_graph(request, "notebooks")
+
+
+@app.get("/api/import/onenote-graph/{job_id}")
+def get_onenote_graph_job(job_id: str):
+    record = onenote_graph.downloads.get(job_id)
+    if record is None:
+        raise HTTPException(404, "download job not found")
+    return record
+
+
+@app.post("/api/import/onenote-graph/{job_id}/cancel", status_code=202)
+def cancel_onenote_graph_job(job_id: str):
+    """Stop a download (the tool's cache keeps what it fetched: running it again resumes)."""
+
+    record, accepted = onenote_graph.downloads.cancel(job_id)
+    if record is None:
+        raise HTTPException(404, "download job not found")
+    if not accepted:
+        raise HTTPException(409, f"The download already ended ({record.get('status')}).")
     return record
 
 

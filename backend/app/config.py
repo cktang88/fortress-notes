@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # looked up (app/onenote_import.converter_path). Seconds before a run is stopped.
     onenote_bin: str = Field("", validation_alias="FORTRESS_ONENOTE_BIN")
     onenote_timeout_s: float = Field(3600.0, validation_alias="FORTRESS_ONENOTE_TIMEOUT_S")
+    # The OneNote download from Microsoft (tools/fortress-onenote-graph, run by
+    # app/onenote_graph.py): the tool's folder; empty = the one in this repository.
+    onenote_graph_dir: str = Field("", validation_alias="FORTRESS_ONENOTE_GRAPH_DIR")
 
     def model_post_init(self, _context: object) -> None:
         notes = self.notes_dir.expanduser()
@@ -82,6 +85,9 @@ class Settings(BaseSettings):
         if self.onenote_bin.strip():
             binary = Path(self.onenote_bin.strip()).expanduser()
             self.onenote_bin = str(binary if binary.is_absolute() else BACKEND_DIR / binary)
+        if self.onenote_graph_dir.strip():
+            tool = Path(self.onenote_graph_dir.strip()).expanduser()
+            self.onenote_graph_dir = str(tool if tool.is_absolute() else BACKEND_DIR / tool)
 
     @property
     def colbert_model_revision(self) -> str | None:
