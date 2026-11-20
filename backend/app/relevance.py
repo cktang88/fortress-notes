@@ -44,6 +44,12 @@ from functools import lru_cache
 from . import embeddings, textutil
 
 RELATED_MIN_SCORE = 0.18
+# Typed search queries are a few words, not a paragraph, so a looser cutoff keeps
+# topical matches ("bread baking" -> a sourdough paragraph scored 0.107) while still
+# dropping notes that don't match at all ("tax return deadline" -> best 0.066 over
+# travel and dentist notes). Checked with Agent-ModernColBERT on a small travel /
+# work / cooking set; exact word matches are found by full-text search regardless.
+SEARCH_MIN_SCORE = 0.10
 _UNRELATED_RATIO = 0.70
 _MIN_CANDIDATES_FOR_MEDIAN = 5
 
@@ -80,11 +86,11 @@ def related(
     """
 
     if query is not None:
-        if not query.strip() or not docs:
+        if not textutil.long_enough_to_compare(query) or not docs:
             return {}, None
         if not embeddings.available():
             return relevant_keyword_scores(query, docs), None
-        tokens = _query_token_count(query)
+        tokens = query_token_count(query)
         if not tokens:
             return {}, None
         raw = embeddings.score_documents(query, docs, paragraph=True)
@@ -127,7 +133,7 @@ def rescore(
     return normalized_scores(raw, tokens, baseline)
 
 
-def _query_token_count(query: str) -> int:
+def query_token_count(query: str) -> int:
     """How many vectors ColBERT makes for ``query`` (no padding, so no forward pass needed)."""
 
     try:

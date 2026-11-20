@@ -1,0 +1,48 @@
+# Dependency updates as pull requests, never sooner than 14 days after a release
+# (docs/dependencies.md). The floor that CI enforces (scripts/check_cooldown.py) and
+# uv's exclude-newer apply is 7 days; Dependabot waits longer. Security updates
+# are not delayed (cooldown applies to version updates only).
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /backend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /tools/fortress-onenote
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      rust:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: rust-toolchain
+    directory: /tools/fortress-onenote
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+
+  # Keeps the SHA pins and updates their "# vX.Y.Z" comments.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # mac/Package.swift has no package dependencies; add the "swift" ecosystem here
+  # (with exact versions and a committed Package.resolved) when it gets one.

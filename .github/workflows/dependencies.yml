@@ -1,0 +1,36 @@
+name: Dependency cooldown
+
+# Everything pinned (uv.lock, Cargo.lock, the Rust toolchain, actions, uv, the ColBERT
+# model revision) was released at least 7 days before the commit that pinned it.
+# See docs/dependencies.md.
+on:
+  push:
+    paths:
+      - "backend/pyproject.toml"
+      - "backend/uv.lock"
+      - "backend/app/config.py"
+      - "tools/fortress-onenote/Cargo.toml"
+      - "tools/fortress-onenote/Cargo.lock"
+      - "tools/fortress-onenote/rust-toolchain.toml"
+      - "mac/Package.swift"
+      - ".github/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cooldown:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The check dates each file by the last commit that changed it.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/check_cooldown.py
