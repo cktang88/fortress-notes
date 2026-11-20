@@ -420,6 +420,7 @@ extension UndoHarness {
         script.step("Move") {
             let drag = BlockDrag(source: controller, firstId: "b1", lastId: "b2", startX: x)
             #expect(controller.dropBlocks(drag, at: harness.point(onBlock: "p2", lower: true)))
+            settleRunLoop()  // one event per drop, as a person drags
         }
         #expect(harness.ids == ["h", "p1", "b3", "p2", "b1", "b2"])
         #expect(controller.currentBlocks()[5].depth == 1, "the child came along")
@@ -430,6 +431,7 @@ extension UndoHarness {
         script.step("Move") {
             let drag = BlockDrag(source: controller, firstId: "p2", lastId: "p2", startX: x)
             #expect(controller.dropBlocks(drag, at: CGPoint(x: x + controller.theme.indentStep * 1.2, y: harness.point(onBlock: "b3", lower: true).y)))
+            settleRunLoop()  // one event per drop, as a person drags
         }
         #expect(harness.ids == ["h", "p1", "b3", "p2", "b1", "b2"])
         #expect(controller.currentBlocks()[3].depth == 1)
@@ -447,6 +449,7 @@ extension UndoHarness {
         script.step("Move") {
             let drag = BlockDrag(source: controller, firstId: "p2", lastId: "p2", startX: 0)
             #expect(controller.dropBlocks(drag, at: harness.point(onBlock: "p1", dx: width - 10)))
+            settleRunLoop()  // one event per drop, as a person drags
         }
         harness.layout()
         #expect(harness.outline.contains { $0.hasSuffix("[p1/d0 | p2/d0]") })
@@ -464,6 +467,7 @@ extension UndoHarness {
         script.step("Move") {
             let drag = BlockDrag(source: controller, firstId: "b3", lastId: "b3", startX: 0)
             #expect(controller.dropBlocks(drag, at: below))
+            settleRunLoop()  // one event per drop, as a person drags
         }
         harness.layout()
         #expect(harness.outline.contains { $0.hasSuffix("[p1/d0 | p2/d0,b3/d0]") })
@@ -473,9 +477,10 @@ extension UndoHarness {
             let drag = BlockDrag(source: liveAgain.editors[0], firstId: "p1", lastId: "p1", startX: 0)
             let end = harness.point(onBlock: try! #require(controller.currentBlocks().last?.id), lower: true)
             #expect(controller.dropBlocks(drag, at: end))
+            settleRunLoop()  // one event per drop, as a person drags
         }
         #expect(!harness.outline.contains { $0.contains("columns") }, "unwrapped: \(harness.outline)")
-        #expect(harness.ids.suffix(3) == ["p2", "b3", "p1"])
+        #expect(harness.ids == ["h", "p2", "b3", "b1", "b2", "p1"], "the columns unwrapped where they were")
         #expect(!harness.ids.contains(columnsId))
         script.walkBackAndForth()
     }
@@ -493,6 +498,7 @@ extension UndoHarness {
             let cell = controller.textView.convert(grid.cellFrame(row: 0, column: 1), from: grid.grid)
             let drag = BlockDrag(source: controller, firstId: "p2", lastId: "p2", startX: 0)
             #expect(controller.dropBlocks(drag, at: CGPoint(x: cell.midX, y: cell.midY)))
+            settleRunLoop()  // one event per drop, as a person drags
         }
         let after = try #require(controller.currentBlocks().first { $0.kind == .table }?.table)
         #expect(after.cell(row: 0, column: 1)?.plainText == "Last")

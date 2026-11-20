@@ -117,6 +117,11 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard fragments.showsBlocks != on else { return }
         fragments.showsBlocks = on
         guard let manager = textView.textLayoutManager else { return }
+        // Invalidating keeps the fragments laid out so far: they change in place.
+        manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: []) { fragment in
+            (fragment as? BlockLayoutFragment)?.showsBlocks = on
+            return true
+        }
         manager.invalidateLayout(for: manager.documentRange)
         manager.textViewportLayoutController.layoutViewport()
         textView.needsDisplay = true
