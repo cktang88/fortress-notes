@@ -3,7 +3,6 @@ title: Welcome to Fortress Notes
 created: '2026-06-20T10:00:00+00:00'
 updated: '2026-11-19T10:00:00+00:00'
 id: welcome
-status: polished
 fortress:
   provenance:
     source: manual
@@ -31,5 +30,4 @@ Ask a question in your own words and get a short answer written only from your n
 
 - Open the inspector (**⌥⌘I**) to see related notes, backlinks and the text read from pictures and PDFs.
 - Press **⌥⌘F** and type part of a title to jump to any note, and **⇧⌘Space** from any app to capture a thought.
-- Mark a **rough** braindump **polished** when it's ready.
 - Bring your notebooks over with **File › Import › From OneNote…**.
