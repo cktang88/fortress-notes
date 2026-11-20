@@ -77,6 +77,12 @@ public struct BackendLaunch: Hashable, Sendable {
         return nil
     }
 
+    /// Whether the program it runs is there: `env uv` needs uv somewhere on `path`.
+    public func canFindExecutable(isExecutable: (String) -> Bool) -> Bool {
+        guard executable.path == "/usr/bin/env", let program = arguments.first else { return true }
+        return path.split(separator: ":").contains { isExecutable("\($0)/\(program)") }
+    }
+
     /// The command line as someone would type it, for Settings.
     public var displayCommand: String {
         let name = executable.path.hasSuffix("/env") ? "" : executable.lastPathComponent + " "
@@ -211,6 +217,12 @@ public final class BackendController {
         let chosen = Self.isPortFree(port) ? port : (Self.freePort() ?? port)
         let folder = URL(fileURLWithPath: (folderPath as NSString).expandingTildeInPath)
         guard let launch = BackendLaunch.make(folder: folder, port: chosen, home: NSHomeDirectory()) else { return false }
+        // Without the backend's own virtualenv it runs through uv: say so plainly when
+        // uv isn't there, instead of an exit code.
+        if !launch.canFindExecutable(isExecutable: { FileManager.default.isExecutableFile(atPath: $0) }) {
+            state = .failed(Self.uvMissingMessage)
+            return false
+        }
         return start(launch, port: chosen)
     }
 
@@ -295,9 +307,19 @@ public final class BackendController {
             exitedUnexpectedly = false
         } else {
             exitedUnexpectedly = wasRunning
-            state = .failed("The backend stopped (exit code \(status)). See the log for details.")
+            state = .failed(Self.exitMessage(status: status))
             if wasRunning { onUnexpectedExit?() }
         }
+    }
+
+    static let uvMissingMessage =
+        "Fortress runs its backend with uv, which isn't installed on this Mac. Install uv (docs.astral.sh/uv), then click Start Backend."
+
+    /// What to tell someone when the started backend stops with `status`.
+    static func exitMessage(status: Int32) -> String {
+        // 127: the shell's "command not found" (`env uv` without uv).
+        if status == 127 { return uvMissingMessage }
+        return "The backend stopped (exit code \(status)). Click Show Log to see why."
     }
 
     /// Called when the backend this app started stops by itself.
