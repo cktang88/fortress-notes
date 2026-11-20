@@ -7,7 +7,7 @@ skiplist for documents) and normalization, returning CPU float32 torch tensors.
 Only the transformer runs in MLX, on the GPU (Metal), by default in float16.
 
 Measured on GitHub's macOS arm64 runners (virtual M1 with a paravirtualized GPU,
-where torch MPS is unavailable; scripts/bench_accel.py; CPU = torch, 1 thread as the
+where torch MPS is unavailable; CPU = torch, 1 thread as the
 app uses there): a query 11-15 ms vs 49-51 ms, a paragraph as query 47-54 ms vs
 229-456 ms, 64 paragraphs 1.1-1.3 s vs 6.4-13.5 s (float16); token cosine to the CPU
 float32 encodings >= 0.9999, same top-10 ranking for every probe query.

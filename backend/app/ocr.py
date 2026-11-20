@@ -99,7 +99,7 @@ def _get_engine():
                     # (MLProgram; ALL, CPU_AND_GPU or CPU_AND_NE) was 1.6-3x slower than
                     # this provider on all cores on GitHub's M1 runners and changed one
                     # image's text; NeuralNetwork format lost half the words; static
-                    # shapes leave CoreML no nodes (scripts/bench_accel.py). RapidOCR's
+                    # shapes leave CoreML no nodes. RapidOCR's
                     # own M2 benchmark found CoreML 3-14x slower too. Apple Vision in
                     # the Mac app is the accelerated reader.
                     "EngineConfig.onnxruntime.intra_op_num_threads": threads,

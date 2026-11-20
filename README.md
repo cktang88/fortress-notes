@@ -314,8 +314,8 @@ Mac test switches: `SNAPSHOT_DIR=<dir>` writes window snapshots there,
 `FORTRESS_INTEGRATION_URL=http://127.0.0.1:8000` (with the backend's `FORTRESS_TOKEN`
 in the environment) runs `IntegrationTests`.
 
-Benchmarks and calibration scripts live in `backend/scripts/` (`bench.py`,
-`bench_api.py`, `bench_workspace.py`, `calibrate_related.py`).
+Benchmarks and calibration scripts live in `backend/scripts/` (`bench.py` with its
+generated workspace `bench_workspace.py`, `calibrate_related.py`).
 
 ## Project layout
 

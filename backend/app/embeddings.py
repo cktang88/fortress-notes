@@ -331,8 +331,8 @@ def model_loaded() -> bool:
 #
 # Chosen per machine at load time (an M1 Air and an M4 Max differ, and a GPU's fixed
 # cost per call could lose to the CPU on a short query). Candidates, best first: MLX
-# (app/colbert_mlx.py: 4-16x faster than the CPU on GitHub's virtual M1, see
-# scripts/bench_accel.py), then torch MPS. A candidate is used only if its encodings
+# (app/colbert_mlx.py: 4-16x faster than the CPU on GitHub's virtual M1), then
+# torch MPS. A candidate is used only if its encodings
 # of the probe texts match the CPU model's (mean token cosine >= ACCEL_MIN_COSINE per
 # text, same token count; float16 first, then float32), and only for the roles
 # (queries, document batches) where it is ACCEL_MIN_SPEEDUP times faster. The CPU
