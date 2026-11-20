@@ -266,7 +266,32 @@ flowchart LR
 - **OneNote**: the Rust converter turns an export into `manifest.json` + content-addressed
   assets; `backend/app/onenote_import.py` imports it as living documents.
 
-## Development
+## FAQ
+
+### Why a block database instead of Markdown files auto-committed to git?
+
+Markdown files with batched git commits is a sound design for a notes app (Obsidian
+works that way). Fortress stores notes as blocks in SQLite because its main features
+(related notes, block links, Ask citations) need every paragraph to have a stable
+identity. It still writes every note out as Markdown, so the files stay open.
+
+| | Blocks in SQLite (Fortress) | Markdown + git as the source of truth |
+|---|---|---|
+| **Paragraph links and embeds** | Every block has a stable id; links survive edits, renames and moves | Ids must live in the text (`^abc123`); a paste, rename or edit in another editor can drop or duplicate them and break links silently |
+| **Related notes and search speed** | The ColBERT index updates only the paragraphs that changed (from SQLite's change log) | Each save means re-reading and re-parsing the file and guessing which paragraphs are the old ones before re-indexing |
+| **Concurrent edits** | Edits are block operations; two windows conflict only on the same paragraph | Git merges by line, and a prose paragraph is one line, so edits conflict or the last write wins |
+| **Undo** | One undo step per transaction, per note | Editor-local only; history is per commit |
+| **Rich content** | Tables whose cells hold blocks, columns, math, callouts and OneNote layout are kept without loss | No faithful Markdown form; each round trip loses some of it |
+| **Pictures** | Stored once by content hash, with cached OCR text | A git repo grows forever unless you add Git LFS |
+| **Open format, no lock-in** | ✅ via the Markdown mirror (an Obsidian vault in `NOTES_DIR`) | ✅ natively |
+| **Edit with any editor** | ⚠️ The mirror is write-only; changes made there are not read back | ✅ |
+| **History and diffs** | Undo/redo while editing; daily database snapshots (last 7 kept); no per-note version history yet | ✅ free with git, plus push to any remote |
+| **Sync** | Not built in (local-first, one Mac) | ✅ through any git remote |
+| **Simplicity** | A server process and a database | Just files |
+
+The block database gives up some simplicity to make related notes, block links and
+Ask fast and reliable. The Markdown mirror means you can always leave with your notes
+in an open format.
 
 | Component | Run tests | CI workflow |
 | --- | --- | --- |
