@@ -1,5 +1,4 @@
 import AppKit
-import CoreText
 import Darwin
 import Testing
 
@@ -412,101 +411,29 @@ final class PerfEditor {
         PerfLog.record("keystroke.return", newline, budget: 8)
     }
 
-    /// Where laying out a 50,000-character paragraph spends its time (diagnostic numbers
-    /// for the long-paragraph keystroke): CoreText alone, a bare TextKit 2 stack, and the
-    /// line break strategies.
+    /// The floor under `keystroke.long50k`: TextKit 2 lays a paragraph out whole (one
+    /// layout fragment per paragraph), so a bare TextKit 2 stack with nothing of the
+    /// editor's takes about as long to lay a 50,000-character paragraph out again as a
+    /// keystroke in it costs (UNDO_AUDIT.md, performance note).
     @Test func longParagraphLayoutCosts() throws {
         let long = String(String(repeating: LongNote.sentence, count: 50_000 / LongNote.sentence.count + 1).prefix(50_000))
-        let font = EditorTheme().bodyFont()
-        let width: CGFloat = 650
-        func median(_ body: () -> Void) -> Double {
-            var samples: [Double] = []
-            for _ in 0..<5 { samples.append(milliseconds(body)) }
-            return samples.sorted()[2]
-        }
-        // CoreText: break and make every line.
-        let plain = NSAttributedString(string: long, attributes: [.font: font])
-        PerfLog.record("diag.long50k.coreTextLines", median {
-            let typesetter = CTTypesetterCreateWithAttributedString(plain)
-            var start = 0
-            while start < plain.length {
-                let count = CTTypesetterSuggestLineBreak(typesetter, start, Double(width))
-                _ = CTTypesetterCreateLine(typesetter, CFRange(location: start, length: count))
-                start += max(1, count)
-            }
-        })
-        func textKit(_ strategy: NSParagraphStyle.LineBreakStrategy?) -> Double {
-            let style = NSMutableParagraphStyle()
-            if let strategy { style.lineBreakStrategy = strategy }
-            let text = NSAttributedString(string: long, attributes: [.font: font, .paragraphStyle: style])
-            let content = NSTextContentStorage()
-            let manager = NSTextLayoutManager()
-            content.addTextLayoutManager(manager)
-            let container = NSTextContainer(size: CGSize(width: width, height: 0))
-            container.lineFragmentPadding = 0
-            manager.textContainer = container
-            content.textStorage?.setAttributedString(text)
-            manager.ensureLayout(for: manager.documentRange)
-            return median {
+        let text = NSAttributedString(string: long, attributes: [.font: EditorTheme().bodyFont(), .paragraphStyle: NSParagraphStyle.default])
+        let content = NSTextContentStorage()
+        let manager = NSTextLayoutManager()
+        content.addTextLayoutManager(manager)
+        let container = NSTextContainer(size: CGSize(width: 650, height: 0))
+        container.lineFragmentPadding = 0
+        manager.textContainer = container
+        content.textStorage?.setAttributedString(text)
+        manager.ensureLayout(for: manager.documentRange)
+        var samples: [Double] = []
+        for _ in 0..<5 {
+            samples.append(milliseconds {
                 manager.invalidateLayout(for: manager.documentRange)
                 manager.ensureLayout(for: manager.documentRange)
-            }
+            })
         }
-        // Experiment: long paragraphs vended as chunks (NSTextContentManagerDelegate):
-        // does a one-character edit then lay out only its chunk?
-        for chunked in [false, true] {
-            let delegate = ChunkingDelegate()
-            let content = NSTextContentStorage()
-            if chunked { content.delegate = delegate }
-            let manager = NSTextLayoutManager()
-            content.addTextLayoutManager(manager)
-            let container = NSTextContainer(size: CGSize(width: width, height: 0))
-            container.lineFragmentPadding = 0
-            manager.textContainer = container
-            let text = NSMutableAttributedString(string: "Before\n", attributes: [.font: font])
-            text.append(NSAttributedString(string: long + "\nAfter\n", attributes: [.font: font]))
-            content.textStorage?.setAttributedString(text)
-            manager.ensureLayout(for: manager.documentRange)
-            var fragments = 0
-            _ = manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: []) { _ in fragments += 1; return true }
-            let name = chunked ? "chunked" : "whole"
-            PerfLog.record("diag.long50k.\(name).fragments", Double(fragments), unit: "")
-            var samples: [Double] = []
-            var calls: [Double] = []
-            for index in 0..<7 {
-                delegate.calls = 0
-                samples.append(milliseconds {
-                    let at = 25_000 + index
-                    content.performEditingTransaction {
-                        content.textStorage?.replaceCharacters(in: NSRange(location: at, length: 0), with: "b")
-                    }
-                    if let start = content.location(content.documentRange.location, offsetBy: at - 1500),
-                       let end = content.location(start, offsetBy: 3000),
-                       let range = NSTextRange(location: start, end: end) {
-                        manager.ensureLayout(for: range)
-                    }
-                })
-                calls.append(Double(delegate.calls))
-            }
-            PerfLog.record("diag.long50k.\(name).editAndLayout", samples.sorted()[3])
-            PerfLog.record("diag.long50k.\(name).delegateCallsPerEdit", calls.sorted()[3], unit: "")
-            // Fragments still tile the text after the edits.
-            var covered = 0
-            var gaps = 0
-            _ = manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: []) { fragment in
-                let start = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
-                if start != covered { gaps += 1 }
-                covered = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.endLocation)
-                return true
-            }
-            PerfLog.record("diag.long50k.\(name).tilingGaps", Double(gaps), unit: "")
-            PerfLog.record("diag.long50k.\(name).coveredEnd", Double(covered - (content.textStorage?.length ?? 0)), unit: "")
-        }
-        PerfLog.record("diag.long50k.textKit.defaultStrategy", textKit(nil))
-        PerfLog.record("diag.long50k.textKit.noStrategy", textKit([]))
-        PerfLog.record("diag.long50k.textKit.standardStrategy", textKit(.standard))
-        PerfLog.record("diag.long50k.defaultStrategyRaw", Double(NSMutableParagraphStyle().lineBreakStrategy.rawValue), unit: "")
-        PerfLog.record("diag.themeStrategyRaw", Double(EditorTheme().paragraphStyle(for: BlockInfo()).lineBreakStrategy.rawValue), unit: "")
+        PerfLog.record("keystroke.long50k.part.bareTextKitRelayout", samples.sorted()[2])
     }
 
     @Test func richBlockLayout() throws {
@@ -731,37 +658,3 @@ extension EditorSession {
     }
 }
 
-
-/// Diagnostic: vends paragraphs longer than 4,000 characters as chunks of about 1,500,
-/// each ending after a space.
-final class ChunkingDelegate: NSObject, NSTextContentStorageDelegate {
-    nonisolated(unsafe) var calls = 0
-
-    func textContentManager(_ textContentManager: NSTextContentManager, textElementAt location: any NSTextLocation) -> NSTextElement? {
-        guard let storage = textContentManager as? NSTextContentStorage, let text = storage.textStorage else { return nil }
-        let string = text.mutableString
-        let offset = storage.offset(from: storage.documentRange.location, to: location)
-        guard offset < string.length else { return nil }
-        let paragraph = string.paragraphRange(for: NSRange(location: offset, length: 0))
-        guard paragraph.length > 4000 else { return nil }
-        calls += 1
-        var start = paragraph.location
-        while true {
-            var end = min(NSMaxRange(paragraph), start + 1500)
-            if end < NSMaxRange(paragraph) {
-                let space = string.range(of: " ", options: .literal, range: NSRange(location: end, length: NSMaxRange(paragraph) - end))
-                end = space.location == NSNotFound ? NSMaxRange(paragraph) : NSMaxRange(space)
-            }
-            if NSMaxRange(paragraph) - end < 500 { end = NSMaxRange(paragraph) }
-            if offset < end || end >= NSMaxRange(paragraph) {
-                let element = NSTextParagraph(attributedString: text.attributedSubstring(from: NSRange(location: start, length: end - start)))
-                if let from = storage.location(storage.documentRange.location, offsetBy: start),
-                   let to = storage.location(storage.documentRange.location, offsetBy: end) {
-                    element.elementRange = NSTextRange(location: from, end: to)
-                }
-                return element
-            }
-            start = end
-        }
-    }
-}

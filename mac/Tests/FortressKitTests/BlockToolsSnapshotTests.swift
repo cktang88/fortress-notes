@@ -108,6 +108,8 @@ struct BlockToolsSnapshotTests {
             }
             RunLoop.main.add(timer, forMode: .common)
             _ = menu.popUp(positioning: nil, at: NSPoint(x: 0, y: hover.grip.bounds.maxY + 4), in: hover.grip)
+            // Never later: cancelling tracking that has ended stops the main run loop (the test process).
+            timer.invalidate()
             window.close()
         }
     }

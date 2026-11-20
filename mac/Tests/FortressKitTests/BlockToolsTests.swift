@@ -9,16 +9,6 @@ import Testing
 // columns, Show Blocks. Each action is checked for the blocks it leaves (ids included),
 // the block operations a save sends, and one named step on the note's undo stack.
 
-/// Diagnostic: who ends the test process early (prints the stack at exit).
-nonisolated(unsafe) private var exitReported = false
-private func reportExits() {
-    guard !exitReported else { return }
-    exitReported = true
-    atexit {
-        print("EXIT STACK\n" + Thread.callStackSymbols.joined(separator: "\n"))
-    }
-}
-
 @MainActor
 enum BlockFixture {
     /// Plans (h1) · First paragraph · • Item one ( • Child ) · • Item two · Last
@@ -34,7 +24,6 @@ enum BlockFixture {
     }
 
     static func harness(_ blocks: [EditorBlock] = blocks()) -> UndoHarness {
-        reportExits()
         let harness = UndoHarness(blocks)
         harness.controller.noteReference = { (id: "doc-1", title: "Trip [draft]") }
         harness.layout()
@@ -297,10 +286,8 @@ extension UndoHarness {
         #expect(harness.controller.slashMenu.model.items.first?.title == "Quote")
         script.step("Quote") { harness.command(#selector(NSResponder.insertNewline(_:))) }
         #expect(harness.controller.currentBlocks()[1].kind == .quote && harness.controller.currentBlocks()[1].plainText.isEmpty)
-        harness.type("Said so")
-        script.states.append(("Typing", harness.snapshot()))
         // After text and a space: a new block below, the text stays.
-        harness.type(" /table 2x4")
+        harness.type("Said so /table 2x4")
         script.states.append(("Typing", harness.snapshot()))
         script.step("Insert Table") { harness.command(#selector(NSResponder.insertTab(_:))) }
         let blocks = harness.controller.currentBlocks()
