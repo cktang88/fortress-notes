@@ -25,16 +25,6 @@ jobs:
       # actor for minutes, which starved timing-sensitive tests running beside them.
       - name: Test
         run: swift test --skip EditorPerformanceTests --skip SnapshotTests
-      - name: Stress undo tests (temporary)
-        run: |
-          fails=0
-          for i in $(seq 1 8); do
-            swift test --skip EditorPerformanceTests --skip SnapshotTests > "$RUNNER_TEMP/stress.log" 2>&1 || true
-            grep -E "✘ Test .*recorded|Test run with" "$RUNNER_TEMP/stress.log" | cut -c1-300 || true
-            if grep -q "✘ Test.*UndoStackTests.swift" "$RUNNER_TEMP/stress.log"; then fails=$((fails+1)); fi
-          done
-          echo "undo failures: $fails / 8"
-          test "$fails" = 0
       - name: Render snapshots
         if: success() || failure()
         run: SNAPSHOT_DIR="$PWD/snapshots" swift test --filter GallerySnapshotTests --filter BlockToolsSnapshotTests --skip ThemeGallerySnapshotTests
