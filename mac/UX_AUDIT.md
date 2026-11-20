@@ -6,6 +6,8 @@ The product rule from the owner runs through all of it: **principle of least sur
 
 Evidence is code (paths under `mac/Sources/FortressKit/`) and the CI snapshots (`snapshots` artifact of the `macOS app` workflow). Items that can only be checked by hand on a Mac (VoiceOver, Full Keyboard Access, a second display) are marked **manual** and say what the code does.
 
+**Later change:** the ⇧⌘O command palette (Open Quickly…) described below was removed afterwards. Notes are found with the one search field (Edit ▸ Search All Notes, ⌥⌘F), and every command the palette offered is in the menu bar. Palette mentions below are kept as the audit's record.
+
 **Status key:** **Pass**: true before this audit. **Fixed**: failed, fixed on this branch. **Partial**: the must-part holds and a refinement is left. **Deferred**: failed, not fixed, with the reason. **n.a.**: not applicable.
 
 ## Summary
@@ -31,7 +33,7 @@ So 48 of the 82 items in scope failed or were only partly met. Of those, 37 are 
 1. **Every window has its own state, and menu commands act on the window in front (C10, E3).** Before, one `AppModel` held the selection, open note, inspector and sheets for every window, and the commands called `delegate.model` directly. So a second window mirrored the first, and Move to Trash could hit the wrong note. Now the shared data (backend, note tree, Trash, backups, OneNote import) is in `App/Library.swift`. Each window gets its own `AppModel` over it (`MainWindowScene`) and publishes it with `focusedSceneValue(\.windowModel)`. `ShellCommands` and `FindingCommands` read `@FocusedValue(\.windowModel)` and are disabled, not hidden, when no window applies. A second window waits for the first window's connection attempt instead of starting a second backend.
 2. **Shortcuts follow the HIG and the Mac apps people know (E5, owner's principle).** All app shortcuts now live in one table (`Shell/Shortcuts.swift`). `UXAuditTests` checks it against about 80 system and standard shortcuts:
    - ⌘E goes back to Use Selection for Find. Inline Code moves to ⌥⌘E.
-   - ⌘K is Add Link, as in Notes, Pages, Mail and TextEdit. The palette moves to ⇧⌘O ("Open Quickly…", as in Xcode).
+   - ⌘K is Add Link, as in Notes, Pages, Mail and TextEdit. The palette moved to ⇧⌘O ("Open Quickly…", as in Xcode); it was later removed, and ⇧⌘O is unassigned.
    - Insert Table drops ⌥⌘T, which is Show/Hide Toolbar.
    - Code Block moves from ⌥⌘C (Copy Style) to ⌃⌥⌘C.
    - Toggle Checkbox moves to ⇧⌘U, Notes' Mark as Checked.
@@ -129,9 +131,9 @@ So 48 of the 82 items in scope failed or were only partly met. Of those, 37 are 
 | F3 [M] predictable focus after actions | Pass | New Note focuses the editor (`requestEditorFocus`). ↩ in the list moves to the editor. Trash opens the neighbouring note. Closing the palette returns to the previous first responder. |
 | F4 [M] no focus stealing | Pass | No `makeFirstResponder` or `focused =` in async callbacks. Streaming Ask and inspector reloads don't touch focus. The search field takes focus only on ⌥⌘F. |
 | F5 [M] system focus ring, list highlight | Pass | No `focusEffectDisabled`. |
-| F6 [M] arrows, ↩, esc, ⌘. | Pass | The palette and search handle ↑/↓/↩/esc (`onLocalKeyDown`). Rename has `onExitCommand`. Sheets use `.cancelAction`. The Ask stop button uses `.cancelAction`. |
-| F7 [M] ↑/↓ while the field keeps focus | Pass | The palette's key monitor moves the selection while the `TextField` stays focused (`FindingTests`). |
-| F8 [S] fast palette, local ranking, shortcut hints | Pass | `PalettePerfTests`. Hints now come from the one shortcut table. |
+| F6 [M] arrows, ↩, esc, ⌘. | Pass | Search handles ↑/↓/↩/esc (`onLocalKeyDown`). Rename has `onExitCommand`. Sheets use `.cancelAction`. The Ask stop button uses `.cancelAction`. |
+| F7 [M] ↑/↓ while the field keeps focus | Pass | The search field's key monitor moves the selection while the field stays focused (`FindingTests`). |
+| F8 [S] fast palette, local ranking, shortcut hints | n.a. (palette removed) | The ⇧⌘O palette was later removed; notes are found with the search field (⌥⌘F) and every command is in the menu bar. |
 | F9 [M] Carbon hot key, conflicts handled, configurable | **Fixed** | `RegisterEventHotKey` was already used, with conflict retry. Added: the Settings recorder (`QuickCaptureShortcutRecorder`), refusal of system and app combinations with the reason, an inline "Another app is using this shortcut", re-registration on change, and the menu item showing the current key (`quickCaptureShortcutStoresAndRefusesSystemKeys`). |
 
 ### G. Sheets, alerts, popovers, feedback, errors

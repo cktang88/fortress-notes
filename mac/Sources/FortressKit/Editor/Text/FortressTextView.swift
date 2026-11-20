@@ -356,7 +356,7 @@ final class FortressTextView: NSTextView {
         return super.performDragOperation(sender)
     }
 
-    // MARK: Format actions (for menus and the command palette)
+    // MARK: Format actions (for menus)
 
     @objc func fortressToggleBold(_ sender: Any?) { controller?.toggleMark(\.bold) }
     @objc func fortressToggleItalic(_ sender: Any?) { controller?.toggleMark(\.italic) }

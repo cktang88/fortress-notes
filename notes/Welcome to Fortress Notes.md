@@ -30,6 +30,6 @@ Ask a question in your own words and get a short answer written only from your n
 ## More to try
 
 - Open the inspector (**⌥⌘I**) to see related notes, backlinks and the text read from pictures and PDFs.
-- Press **⇧⌘O** to jump to any note or run any command, and **⇧⌘Space** from any app to capture a thought.
+- Press **⌥⌘F** and type part of a title to jump to any note, and **⇧⌘Space** from any app to capture a thought.
 - Mark a **rough** braindump **polished** when it's ready.
 - Bring your notebooks over with **File › Import › From OneNote…**.

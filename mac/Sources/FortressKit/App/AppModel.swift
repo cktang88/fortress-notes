@@ -14,7 +14,7 @@ public enum LibraryScope: Hashable, Sendable {
     case folder(id: String)
 }
 
-/// One main window's state (selection, open note, sheets, palette) over the `Library`
+/// One main window's state (selection, open note, sheets) over the `Library`
 /// all windows share. Screens read it and call its methods; each feature area adds its
 /// own state and actions in an extension in its own folder (Shell/, Editor/, Finding/).
 @MainActor
@@ -50,7 +50,6 @@ public final class AppModel {
     /// Search box text; non-empty shows search results in place of the note list.
     public var query = ""
     public var isInspectorShown = false
-    public var isPaletteShown = false
     /// Bumped by Edit ▸ Search All Notes (⌥⌘F) to put the caret in the window's search field.
     public var searchFocusRequest = 0
     /// Text waiting for Ask's question field (the search text when Ask was opened); the
@@ -235,8 +234,6 @@ public final class AppModel {
 
     /// The block the caret is in, set by the editor; drives "Seen before" in the inspector.
     public var focusedBlockId: String?
-    /// Text in the palette (Open Quickly…, ⇧⌘O) (set it before showing the palette to open in a mode, e.g. "? " for Ask).
-    public var paletteQuery = ""
     /// The open note's blocks as last saved: block id → a version of its text. Set by
     /// `noteDidChange` (via `recordBlockVersions`); "Seen before" caches per block text.
     public internal(set) var savedBlockVersions: [String: Int] = [:]

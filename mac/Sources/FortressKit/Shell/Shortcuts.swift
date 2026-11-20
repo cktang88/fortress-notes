@@ -44,7 +44,7 @@ public struct AppShortcut: @unchecked Sendable {  // KeyEquivalent and EventModi
 }
 
 /// Every keyboard shortcut the app defines, in one table (DESIGN b.12). The menu bar,
-/// the ⌘K palette's hints and the tests read it, so they can't disagree.
+/// the menu bar and the tests read it, so they can't disagree.
 ///
 /// Rule (principle of least surprise): no shortcut here takes a key combination that
 /// macOS, the HIG's standard table or Notes/TextEdit/Pages give a different meaning;
@@ -60,7 +60,6 @@ public enum Shortcuts {
     // View
     public static let toggleInspector = AppShortcut("Show Inspector", "i", [.option, .command])
     public static let focusMode = AppShortcut("Enter Focus Mode", .return, [.control, .command])
-    public static let commandPalette = AppShortcut("Open Quickly…", "o", [.shift, .command])
     public static let askNotes = AppShortcut("Ask Your Notes…", "a", [.shift, .command])
     public static let reloadNotes = AppShortcut("Reload Notes", "r")
     // Note
@@ -102,7 +101,7 @@ public enum Shortcuts {
     /// The app's own shortcuts (Quick Capture's global one is configurable and separate).
     public static let all: [AppShortcut] = [
         newNote, newFolder, importMarkdown, exportMarkdown, searchAllNotes, toggleInspector, focusMode,
-        commandPalette, askNotes, reloadNotes, moveToTrash, allNotes, rough, polished, recent,
+        askNotes, reloadNotes, moveToTrash, allNotes, rough, polished, recent,
         bold, italic, underline, strikethrough, inlineCode, highlight, superscript, `subscript`, addLink,
         body, heading1, heading2, heading3, bulletedList, numberedList, checklist, quote, codeBlock,
         toggleCheckbox, indent, outdent, moveBlockUp, moveBlockDown, duplicateBlock, showBlocks,

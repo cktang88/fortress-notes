@@ -55,7 +55,7 @@ Strict concurrency is a build error now (`treatAllWarnings(as: .error)`, Swift 6
   sidebar, `Settings` scene, `.fileImporter`/`.fileExporter`, `.confirmationDialog`.
   (Details of each component are the UX audit's.)
 - **A5 [S] profile with the SwiftUI instrument each release — fail → deferred.** Signposts
-  cover note open, load/append, decode, save diff, palette, Ask (`App/Signposts.swift`);
+  cover note open, load/append, decode, save diff, Ask (`App/Signposts.swift`);
   CI runs the editor and Finding perf suites. No release checklist step runs Instruments;
   that needs a release process (there is none yet). Added an opt-in sampled keystroke
   profile (`Tests/FortressKitTests/KeystrokeProfile.swift`, `KEYSTROKE_PROFILE=1`).
@@ -119,8 +119,7 @@ Strict concurrency is a build error now (`treatAllWarnings(as: .error)`, Swift 6
   string lists in the import sheets; no `indices`, no `.id(UUID())`.
 - **L5 [M] no `AnyView`, no `.if` — pass.** No hits.
 - **L6 [M] lazy containers for large collections — pass.** Notes and sidebar are `List`;
-  search results a `LazyVStack` (`SearchResultsView.swift:19`); the palette's `VStack`
-  holds a capped section list; the one `GeometryReader` (`Attachments.swift:304`) is in an
+  search results a `LazyVStack` (`SearchResultsView.swift:19`); the one `GeometryReader` (`Attachments.swift:304`) is in an
   embed view, not a row.
 - **L7 [M] fast-changing values out of the environment — pass.** The one `@Entry` is a
   `FocusedValues` key (`NoteListView.swift`); Ask's streaming text lives in `AskState`.
@@ -147,7 +146,7 @@ Strict concurrency is a build error now (`treatAllWarnings(as: .error)`, Swift 6
   AppKit/TextKit/RunLoop callbacks, commented (see A1).
 - **L11 [S] shared caches are actors or `Mutex` — pass.** `MediaCache` (`Mutex` +
   NSCache), `Timestamp` memo (`Mutex`), `APIStore` (`Mutex`), `EditorTheme.StyleCache`
-  (`NSLock`, justified), `PaletteCache` and Finding caches are main-actor.
+  (`NSLock`, justified) and the Finding caches are main-actor.
 
 ## N. Localization readiness
 
@@ -160,7 +159,7 @@ Strict concurrency is a build error now (`treatAllWarnings(as: .error)`, Swift 6
   Catalog, `Packaging/Localizable.xcstrings`, compiled into the app bundle's resources by
   `Scripts/package_app.sh` (SwiftUI and `String(localized:)` look in the main bundle;
   the package's targets have no resource bundle). *Deferred:* model strings still plain in
-  `Finding/NoteInfo.swift`, `Finding/AskState.swift`, `Finding/PaletteModel.swift`,
+  `Finding/NoteInfo.swift`, `Finding/AskState.swift`,
   `Finding/QuickCapture.swift`, `Shell/AppModel+Shell.swift`,
   `Shell/BackendController.swift` (status messages) — mechanical, but those files are
   being changed by the UX audit; and catalog extraction needs Xcode's string extraction
@@ -177,8 +176,8 @@ Strict concurrency is a build error now (`treatAllWarnings(as: .error)`, Swift 6
   the remaining `String(format: "%02x")` calls build hex ids, not UI text.
 - **N4 [S] RTL-safe layout — pass.** No `.left`/`.right` alignment; shortcuts are
   `KeyEquivalent`s. (Pseudo-language screenshots not taken.)
-- **N5 [S] locale-aware matching — fail → fixed.** Fuzzy matching folds case and
-  diacritics (`FuzzyMatch.swift:81`), title sort uses `localizedStandardCompare`; the
+- **N5 [S] locale-aware matching — fail → fixed.** Title matching folds case and
+  diacritics (backend `block_query.title_matches`), title sort uses `localizedStandardCompare`; the
   `[[` suggestions used `lowercased().contains`, now `localizedStandardContains`.
 
 ## O. Sandbox, hardened runtime, privacy

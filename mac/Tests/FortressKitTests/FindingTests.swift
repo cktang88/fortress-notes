@@ -48,71 +48,6 @@ import Testing
     }
 }
 
-// MARK: Palette ranking
-
-@Suite struct PaletteRankingTests {
-    let notes = [
-        PaletteNote(id: "1", title: "Kyoto trip", folder: "Travel"),
-        PaletteNote(id: "2", title: "Packing list", folder: nil),
-        PaletteNote(id: "3", title: "Travel ideas: ship", folder: nil),
-        PaletteNote(id: "4", title: "Café list", folder: nil),
-    ]
-
-    private func titles(_ query: String) -> [String] {
-        PaletteCatalog.sections(for: query, notes: notes, recent: []).first?.items.map(\.title) ?? []
-    }
-
-    @Test func commandContainingTheQueryBeatsScatteredLetters() {
-        // "trash": the "Show Trash" command contains it; "Travel ideas: ship"
-        // only has the letters scattered. The command must come first.
-        let result = titles("trash")
-        #expect(result.first == "Show Trash")
-        #expect(result.contains("Travel ideas: ship"))
-    }
-
-    @Test func prefixBeatsWordStartBeatsInside() {
-        let prefix = FuzzyMatch.match("kyo", in: "Kyoto trip")!.score
-        let wordStart = FuzzyMatch.match("tri", in: "Kyoto trip")!.score
-        let inside = FuzzyMatch.match("oto", in: "Kyoto trip")!.score
-        let scattered = FuzzyMatch.match("kt", in: "Kyoto trip")!.score
-        #expect(prefix > wordStart && wordStart > inside && inside > scattered)
-    }
-
-    @Test func matchesIgnoreCaseAndAccentsAndReportIndices() {
-        let match = FuzzyMatch.match("cafe", in: "Café list")
-        #expect(match?.indices == [0, 1, 2, 3])
-        #expect(FuzzyMatch.match("zzz", in: "Kyoto trip") == nil)
-        #expect(FuzzyMatch.match("trip kyo", in: "Kyoto trip")?.indices == [0, 1, 2, 6, 7, 8, 9])
-    }
-
-    @Test func keywordsFindCommands() {
-        #expect(titles("deleted").first == "Show Trash")
-    }
-
-    @Test func fallbacksAndPrefixes() {
-        let sections = PaletteCatalog.sections(for: "onsen", notes: notes, recent: [])
-        let actions = sections.flatMap(\.items).map(\.action)
-        #expect(actions == [.newNote(title: "onsen"), .search("onsen"), .ask("onsen")])
-        #expect(PaletteCatalog.sections(for: "? where did we stay", notes: notes, recent: [])
-            .flatMap(\.items).map(\.action) == [.ask("where did we stay")])
-        let commandsOnly = PaletteCatalog.sections(for: ">list", notes: notes, recent: []).flatMap(\.items)
-        #expect(commandsOnly.allSatisfy { if case .command = $0.action { true } else { false } })
-    }
-
-    @Test func emptyQueryShowsRecentThenSuggestions() {
-        let sections = PaletteCatalog.sections(for: "", notes: notes, recent: Array(notes.prefix(2)))
-        #expect(sections.map(\.title) == ["Recent", "Suggestions"])
-        #expect(sections[0].items.map(\.title) == ["Kyoto trip", "Packing list"])
-    }
-
-    @Test func flattensTheSidebarTree() throws {
-        let navigation = try JSONDecoder().decode(NavigationResponse.self, from: try findingFixture("navigation.json"))
-        let notes = PaletteCatalog.notes(in: navigation)
-        #expect(notes.contains(PaletteNote(id: "01M7NZXNDZHSR801AP2K15KMAQ", title: "Kyoto trip", folder: "Travel")))
-        #expect(notes.contains { $0.title == "Packing list" && $0.folder == nil })
-    }
-}
-
 // MARK: Search debounce and stale results
 
 @MainActor
@@ -425,12 +360,10 @@ func findingFixture(_ name: String) throws -> Data {
         let model = AppModel()
         model.connectsOnAppear = false
         model.query = "  ryokan check-in  "
-        model.isPaletteShown = true
         model.openAsk()
         #expect(model.route == .ask(question: ""))
         #expect(model.askDraft == "ryokan check-in")
         #expect(model.askFocusRequest == 1)
-        #expect(!model.isPaletteShown)
     }
 
     @Test func leavesTheTrashToShowAsk() {

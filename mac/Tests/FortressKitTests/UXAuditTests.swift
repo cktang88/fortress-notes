@@ -26,7 +26,6 @@ import Testing
     }
     #expect(Shortcuts.addLink.chord == "⌘K")  // As in Notes, Pages, Mail and TextEdit.
     #expect(Shortcuts.inlineCode.chord == "⌥⌘E")
-    #expect(Shortcuts.commandPalette.chord == "⇧⌘O")
 }
 
 @Test func shortcutsDisplayModifiersInTheMacOrder() {
@@ -34,20 +33,6 @@ import Testing
     #expect(AppShortcut("x", .return, [.command, .control]).display == "⌃⌘↩")
     #expect(AppShortcut("x", .upArrow, [.control, .command]).display == "⌃⌘↑")
     #expect(Shortcuts.moveToTrash.display == "⌘⌫")
-}
-
-@Test @MainActor func paletteHintsAreTheMenuBarsShortcuts() {
-    let menu = Set(Shortcuts.all.map(\.display))
-    for command in PaletteCommand.allCases where command != .quickCapture {
-        guard let hint = command.shortcut else { continue }
-        #expect(menu.contains(hint), "\(command.title) shows \(hint), which no menu item has")
-    }
-    // The palette offers the menu bar's commands too (HIG: every command, one place to find it).
-    let titles = Set(PaletteCommand.allCases.map(\.title))
-    for title in ["New Note", "New Folder", "New Window", "Import Markdown Files…", "Export as Markdown…",
-                  "Back Up Now", "Import from OneNote…", "Reload Notes", "Move Note to Trash"] {
-        #expect(titles.contains(title), "\(title) is missing from the palette")
-    }
 }
 
 // MARK: Quick Capture shortcut

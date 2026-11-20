@@ -19,7 +19,7 @@ struct FortressNotesApp: App {
             TextEditingCommands()  // Find (⌘F, ⌘G, ⌘E), Spelling, Substitutions, Speech.
             ToolbarCommands()
             ShellCommands(library: delegate.library)
-            FindingCommands()  // Open Quickly… (palette), Ask, Quick Capture.
+            FindingCommands()  // Ask, Quick Capture.
         }
 
         Settings {

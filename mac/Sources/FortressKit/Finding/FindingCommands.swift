@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Menu-bar commands for finding things: the palette (Open Quickly…), Ask, and Quick
-/// Capture. They act on the focused window (`FocusedValues.windowModel`).
+/// Menu-bar commands for finding things: Ask and Quick Capture (searching is Edit ▸
+/// Search All Notes, ⌥⌘F). They act on the focused window (`FocusedValues.windowModel`).
 public struct FindingCommands: Commands {
     @FocusedValue(\.windowModel) private var model
     @AppStorage(QuickCaptureShortcut.defaultsKey) private var captureShortcut = QuickCaptureShortcut.standard.storage
@@ -10,14 +10,6 @@ public struct FindingCommands: Commands {
 
     public var body: some Commands {
         CommandGroup(after: .sidebar) {
-            Button(Shortcuts.commandPalette.title) {
-                guard let model else { return }
-                if !model.isPaletteShown { model.paletteQuery = "" }
-                model.isPaletteShown.toggle()
-            }
-            .keyboardShortcut(Shortcuts.commandPalette)
-            .disabled(model == nil)
-
             Button(Shortcuts.askNotes.title) { model?.openAsk() }
             .keyboardShortcut(Shortcuts.askNotes)
             .disabled(model == nil)
@@ -37,7 +29,6 @@ extension AppModel {
     /// on screen stays: the field is then its follow-up.
     public func openAsk() {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        isPaletteShown = false
         // The Trash shows trashed notes in the detail column, never an answer.
         if scope == .trash { select(.all) }
         askDraft = text

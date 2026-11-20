@@ -2,8 +2,8 @@ import Foundation
 import Observation
 
 /// What every window shares: the backend connection, the note tree, the Trash and the
-/// backups. Each main window has its own `AppModel` (selection, open note, sheets, the
-/// palette) over one `Library`, so two windows never mirror each other's selection and
+/// backups. Each main window has its own `AppModel` (selection, open note, sheets)
+/// over one `Library`, so two windows never mirror each other's selection and
 /// menu commands act on the window in front (`FocusedValues.windowModel`).
 @MainActor
 @Observable

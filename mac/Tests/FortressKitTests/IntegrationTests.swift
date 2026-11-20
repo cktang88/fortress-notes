@@ -87,7 +87,7 @@ struct IntegrationTests {
         #expect(counts["before"]! == 40)
     }
 
-    /// Ten views asking for the tree at once (window open, sidebar, palette…).
+    /// Ten views asking for the tree at once (window open, sidebar, inspector…).
     @Test func navigationStorm() async throws {
         var counts: [String: Int] = [:]
         for (label, options) in [("before", APIStore.Options.uncached), ("after", APIStore.Options())] {
