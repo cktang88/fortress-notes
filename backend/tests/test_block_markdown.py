@@ -56,7 +56,7 @@ class MarkdownImportTests(unittest.TestCase):
         self.assertEqual(
             [spec.type for spec in specs],
             ["heading", "paragraph", "quote", "bullet_item", "check_item", "check_item",
-             "numbered_item", "numbered_item", "code", "divider", "table", "math", "image", "image",
+             "numbered_item", "numbered_item", "code", "divider", "table", "code", "image", "image",
              "html", "columns", "table", "heading"],
         )
         para = specs[1].content
@@ -70,7 +70,7 @@ class MarkdownImportTests(unittest.TestCase):
         self.assertEqual(gfm.attrs["header_rows"], 1)
         self.assertEqual(gfm.children[1].children[1].children[0].content,
                          [{"type": "text", "text": "2", "marks": {"bold": True}}])
-        self.assertEqual(specs[11].payload, {"latex": "a^2"})
+        self.assertEqual((specs[11].attrs, specs[11].content), ({"language": "latex"}, [{"type": "text", "text": "a^2"}]))
         self.assertEqual(specs[12].attrs, {"url": "/media/x.png", "alt": "pic", "width": 100})
         columns = specs[15]
         self.assertEqual([column.attrs.get("width") for column in columns.children], [0.3, None])
@@ -108,7 +108,7 @@ class MarkdownImportTests(unittest.TestCase):
 class ObsidianSyntaxTests(unittest.TestCase):
     """What Obsidian writes reads as the blocks it shows."""
 
-    def test_callouts_highlights_tasks_math_and_embeds(self) -> None:
+    def test_callouts_highlights_tasks_dollars_and_embeds(self) -> None:
         specs = parse_markdown(
             "> [!warning]- Careful *now*\n> Body with ==marked== text.\n\n"
             "> [!NOTE]\n> plain\n\n"
@@ -256,7 +256,8 @@ class ObsidianVaultImportTests(unittest.TestCase):
         self.assertIn(("callout", {"callout_type": "tip", "callout_fold": "-", "callout_title": True}), kinds)
         self.assertIn(("image", {"url": "diagram.png", "width": 300}), kinds)
         self.assertIn(("file", {"url": "Spec.pdf", "name": "Spec.pdf", "mime": "application/pdf"}), kinds)
-        self.assertIn(("math", {}), kinds)
+        # $$…$$ keeps its source as a LaTeX code block (Fortress has no math blocks).
+        self.assertIn(("code", {"language": "latex"}), kinds)
 
 
 if __name__ == "__main__":

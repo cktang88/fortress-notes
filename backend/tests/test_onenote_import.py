@@ -31,7 +31,6 @@ from support import make_settings, use_settings, mirror_file
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"fake image bytes"
 PDF = b"%PDF-1.4 fake pdf"
-SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><path d="M0 0L9 9"/></svg>'
 HTML = b"<script>alert(1)</script>"
 
 
@@ -43,7 +42,6 @@ def _asset(data: bytes, ext: str, mime: str) -> tuple[str, dict]:
 
 PNG_NAME, PNG_INFO = _asset(PNG, "png", "image/png")
 PDF_NAME, PDF_INFO = _asset(PDF, "pdf", "application/pdf")
-SVG_NAME, SVG_INFO = _asset(SVG, "svg", "image/svg+xml")
 HTML_NAME, HTML_INFO = _asset(HTML, "html", "text/html")
 
 P1 = "{11111111-1111-1111-1111-111111111111}"
@@ -60,7 +58,7 @@ def _page(guid, title, items, layout=None, *, level=0, parent=None, order=0, pat
         "level": level, "parent_id": parent, "order": order,
         "created": "2024-01-02T03:04:05.000Z", "updated": "2024-02-03T04:05:06.000Z",
         "author": "Tester", "source_path": [*path, title], "source_url": source_url,
-        "height": None, "ink_text": None, "items": items,
+        "height": None, "items": items,
         "layout": layout if layout is not None else [{"kind": "item", "item": item["id"]} for item in items],
         "stats": {"blocks": 0, "text_chars": 0},
     }
@@ -161,7 +159,8 @@ def build_manifest() -> dict:
         {"type": "paragraph", "indent": 0, "text": "Standup notes"},
         {"type": "code", "indent": 0, "text": "print('hi')\nprint('there')"},
         {"type": "quote", "indent": 0, "variant": "quote", "text": "A wise quote"},
-        {"type": "math", "indent": 0, "text": "a=b", "latex": "\\[a=b\\]", "mathml": "<math><mi>a</mi></math>"},
+        # An equation: the converter writes its LaTeX as a code block (Fortress has no math).
+        {"type": "code", "indent": 0, "text": "a=b", "language": "latex"},
         {"type": "file", "indent": 0, "asset": PDF_NAME, "filename": "Contract.pdf", "extension": "pdf",
          "mime": "application/pdf", "size": len(PDF), "data_status": "available", "media_kind": "other",
          "icon_asset": None},
@@ -172,14 +171,12 @@ def build_manifest() -> dict:
          "mime": "application/octet-stream", "size": 0, "data_status": "missing", "media_kind": "other",
          "icon_asset": None},
         {"type": "embed", "indent": 0, "url": "https://www.youtube.com/watch?v=xyz", "thumbnail_asset": None},
-        {"type": "ink", "indent": 0, "asset": SVG_NAME, "recognized_text": "handwritten words", "width": 4.0,
-         "height": 2.0, "stroke_count": 3},
         {"type": "hologram", "indent": 0, "text": "future content"},
     ]
     standup = _page(P3, "Standup notes", [_outline("i0", standup_blocks)], path=("Work", "Meetings"),
                     derived=True, source_url="https://example.org/source")
     report = {
-        "counts": {}, "tags_by_label": {}, "warnings": [
+        "counts": {"ink_skipped": 2}, "tags_by_label": {}, "warnings": [
             {"message": "embedded file has no data container", "page_id": P3, "page_title": "Standup notes"}],
         "failed_sections": [{"path": ["Work", "Locked"], "file": "Locked.one",
                              "reason": "The section is password protected.",
@@ -206,7 +203,7 @@ def build_manifest() -> dict:
             ],
             "report": report,
         }],
-        "assets": {PNG_NAME: PNG_INFO, PDF_NAME: PDF_INFO, SVG_NAME: SVG_INFO, HTML_NAME: HTML_INFO},
+        "assets": {PNG_NAME: PNG_INFO, PDF_NAME: PDF_INFO, HTML_NAME: HTML_INFO},
         "report": {"export_errors": [{"file": "errors.txt", "text": "Section X failed to export"}],
                    "input_warnings": [], "skipped": [], "notebooks": 1, "sections": 2, "sections_failed": 1,
                    "pages": 4, "assets": 4, "assets_bytes": 0},
@@ -215,7 +212,7 @@ def build_manifest() -> dict:
 
 def write_manifest(directory: Path, manifest: dict) -> Path:
     (directory / "assets").mkdir(parents=True, exist_ok=True)
-    for name, data in ((PNG_NAME, PNG), (PDF_NAME, PDF), (SVG_NAME, SVG), (HTML_NAME, HTML)):
+    for name, data in ((PNG_NAME, PNG), (PDF_NAME, PDF), (HTML_NAME, HTML)):
         (directory / "assets" / name).write_bytes(data)
     (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return directory
@@ -289,6 +286,7 @@ class ImportManifestTests(_Base):
         self.assertEqual(result["errors_txt"], "Section X failed to export")
         self.assertTrue(any("embedded file has no data container" in w for w in notebook["warnings"]))
         self.assertTrue(any("hologram" in w for w in notebook["warnings"]))
+        self.assertEqual(notebook["ink_skipped"], 2)  # Fortress has no ink: counted, not imported
 
     def test_import_under_a_chosen_folder(self) -> None:
         parent = block_store.create_folder(self.db, "Imports", None)["id"]
@@ -407,7 +405,6 @@ class ImportManifestTests(_Base):
         assets = self.settings.assets_path
         self.assertEqual((assets / PNG_NAME).read_bytes(), PNG)
         self.assertEqual((assets / PDF_NAME).read_bytes(), PDF)
-        self.assertEqual((assets / SVG_NAME).read_bytes(), SVG)
         html_digest = HTML_NAME.split(".")[0]
         self.assertTrue((assets / f"{html_digest}.bin").is_file())  # active content as a download
         self.assertFalse((assets / HTML_NAME).exists())
@@ -422,20 +419,15 @@ class ImportManifestTests(_Base):
         self.assertEqual(files[0]["attrs"]["name"], "Contract.pdf")
         self.assertEqual(files[1]["attrs"]["url"], f"/media/{html_digest}.bin")
         self.assertNotIn("url", files[2]["attrs"])
-        ink = next(node for node in nodes if node["type"] == "image")
-        self.assertEqual(ink["attrs"]["url"], f"/media/{SVG_NAME}")
-        self.assertEqual(ink["attrs"]["alt"], "handwritten words")
-        math = next(node for node in nodes if node["type"] == "math")
-        self.assertEqual(math["payload"]["latex"], "a=b")
-        code = next(node for node in nodes if node["type"] == "code")
+        code, equation = (node for node in nodes if node["type"] == "code")
         self.assertEqual(code["text"], "print('hi')\nprint('there')")
+        self.assertEqual((equation["attrs"], equation["text"]), ({"language": "latex"}, "a=b"))
         self.assertTrue(any(node["type"] == "quote" for node in nodes))
         embed = next(node for node in nodes if "youtube" in node["text"])
         self.assertEqual(embed["content"][0]["type"], "link")
 
         hits = search_blocks(self.db, "Quarterly revenue")
         self.assertEqual([hit["document_id"] for hit in hits], [self.doc_id(P1)])
-        self.assertTrue(search_blocks(self.db, "handwritten"))
         with block_store.connection_scope(self.db) as connection:
             registered = {row["media_name"] for row in connection.execute("SELECT media_name FROM assets")}
         self.assertIn(PNG_NAME, registered)
@@ -1019,7 +1011,7 @@ class OneNoteSamplesTests(_Base):
             self.assertEqual(nb["tables"], counts["tables"], nb["name"])
             self.assertEqual(nb["images"], counts["images"], nb["name"])
             self.assertEqual(nb["files"], counts["attachments"], nb["name"])
-            self.assertEqual(nb["ink"], counts["ink"], nb["name"])
+            self.assertEqual(nb["ink_skipped"], counts["ink_skipped"], nb["name"])
             self.assertEqual(len(nb["failed_sections"]), counts["sections_failed"], nb["name"])
         self.assertEqual(sum(len(nb["failed_sections"]) for nb in notebooks), summary["sections_failed"])
         # Some text from the samples is searchable.
@@ -1251,7 +1243,7 @@ class CompareFindingsTests(_Base):
         for path in self.settings.assets_path.iterdir():
             self.assertRegex(path.name, r"^[0-9a-f]{64}\.[a-z0-9]+$")
 
-    def test_unusable_image_data_and_equations_without_latex(self) -> None:
+    def test_unusable_image_data_becomes_a_file(self) -> None:
         bin_name = "b" * 64 + ".bin"
         self.manifest["assets"][bin_name] = {**PNG_INFO, "path": f"assets/{bin_name}", "mime": "application/octet-stream"}
         (self.export / "assets").mkdir(parents=True, exist_ok=True)
@@ -1260,16 +1252,13 @@ class CompareFindingsTests(_Base):
             {"type": "image", "indent": 0, "asset": bin_name, "data_status": "available", "alt_text": "chart",
              "width": None, "height": None, "is_printout_page": False, "printout_page_number": None,
              "is_background": False, "original_name": "chart.png", "original_asset": None},
-            {"type": "math", "indent": 0, "text": "x=−b±b2−4ac2a", "latex": None, "mathml": None},
         ])
-        attachment, math = tree["children"]
+        [attachment] = tree["children"]
         self.assertEqual(attachment["type"], "file")
         self.assertTrue(attachment["attrs"]["url"].endswith(".bin"))
         self.assertIn("chart", attachment["attrs"]["caption"])
-        self.assertEqual(math["type"], "math")
         warnings = " ".join(w for nb in self.last_result["notebooks"] for w in nb["warnings"])
         self.assertIn("not a picture", warnings)
-        self.assertIn("no LaTeX", warnings)
 
     def test_notebook_with_no_pages_and_no_failures_is_reported(self) -> None:
         # A .onepkg of OneNote 2007 sections converts to an empty notebook with no failure.
@@ -1354,26 +1343,20 @@ class CompareFindingsTests(_Base):
         # The colour is kept too (it used to be stripped from code runs).
         self.assertIn({"type": "text", "text": "ls -la", "marks": {"code": True, "color": "#C00000"}}, runs)
 
-    def test_inline_equations_keep_their_latex(self) -> None:
-        text = "Pythagoras: 𝑎2+𝑏2=𝑐2 holds"
-        start = text.index("𝑎")
-        end = start + len("𝑎2+𝑏2=𝑐2")
+    def test_inline_equations_arrive_as_latex_code(self) -> None:
+        # The converter writes an inline equation's LaTeX as code (Fortress has no math).
+        text = "Pythagoras: $a^{2}+b^{2}=c^{2}$ holds"
+        start = text.index("$")
         tree = self.import_blocks([
             {"type": "paragraph", "indent": 0, "text": text,
-             "marks": [{"start": start, "end": end, "type": "math", "latex": "\\(a^{2}+b^{2}=c^{2}\\)"}]},
-            # An equation alone in a list item (converter >= 0.2.1 keeps it a list item).
-            {"type": "list_item", "indent": 0, "text": "∫1𝑥𝑑𝑥",
-             "list": {"ordered": False, "style": "bullet", "marker": "•", "restart": None},
-             "marks": [{"start": 0, "end": 6, "type": "math", "latex": "\\[\\int \\frac{1}{x}dx\\]"}]},
+             "marks": [{"start": start, "end": text.rindex("$") + 1, "type": "code"}]},
         ])
-        paragraph, item = tree["children"]
+        [paragraph] = tree["children"]
         self.assertEqual(paragraph["content"], [
             {"type": "text", "text": "Pythagoras: "},
             {"type": "text", "text": "$a^{2}+b^{2}=c^{2}$", "marks": {"code": True}},
             {"type": "text", "text": " holds"},
         ])
-        self.assertEqual(item["type"], "bullet_item")
-        self.assertEqual(item["text"], "$\\int \\frac{1}{x}dx$")
         report = self.run_import(self.manifest)
         self.assertEqual([page for nb in report["notebooks"] for page in nb["low_coverage_pages"]], [])
 

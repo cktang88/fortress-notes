@@ -318,6 +318,23 @@ def convert(
     return result
 
 
+def math_as_code(latex: object, mathml: object, extra_attrs: dict[str, Any]) -> BlockSpec:
+    """A retired math block as the code block that keeps its formula.
+
+    The LaTeX source becomes the code (language ``latex``); an equation stored
+    with MathML only keeps that instead (language ``xml``).
+    """
+
+    if isinstance(latex, str) and latex.strip():
+        source, language = latex, "latex"
+    elif isinstance(mathml, str) and mathml.strip():
+        source, language = mathml, "xml"
+    else:
+        source, language = "", "latex"
+    attrs = schema.normalize_attrs("code", {**extra_attrs, "language": language})
+    return spec("code", attrs, [text_node(source)] if source else [])
+
+
 def _convert(kind, type_name, old_attrs, content, runs, markdown, text) -> list[BlockSpec]:
     if kind == "table":
         if isinstance(runs, dict):
@@ -329,12 +346,10 @@ def _convert(kind, type_name, old_attrs, content, runs, markdown, text) -> list[
         latex = content.get("latex", old_attrs.get("latex"))
         if not isinstance(latex, str) and isinstance(markdown, str):
             parsed = parse_markdown(markdown) if markdown.strip() else []
-            if parsed and parsed[0].type == "math" and parsed[0].payload:
-                latex = parsed[0].payload.get("latex")
-        payload = {"latex": latex if isinstance(latex, str) else ""}
-        if isinstance(content.get("mathml"), str):
-            payload["mathml"] = content["mathml"]
-        return [spec("math", attrs("math", old_attrs), payload=payload)]
+            if parsed and parsed[0].type == "code" and parsed[0].content:
+                latex = schema.inline_text(parsed[0].content)
+        extra = {key: value for key, value in old_attrs.items() if key != "latex"}
+        return [math_as_code(latex, content.get("mathml"), attrs("code", extra))]
     if kind in ("columns", "column", "divider", "table_row", "table_cell"):
         return [spec(kind, attrs(kind, old_attrs))]
     if kind == "html":

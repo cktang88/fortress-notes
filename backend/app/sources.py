@@ -116,7 +116,7 @@ class UpsertResult:
 def source_block(data: dict[str, Any] | str) -> SourceBlock:
     """A :class:`SourceBlock` from a plain dict in the canonical shape
     (docs/block-model.md): ``type``, ``attrs``, ``content`` (inline nodes, text
-    types), ``payload`` (math, html) and ``children`` (a table's are
+    types), ``payload`` (html) and ``children`` (a table's are
     ``table_row`` blocks, whose children are ``table_cell`` blocks; a
     ``columns`` block's are ``column`` blocks). Source keys: ``id`` (the
     source's id for this block), ``previous_ids``, ``created_at``,

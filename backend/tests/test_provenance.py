@@ -556,7 +556,7 @@ class ProvenanceStoreTests(unittest.TestCase):
         self.assertEqual(tree["children"][0]["provenance"]["source"], "capture")
         with connection_scope(self.db) as connection:
             self.assertEqual(
-                connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 14
+                connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], block_store.SCHEMA_VERSION
             )
 
 

@@ -144,7 +144,7 @@ class ResponseHeadersMiddleware:
 
     API responses default to ``Cache-Control: no-cache`` (keep, but revalidate;
     GETs carry ETags). Stored files are never sniffed, ``.bin`` downloads as an
-    attachment and imported SVG ink never runs scripts when opened directly.
+    attachment and a stored SVG picture never runs scripts when opened directly.
     """
 
     def __init__(self, app: ASGIApp):

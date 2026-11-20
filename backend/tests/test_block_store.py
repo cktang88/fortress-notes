@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from app.block_store import (
+    SCHEMA_VERSION,
     DocumentRevisionConflict,
     apply_transaction,
     backup_database,
@@ -70,7 +71,7 @@ class BlockStoreTests(unittest.TestCase):
             self.assertIn("transaction_receipts", tables)
             self.assertIn("block_sync", tables)
             self.assertFalse({"revisions", "block_attrs"} & tables)
-            self.assertEqual(version, 14)
+            self.assertEqual(version, SCHEMA_VERSION)
             self.assertTrue({"order_key", "payload_json", "content_json"} <= columns)
             self.assertNotIn("position", columns)
 
@@ -967,7 +968,7 @@ class BlockStoreTests(unittest.TestCase):
                 versions = connection.execute(
                     "SELECT version FROM schema_migrations ORDER BY version"
                 ).fetchall()
-                self.assertEqual([row["version"] for row in versions], list(range(2, 15)))
+                self.assertEqual([row["version"] for row in versions], list(range(2, SCHEMA_VERSION + 1)))
                 tables = {
                     row["name"] for row in connection.execute(
                         "SELECT name FROM sqlite_master WHERE type = 'table'"

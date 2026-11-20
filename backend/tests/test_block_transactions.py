@@ -137,6 +137,8 @@ class LegacyRequestShapeTests(unittest.TestCase):
              "content": {"blocknote": [{"type": "text", "text": "x", "styles": {"bold": True}}]}},
             {"operation": "update", "block_id": a, "content": {"blocknote": runs("x")}},
             {"operation": "insert", "type": "math", "content": {"latex": "x^2"}},
+            # math is no longer a block type
+            {"operation": "insert", "type": "math", "payload": {"latex": "x^2"}},
             {"operation": "insert", "type": "image", "attrs": {"url": "/media/a.png"},
              "content": {"markdown": "![](/media/a.png)"}},
             # BlockNote image width, inline runs on a container
