@@ -26,10 +26,13 @@ enum Signposts {
 enum EditorMetrics {
     static var normalize = 0.0
     static var restyle = 0.0
+    /// The editor's own work after an edit (textDidChange, selection change callbacks).
+    static var callbacks = 0.0
 
     static func reset() {
         normalize = 0
         restyle = 0
+        callbacks = 0
     }
 
     static func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }

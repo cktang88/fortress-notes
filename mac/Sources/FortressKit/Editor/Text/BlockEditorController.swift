@@ -1077,6 +1077,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     func textDidChange(_ notification: Notification) {
         guard !isLoading else { return }
+        let start = EditorMetrics.now()
+        defer { EditorMetrics.callbacks += EditorMetrics.since(start) }
         let inserted = lastReplacement
         lastReplacement = nil
         if !textView.hasMarkedText(), !isApplyingEdit {
@@ -1093,6 +1095,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     func textViewDidChangeSelection(_ notification: Notification) {
         guard !isLoading else { return }
+        let start = EditorMetrics.now()
+        defer { EditorMetrics.callbacks += EditorMetrics.since(start) }
         syncTypingAttributes()
         completion.selectionDidChange()
         let id = storage.blockInfo(at: paragraph(at: textView.selectedRange().location).location)?.id
