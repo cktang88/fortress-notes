@@ -165,7 +165,7 @@ class ApiWorkTests(unittest.TestCase):
         
         from fastapi.testclient import TestClient
 
-        from app import assets, documents, images, main, search
+        from app import documents, main
 
         self.main = main
         self.documents = documents
@@ -176,7 +176,6 @@ class ApiWorkTests(unittest.TestCase):
         patcher = use_settings(settings)
         patcher.start()
         self.addCleanup(patcher.stop)
-        main._clear_response_caches()
         self.client = TestClient(main.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
@@ -212,13 +211,10 @@ class ApiWorkTests(unittest.TestCase):
         mirror = self.documents.mirror_path(self.note["id"], self.notes)
         self.assertIn("Background", mirror.read_text(encoding="utf-8"))
 
-    def test_transaction_response_primes_the_get_and_its_etag(self) -> None:
+    def test_transaction_response_is_the_get_under_its_etag(self) -> None:
         response = self.transact("Primed")
         tag = response.headers["x-document-etag"]
-        with patch.object(
-            block_store, "document_tree_with_validator", side_effect=AssertionError("rebuilt")
-        ):
-            fetched = self.client.get(f"/api/block-documents/{self.note['id']}")
+        fetched = self.client.get(f"/api/block-documents/{self.note['id']}")
         self.assertEqual(fetched.status_code, 200)
         self.assertEqual(fetched.headers["etag"], tag)
         self.assertEqual(fetched.json(), response.json())

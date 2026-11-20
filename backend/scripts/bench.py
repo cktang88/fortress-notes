@@ -121,15 +121,16 @@ def main() -> None:
         results["workspace"] = bench_workspace.build(args.dir, args.notes)
         results["generate_s"] = round(time.perf_counter() - started, 1)
 
-    from app import ask, block_store, embeddings, search
+    from app import ask, corpus as corpus_module, embeddings, search
     from app.config import get_settings
 
     settings = get_settings()
-    corpus = block_store.embedding_documents(settings.block_db_path)
+    corpus = corpus_module.embedding_documents(settings.block_db_path)
     results["paragraphs"] = len(corpus)
     results["rss_before_model_mb"] = round(_rss_mb())
 
     started = time.perf_counter()
+    embeddings.load_model()
     assert embeddings.available(), "ColBERT model unavailable (set HF_HUB_OFFLINE=1?)"
     results["model_load_s"] = round(time.perf_counter() - started, 1)
 
@@ -200,15 +201,15 @@ def _baseline_prefill(results: dict, corpus: list) -> None:
 
     import numpy as np
     import torch
-    from app import block_store, embeddings
+    from app import corpus as corpus_module, embeddings
 
     sample = corpus[:100]
-    original = block_store.embedding_documents
-    block_store.embedding_documents = lambda _path: sample
+    original = corpus_module.embedding_documents
+    corpus_module.embedding_documents = lambda _path: sample
     started = time.perf_counter()
     embeddings.warm_index()
     elapsed = time.perf_counter() - started
-    block_store.embedding_documents = original
+    corpus_module.embedding_documents = original
     results["baseline_index_100_s"] = round(elapsed, 1)
     results["baseline_index_extrapolated_s"] = round(elapsed / 100 * len(corpus))
     fast = copy.deepcopy(embeddings._get_model()).to(torch.bfloat16)

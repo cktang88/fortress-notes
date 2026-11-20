@@ -1,8 +1,5 @@
-"""Batch endpoints for the native app's data layer.
-
-One request in place of N: prefetching notes (next/previous in the list, hover) and
-moving many notes and folders at once (deleting a folder moves its contents up).
-Kept in its own module so it stays out of the way of ``main.py``.
+"""Moving many notes and folders in one request (deleting a folder moves its
+contents up). Kept in its own module so it stays out of the way of ``main.py``.
 """
 
 from __future__ import annotations
@@ -10,30 +7,11 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from . import block_store, document_service, http_cache
+from . import block_store, document_service
 
 router = APIRouter()
 
-MAX_BATCH_DOCUMENTS = 50
 MAX_BATCH_MOVES = 500
-
-
-class DocumentBatchRequest(BaseModel):
-    ids: list[str] = Field(default_factory=list, max_length=MAX_BATCH_DOCUMENTS)
-    # ETags the client already holds (as ``GET`` sent them): matching notes come
-    # back as ``unchanged``.
-    known: dict[str, str] = Field(default_factory=dict)
-
-
-@router.post("/api/batch/block-documents")
-def batch_block_documents(request: DocumentBatchRequest):
-    """Several block documents in one read, for prefetching (never writes).
-
-    Answers ``{documents, etags: {id: ETag}, unchanged, missing}``; each body is
-    exactly what ``GET /api/block-documents/{id}`` answers under that ETag.
-    """
-
-    return http_cache.json_response(document_service.batch(request.ids, request.known))
 
 
 class DocumentMoveItem(BaseModel):
