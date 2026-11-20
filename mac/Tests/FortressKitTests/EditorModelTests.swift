@@ -149,11 +149,12 @@ private func para(_ id: String, _ text: String, depth: Int = 0, kind: BlockKind 
             node("c", "code", content: [text("let a = 1\nlet b = 2")], attrs: ["language": .string("swift")]),
             node("i", "image", attrs: ["url": .string("/media/abc.png")]),
             node("t", "divider"),
+            // Fortress has no math: a type it doesn't know is shown read-only.
             node("m", "math", payload: .object(["latex": .string("x^2")])),
             node("r", "html", payload: .object(["html": .string("<b>x</b>")])),
             node("u", "something_newer", content: [text("future")]),
         ])
-        #expect(blocks.map(\.kind) == [.heading5, .check, .numbered, .quote, .quote, .code, .image, .divider, .math, .embed, .embed])
+        #expect(blocks.map(\.kind) == [.heading5, .check, .numbered, .quote, .quote, .code, .image, .divider, .embed, .embed, .embed])
         #expect(blocks.map(\.depth) == [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
         #expect(blocks[0].plainText == "Plan")
         #expect(blocks[1].checked)

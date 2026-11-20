@@ -60,7 +60,6 @@ struct EditorTheme: Sendable {
         case .bullet, .numbered, .check: (0, 4 * scale)
         case .code: ((8 + 10) * scale, (12 + 10) * scale)
         case .image, .embed, .table, .columns: (14 * scale, 18 * scale)
-        case .math: (6 * scale, 14 * scale)
         case .file: (6 * scale, 12 * scale)
         case .divider: (6 * scale, 10 * scale)
         default: (0, 10 * scale)

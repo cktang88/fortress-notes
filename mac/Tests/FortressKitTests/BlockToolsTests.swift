@@ -234,7 +234,7 @@ extension UndoHarness {
         #expect(titles("bul") == ["Bulleted List"])
         #expect(titles("col") == ["2 Columns", "3 Columns"])
         #expect(titles("col", inColumn: true).isEmpty, "columns don't nest")
-        #expect(titles("latex") == ["Math…"])
+        #expect(titles("latex").isEmpty, "no math blocks")
         #expect(titles("table 4x5") == ["Table 4 × 5"])
         #expect(titles("3×2") == ["Table 3 × 2"])
         #expect(titles("zzz").isEmpty)
@@ -298,7 +298,7 @@ extension UndoHarness {
         script.walkBackAndForth()
     }
 
-    @Test func slashColumnsAndMath() throws {
+    @Test func slashColumns() throws {
         let harness = BlockFixture.harness([EditorBlock(id: "e", runs: [])])
         harness.select(NSRange(location: 0, length: 0))
         harness.type("/3 col")
@@ -309,9 +309,6 @@ extension UndoHarness {
         let operations = harness.operations(from: [EditorBlock(id: "e", runs: [])])
         #expect(operations.filter { $0.type == "column" }.count == 3)
         #expect(operations.contains { $0.type == "columns" })
-        #expect(SlashItem.items(matching: "math", inColumn: false).first?.action == .math)
-        let block = BlockEditorController.mathBlock("E = mc^2")
-        #expect(BlockCodec.encode(block).payload?["latex"]?.stringValue == "E = mc^2")
     }
 
     // MARK: Block selection (Esc)

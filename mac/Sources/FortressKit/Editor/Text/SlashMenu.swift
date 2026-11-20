@@ -6,13 +6,13 @@ struct SlashItem: Identifiable, Hashable {
     enum Action: Hashable {
         case turn(BlockTurnInto)
         case table(rows: Int, columns: Int)
-        case image, file, math, noteLink
+        case image, file, noteLink
     }
 
     let id: String
     let title: String
     let symbol: String
-    /// Other words it is found by ("h1", "todo", "latex").
+    /// Other words it is found by ("h1", "todo", "col").
     let keywords: [String]
     let action: Action
 
@@ -21,7 +21,6 @@ struct SlashItem: Identifiable, Hashable {
         case .turn(let target): target.undoName
         case .table: UndoNames.insertTable
         case .image, .file: UndoNames.insertBlock
-        case .math: UndoNames.math
         case .noteLink: UndoNames.noteLink
         }
     }
@@ -47,7 +46,6 @@ struct SlashItem: Identifiable, Hashable {
         SlashItem(id: "columns3", title: String(localized: "3 Columns"), symbol: "rectangle.split.3x1", keywords: ["columns", "side", "layout", "three"], action: .turn(.columns(3))),
         SlashItem(id: "image", title: String(localized: "Image…"), symbol: "photo", keywords: ["picture", "photo", "screenshot"], action: .image),
         SlashItem(id: "file", title: String(localized: "File…"), symbol: "doc", keywords: ["attachment", "pdf", "upload"], action: .file),
-        SlashItem(id: "math", title: String(localized: "Math…"), symbol: "function", keywords: ["equation", "latex", "formula"], action: .math),
         SlashItem(id: "link", title: String(localized: "Note Link"), symbol: "link", keywords: ["note", "wikilink", "[["], action: .noteLink),
     ]
 
@@ -273,51 +271,6 @@ private struct SlashMenuList: View {
     }
 }
 
-/// The small LaTeX field for a math block (`/math`, Edit Math…).
-@MainActor
-enum MathEditor {
-    static func show(relativeTo rect: NSRect, of view: NSView, initial: String, completion: @escaping (String?) -> Void) {
-        let popover = NSPopover()
-        popover.behavior = .transient
-        var finished = false
-        let finish: (String?) -> Void = { result in
-            guard !finished else { return }
-            finished = true
-            popover.close()
-            completion(result)
-        }
-        let hosting = NSHostingController(rootView: MathEditorForm(text: initial, finish: finish))
-        hosting.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = hosting
-        popover.show(relativeTo: rect.insetBy(dx: -2, dy: -2), of: view, preferredEdge: .maxY)
-    }
-}
-
-private struct MathEditorForm: View {
-    @State var text: String
-    let finish: (String?) -> Void
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "function").foregroundStyle(.secondary)
-            TextField("LaTeX, e.g. E = mc^2", text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(.body, design: .monospaced))
-                .focused($focused)
-                .onSubmit {
-                    let latex = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    finish(latex.isEmpty ? nil : latex)
-                }
-                .onExitCommand { finish(nil) }
-                .frame(width: 280)
-                .accessibilityLabel("LaTeX")
-        }
-        .padding(12)
-        .onAppear { focused = true }
-    }
-}
-
 // MARK: Performing an item
 
 extension BlockEditorController {
@@ -336,15 +289,6 @@ extension BlockEditorController {
                 replace(range, with: attributed("[[", info: current), selecting: NSRange(location: range.location + 2, length: 0))
             }
             maybeStartCompletion()
-        case .math:
-            editMath(at: nil, initial: "") { [weak self] latex in
-                guard let self else { return }
-                self.undoStep(UndoNames.math) {
-                    if let slash = slashRange() { self.replace(slash, with: NSAttributedString(), selecting: NSRange(location: slash.location, length: 0)) }
-                    let line = self.paragraph(at: min(range.location, max(0, self.string.length - 1)))
-                    self.insertBlocks([Self.mathBlock(latex)], at: line)
-                }
-            }
         case .image, .file:
             let images = item.action == .image
             let picker = chooseFiles ?? { images, completion in Self.openPanel(images: images, completion: completion) }

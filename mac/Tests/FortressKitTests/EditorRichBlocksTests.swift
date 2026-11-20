@@ -4,7 +4,7 @@ import Testing
 
 @testable import FortressKit
 
-// Editable tables and columns in the real text view, plus image/file/math rendering,
+// Editable tables and columns in the real text view, plus image/file/equation rendering,
 // and gallery scenes of an imported OneNote page.
 
 enum RichPage {
@@ -76,8 +76,9 @@ enum RichPage {
                         "caption": .string("Readings on the lab whiteboard"), "width": .number(640), "height": .number(427)]),
                 ]),
             ]),
-            node("01M7ONENOTEBLOCK0000000011", "math", payload: .object(["latex": .string(#"c_{acid} = \frac{c_{base} \cdot V_{base}}{V_{acid}} \approx 0.098"#)]),
-                 text: "c_acid"),
+            // An equation, imported as its LaTeX (Fortress has no math blocks).
+            paragraph("01M7ONENOTEBLOCK0000000011", [run(#"c_{acid} = \frac{c_{base} \cdot V_{base}}{V_{acid}} \approx 0.098"#)],
+                      type: "code", attrs: ["language": .string("latex")]),
             node("01M7ONENOTEBLOCK0000000012", "file", attrs: ["url": .string("/media/titration-printout.pdf"), "name": .string("Titration printout.pdf"),
                                                               "size": .number(482_133), "mime": .string("application/pdf")], text: "Titration printout.pdf"),
         ]
@@ -121,7 +122,7 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         // Read the text back, not the blocks kept from loading.
         controller.discardReadCache()
         let blocks = controller.currentBlocks()
-        #expect(blocks.map(\.kind) == [.paragraph, .table, .heading2, .columns, .math, .file])
+        #expect(blocks.map(\.kind) == [.paragraph, .table, .heading2, .columns, .code, .file])
         #expect(blocks[3].columns?.map { $0.blocks.count } == [3, 1])
         let (operations, _) = BlockDiff.operations(from: SyncedTree(BlockCodec.flatten(document.children)), to: blocks)
         #expect(operations.isEmpty, "unexpected: \(operations.map { "\($0.operation) \($0.blockId ?? "")" })")
@@ -273,7 +274,7 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
         for (name, appearance) in [("editor-onenote-light", NSAppearance.Name.aqua), ("editor-onenote-dark", .darkAqua)] {
             try snapshot(NoteEditorView(session: EditorSession(document: document)).environment(model), named: name, appearance: appearance)
         }
-        // Scrolled down to the columns, math and file.
+        // Scrolled down to the columns, equation and file.
         for (name, appearance) in [("editor-onenote-lower-light", NSAppearance.Name.aqua), ("editor-onenote-lower-dark", .darkAqua)] {
             try snapshot(NoteEditorView(session: EditorSession(document: document), focusBlockId: "01M7ONENOTEBLOCK0000000011").environment(model),
                          named: name, appearance: appearance)

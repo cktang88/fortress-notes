@@ -12,16 +12,16 @@ public enum BlockKind: String, Sendable, Hashable, CaseIterable {
     case quote
     /// Atomic blocks: one attachment character, no inline text.
     case divider, image, file
-    /// Blocks with their own editing inside the attachment: a table grid, side-by-side
-    /// columns (each with its own blocks), and math (shown, saved untouched).
-    case table, columns, math
+    /// Blocks with their own editing inside the attachment: a table grid and side-by-side
+    /// columns (each with its own blocks).
+    case table, columns
     /// Any block the editor doesn't edit (raw HTML, types added later, quotes holding
     /// more than lines of text…): shown read-only and never rewritten.
     case embed
 
     public var hasInlineText: Bool {
         switch self {
-        case .divider, .image, .file, .embed, .table, .columns, .math: false
+        case .divider, .image, .file, .embed, .table, .columns: false
         default: true
         }
     }
@@ -33,7 +33,7 @@ public enum BlockKind: String, Sendable, Hashable, CaseIterable {
     /// attachment, and quote lines, whose container holds only them).
     public var takesNoChildren: Bool {
         switch self {
-        case .divider, .image, .file, .math, .embed, .table, .columns, .quote, .code: true
+        case .divider, .image, .file, .embed, .table, .columns, .quote, .code: true
         default: false
         }
     }
@@ -79,7 +79,6 @@ public enum BlockKind: String, Sendable, Hashable, CaseIterable {
         case .file: "file"
         case .table: "table"
         case .columns: "columns"
-        case .math: "math"
         case .embed: "html"
         }
     }

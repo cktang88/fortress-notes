@@ -114,7 +114,7 @@ public struct Folder: Codable, Hashable, Identifiable, Sendable {
 
 /// One block as `GET /api/block-documents/{id}` returns it (docs/block-model.md §1):
 /// a `type`, `attrs`, inline `content` (text blocks: an array of inline nodes, else
-/// null), a `payload` (math and html only), and its children in document order.
+/// null), a `payload` (html only), and its children in document order.
 public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var documentId: String
@@ -126,7 +126,7 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
     public var userAttrs: [String: JSONValue]
     /// Inline nodes (text blocks), or `.null`.
     public var content: JSONValue
-    /// Structured data (math `{latex}`, html `{html}`), or nil.
+    /// Structured data (html `{html}`), or nil.
     public var payload: JSONValue?
     /// Derived plain text (read-only; never sent).
     public var text: String

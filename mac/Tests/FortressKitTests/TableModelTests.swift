@@ -9,7 +9,7 @@ private typealias BlockOp = FortressKit.BlockOperation
 private typealias BlockOp = Core.BlockOperation
 #endif
 
-// Tables, columns, math and superscript: block content ⇄ editing model, and the
+// Tables, columns, unknown types and superscript: block content ⇄ editing model, and the
 // operations edits turn into (spec §2a).
 
 private func run(_ text: String, _ marks: [String: JSONValue] = [:]) -> JSONValue {
@@ -321,13 +321,15 @@ private func columnsNode() -> BlockNode {
     }
 }
 
-// MARK: Math, images, marks
+// MARK: Unknown types, images, marks
 
 @Suite struct RichBlockTests {
-    @Test func mathIsKeptVerbatim() {
+    @Test func unknownTypesAreShownReadOnlyAndKeptVerbatim() {
+        // Fortress has no math; a type the app doesn't know (an older server's math
+        // block, a newer type) is shown read-only and saved untouched.
         let node = blockNode("m", "math", payload: .object(["latex": .string("E = mc^2"), "mathml": .string("<math/>")]))
         let block = BlockCodec.decode(node)
-        #expect(block.kind == .math)
+        #expect(block.kind == .embed)
         #expect(BlockCodec.encode(block) == BlockFields(node))
         let (operations, _) = BlockDiff.operations(from: SyncedTree([block]), to: [block])
         #expect(operations.isEmpty)
@@ -360,19 +362,5 @@ private func columnsNode() -> BlockNode {
         // Provenance is never sent on update (the server keeps it).
         #expect(operations.count == 1)
         #expect(operations.first?.provenance == nil)
-    }
-}
-
-@Suite struct MathFormatterTests {
-    @Test func formatsCommonLatex() {
-        #expect(MathFormatter.format("E = mc^2") == [.text("E = mc"), .sup([.text("2")])])
-        #expect(MathFormatter.format(#"\alpha + \beta \le \infty"#) == [.text("α + β ≤ ∞")])
-        #expect(MathFormatter.format("x_{i+1}") == [.text("x"), .sub([.text("i+1")])])
-        #expect(MathFormatter.format(#"\frac{a}{b}"#) == [.sup([.text("a")]), .text("⁄"), .sub([.text("b")])])
-        #expect(MathFormatter.format(#"\sqrt{2}"#) == [.text("√2")])
-        #expect(MathFormatter.format(#"\sqrt{x+1}"#) == [.text("√(x+1)")])
-        #expect(MathFormatter.format(#"\text{if } x"#) == [.text("if  x")])
-        #expect(MathFormatter.format(#"\unknown{x}"#) == [.text(#"\unknownx"#)])
-        #expect(MathFormatter.plain(MathFormatter.format("a^{10}")) == "a^(10)")
     }
 }

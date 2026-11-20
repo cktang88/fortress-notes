@@ -27,7 +27,7 @@ enum OneNoteFixtures {
          {"name": "Work", "folder_id": "01M7FOLDERWORK000000000000", "sections": 6,
           "pages_created": 92, "pages_updated": 3, "pages_unchanged": 0, "pages_skipped": 1,
           "images": 31, "files": 7, "tables": 12, "columns_pages": 9,
-          "warnings": ["Meetings › Kickoff: an ink drawing was kept as an image",
+          "warnings": ["Meetings › Kickoff: 1 ink drawing(s) not imported (Fortress does not support ink)",
                        {"page": "Projects › Roadmap", "message": "a video link was kept as a link"}],
           "failed_sections": [{"path": "Work › HR (locked)", "reason": "The section is password-protected.",
                                "hint": "Unlock it in OneNote, export the notebook again and re-import."}]},
@@ -89,7 +89,7 @@ enum OneNoteFixtures {
         #expect(work.pages == 95)
         #expect(work.pagesSkipped == 1)
         #expect(work.columnsPages == 9)
-        #expect(work.warnings == ["Meetings › Kickoff: an ink drawing was kept as an image",
+        #expect(work.warnings == ["Meetings › Kickoff: 1 ink drawing(s) not imported (Fortress does not support ink)",
                                   "Projects › Roadmap: a video link was kept as a link"])
         #expect(work.failedSections == [.init(path: "Work › HR (locked)", reason: "The section is password-protected.",
                                               hint: "Unlock it in OneNote, export the notebook again and re-import.")])

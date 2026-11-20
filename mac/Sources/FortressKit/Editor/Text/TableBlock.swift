@@ -1253,7 +1253,7 @@ final class TableAccessibilityElement: NSAccessibilityElement {
 }
 
 /// What a OneNote cell holds besides its first line: list items, more paragraphs,
-/// pictures, nested tables, math. Read-only; never rewritten.
+/// pictures, nested tables. Read-only; never rewritten.
 struct NestedCellBlocks: View {
     let blocks: [BlockNode]
     let context: AttachmentContext?
@@ -1305,8 +1305,6 @@ struct NestedCellBlocks: View {
             Label("Table · \(block.children.count) rows", systemImage: "tablecells")
                 .foregroundStyle(.themeSecondary)
                 .help(TableContent.nestedText(block))
-        case "math":
-            Text(MathText.attributed(block.payload?["latex"]?.stringValue ?? block.text, size: 14 * scale))
         case "file":
             Label(block.attrs["name"]?.stringValue ?? "File", systemImage: "doc")
                 .foregroundStyle(.themeSecondary)
