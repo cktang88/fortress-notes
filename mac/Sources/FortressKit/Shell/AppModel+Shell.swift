@@ -193,7 +193,12 @@ extension AppModel {
     /// Tries the backend again (after it was started by hand, or the address changed).
     public func retryConnection() async {
         applyBackendAddress()
-        if backend.ownsServer, !(await backendAnswers()) { return }
+        if backend.ownsServer, !(await backendAnswers()) {
+            // The backend this app started is gone (it stopped, or restarting it gave
+            // up): Retry starts it again rather than doing nothing.
+            if backend.canStart { await startBackend() }
+            return
+        }
         await refreshNavigation()
         if isConnected {
             hasLoadedNavigation = true

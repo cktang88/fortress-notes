@@ -166,6 +166,19 @@ private func fixtureData(_ name: String) throws -> Data {
     #expect(BackendLaunch.make(folder: URL(fileURLWithPath: "/elsewhere"), port: 8000, home: "/h", fileExists: { _ in false }) == nil)
 }
 
+@Test func missingUvIsSaidInWords() throws {
+    let bare = try #require(BackendLaunch.make(folder: URL(fileURLWithPath: "/repo"), port: 8000, home: "/h", fileExists: { $0 == "/repo/backend/app/main.py" }))
+    #expect(!bare.canFindExecutable { _ in false })
+    #expect(bare.canFindExecutable { $0 == "/usr/bin/uv" })
+    let venv = try #require(BackendLaunch.make(
+        folder: URL(fileURLWithPath: "/repo"), port: 8000, home: "/h",
+        fileExists: { ["/repo/backend/app/main.py", "/repo/backend/.venv/bin/uvicorn"].contains($0) }))
+    #expect(venv.canFindExecutable { _ in false })
+    // `env` exits 127 when it can't find uv: never just "exit code 127".
+    #expect(BackendController.exitMessage(status: 127).contains("uv"))
+    #expect(BackendController.exitMessage(status: 1).contains("Show Log"))
+}
+
 @Test func findsTheRepositoryAboveTheBuiltApp() {
     let found = BackendLaunch.repository(
         containing: URL(fileURLWithPath: "/src/fortress/mac/.build/debug"),
