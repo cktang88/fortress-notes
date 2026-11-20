@@ -22,31 +22,19 @@ struct NoteListView: View {
                 if let id { model.open(noteId: id) } else if model.openNoteId != nil { model.route = .empty }
             })
 
-        List(selection: selection) {
-            ForEach(sections) { section in
-                Section {
-                    ForEach(section.notes) { note in
-                        NoteRow(note: note, folderName: showsFolder ? note.folderId.flatMap { folderNames[$0] } : nil)
-                            .tag(note.id)
-                            .listRowSeparator(.hidden)
-                            .draggable(NoteDrag.payload(for: note.id)) {
-                                Label(NoteListing.displayTitle(note.title), systemImage: "note.text")
-                                    .padding(8)
-                            }
-                            .contextMenu { NoteContextMenu(note: note) }
-                            .accessibilityAction(named: "Move to Trash") { Task { await model.trashNote(id: note.id) } }
-                            .accessibilityAction(named: "Open in New Window") { model.library.openWindow?(note.id) }
-                            .onHover { inside in model.prefetchOnHover(noteId: inside ? note.id : nil) }
-                    }
-                } header: {
-                    if !section.title.isEmpty {
-                        Text(section.title)
-                    }
-                }
+        Group {
+            // The List is made only once it has notes to show, never empty with the notes
+            // arriving later: a List in a split view column that gets its first sections
+            // inserted (the library loading after launch) leaves their rows at the
+            // table's default 24 pt, showing a clipped title and nothing else, until the
+            // rows are replaced (another scope). Made with its sections, it measures
+            // them. (NoteListGallerySnapshotTests.notesArrivingAfterLaunchGetFullHeightRows)
+            if sections.isEmpty {
+                Color.clear
+            } else {
+                noteList(sections: sections, folderNames: folderNames, showsFolder: showsFolder, selection: selection)
             }
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
         .themedContent(.sunken)
         .task(id: model.openNoteId) {
             // Load the notes above and below the open one, so ↑/↓ open instantly. A new
@@ -101,6 +89,36 @@ struct NoteListView: View {
                 .disabled(!model.isConnected)
             }
         }
+    }
+
+    private func noteList(
+        sections: [NoteSection], folderNames: [String: String], showsFolder: Bool, selection: Binding<String?>
+    ) -> some View {
+        List(selection: selection) {
+            ForEach(sections) { section in
+                Section {
+                    ForEach(section.notes) { note in
+                        NoteRow(note: note, folderName: showsFolder ? note.folderId.flatMap { folderNames[$0] } : nil)
+                            .tag(note.id)
+                            .listRowSeparator(.hidden)
+                            .draggable(NoteDrag.payload(for: note.id)) {
+                                Label(NoteListing.displayTitle(note.title), systemImage: "note.text")
+                                    .padding(8)
+                            }
+                            .contextMenu { NoteContextMenu(note: note) }
+                            .accessibilityAction(named: "Move to Trash") { Task { await model.trashNote(id: note.id) } }
+                            .accessibilityAction(named: "Open in New Window") { model.library.openWindow?(note.id) }
+                            .onHover { inside in model.prefetchOnHover(noteId: inside ? note.id : nil) }
+                    }
+                } header: {
+                    if !section.title.isEmpty {
+                        Text(section.title)
+                    }
+                }
+            }
+        }
+        .listStyle(.inset)
+        .scrollContentBackground(.hidden)
     }
 
     private var isFolderScope: Bool {
