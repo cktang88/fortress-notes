@@ -305,14 +305,13 @@ struct IntegrationTests {
             try #require(controller.currentBlocks().first { $0.plainText == text }?.id, "a block reading \(text)")
         }
         try await edit("paste") { harness.paste("Plans\nFirst\nSecond\nThird") }
-        let start = controller.currentBlocks()
-        try await edit("heading") { harness.choose(harness.blockMenu(try id("Plans")), "Turn Into", "Heading 1") }
-        try await edit("callout") { harness.choose(harness.blockMenu(try id("First")), "Turn Into", "Callout") }
-        try await edit("duplicate") { harness.choose(harness.blockMenu(try id("Second")), "Duplicate") }
-        try await edit("move up") { harness.choose(harness.blockMenu(try id("Third")), "Move Up") }
+        let plans = try id("Plans"), first = try id("First"), second = try id("Second"), third = try id("Third")
+        try await edit("heading") { harness.choose(harness.blockMenu(plans), "Turn Into", "Heading 1") }
+        try await edit("callout") { harness.choose(harness.blockMenu(first), "Turn Into", "Callout") }
+        try await edit("duplicate") { harness.choose(harness.blockMenu(second), "Duplicate") }
+        try await edit("move up") { harness.choose(harness.blockMenu(third), "Move Up") }
         try await edit("columns") {
             controller.endBlockSelection(caret: nil)
-            let second = try id("Second")
             controller.selectBlocks(anchor: second, head: second)
             harness.command(#selector(NSResponder.moveDownAndModifySelection(_:)))
             harness.send("fortressTurnIntoTwoColumns:")
@@ -320,16 +319,16 @@ struct IntegrationTests {
         try await edit("add column") { harness.send("fortressAddColumn:") }
         try await edit("drag into a column") {
             let live = try #require(harness.live(ColumnsBlockController.self))
-            let first = live.editors[0]
-            let frame = first.selectionFrame(first.paragraph(at: 0))
-            let point = controller.textView.convert(CGPoint(x: frame.minX + 10, y: frame.maxY - 2), from: first.textView)
-            let drag = BlockDrag(source: controller, firstId: try id("Plans"), lastId: try id("Plans"), startX: 0)
+            let column = live.editors[0]
+            let frame = column.selectionFrame(column.paragraph(at: 0))
+            let point = controller.textView.convert(CGPoint(x: frame.minX + 10, y: frame.maxY - 2), from: column.textView)
+            let drag = BlockDrag(source: controller, firstId: plans, lastId: plans, startX: 0)
             #expect(controller.dropBlocks(drag, at: point))
         }
         try await edit("drag out of a column") {
             let live = try #require(harness.live(ColumnsBlockController.self))
-            let plans = try #require(live.editors.first { $0.range(ofBlock: try! id("Plans")) != nil })
-            let drag = BlockDrag(source: plans, firstId: try id("Plans"), lastId: try id("Plans"), startX: 0)
+            let column = try #require(live.editors.first { $0.range(ofBlock: plans) != nil })
+            let drag = BlockDrag(source: column, firstId: plans, lastId: plans, startX: 0)
             #expect(controller.dropBlocks(drag, at: harness.point(onBlock: controller.currentBlocks()[0].id)))
         }
         try await edit("unwrap") {
@@ -346,7 +345,7 @@ struct IntegrationTests {
             harness.command(#selector(NSResponder.insertNewline(_:)))
         }
         steps += 2  // Return and the typed "/table 2x2" are steps of their own
-        try await edit("delete") { harness.choose(harness.blockMenu(try id("Third")), "Delete") }
+        try await edit("delete") { harness.choose(harness.blockMenu(third), "Delete") }
         let final = controller.currentBlocks()
         #expect(final.contains { $0.kind == .table })
         #expect(final.contains { $0.kind == .quote && $0.container?.type == "callout" })
@@ -357,7 +356,6 @@ struct IntegrationTests {
             try await saveAndCompare("undo \(index + 1)")
         }
         #expect(controller.currentBlocks().isEmpty || controller.currentBlocks().allSatisfy { $0.plainText.isEmpty })
-        _ = start
         for index in 0..<steps {
             harness.redo()
             try await saveAndCompare("redo \(index + 1)")
