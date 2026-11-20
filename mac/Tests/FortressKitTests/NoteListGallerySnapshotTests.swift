@@ -173,16 +173,11 @@ import Testing
         host.close()
     }
 
-    private func variant<Row: View>(_ label: String, @ViewBuilder row: @escaping (NavigationDocument) -> Row) {
+    private func variant<Row: View>(_ label: String, sections: Bool = false, @ViewBuilder row: @escaping (NavigationDocument) -> Row) {
         let items = DiagNotes()
         let host = HostWindow(
             NavigationSplitView { Text("Sidebar") } content: {
-                List(selection: .constant(String?.none)) {
-                    Section("Header") {
-                        ForEach(items.notes) { note in row(note) }
-                    }
-                }
-                .listStyle(.inset)
+                DiagVariantList(items: items, sections: sections, row: row)
             } detail: { Text("Detail") })
         items.notes = Array(ShellFixtures.notes.prefix(5))
         host.settle()
@@ -192,14 +187,13 @@ import Testing
 
     @Test func diagVariants() {
         variant("noterow") { note in NoteRow(note: note, folderName: nil) }
-        variant("noterow-drag") { note in NoteRow(note: note, folderName: nil).draggable(NoteDrag.payload(for: note.id)) }
-        variant("noterow-menu") { note in NoteRow(note: note, folderName: nil).contextMenu { Button("X") {} } }
-        variant("noterow-hover") { note in NoteRow(note: note, folderName: nil).onHover { _ in } }
+        variant("noterow-sections", sections: true) { note in NoteRow(note: note, folderName: nil) }
+        variant("fixed-sections", sections: true) { note in Text(note.title).frame(height: 80) }
         variant("reserves") { note in Text(note.snippet).lineLimit(2, reservesSpace: true) }
         variant("linelimit") { note in Text(note.snippet).lineLimit(2) }
         variant("wrapping") { note in Text(note.snippet) }
         variant("two-texts") { note in VStack(alignment: .leading) { Text(note.title).font(.headline); Text("one\ntwo") } }
-        variant("access") { note in VStack(alignment: .leading) { Text(note.title); Text("one\ntwo") }.accessibilityElement(children: .combine) }
+        variant("fixed") { note in Text(note.title).frame(height: 80) }
     }
 
     @Test func selectedRow() throws {
@@ -248,4 +242,25 @@ struct DiagSplitList: View {
 
 @Observable @MainActor final class DiagNotes {
     var notes: [NavigationDocument] = []
+}
+
+struct DiagVariantList<Row: View>: View {
+    let items: DiagNotes
+    let sections: Bool
+    let row: (NavigationDocument) -> Row
+
+    var body: some View {
+        List(selection: .constant(String?.none)) {
+            if sections {
+                ForEach(Array(items.notes.enumerated()), id: \.element.id) { index, note in
+                    Section("Section \(index)") { row(note) }
+                }
+            } else {
+                Section("Header") {
+                    ForEach(items.notes) { note in row(note) }
+                }
+            }
+        }
+        .listStyle(.inset)
+    }
 }
