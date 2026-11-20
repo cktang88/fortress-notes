@@ -2,7 +2,8 @@
 """Check the dependency cooldown (docs/dependencies.md): everything we pin was
 released at least MIN_AGE_DAYS before the commit that pinned it.
 
-* backend/uv.lock: the upload time of every sdist and wheel (recorded in the lock).
+* backend/uv.lock and tools/fortress-onenote-graph/uv.lock: the upload time of every
+  sdist and wheel (recorded in the lock).
 * tools/fortress-onenote/Cargo.lock: every crates.io version's publish time (the
   sparse index's ``pubtime``), and its checksum against the index.
 * tools/fortress-onenote/rust-toolchain.toml: the Rust release's date.
@@ -34,8 +35,11 @@ from pathlib import Path
 
 MIN_AGE_DAYS = 7
 ROOT = Path(__file__).resolve().parents[2]
-UV_LOCK = ROOT / "backend/uv.lock"
-PYPROJECT = ROOT / "backend/pyproject.toml"
+# Every uv project: (pyproject.toml, uv.lock).
+UV_PROJECTS = [
+    (ROOT / "backend/pyproject.toml", ROOT / "backend/uv.lock"),
+    (ROOT / "tools/fortress-onenote-graph/pyproject.toml", ROOT / "tools/fortress-onenote-graph/uv.lock"),
+]
 CARGO_LOCK = ROOT / "tools/fortress-onenote/Cargo.lock"
 RUST_TOOLCHAIN = ROOT / "tools/fortress-onenote/rust-toolchain.toml"
 MODEL_CONFIG = ROOT / "backend/app/config.py"
@@ -95,11 +99,17 @@ def fetch_json(url: str, **kwargs):
 
 
 def check_uv() -> None:
-    settings = tomllib.loads(PYPROJECT.read_text()).get("tool", {}).get("uv", {})
+    for pyproject, lockfile in UV_PROJECTS:
+        check_uv_project(pyproject, lockfile)
+
+
+def check_uv_project(pyproject: Path, lockfile: Path) -> None:
+    name = lockfile.relative_to(ROOT)
+    settings = tomllib.loads(pyproject.read_text()).get("tool", {}).get("uv", {})
     if not settings.get("exclude-newer"):
-        fail(f"{PYPROJECT.relative_to(ROOT)}: [tool.uv] exclude-newer is not set")
-    cutoff = cutoff_for(UV_LOCK)
-    lock = tomllib.loads(UV_LOCK.read_text())
+        fail(f"{pyproject.relative_to(ROOT)}: [tool.uv] exclude-newer is not set")
+    cutoff = cutoff_for(lockfile)
+    lock = tomllib.loads(lockfile.read_text())
     files = 0
     for package in lock["package"]:
         if "registry" not in package.get("source", {}):
@@ -109,12 +119,12 @@ def check_uv() -> None:
             files += 1
             uploaded = artifact.get("upload-time")
             if uploaded is None:
-                fail(f"uv.lock: {package['name']} {package['version']}: no upload time for "
+                fail(f"{name}: {package['name']} {package['version']}: no upload time for "
                      f"{artifact['url'].rsplit('/', 1)[-1]}")
             elif parse_time(uploaded) > cutoff:
-                fail(f"uv.lock: {package['name']} {package['version']}: "
+                fail(f"{name}: {package['name']} {package['version']}: "
                      f"{artifact['url'].rsplit('/', 1)[-1]} uploaded {uploaded}, after {cutoff:%Y-%m-%dT%H:%MZ}")
-    print(f"ok   uv.lock: {files} files of {len(lock['package'])} packages, cutoff {cutoff:%Y-%m-%d %H:%M} UTC")
+    print(f"ok   {name}: {files} files of {len(lock['package'])} packages, cutoff {cutoff:%Y-%m-%d %H:%M} UTC")
 
 
 # --- Rust (cargo) ------------------------------------------------------------------------

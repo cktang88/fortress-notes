@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs the tool with its locked dependencies (uv installs them on first use).
+here="$(cd "$(dirname "$0")" && pwd)"
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec uv run --frozen --quiet --project "$here" python -m fortress_onenote_graph "$@"

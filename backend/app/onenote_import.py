@@ -5,7 +5,9 @@ Pipeline (docs/onenote-import.md, F3):
 1. **convert** -- the Rust converter ``fortress-onenote`` (tools/fortress-onenote)
    reads the export (.zip, folder, .one, .onetoc2, .onepkg) and writes
    ``manifest.json`` + content-addressed ``assets/`` (contract:
-   tools/fortress-onenote/SCHEMA.md, format version 1).
+   tools/fortress-onenote/SCHEMA.md, format version 1). Input that is already a
+   manifest (a folder or zip from tools/fortress-onenote-graph, which downloads
+   notebooks with Microsoft Graph) skips this step (``manifest_input``).
 2. **import** -- notebooks, section groups and sections become folders
    (``sources.ensure_folder_path``, keyed by their OneNote file identities);
    every page becomes one note through ``sources.upsert_document_from_source``
@@ -78,6 +80,7 @@ import sys
 import threading
 import time
 import traceback
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -280,6 +283,64 @@ def _wait_for_converter(process: subprocess.Popen, limit: float,
                 raise OneNoteImportError(
                     f"The OneNote converter took longer than {int(limit)} s and was stopped."
                 ) from None
+
+
+# --- Ready-made manifests -----------------------------------------------------------------
+
+MAX_MANIFEST_ZIP_BYTES = 32 * 1024 ** 3
+
+
+def _is_manifest(head: bytes) -> bool:
+    # Both writers put "format" first; the importer checks the whole manifest later.
+    return f'"{MANIFEST_FORMAT}"'.encode() in head[:4096]
+
+
+def manifest_input(input_path: Path, work: Path) -> Path | None:
+    """The manifest folder for an input that is already converted, else None.
+
+    tools/fortress-onenote-graph (notebooks downloaded with Microsoft Graph) writes
+    the converter's output itself: a folder with ``manifest.json`` + ``assets/``,
+    or a zip of that. A folder is imported in place; a zip is unpacked into
+    ``work/manifest`` taking only ``manifest.json`` and ``assets/<sha256>.<ext>``
+    entries (anything else is ignored), with a size limit.
+    """
+
+    try:
+        if input_path.is_dir():
+            manifest = input_path / "manifest.json"
+            with manifest.open("rb") as handle:
+                return input_path if _is_manifest(handle.read(4096)) else None
+        if input_path.suffix.lower() != ".zip" or not zipfile.is_zipfile(input_path):
+            return None
+        with zipfile.ZipFile(input_path) as archive:
+            try:
+                with archive.open("manifest.json") as handle:
+                    if not _is_manifest(handle.read(4096)):
+                        return None
+            except KeyError:
+                return None
+            target = work / "manifest"
+            (target / "assets").mkdir(parents=True, exist_ok=True)
+            budget = MAX_MANIFEST_ZIP_BYTES
+            for info in archive.infolist():
+                name = info.filename
+                if name == "manifest.json":
+                    destination = target / "manifest.json"
+                elif name.startswith("assets/") and _ASSET_NAME_RE.match(name[len("assets/"):]):
+                    destination = target / "assets" / name[len("assets/"):]
+                else:
+                    continue
+                with archive.open(info) as source, destination.open("wb") as sink:
+                    while chunk := source.read(1024 * 1024):
+                        budget -= len(chunk)
+                        if budget < 0:
+                            raise OneNoteImportError("The manifest zip is too large to unpack.")
+                        sink.write(chunk)
+            return target
+    except FileNotFoundError:
+        return None
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise OneNoteImportError(f"The manifest could not be read: {exc}") from exc
 
 
 # --- Manifest -> source blocks -----------------------------------------------------------
@@ -1242,7 +1303,7 @@ class _Importer:
         block_store.initialize(self.db_path)
         with block_store.connection_scope(self.db_path) as connection:
             rows = connection.execute(
-                """SELECT id, title, source_external_id FROM documents
+                """SELECT id, title, source_external_id, provenance_json FROM documents
                     WHERE source_kind = ? AND deleted_at IS NULL""",
                 (SOURCE,),
             ).fetchall()
@@ -1251,6 +1312,13 @@ class _Importer:
             guid = _norm_guid(row["source_external_id"])
             if guid and "~" not in guid:
                 self.targets[guid] = _Target(row["id"], row["title"])
+            if '"link_target_id"' in (row["provenance_json"] or ""):
+                # Pages keyed by something else than their GUID (Graph downloads).
+                with contextlib.suppress(ValueError, AttributeError, TypeError):
+                    extra = json.loads(row["provenance_json"])["extra"]["onenote"]
+                    link = _norm_guid(extra.get("link_target_id"))
+                    if link:
+                        self.targets.setdefault(link, _Target(row["id"], row["title"]))
 
     def run(self) -> dict[str, Any]:
         started = time.monotonic()
@@ -1430,6 +1498,8 @@ class _Importer:
             "notebook_id": segments[0][0].removeprefix("notebook:"),
             "section_id": segments[-1][0].removeprefix("section:"),
         }
+        if link_guid and link_guid != guid:
+            onenote_extra["link_target_id"] = link_guid
         if page.get("parent_id"):
             onenote_extra["parent_page_id"] = _page_key({"id": page["parent_id"]})
         if page.get("title_derived"):
@@ -1777,14 +1847,17 @@ class ImportJobs(background.Service):
             out_dir = work / "out"
             if out_dir.exists():
                 shutil.rmtree(out_dir)
-            run_converter(input_path, out_dir, cancelled=event.is_set)
+            manifest_dir = manifest_input(input_path, work)
+            if manifest_dir is None:
+                run_converter(input_path, out_dir, cancelled=event.is_set)
+                manifest_dir = out_dir
 
             def progress(*, status: str, pages_total: int, pages_done: int, current: str | None) -> None:
                 self._update(job_id, status=status, progress={
                     "pages_total": pages_total, "pages_done": pages_done, "current": current,
                 })
 
-            result = import_manifest(out_dir, db_path=db_path, notes_path=notes_path,
+            result = import_manifest(manifest_dir, db_path=db_path, notes_path=notes_path,
                                      assets_path=assets_path, folder_id=folder_id, progress=progress,
                                      cancelled=event.is_set, ocr=self.ocr)
             result["duration_ms"] = int((time.monotonic() - started) * 1000)

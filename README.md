@@ -181,17 +181,33 @@ macOS binary (artifact `fortress-onenote-macos-universal`).
 
 ## Importing from OneNote
 
-No Microsoft sign-in is involved: you export the notebooks as files and import those.
+OneNote for the web no longer offers *Export notebook* (2026), OneDrive doesn't
+download notebooks, and OneNote for Mac only saves PDFs. So there are two routes:
 
-1. In a browser, open **onenote.com/notebooks**, right-click a notebook and choose
-   **Export notebook**. A `.zip` downloads. If there is no *Export notebook* item, open
-   **onedrive.com**, select the notebook (or the folder holding your notebooks) and click
-   **Download**. On Windows, OneNote's *File › Export › Notebook › OneNote Package*
-   (`.onepkg`) works too.
-2. Unlock password-protected sections in OneNote before exporting; locked sections are
-   skipped and listed in the report.
-3. In Fortress: **File › Import › From OneNote…** (or ⇧⌘O "Import from OneNote…"), drop
-   the `.zip`, `.onepkg` or `.one` file, and choose where the notebooks go.
+- **Windows (best fidelity):** OneNote for Windows › *File › Export › Notebook ›
+  OneNote Package (.onepkg)* (or a section as `.one`). Unlock password-protected
+  sections first. Copy the file to the Mac.
+- **Mac (or no Windows PC):** download the notebooks with Microsoft Graph using the
+  optional tool [`tools/fortress-onenote-graph`](tools/fortress-onenote-graph/README.md).
+  Register a free app in Microsoft Entra once (five minutes, steps in the tool's
+  README), then:
+
+  ```sh
+  cd tools/fortress-onenote-graph
+  export FORTRESS_ONENOTE_CLIENT_ID=<your app's client id>
+  ./fortress-onenote-graph download --out ~/Desktop/OneNote.zip
+  ```
+
+  Microsoft limits reads to 400 requests an hour, so a large first download takes a
+  while (roughly an hour per 200–400 pages); it can be interrupted and resumed, and
+  later runs fetch only changed pages. Graph loses some things the `.one` route keeps:
+  ink/handwriting, equations (kept as text in a code block), custom note tags, section
+  order and colours (full list in the tool's README). Fortress itself never signs in to
+  Microsoft.
+
+Then in Fortress: **File › Import › From OneNote…** (or ⇧⌘O "Import from OneNote…"),
+drop the `.onepkg`, `.one` or `.zip` (the Graph tool's zip is imported as it is, without
+the converter), and choose where the notebooks go.
 
 Notebooks, section groups and sections become folders; pages become notes (subpages
 stay next to their parent, which gets a *Subpages* list). The report lists counts per

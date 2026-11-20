@@ -1,6 +1,19 @@
 # OneNote -> Fortress Notes migration research (Nov 2026)
 
-STATUS: complete, and built. The file-based route (F1–F5) is what shipped:
+STATUS (Nov 20 2026): two routes are built. **Update:** OneNote for the web's
+*Export notebook* is gone (2026) and OneDrive won't download notebooks, so on a Mac
+the file route has no input any more. The **Graph route** is now built as an
+optional, standalone tool: [`tools/fortress-onenote-graph`](../tools/fortress-onenote-graph/README.md)
+downloads notebooks with Microsoft Graph (§2a below: delegated MSAL sign-in with
+the user's own Entra app registration, read-only scopes, self-paced under the
+throttling limits, resumable cache, re-runs fetch only changed pages) and writes
+the same manifest the converter writes, which the importer takes as is (spec.md
+§7b "Ready-made manifests"). Not requested: `includeInkML` (Fortress dropped ink and
+math); MathML is kept as text in a code block. The earlier "no Graph" decision
+(below) predates the export's removal. On Windows, `.onepkg` stays the most complete
+route.
+
+The file-based route (F1–F5) shipped first:
 `tools/fortress-onenote` (Rust converter, manifest format in
 [SCHEMA.md](../tools/fortress-onenote/SCHEMA.md)) → `backend/app/onenote_import.py` →
 File › Import › From OneNote… in the Mac app. **The behaviour as implemented is
@@ -88,7 +101,7 @@ The Graph material above is kept only as background (it documents what the HTML 
 ---------------------------------------------------------------------
 
 ## F1. Getting notebooks out as files (Mac user, personal OneDrive) — verified Nov 2026 (in progress)
-1. **OneNote for the web -> "Export notebook"** (Microsoft's official route; personal OneDrive only). onenote.com/notebooks -> right-click notebook -> *Export notebook* -> pop-up shows size -> *Export* -> downloads a **.zip containing a folder named after the notebook** with the notebook's OneNote files (`.one` per section, `.onetoc2`, section-group subfolders). If the zip contains only `errors.txt`, the export failed (open it for details). Large notebooks can fail with "too large to export" -> split the notebook. "Import" of such zips back into OneNote is deprecated. ([Microsoft Support: Export OneNote notebooks](https://support.microsoft.com/en-us/onenote/export-and-import-onenote-notebooks)). Some users report the menu item missing for some account/subscription types ([MS Q&A](https://learn.microsoft.com/en-us/answers/questions/5424986/how-do-i-export-my-entire-onenote); [Outline help](https://help.outline.app/article/150-how-to-export-notebook-from-onedrive)).
+1. **OneNote for the web -> "Export notebook"** (Microsoft's official route; personal OneDrive only; **removed in 2026** — use the Graph tool instead). onenote.com/notebooks -> right-click notebook -> *Export notebook* -> pop-up shows size -> *Export* -> downloads a **.zip containing a folder named after the notebook** with the notebook's OneNote files (`.one` per section, `.onetoc2`, section-group subfolders). If the zip contains only `errors.txt`, the export failed (open it for details). Large notebooks can fail with "too large to export" -> split the notebook. "Import" of such zips back into OneNote is deprecated. ([Microsoft Support: Export OneNote notebooks](https://support.microsoft.com/en-us/onenote/export-and-import-onenote-notebooks)). Some users report the menu item missing for some account/subscription types ([MS Q&A](https://learn.microsoft.com/en-us/answers/questions/5424986/how-do-i-export-my-entire-onenote); [Outline help](https://help.outline.app/article/150-how-to-export-notebook-from-onedrive)).
 2. **OneDrive web -> select the notebook (or its parent folder, e.g. Documents) -> Download** -> .zip of the same folder structure (`.one` + `.onetoc2`). This is what Joplin documents (Joplin ≥3.5.1: "OneNote Web -> Show all notebooks (opens OneDrive) -> My files -> download the folder containing your notebooks as a ZIP"; "may not work for notebooks larger than 2–4 GB") ([Joplin import/export help](https://joplinapp.org/help/apps/import_export)). These .one files are in the **cloud/FSSHTTP "package store" format**, not the classic desktop revision-store format — the parser must support it (onenote.rs and Obsidian's TS parser both do).
 3. **OneNote for Windows (Microsoft 365 / 2016 / 2021) -> File -> Export -> Notebook -> OneNote Package (*.onepkg)** or Section -> `*.one`. Needs a Windows machine (or Parallels/UTM VM). `.onepkg` is a **Microsoft Cabinet (CAB, LZX/MSZIP-compressed) archive** of the `.one`/`.onetoc2` files in *classic desktop revision-store format*. The Store "OneNote for Windows 10" app and OneNote for Mac cannot export these formats ([Obsidian help](https://obsidian.md/help/import/onenote); Joplin help). Joplin only imports .onepkg on Windows (it relies on the OS to unpack the CAB).
 4. **OneNote for Mac**: only per-page/section **PDF** export (File -> Save as PDF). Useless for structured import (lossy, no structure) — not recommended. The Mac app keeps notebooks in a private cache, not as .one files.

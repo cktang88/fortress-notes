@@ -1,0 +1,21 @@
+[project]
+name = "fortress-onenote-graph"
+version = "0.1.0"
+description = "Optional: download OneNote notebooks with Microsoft Graph and write a fortress-onenote manifest"
+requires-python = ">=3.11"
+# Only the sign-in needs third-party code: MSAL (Microsoft's auth library) and
+# msal-extensions (its token-cache persistence: macOS Keychain, else a file).
+# Graph requests, HTML parsing and the manifest use the standard library.
+dependencies = [
+    "msal>=1.34.0",
+    "msal-extensions>=1.3.1",
+]
+
+[tool.uv]
+# Not built or installed: run `./fortress-onenote-graph` (uv run python -m
+# fortress_onenote_graph), so no unpinned build backend is ever downloaded.
+package = false
+# Supply-chain cooldown (docs/dependencies.md): never a file uploaded in the last 7 days;
+# install with `uv sync --frozen`. Checked in CI by .github/scripts/check_cooldown.py.
+required-version = ">=0.11.8"
+exclude-newer = "7 days"
