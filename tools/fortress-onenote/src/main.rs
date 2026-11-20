@@ -9,7 +9,6 @@ mod input;
 mod layout;
 mod links;
 mod manifest;
-mod objectids;
 mod richtext;
 
 use anyhow::{Context, Result, bail};

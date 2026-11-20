@@ -119,6 +119,15 @@ went. A damaged ink container no longer drops its outline item or paragraph
 `lib.rs`, `onenote/{ink,content,page_content,rich_text,page,page_series,section,mod}.rs`,
 `one/property_set/mod.rs`, `one/property/{mod,simple}.rs`, `shared/mod.rs`.
 
+**P11 — object ids.** `RichText`, `Table`, `Image`, `EmbeddedFile` and
+`OutlineElement` keep the extended GUID they were parsed from and return it
+from `id()`; `ExGuid` is exported as `onenote_parser::contents::ExGuid`
+(public `guid`, whose `Display` is `{GUID}` in upper case, and `value`). The
+converter writes them as block `object_id` / `element_id`; before this it
+recovered them by matching the text of `Parser::dump_onestore` against the
+content. Files: `lib.rs`, `fsshttpb/data/exguid.rs`,
+`onenote/{rich_text,table,image,embedded_file,outline}.rs`.
+
 ## cab 0.6.0
 
 **C1 — no panic on corrupt cabinets.** In `folder.rs`, a file offset beyond

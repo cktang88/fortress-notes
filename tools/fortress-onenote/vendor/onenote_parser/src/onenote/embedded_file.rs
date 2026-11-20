@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P11).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::file_type::FileType;
@@ -15,6 +16,8 @@ use crate::onestore::shared::file_blob::{FileBlob, FileDataStatus};
 /// [\[MS-ONE\] 2.2.32]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/a665b5ad-ff40-4c0c-9e42-4b707254dc3f
 #[derive(Clone, PartialEq, Debug)]
 pub struct EmbeddedFile {
+    /// PATCH(fortress-onenote, P11)
+    pub(crate) id: ExGuid,
     pub(crate) filename: String,
     pub(crate) file_type: FileType,
     pub(crate) data: FileBlob,
@@ -30,6 +33,12 @@ pub struct EmbeddedFile {
 }
 
 impl EmbeddedFile {
+    /// PATCH(fortress-onenote, P11): the object's id (extended GUID), stable
+    /// across revisions of the object.
+    pub fn id(&self) -> ExGuid {
+        self.id
+    }
+
     /// The embedded file's original file name.
     ///
     /// See [\[MS-ONE\] 2.2.71].
@@ -166,6 +175,7 @@ pub(crate) fn parse_embedded_file(
     // Helper function to create a fallback for corrupted files
     let create_fallback = |filename: String| -> Result<EmbeddedFile> {
         Ok(EmbeddedFile {
+            id: file_id,
             filename,
             file_type: node.file_type,
             data: FileBlob::missing(),
@@ -207,6 +217,7 @@ pub(crate) fn parse_embedded_file(
     let container = embedded_file_container::parse(container_object)?;
 
     let file = EmbeddedFile {
+        id: file_id,
         filename: embedded_filename,
         file_type: node.file_type,
         data: container.into_value(),

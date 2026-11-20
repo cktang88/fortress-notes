@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P6, P9, P10).
+// Modified by fortress-onenote (vendor/PATCHES.md: P6, P9, P10, P11).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::charset::Charset;
@@ -33,6 +33,8 @@ use itertools::Itertools;
 /// substring.
 #[derive(Clone, Debug)]
 pub struct RichText {
+    /// PATCH(fortress-onenote, P11)
+    pub(crate) id: ExGuid,
     pub(crate) text: String,
 
     pub(crate) text_run_formatting: Vec<ParagraphStyling>,
@@ -82,6 +84,12 @@ impl TextHyperlink {
 }
 
 impl RichText {
+    /// PATCH(fortress-onenote, P11): the object's id (extended GUID), stable
+    /// across revisions of the object.
+    pub fn id(&self) -> ExGuid {
+        self.id
+    }
+
     /// The paragraph text content.
     pub fn text(&self) -> &str {
         &self.text
@@ -607,6 +615,7 @@ pub(crate) fn parse_rich_text(
     fix_leading_vt_misalignment(&mut text, &mut text_run_indices, &mut styles);
 
     let text = RichText {
+        id: content_id,
         text,
         embedded_objects,
         text_run_formatting: styles,

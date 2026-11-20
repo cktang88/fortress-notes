@@ -522,15 +522,12 @@ fn converts_real_samples_when_configured() {
         total_pages += pages;
     }
     assert!(total_pages > 0);
-    // Stable object ids are derived for most text blocks (see objectids.rs).
+    // Text blocks carry the parser's object ids (SCHEMA.md, Object ids).
     eprintln!("object ids on {} of {} text blocks", coverage.1, coverage.0);
-    if coverage.0 > 20 {
-        assert!(
-            coverage.1 * 2 > coverage.0,
-            "object ids on only {} of {} text blocks",
-            coverage.1,
-            coverage.0
-        );
-    }
+    assert_eq!(
+        coverage.1, coverage.0,
+        "object ids on only {} of {} text blocks",
+        coverage.1, coverage.0
+    );
     fs::remove_dir_all(&base).unwrap();
 }

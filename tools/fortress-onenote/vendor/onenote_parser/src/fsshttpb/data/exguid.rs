@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P11).
 use crate::Reader;
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::compact_u64::CompactU64;
@@ -12,7 +13,9 @@ use std::ops::BitXor;
 /// [\[MS-FSSHTTPB\] 2.2.1.7]: https://docs.microsoft.com/en-us/openspecs/sharepoint_protocols/ms-fsshttpb/bff58e9f-8222-4fbb-b112-5826d5febedd
 #[derive(Clone, Copy, PartialEq, Hash, Eq)]
 pub struct ExGuid {
+    /// The GUID; `Display` prints it as `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
     pub guid: Guid,
+    /// The counter that tells apart ids allocated from the same GUID.
     pub value: u32,
 }
 

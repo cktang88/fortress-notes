@@ -272,28 +272,23 @@ a new revision of the same object). Paragraph links use it:
 `{GUID}&N` — upper-case GUID with braces, `&`, `N` in upper-case hexadecimal
 without leading zeros. Compare as strings.
 
-`onenote_parser` 2.1 resolves these ids internally but does not expose them
-on its content types, so the converter reads them from the parser's public
-`Parser::dump_onestore` view (`src/objectids.rs`; the crate version is pinned
-with `=` in `Cargo.toml` because that text format is not a stable API) and
-matches them to the converted content per page:
+The converter takes them from the parser (`id()` of rich text, tables,
+images, attachments and outline elements, added by vendor patch P11):
 
-| field | how it is found |
+| field | value |
 |---|---|
-| `object_id` of rich text (paragraph, heading, list/check item, quote, code) | the page's `RichTextNode` whose text equals the paragraph text (whitespace-normalised), when exactly one does |
-| `object_id` of a file / image | the `EmbeddedFileNode` / `ImageNode` with that file name / alt text (or file name), else the page's only one |
-| `object_id` of a table | the page's only `TableNode` with that row and column count |
-| `element_id` | the `OutlineElementNode` OneNote created with the content: same GUID and last-modified time; within such a group, elements and content nodes pair up in counter order (or by counter `n − 1` when the numbers differ) |
+| `object_id` | the content node itself: `RichTextNode` (paragraph, heading, list/check item, quote, code), `TableNode`, `ImageNode`, `EmbeddedFileNode` |
+| `element_id` | the outline element (paragraph) whose contents hold that node; omitted for floating images and files, which sit on the page outside any outline |
 
-Anything ambiguous (two paragraphs with identical text on a page, a merged
-code block's later lines, the second embed of one picture) gets no id, and an
-id is never given to two blocks of a page. Table cells and items have no ids
-(their blocks do). Sections inside a `.onepkg` are unpacked first and get ids like
-any other.
-On the public samples about 90 % of text blocks get an `object_id`, and
-the ids are identical across two downloads of the same section. Importers
-must fall back to their own keys (e.g. a content hash) when a block has no
-`object_id`.
+An id is never given to two blocks of a page (the second embed of one
+picture gets none), and a merged code block carries the id of its first
+paragraph. Table cells and items have no ids (their blocks do). Sections
+inside a `.onepkg` are unpacked first and get ids like any other. Converters
+before 0.3.1 matched ids heuristically from the parser's debug dump, so
+blocks with ambiguous content had none and some `element_id`s (mostly in
+files written by third-party tools) named a neighbouring element; importers
+should still fall back to their own keys (e.g. a content hash) when a block
+has no `object_id`.
 
 ## Reports
 

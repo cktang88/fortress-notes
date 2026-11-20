@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P11).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::layout_alignment::LayoutAlignment;
@@ -16,6 +17,8 @@ use crate::onestore::shared::file_blob::{FileBlob, FileDataStatus};
 /// [\[MS-ONE\] 2.2.24]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/b7bb4d1a-2a57-4819-9eb4-5a2ce8cf210f
 #[derive(Clone, PartialEq, Debug)]
 pub struct Image {
+    /// PATCH(fortress-onenote, P11)
+    pub(crate) id: ExGuid,
     pub(crate) data: Option<FileBlob>,
     pub(crate) extension: Option<String>,
     pub(crate) web_picture: Option<Picture>,
@@ -52,6 +55,12 @@ pub struct Image {
 }
 
 impl Image {
+    /// PATCH(fortress-onenote, P11): the object's id (extended GUID), stable
+    /// across revisions of the object.
+    pub fn id(&self) -> ExGuid {
+        self.id
+    }
+
     /// A [`Read`] over the image's binary data.
     ///
     /// Bytes are pulled lazily from the underlying [`crate::fs::FileSource`].
@@ -290,6 +299,7 @@ pub(crate) fn parse_image(
         .collect::<Result<_>>()?;
 
     let image = Image {
+        id: image_id,
         data,
         extension,
         web_picture,

@@ -48,12 +48,10 @@ one JSON summary line is printed to stdout; see SCHEMA.md for exit codes.
   get a warning in the report. Ink drawings are skipped (Fortress has no ink)
   and counted in the report, with a warning per page.
 - Blocks carry OneNote's own object ids (`object_id`, `element_id`: ExGUIDs
-  that survive edits) where they can be matched unambiguously, and paragraph
-  links carry their target id (`onenote.object_ref`), so an importer can
-  update edited paragraphs in place and link to the exact paragraph.
-  `onenote_parser` does not expose these ids on its content types; they are
-  read from its `dump_onestore` view (`src/objectids.rs`, SCHEMA.md
-  "Object ids"), which is why the crate is pinned to an exact version.
+  that survive edits), and paragraph links carry their target id
+  (`onenote.object_ref`), so an importer can update edited paragraphs in
+  place and link to the exact paragraph. The vendored parser exposes the ids
+  (vendor patch P11; SCHEMA.md "Object ids").
 
 ## Locating the binary (for the importer)
 

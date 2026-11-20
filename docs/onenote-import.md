@@ -178,7 +178,7 @@ is specified in [tools/fortress-onenote/SCHEMA.md](../tools/fortress-onenote/SCH
 usage and tests in [its README](../tools/fortress-onenote/README.md).
 
 ### Python side: `backend/app/onenote_import.py` + `POST /api/import/onenote` (upload zip/onepkg; job id; progress via polling)
-**Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, two-pass link rewrite) and the job API. Update (Nov 2026): blocks are keyed by OneNote object ids (ExGUIDs, stable across edits; `onenote_parser` 2.1 keeps them internal, so the converter reads them from `Parser::dump_onestore` and matches them to content — tools/fortress-onenote/SCHEMA.md "Object ids"), paragraph links become block references, pages deleted in OneNote are marked `source_removed`, jobs persist/cancel, and each page gets a text-coverage check.
+**Built** (Nov 2026): see spec.md §7b for the mapping as implemented (subpages as a "Subpages" link list on the parent, two-pass link rewrite) and the job API. Update (Nov 2026): blocks are keyed by OneNote object ids (ExGUIDs, stable across edits; the vendored `onenote_parser` exposes them — tools/fortress-onenote/SCHEMA.md "Object ids"), paragraph links become block references, pages deleted in OneNote are marked `source_removed`, jobs persist/cancel, and each page gets a text-coverage check.
 Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff against mapping table) → apply in one transaction per page (existing block transaction machinery) → second pass link rewrite → report.
 
 **Mapping** (as built; the authoritative list is spec.md §7b)

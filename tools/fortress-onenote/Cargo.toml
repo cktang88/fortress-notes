@@ -9,8 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.104"
 hex = "0.4.3"
-# Pinned exactly: src/objectids.rs reads its `dump_onestore` text (see SCHEMA.md, Object ids).
-onenote_parser = "=2.1.0"
+onenote_parser = "2.1.0"
 # .onepkg packages are CAB archives; we extract them ourselves (src/input.rs).
 cab = "=0.6.0"
 percent-encoding = "2.3.2"
