@@ -179,7 +179,7 @@ private func fixtureData(_ name: String) throws -> Data {
     #expect(BackendController.exitMessage(status: 1).contains("Show Log"))
 }
 
-@Test func showsTheReasonTheBackendGaveForNotStarting() {
+@MainActor @Test func showsTheReasonTheBackendGaveForNotStarting() {
     let log = """
     --- 2026-11-20T10:00:00Z starting backend ---
     Fortress can't start: an earlier start
