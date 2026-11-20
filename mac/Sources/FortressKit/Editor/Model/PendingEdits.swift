@@ -128,7 +128,7 @@ public enum PendingEdits {
                 let node = Node(BlockNode(
                     id: id, parentId: parent === root ? nil : parent.block.id, type: operation.type ?? "paragraph",
                     attrs: (operation.attrs ?? [:]).filter { $0.value != .null }, content: operation.content ?? .null,
-                    payload: operation.payload, provenance: operation.provenance))
+                    payload: operation.payload))
                 parent.children.insert(node, at: min(max(0, at), parent.children.count))
                 parentOf[id] = parent
                 byId[id] = node

@@ -105,7 +105,7 @@ enum DocumentText {
         let string = text.nsString
         var block = EditorBlock(id: info.id, kind: info.kind, depth: info.depth, checked: info.checked,
                                 language: info.language, origin: info.origin?.origin,
-                                newProvenance: info.newProvenance, container: info.kind == .quote ? info.container : nil)
+                                container: info.kind == .quote ? info.container : nil)
         var content = paragraph
         if content.length > 0, string.character(at: NSMaxRange(content) - 1) == 0x0A { content.length -= 1 }
         if info.kind.hasInlineText {

@@ -18,8 +18,7 @@ enum RichPage {
                      payload: JSONValue? = nil, text: String = "", children: [BlockNode] = []) -> BlockNode {
         BlockNode(id: id, documentId: "01M7ONENOTEPAGE00000000000", type: type, attrs: attrs,
                   content: content.map(JSONValue.array) ?? .null, payload: payload, text: text,
-                  createdAt: "2024-03-11T09:00:00+00:00", updatedAt: "2026-11-16T09:00:00+00:00", children: children,
-                  provenance: .object(["source": .string("onenote_import"), "source_path": .string("Lab › Week 12 › Titration")]))
+                  createdAt: "2024-03-11T09:00:00+00:00", updatedAt: "2026-11-16T09:00:00+00:00", children: children)
     }
 
     static func paragraph(_ id: String, _ runs: [JSONValue], type: String = "paragraph", attrs: [String: JSONValue] = [:]) -> BlockNode {

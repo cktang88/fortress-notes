@@ -16,10 +16,6 @@ enum NodeSource: Hashable, Sendable {
         }
     }
 
-    var newProvenance: JSONValue? {
-        if case .block(let block) = self { return block.newProvenance }
-        return nil
-    }
 }
 
 /// What the server holds for the blocks the editor shows: the tree shape and each
@@ -495,8 +491,7 @@ public enum BlockDiff {
                 var insert = BlockOperation(
                     operation: .insert, blockId: id, type: fields.type,
                     attrs: fields.attrs.filter { $0.value != .null },
-                    content: fields.content == .null ? nil : fields.content, payload: fields.payload,
-                    provenance: result.sources[id]?.newProvenance)
+                    content: fields.content == .null ? nil : fields.content, payload: fields.payload)
                 if insert.attrs?.isEmpty == true { insert.attrs = nil }
                 insert = placed(insert, position: position, siblings: children[targetParent] ?? [], parent: targetParent ?? root)
                 operations.append(insert)

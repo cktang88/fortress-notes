@@ -172,7 +172,6 @@ extension UndoHarness {
         #expect(Array(afterDuplicate.map(\.id)[0..<4]) == ["h", "p1", "b1", "b2"])
         #expect(afterDuplicate[4].plainText == "Item one" && afterDuplicate[5].plainText == "Child" && afterDuplicate[5].depth == 1)
         #expect(!["b1", "b2"].contains(afterDuplicate[4].id))
-        #expect(afterDuplicate[4].newProvenance?["origin"]?["operation"]?.stringValue == "duplicate")
         #expect(harness.operations(from: start).filter { $0.operation == .insert }.count == 2)
         // Move Down past the copy (a sibling with its child), then back up.
         script.step("Move") { harness.choose(harness.blockMenu("b1"), "Move Down") }
