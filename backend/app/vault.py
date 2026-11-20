@@ -41,6 +41,10 @@ FORMAT_VERSION = 2
 # refuses in note names because links use them (# ^ [ ] |).
 _UNSAFE_NAME = re.compile(r'[\\/:*?"<>|#^\[\]\x00-\x1f\x7f]+')
 _NAME_LIMIT = 100
+# File systems limit a name to 255 bytes (UTF-8 on APFS and ext4), not characters:
+# 100 CJK characters or emoji are 300-400 bytes. Room is left for " 12", ".md"
+# and the temporary name a mirror is written under (".<name>.md.XXXXXXXX").
+_NAME_BYTES = 200
 # Top-level names the vault itself uses.
 RESERVED_TOP_LEVEL = frozenset({"assets"})
 
@@ -49,7 +53,10 @@ def file_stem(name: str, fallback: str = "Untitled") -> str:
     """A note or folder name as a file name that every OS and Obsidian accept."""
 
     cleaned = " ".join(_UNSAFE_NAME.sub(" ", name).split()).strip(". ")
-    cleaned = cleaned[:_NAME_LIMIT].rstrip(". ")
+    cleaned = cleaned[:_NAME_LIMIT]
+    while len(cleaned.encode("utf-8")) > _NAME_BYTES:
+        cleaned = cleaned[:-1]
+    cleaned = cleaned.rstrip(". ")
     return cleaned or fallback
 
 
