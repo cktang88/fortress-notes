@@ -24,6 +24,7 @@ public struct ShellCommands: Commands {
     // The list's Sort and Group menu, also in View (HIG: toolbar items are in the menu bar).
     @AppStorage("noteSort") private var sort: NoteSort = .edited
     @AppStorage("groupByDate") private var groupsByDate = true
+    @AppStorage(BlockOutlines.key) private var showsBlocks = false
 
     public init(library: Library) {
         self.library = library
@@ -94,6 +95,8 @@ public struct ShellCommands: Commands {
             }
             .keyboardShortcut(Shortcuts.focusMode)
             .disabled(model == nil)
+            Toggle(Shortcuts.showBlocks.title, isOn: $showsBlocks)
+                .keyboardShortcut(Shortcuts.showBlocks)
             Divider()
             Picker("Sort By", selection: $sort) {
                 ForEach(NoteSort.allCases) { Text($0.label).tag($0) }
@@ -188,11 +191,34 @@ struct FormatCommands: Commands {
                 item(Shortcuts.moveBlockUp, "fortressMoveBlockUp:")
                 item(Shortcuts.moveBlockDown, "fortressMoveBlockDown:")
             }
+            // What the block handle's menu does, for the keyboard (Esc selects a block).
+            Menu("Block") {
+                plain("Select Block", "fortressSelectBlock:")
+                plain("Insert Block…", "fortressInsertBlock:")
+                item(Shortcuts.duplicateBlock, "fortressDuplicateBlock:")
+                plain("Delete Block", "fortressDeleteBlock:")
+                plain("Copy Link to Block", "fortressCopyBlockLink:")
+                Divider()
+                plain("Turn into 2 Columns", "fortressTurnIntoTwoColumns:")
+                plain("Turn into 3 Columns", "fortressTurnIntoThreeColumns:")
+                plain("Add Column", "fortressAddColumn:")
+                plain("Remove Column", "fortressRemoveColumn:")
+                plain("Unwrap Columns", "fortressUnwrapColumns:")
+                Divider()
+                plain("Edit Math…", "fortressEditMath:")
+                plain("Block Info", "fortressBlockInfo:")
+            }
+            .disabled(!isEnabled)
             Divider()
             item(Shortcuts.addLink, "fortressAddLink:")
             Button("Insert Table") { send("fortressInsertTable:") }
                 .disabled(!isEnabled)
         }
+    }
+
+    private func plain(_ title: LocalizedStringKey, _ selector: String) -> some View {
+        Button(title) { send(selector) }
+            .disabled(!isEnabled)
     }
 
     private func item(_ shortcut: AppShortcut, _ selector: String) -> some View {

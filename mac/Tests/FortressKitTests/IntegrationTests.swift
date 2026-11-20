@@ -259,6 +259,111 @@ struct IntegrationTests {
         try await api.trashDocument(id: created.id)
     }
 
+    /// The block tools save what the editor shows: Turn Into (heading, callout), Duplicate,
+    /// Move, columns made from selected blocks, a column added, a block dragged into a
+    /// column and out again, columns unwrapped, a table from the `/` menu, Delete. Each is
+    /// saved by the session's diff and compared with the server's note (ids included);
+    /// then all are undone and redone, saving and comparing after each.
+    @Test func blockToolsSaveWhatTheEditorShows() async throws {
+        let api = client(APIStore.Options())
+        let created = try await api.createDocument(title: "Block tools round trip")
+        let session = EditorSession(documentId: created.id, api: api)
+        session.persistsPendingEdits = false
+        session.saveDelay = .milliseconds(1)
+        await session.load()
+        let harness = UndoHarness([])
+        let controller = harness.controller
+        controller.load(session.initialBlocks)
+        session.resetBase(to: controller.currentBlocks())
+        session.currentBlocks = { controller.currentBlocks() }
+        controller.onChange = { session.textDidChange() }
+        controller.noteReference = { (id: created.id, title: "Block tools round trip") }
+        harness.window.makeFirstResponder(controller.textView)
+
+        func saveAndCompare(_ label: String) async throws {
+            for _ in 0..<100 {
+                await session.flush()
+                if !session.hasUnsavedChanges { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(session.saveState == .saved, "\(label): \(session.saveState)")
+            let server = try await api.reloadDocument(id: created.id)
+            let stored = BlockCodec.flatten(server.children, resolved: server.resolvedLinks)
+            let shown = controller.currentBlocks()
+            let missing = BlockDiff.operations(from: SyncedTree(stored), to: shown).operations
+            #expect(missing.isEmpty, "\(label): the server lacks \(missing.map { "\($0.operation) \($0.type ?? "") \($0.blockId ?? "")" })")
+            #expect(stored.map(\.id) == shown.map(\.id), "\(label): block ids")
+        }
+        var steps = 0
+        func edit(_ label: String, _ body: () throws -> Void) async throws {
+            try body()
+            harness.layout()
+            steps += 1
+            try await saveAndCompare(label)
+        }
+        func id(_ text: String) throws -> String {
+            try #require(controller.currentBlocks().first { $0.plainText == text }?.id, "a block reading \(text)")
+        }
+        try await edit("paste") { harness.paste("Plans\nFirst\nSecond\nThird") }
+        let plans = try id("Plans"), first = try id("First"), second = try id("Second"), third = try id("Third")
+        try await edit("heading") { harness.choose(harness.blockMenu(plans), "Turn Into", "Heading 1") }
+        try await edit("callout") { harness.choose(harness.blockMenu(first), "Turn Into", "Callout") }
+        try await edit("duplicate") { harness.choose(harness.blockMenu(second), "Duplicate") }
+        try await edit("move up") { harness.choose(harness.blockMenu(third), "Move Up") }
+        try await edit("columns") {
+            controller.endBlockSelection(caret: nil)
+            controller.selectBlocks(anchor: second, head: second)
+            harness.command(#selector(NSResponder.moveDownAndModifySelection(_:)))
+            harness.send("fortressTurnIntoTwoColumns:")
+        }
+        try await edit("add column") { harness.send("fortressAddColumn:") }
+        try await edit("drag into a column") {
+            let live = try #require(harness.live(ColumnsBlockController.self))
+            let column = live.editors[0]
+            let frame = column.selectionFrame(column.paragraph(at: 0))
+            let point = controller.textView.convert(CGPoint(x: frame.minX + 10, y: frame.maxY - 2), from: column.textView)
+            let drag = BlockDrag(source: controller, firstId: plans, lastId: plans, startX: 0)
+            #expect(controller.dropBlocks(drag, at: point))
+        }
+        try await edit("drag out of a column") {
+            let live = try #require(harness.live(ColumnsBlockController.self))
+            let column = try #require(live.editors.first { $0.range(ofBlock: plans) != nil })
+            let drag = BlockDrag(source: column, firstId: plans, lastId: plans, startX: 0)
+            #expect(controller.dropBlocks(drag, at: harness.point(onBlock: controller.currentBlocks()[0].id)))
+        }
+        try await edit("unwrap") {
+            let columns = try #require(controller.currentBlocks().first { $0.kind == .columns }?.id)
+            controller.selectBlocks(anchor: columns, head: columns)
+            harness.send("fortressUnwrapColumns:")
+        }
+        try await edit("slash table") {
+            controller.endBlockSelection(caret: nil)
+            let last = try #require(controller.range(ofBlock: controller.currentBlocks().last!.id))
+            harness.select(NSRange(location: NSMaxRange(last) - 1, length: 0))
+            harness.command(#selector(NSResponder.insertNewline(_:)))
+            harness.type("/table 2x2")
+            harness.command(#selector(NSResponder.insertNewline(_:)))
+        }
+        steps += 2  // Return and the typed "/table 2x2" are steps of their own
+        try await edit("delete") { harness.choose(harness.blockMenu(third), "Delete") }
+        let final = controller.currentBlocks()
+        #expect(final.contains { $0.kind == .table })
+        #expect(final.contains { $0.kind == .quote && $0.container?.type == "callout" })
+
+        controller.endBlockSelection(caret: nil)
+        for index in 0..<steps {
+            harness.undo()
+            try await saveAndCompare("undo \(index + 1)")
+        }
+        #expect(controller.currentBlocks().isEmpty || controller.currentBlocks().allSatisfy { $0.plainText.isEmpty })
+        for index in 0..<steps {
+            harness.redo()
+            try await saveAndCompare("redo \(index + 1)")
+        }
+        #expect(controller.currentBlocks() == final, "redone to the end")
+        try await api.trashDocument(id: created.id)
+    }
+
     /// Rename then reopen: the save's answer is the note, so reopening is free.
     @Test func saveThenReopen() async throws {
         var counts: [String: Int] = [:]

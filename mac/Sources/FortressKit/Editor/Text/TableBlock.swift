@@ -1005,7 +1005,28 @@ final class CellTextView: NSTextView {
     @objc(redo:) func redoNoteEdit(_ sender: Any?) { NoteUndoActions.redo(noteStack, from: self) }
 
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        NoteUndoActions.validate(menuItem, noteStack) ?? super.validateMenuItem(menuItem)
+        if let undo = NoteUndoActions.validate(menuItem, noteStack) { return undo }
+        // Find and Print are the note's (NotePrinting.swift).
+        if [#selector(performTextFinderAction(_:)), #selector(performFindPanelAction(_:)), #selector(NSView.printView(_:))]
+            .contains(menuItem.action), enclosingNoteTextView != nil {
+            return true
+        }
+        return super.validateMenuItem(menuItem)
+    }
+
+    // Find in a cell searches the note, in the note's find bar (not the cell alone).
+    override func performTextFinderAction(_ sender: Any?) {
+        if !forwardFindToNote(sender, panel: false) { super.performTextFinderAction(sender) }
+    }
+
+    override func performFindPanelAction(_ sender: Any?) {
+        if !forwardFindToNote(sender, panel: true) { super.performFindPanelAction(sender) }
+    }
+
+    /// File ▸ Print…: the whole note, not this cell.
+    override func printView(_ sender: Any?) {
+        guard let note = enclosingNoteTextView?.controller else { return super.printView(sender) }
+        note.printNote()
     }
 
     static func make() -> CellTextView {

@@ -94,6 +94,10 @@ public enum Shortcuts {
     public static let outdent = AppShortcut("Outdent", "[")
     public static let moveBlockUp = AppShortcut("Move Up", .upArrow, [.control, .command])
     public static let moveBlockDown = AppShortcut("Move Down", .downArrow, [.control, .command])
+    /// Duplicates the selected blocks (the HIG's Duplicate, for blocks; Notion's ⌘D too).
+    public static let duplicateBlock = AppShortcut("Duplicate", "d")
+    // View
+    public static let showBlocks = AppShortcut("Show Blocks", "b", [.option, .command])
 
     /// The app's own shortcuts (Quick Capture's global one is configurable and separate).
     public static let all: [AppShortcut] = [
@@ -101,7 +105,7 @@ public enum Shortcuts {
         commandPalette, askNotes, reloadNotes, moveToTrash, allNotes, rough, polished, recent,
         bold, italic, underline, strikethrough, inlineCode, highlight, superscript, `subscript`, addLink,
         body, heading1, heading2, heading3, bulletedList, numberedList, checklist, quote, codeBlock,
-        toggleCheckbox, indent, outdent, moveBlockUp, moveBlockDown,
+        toggleCheckbox, indent, outdent, moveBlockUp, moveBlockDown, duplicateBlock, showBlocks,
     ]
 
     /// Standard macOS shortcuts (HIG "Standard keyboard shortcuts", the system, and the
@@ -125,10 +129,13 @@ public enum Shortcuts {
         "⌃⌘=": "Superscript", "⌃⌘-": "Subscript", "⌘↑": "Beginning of Document", "⌘↓": "End of Document",
         "⌘⌫": "Delete to Line Start / Move to Trash", "⌘↩": "Done", "⌘Tab": "App Switcher",
         "⇧⌘Q": "Log Out", "⌃⌘Q": "Lock Screen", "⌥⌘D": "Show/Hide Dock", "⌥⌘Esc": "Force Quit",
+        // The text system's own keys (NSStandardKeyBindingResponding).
+        "⌥⇧↑": "Select to Paragraph Start", "⌥⇧↓": "Select to Paragraph End", "⌥esc": "Complete",
+        "⇧↑": "Extend Selection Up", "⇧↓": "Extend Selection Down",
     ]
 
     /// App shortcuts that do take a standard combination, for its standard meaning.
     public static let sameMeaning: Set<String> = [
-        "⌘N", "⌘B", "⌘I", "⌘U", "⌘K", "⌥⌘I", "⌥⌘F", "⌘[", "⌘]", "⌃⌘=", "⌃⌘-", "⌘⌫",
+        "⌘N", "⌘B", "⌘I", "⌘U", "⌘K", "⌥⌘I", "⌥⌘F", "⌘[", "⌘]", "⌃⌘=", "⌃⌘-", "⌘⌫", "⌘D",
     ]
 }

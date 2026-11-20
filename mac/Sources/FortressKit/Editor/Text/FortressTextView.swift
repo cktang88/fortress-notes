@@ -88,6 +88,7 @@ final class FortressTextView: NSTextView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         layoutColumn()
+        controller?.layoutBlockChrome()
     }
 
     func layoutColumn() {
@@ -154,14 +155,24 @@ final class FortressTextView: NSTextView {
         super.selectAll(sender)
     }
 
+    // A column's Find is the note's (NotePrinting.swift): its own find bar would search
+    // the column alone.
     override func performTextFinderAction(_ sender: Any?) {
+        if isEmbedded, forwardFindToNote(sender, panel: false) { return }
         controller?.finishLoading()
         super.performTextFinderAction(sender)
     }
 
     override func performFindPanelAction(_ sender: Any?) {
+        if isEmbedded, forwardFindToNote(sender, panel: true) { return }
         controller?.finishLoading()
         super.performFindPanelAction(sender)
+    }
+
+    /// File ▸ Print…: the whole note, from the note's text or a column's.
+    override func printView(_ sender: Any?) {
+        guard let controller else { return super.printView(sender) }
+        controller.printNote()
     }
 
     override func moveToEndOfDocument(_ sender: Any?) {
@@ -183,8 +194,26 @@ final class FortressTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        // A click puts the caret back (blocks selected with Esc are let go).
+        controller?.endBlockSelection(caret: nil)
         if let controller, controller.handleClick(at: point) { return }
         super.mouseDown(with: event)
+    }
+
+    /// Copy of selected blocks: the blocks whole (blocks, Markdown, RTF, plain text).
+    override func copy(_ sender: Any?) {
+        guard let controller, controller.blockSelection != nil else { super.copy(sender); return }
+        controller.withBlocksSelectedAsText { super.copy(sender) }
+    }
+
+    /// Cut of selected blocks: copied, then deleted as blocks (one "Cut" step).
+    override func cut(_ sender: Any?) {
+        if let controller, controller.blockSelection != nil {
+            copy(sender)
+            controller.deleteBlocks(name: UndoNames.cut)
+            return
+        }
+        super.cut(sender)
     }
 
     override func paste(_ sender: Any?) {
@@ -240,11 +269,12 @@ final class FortressTextView: NSTextView {
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         if type == BlockEditorController.blocksPasteboardType, let controller, controller.pasteBlocks(from: pboard) { return true }
+        if type == BlockEditorController.blockReferencePasteboardType, let controller, controller.pasteBlockReference(from: pboard) { return true }
         return super.readSelection(from: pboard, type: type)
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [BlockEditorController.blocksPasteboardType] + super.readablePasteboardTypes
+        [BlockEditorController.blocksPasteboardType, BlockEditorController.blockReferencePasteboardType] + super.readablePasteboardTypes
     }
 
     /// Copy puts the note's own blocks, Markdown, and the text system's rich and plain
@@ -264,7 +294,39 @@ final class FortressTextView: NSTextView {
         return super.writeSelection(to: pboard, type: type)
     }
 
+    // MARK: Dragging blocks by their handle (the note's editor places them, for columns too)
+
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        [BlockDrag.type] + super.acceptableDragTypes
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if BlockDrag.isBlockDrag(sender), let root = controller?.rootEditor { return root.blockDragUpdated(sender) }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if BlockDrag.isBlockDrag(sender), let root = controller?.rootEditor { return root.blockDragUpdated(sender) }
+        return super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        if let sender, BlockDrag.isBlockDrag(sender), let root = controller?.rootEditor { root.blockDragExited(); return }
+        super.draggingExited(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if BlockDrag.isBlockDrag(sender) { return true }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) {
+        if let sender, BlockDrag.isBlockDrag(sender) { return }
+        super.concludeDragOperation(sender)
+    }
+
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if BlockDrag.isBlockDrag(sender), let root = controller?.rootEditor { return root.performBlockDrop(sender) }
         let point = convert(sender.draggingLocation, from: nil)
         if let controller, controller.pasteFiles(from: sender.draggingPasteboard, at: characterIndexForInsertion(at: point)) {
             return true
@@ -298,6 +360,19 @@ final class FortressTextView: NSTextView {
     @objc func fortressOutdent(_ sender: Any?) { controller?.indent(by: -1) }
     @objc func fortressMoveBlockUp(_ sender: Any?) { controller?.moveBlocks(by: -1) }
     @objc func fortressMoveBlockDown(_ sender: Any?) { controller?.moveBlocks(by: 1) }
+    // Blocks (Format ▸ Block, the handle's menu)
+    @objc func fortressDuplicateBlock(_ sender: Any?) { controller?.duplicateBlocks() }
+    @objc func fortressDeleteBlock(_ sender: Any?) { controller?.deleteBlocks() }
+    @objc func fortressCopyBlockLink(_ sender: Any?) { controller?.copyLinkToBlock() }
+    @objc func fortressSelectBlock(_ sender: Any?) { controller?.selectBlocksAtCaret() }
+    @objc func fortressInsertBlock(_ sender: Any?) { controller?.insertBlockAtCaret() }
+    @objc func fortressTurnIntoTwoColumns(_ sender: Any?) { controller?.makeColumns(2) }
+    @objc func fortressTurnIntoThreeColumns(_ sender: Any?) { controller?.makeColumns(3) }
+    @objc func fortressAddColumn(_ sender: Any?) { controller?.addColumn() }
+    @objc func fortressRemoveColumn(_ sender: Any?) { controller?.removeColumn() }
+    @objc func fortressUnwrapColumns(_ sender: Any?) { controller?.unwrapColumns() }
+    @objc func fortressEditMath(_ sender: Any?) { controller?.editSelectedMath() }
+    @objc func fortressBlockInfo(_ sender: Any?) { controller?.showBlockInfo() }
 
     // Standard Format ▸ Font items route here too.
     @objc override func underline(_ sender: Any?) { controller?.toggleMark(\.underline) }

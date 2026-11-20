@@ -354,10 +354,44 @@ final class PerfEditor {
         editor.controller.scrollRangeToVisibleForTests(NSRange(location: long.location + 25_000, length: 0))
         editor.layoutViewport()
         times = []
-        for _ in 0..<20 { times.append(milliseconds { editor.type("b") }) }
+        var longInserts: [Double] = [], longLayouts: [Double] = [], longNormalizes: [Double] = [], longRestyles: [Double] = []
+        var longCallbacks: [Double] = []
+        for _ in 0..<20 {
+            EditorMetrics.reset()
+            var insert = 0.0, layout = 0.0
+            times.append(milliseconds {
+                insert = milliseconds {
+                    editor.controller.textView.insertText("b", replacementRange: editor.controller.textView.selectedRange())
+                }
+                layout = milliseconds { editor.layoutViewport() }
+            })
+            longInserts.append(insert)
+            longLayouts.append(layout)
+            longNormalizes.append(EditorMetrics.normalize)
+            longRestyles.append(EditorMetrics.restyle)
+            longCallbacks.append(EditorMetrics.callbacks)
+        }
         let longSorted = times.sorted()
         PerfLog.record("keystroke.long50k.median", longSorted[longSorted.count / 2], budget: 8)
         PerfLog.record("keystroke.long50k.max", longSorted.last!)
+        PerfLog.record("keystroke.long50k.part.insert.median", longInserts.sorted()[10])
+        PerfLog.record("keystroke.long50k.part.layout.median", longLayouts.sorted()[10])
+        PerfLog.record("keystroke.long50k.part.normalize.median", longNormalizes.sorted()[10])
+        PerfLog.record("keystroke.long50k.part.restyle.median", longRestyles.sorted()[10])
+        PerfLog.record("keystroke.long50k.part.callbacks.median", longCallbacks.sorted()[10])
+        // Laying the long paragraph out again with no edit (TextKit 2 lays out a whole
+        // paragraph per fragment).
+        if let manager = editor.controller.textView.textLayoutManager,
+           let range = editor.controller.textRange(for: editor.range(ofBlock: "l0")) {
+            var relayouts: [Double] = []
+            for _ in 0..<5 {
+                relayouts.append(milliseconds {
+                    manager.invalidateLayout(for: range)
+                    editor.layoutViewport()
+                })
+            }
+            PerfLog.record("keystroke.long50k.part.relayoutOnly.median", relayouts.sorted()[2])
+        }
 
         // What long50k measured before the caret fix (UNDO_AUDIT.md): the first key went
         // into the long paragraph and moved the caret past it, so the rest were typed at
@@ -375,6 +409,31 @@ final class PerfEditor {
             editor.layoutViewport()
         }
         PerfLog.record("keystroke.return", newline, budget: 8)
+    }
+
+    /// The floor under `keystroke.long50k`: TextKit 2 lays a paragraph out whole (one
+    /// layout fragment per paragraph), so a bare TextKit 2 stack with nothing of the
+    /// editor's takes about as long to lay a 50,000-character paragraph out again as a
+    /// keystroke in it costs (UNDO_AUDIT.md, performance note).
+    @Test func longParagraphLayoutCosts() throws {
+        let long = String(String(repeating: LongNote.sentence, count: 50_000 / LongNote.sentence.count + 1).prefix(50_000))
+        let text = NSAttributedString(string: long, attributes: [.font: EditorTheme().bodyFont(), .paragraphStyle: NSParagraphStyle.default])
+        let content = NSTextContentStorage()
+        let manager = NSTextLayoutManager()
+        content.addTextLayoutManager(manager)
+        let container = NSTextContainer(size: CGSize(width: 650, height: 0))
+        container.lineFragmentPadding = 0
+        manager.textContainer = container
+        content.textStorage?.setAttributedString(text)
+        manager.ensureLayout(for: manager.documentRange)
+        var samples: [Double] = []
+        for _ in 0..<5 {
+            samples.append(milliseconds {
+                manager.invalidateLayout(for: manager.documentRange)
+                manager.ensureLayout(for: manager.documentRange)
+            })
+        }
+        PerfLog.record("keystroke.long50k.part.bareTextKitRelayout", samples.sorted()[2])
     }
 
     @Test func richBlockLayout() throws {
@@ -598,3 +657,4 @@ extension EditorSession {
         return BlockDiff.operations(from: base, to: blocks).operations
     }
 }
+

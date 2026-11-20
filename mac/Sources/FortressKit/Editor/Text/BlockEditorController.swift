@@ -40,14 +40,32 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     /// The view showing this editor now (an editor kept for a note outlives its views).
     weak var host: AnyObject?
 
-    private var isNormalizing = false
+    var isNormalizing = false
     private var isLoading = false
     private var lastReplacement: String?
     /// The pending change adds, removes or retypes paragraphs (list numbers may move).
     private var structuralEdit = false
     private var focusedBlockId: String?
-    private lazy var completion = LinkCompletion(controller: self)
+    lazy var completion = LinkCompletion(controller: self)
     private lazy var blockHover = BlockHover(controller: self)
+    /// The `/` insert menu.
+    lazy var slashMenu = SlashMenu(controller: self)
+    /// Blocks selected as blocks (Esc), by the ids of the first and last chosen.
+    var blockSelection: (anchor: String, head: String)?
+    /// Draws the selected blocks' highlight.
+    var blockSelectionOverlay: BlockSelectionOverlay?
+    var savedInsertionPointColor: NSColor?
+    var isSettingBlockSelection = false
+    /// The editor of the columns block this column's editor sits in (nil for the note's own).
+    weak var parentEditor: BlockEditorController?
+    /// The columns block this editor is a column of.
+    weak var columnsHost: ColumnsBlockController?
+    /// The note's id and title (Copy Link to Block, provenance of duplicates).
+    var noteReference: (() -> (id: String, title: String))?
+    /// Picks files for the `/` menu's Image and File items (tests set their own).
+    /// Runs File ▸ Print…'s operation (tests look at it instead of a print panel).
+    var runPrintOperation: ((NSPrintOperation) -> Void)?
+    var chooseFiles: ((_ images: Bool, _ completion: @escaping @MainActor ([URL]) -> Void) -> Void)?
 
     init(baseURL: URL, embedded: Bool = false) {
         textView = FortressTextView.make()
@@ -87,6 +105,32 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         context.attachmentDidResize = { [weak self] attachment in self?.relayout(attachment) }
         context.leaveAttachment = { [weak self] attachment, forward in self?.leave(attachment, forward: forward) }
         context.configureNested = { [weak self] child in self?.configure(nested: child) }
+        fragments.showsBlocks = BlockOutlines.isOn
+        outlinesObservation = UserDefaults.standard.observe(\.showBlocks) { [weak self] _, _ in
+            // The menu toggle sets it on the main thread: applied at once, in that turn.
+            guard Thread.isMainThread else {
+                Task { @MainActor in self?.setShowsBlocks(BlockOutlines.isOn) }
+                return
+            }
+            MainActor.assumeIsolated { self?.setShowsBlocks(BlockOutlines.isOn) }
+        }
+    }
+
+    private var outlinesObservation: NSKeyValueObservation?
+
+    /// View ▸ Show Blocks changed: every block is laid out again with (or without) its outline.
+    func setShowsBlocks(_ on: Bool) {
+        guard fragments.showsBlocks != on else { return }
+        fragments.showsBlocks = on
+        guard let manager = textView.textLayoutManager else { return }
+        // Invalidating keeps the fragments laid out so far: they change in place.
+        manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: []) { fragment in
+            (fragment as? BlockLayoutFragment)?.showsBlocks = on
+            return true
+        }
+        manager.invalidateLayout(for: manager.documentRange)
+        manager.textViewportLayoutController.layoutViewport()
+        textView.needsDisplay = true
     }
 
     /// A column's editor forwards links, uploads and focus to this editor.
@@ -110,11 +154,16 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         child.context.documentTitles = context.documentTitles
         child.context.session = context.session
         child.context.undoManager = context.undoManager
+        child.parentEditor = self
+        child.noteReference = { [weak self] in self?.rootEditor.noteReference?() ?? (id: "", title: "") }
+        child.chooseFiles = { [weak self] images, completion in
+            if let choose = self?.rootEditor.chooseFiles { choose(images, completion) } else { BlockEditorController.openPanel(images: images, completion: completion) }
+        }
     }
 
     // MARK: Tables and columns
 
-    private func range(of attachment: NSTextAttachment) -> NSRange? {
+    func range(of attachment: NSTextAttachment) -> NSRange? {
         var found: NSRange?
         storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length), options: []) { value, range, stop in
             if (value as AnyObject?) === attachment {
@@ -203,7 +252,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     var storage: NSTextStorage { textView.textStorage! }
-    private var string: NSString { storage.nsString }
+    var string: NSString { storage.nsString }
 
     // MARK: Loading and reading
 
@@ -650,7 +699,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         textView.setSelectedRange(NSRange(location: 0, length: 0))
     }
 
-    private func scrollToCenter(_ range: NSRange) {
+    func scrollToCenter(_ range: NSRange) {
         // Scroll there first (TextKit 2 places it from estimates), lay out just the
         // viewport, then center on the block's real frame. Laying out everything above the
         // block (ensureLayout from the start) made opening a link to the end of a long note
@@ -691,7 +740,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     /// Lays everything out again, once per run loop turn however many ask (a burst of
     /// resolved block references used to relayout the whole note once each).
-    private func relayoutAttachments() {
+    func relayoutAttachments() {
         guard !relayoutScheduled else { return }
         relayoutScheduled = true
         Self.later { [weak self] in
@@ -738,21 +787,21 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     // MARK: Paragraph helpers
 
-    private func paragraph(at index: Int) -> NSRange { string.paragraphRange(at: index) }
+    func paragraph(at index: Int) -> NSRange { string.paragraphRange(at: index) }
 
     /// A paragraph without its "\n".
-    private func contentRange(of paragraph: NSRange) -> NSRange {
+    func contentRange(of paragraph: NSRange) -> NSRange {
         var content = paragraph
         if content.length > 0, string.character(at: NSMaxRange(content) - 1) == 0x0A { content.length -= 1 }
         return content
     }
 
-    private func info(at index: Int) -> BlockInfo {
+    func info(at index: Int) -> BlockInfo {
         storage.blockInfo(at: paragraph(at: index).location) ?? BlockInfo()
     }
 
     /// Paragraphs touched by a range.
-    private func paragraphs(in range: NSRange) -> [NSRange] {
+    func paragraphs(in range: NSRange) -> [NSRange] {
         var output: [NSRange] = []
         var location = paragraph(at: range.location).location
         let end = max(NSMaxRange(range), range.location + 1)
@@ -794,7 +843,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     /// Names the current step after what the command turned out to do (Return that
     /// makes a code block is "Code Block", not typing).
-    private func renameStep(_ name: String) {
+    func renameStep(_ name: String) {
         guard let step = currentStep else { return }
         currentStep = UndoStep(name: name, changed: step.changed)
     }
@@ -826,7 +875,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     /// Changes attributes undoably.
-    private func changeAttributes(in range: NSRange, _ body: (NSTextStorage) -> Void) {
+    func changeAttributes(in range: NSRange, _ body: (NSTextStorage) -> Void) {
         isApplyingEdit = true
         defer { isApplyingEdit = false }
         stepWillChange()
@@ -839,7 +888,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     /// Gives paragraphs new block infos (kind, depth, checked) as one undo step.
-    private func updateBlocks(_ paragraphs: [NSRange], _ transform: (BlockInfo) -> BlockInfo) {
+    func updateBlocks(_ paragraphs: [NSRange], _ transform: (BlockInfo) -> BlockInfo) {
         guard let first = paragraphs.first, let last = paragraphs.last else { return }
         let selection = textView.selectedRange()
         changeAttributes(in: NSUnionRange(first, last)) { storage in
@@ -852,14 +901,14 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         syncTypingAttributes()
     }
 
-    private func attributed(_ string: String, info: BlockInfo, marks: InlineMarks = InlineMarks()) -> NSAttributedString {
+    func attributed(_ string: String, info: BlockInfo, marks: InlineMarks = InlineMarks()) -> NSAttributedString {
         var attributes: [NSAttributedString.Key: Any] = [.fnBlock: info]
         if !marks.isPlain { attributes[.fnMarks] = MarksBox(marks) }
         return NSAttributedString(string: string, attributes: attributes)
     }
 
     /// `range`'s text with every character given `info`.
-    private func retagged(_ range: NSRange, info: BlockInfo) -> NSMutableAttributedString {
+    func retagged(_ range: NSRange, info: BlockInfo) -> NSMutableAttributedString {
         let copy = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: range))
         if copy.length > 0 { copy.addAttribute(.fnBlock, value: info, range: NSRange(location: 0, length: copy.length)) }
         return copy
@@ -1077,6 +1126,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     func textDidChange(_ notification: Notification) {
         guard !isLoading else { return }
+        let start = EditorMetrics.now()
+        defer { EditorMetrics.callbacks += EditorMetrics.since(start) }
         let inserted = lastReplacement
         lastReplacement = nil
         if !textView.hasMarkedText(), !isApplyingEdit {
@@ -1084,6 +1135,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             if inserted == "[" { maybeStartCompletion() }
         }
         completion.textDidChange()
+        slashMenu.textDidChange(inserted: isApplyingEdit || textView.hasMarkedText() ? nil : inserted)
         // Typing inside a paragraph can't renumber a list; only structural edits relayout
         // the items below (a long numbered list would otherwise relayout per keystroke).
         if structuralEdit { invalidateNumbering(around: textView.selectedRange().location) }
@@ -1093,8 +1145,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     func textViewDidChangeSelection(_ notification: Notification) {
         guard !isLoading else { return }
+        let start = EditorMetrics.now()
+        defer { EditorMetrics.callbacks += EditorMetrics.since(start) }
         syncTypingAttributes()
         completion.selectionDidChange()
+        slashMenu.selectionDidChange()
+        if blockSelection != nil, !isSettingBlockSelection { endBlockSelection(caret: nil) }
         let id = storage.blockInfo(at: paragraph(at: textView.selectedRange().location).location)?.id
         if id != focusedBlockId {
             focusedBlockId = id
@@ -1140,7 +1196,13 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if slashMenu.isActive, slashMenu.handle(commandSelector) { return true }
         if completion.isActive, completion.handle(commandSelector) { return true }
+        if blockSelection != nil, let handled = handleBlockSelectionCommand(commandSelector) { return handled }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)), !textView.hasMarkedText() {
+            // Esc selects the block the caret is in (⌥Esc still completes words).
+            return selectBlocksAtCaret()
+        }
         switch commandSelector {
         // Return, Tab and Backspace across blocks: a step of their own, named as typing.
         case #selector(NSResponder.insertNewline(_:)): return undoStep(UndoNames.typing) { insertNewline() }
@@ -1347,13 +1409,14 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     func indent(by delta: Int) {
+        if blockSelection != nil { indentSelectedBlocks(by: delta); return }
         undoStep(delta < 0 ? UndoNames.outdent : UndoNames.indent) {
             indent(paragraphs: paragraphs(in: textView.selectedRange()), by: delta)
         }
     }
 
     /// Indents paragraphs and the children that follow them, keeping depths valid.
-    private func indent(paragraphs: [NSRange], by delta: Int) {
+    func indent(paragraphs: [NSRange], by delta: Int) {
         guard let first = paragraphs.first, var last = paragraphs.last else { return }
         let firstInfo = storage.blockInfo(at: first.location) ?? BlockInfo()
         // Take the children along.
@@ -1511,7 +1574,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     /// Numbers of following items change when one is inserted or removed.
-    private func invalidateNumbering(around location: Int) {
+    func invalidateNumbering(around location: Int) {
         guard let manager = textView.textLayoutManager, string.length > 0 else { return }
         var start = paragraph(at: location).location
         if start > 0 { start = paragraph(at: start - 1).location }
@@ -1583,6 +1646,12 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     func setKind(_ kind: BlockKind) {
+        if blockSelection != nil {
+            let all = selectedParagraphs()
+            let already = all.allSatisfy { storage.blockInfo(at: $0.location)?.kind == kind }
+            turnInto(.kind(already && kind != .paragraph ? .paragraph : kind))
+            return
+        }
         let paragraphs = paragraphs(in: textView.selectedRange())
         let textual = paragraphs.filter { storage.blockInfo(at: $0.location)?.kind.hasInlineText ?? false }
         let allAlready = textual.allSatisfy { storage.blockInfo(at: $0.location)?.kind == kind }
@@ -1593,15 +1662,19 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     func toggleChecked() {
-        let paragraphs = paragraphs(in: textView.selectedRange()).filter { storage.blockInfo(at: $0.location)?.kind == .check }
-        guard !paragraphs.isEmpty else { setKind(.check); return }
-        let allChecked = paragraphs.allSatisfy { storage.blockInfo(at: $0.location)?.checked == true }
-        undoStep(UndoNames.checkbox) { updateBlocks(paragraphs) { $0.with(checked: !allChecked) } }
+        let kept = blockSelection
+        defer { if let kept, blockSelection == nil { selectBlocks(anchor: kept.anchor, head: kept.head) } }
+        let chosen = kept != nil ? selectedParagraphs() : paragraphs(in: textView.selectedRange())
+        let checks = chosen.filter { storage.blockInfo(at: $0.location)?.kind == .check }
+        guard !checks.isEmpty else { setKind(.check); return }
+        let allChecked = checks.allSatisfy { storage.blockInfo(at: $0.location)?.checked == true }
+        undoStep(UndoNames.checkbox) { updateBlocks(checks) { $0.with(checked: !allChecked) } }
     }
 
     /// Moves the selected blocks (with their children) above the previous or below the
     /// next block.
     func moveBlocks(by direction: Int) {
+        if blockSelection != nil { moveSelectedBlocks(by: direction); return }
         undoStep(UndoNames.move) { moveBlocksUnnamed(by: direction) }
     }
 
@@ -1714,7 +1787,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
 
     // MARK: `[[` note links
 
-    private func maybeStartCompletion() {
+    func maybeStartCompletion() {
         let caret = textView.selectedRange().location
         guard caret >= 2, string.substring(with: NSRange(location: caret - 2, length: 2)) == "[[",
               info(at: caret).kind != .code else { return }
@@ -1762,6 +1835,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         case ([.command, .option], "'"): setKind(.quote)
         case ([.command, .option, .control], "c"): setKind(.code)  // ⌥⌘C is Copy Style.
         case ([.command, .shift], "u"): toggleChecked()  // Notes' Mark as Checked.
+        case ([.command], "d"): duplicateBlocks()  // Duplicate, as the HIG names ⌘D.
         case ([.command], "]"): indent(by: 1)
         case ([.command], "["): indent(by: -1)
         default:
@@ -1773,7 +1847,8 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
     }
 
     func handleKeyDown(_ event: NSEvent) -> Bool {
-        false
+        guard blockSelection != nil, !textView.hasMarkedText() else { return false }
+        return handleBlockSelectionKey(event)
     }
 
     /// Clicking a checkbox toggles it.
@@ -1799,6 +1874,9 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         guard !isEmbedded else { return }
         blockHover.hover(at: point)
     }
+
+    /// The block handle (tests and accessibility reach it).
+    var blockHandle: BlockHover { blockHover }
 
     /// The paragraph under a point (text view coordinates) and its line area.
     func blockFrame(at point: CGPoint) -> (NSRange, CGRect)? {
@@ -1962,7 +2040,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             var item: [String: JSONValue] = [
                 "type": .string(fields.type), "kind": .string(block.kind.rawValue), "attrs": .object(fields.attrs),
                 "content": fields.content, "depth": .number(Double(block.depth)),
-                "partial": .bool(!substring.string.hasSuffix("\n") && block == blocks.last),
+                "partial": .bool(blockSelection == nil && !substring.string.hasSuffix("\n") && block == blocks.last),
             ]
             if let payload = fields.payload { item["payload"] = payload }
             // A table travels with its cells' text (pasted with new ids).
