@@ -100,8 +100,9 @@ final class BlockLayoutFragment: NSTextLayoutFragment {
         return CGRect(x: nesting - 6, y: content.minY - padding, width: max(0, width + 12), height: content.height + padding * 2)
     }
 
+    /// Centred where the hover handle's grip is (BlockHover.show), so the two coincide.
     private func gripRect(_ outline: CGRect) -> CGRect {
-        CGRect(x: outline.minX - 22, y: outline.minY + 2, width: 14, height: min(outline.height - 4, 18))
+        CGRect(x: outline.minX - 16, y: outline.minY + 2, width: 14, height: min(outline.height - 4, 18))
     }
 
     /// The code background / quote bar area, in fragment coordinates.
