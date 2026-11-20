@@ -81,7 +81,7 @@ enum RichPage {
             node("01M7ONENOTEBLOCK0000000012", "file", attrs: ["url": .string("/media/titration-printout.pdf"), "name": .string("Titration printout.pdf"),
                                                               "size": .number(482_133), "mime": .string("application/pdf")], text: "Titration printout.pdf"),
         ]
-        return BlockDocument(id: "01M7ONENOTEPAGE00000000000", revision: 4, titleAuto: false, canUndo: false, canRedo: false,
+        return BlockDocument(id: "01M7ONENOTEPAGE00000000000", revision: 4, titleAuto: false,
                              title: "Titration — week 12", status: .rough, createdAt: "2024-03-11T09:00:00+00:00",
                              updatedAt: "2026-11-16T09:00:00+00:00", children: blocks)
     }
@@ -245,7 +245,7 @@ private func live<T>(_ controller: BlockEditorController, _ type: T.Type) -> T? 
     }
 
     @Test func insertTableMakesANewBlock() throws {
-        let (controller, _) = editor(BlockDocument(id: "d", revision: 1, titleAuto: true, canUndo: false, canRedo: false, title: "",
+        let (controller, _) = editor(BlockDocument(id: "d", revision: 1, titleAuto: true, title: "",
                                                    status: .rough, createdAt: "", updatedAt: "", children: [RichPage.paragraph("p", [RichPage.run("Hello")])]))
         let base = SyncedTree(controller.currentBlocks())
         controller.textView.setSelectedRange(NSRange(location: 2, length: 0))

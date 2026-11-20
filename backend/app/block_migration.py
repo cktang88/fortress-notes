@@ -113,8 +113,6 @@ def migrate(connection: sqlite3.Connection) -> None:
                source_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
                target_document_id TEXT NOT NULL,
                PRIMARY KEY (source_block_id, target_document_id))""",
-        # Undo steps were snapshots of the old shapes.
-        "DELETE FROM document_history",
         "DELETE FROM block_user_attrs WHERE block_id NOT IN (SELECT id FROM blocks)",
         "DELETE FROM block_assets",
     ):

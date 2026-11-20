@@ -6,8 +6,6 @@
   "updated_at": "2026-11-16T09:00:00+00:00",
   "revision": 12,
   "title_auto": false,
-  "can_undo": false,
-  "can_redo": false,
   "provenance": {
     "source": "manual"
   },

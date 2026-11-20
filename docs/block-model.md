@@ -51,7 +51,7 @@ document order):
 ```
 
 The document payload around the blocks is unchanged (`id`, `title`, `revision`,
-`can_undo`, `can_redo`, `provenance`, `resolved_links`, `children`, ...).
+`provenance`, `resolved_links`, `children`, ...).
 `resolved_links` gives the current title of every linked note and the current
 text of every referenced block, so clients render `docLink`/`blockRef` labels
 from it (labels are never stored).
@@ -208,8 +208,8 @@ none. It is accepted only when `base_revision` equals the document's current
 `revision`; otherwise the response is HTTP 409 with
 `{"code": "document_revision_conflict", "base_revision", "current_revision"}`
 and the client re-reads the document and re-applies its edit. A successful
-transaction bumps the revision by one and is one undo step
-(`POST .../undo` / `.../redo` with `base_revision`). Re-sending the same
+transaction bumps the revision by one (undo is the client's: it saves as an
+ordinary transaction). Re-sending the same
 `transaction_id` with the same body returns the result again without applying
 twice; with a different body it is rejected.
 
@@ -339,7 +339,7 @@ Siblings are ordered by `order`, a fractional-index string key
 (`order_keys.py`: the base-62 "integer part + fraction" scheme used by Figma and
 Logseq). Keys compare by plain byte order. The server generates a key between
 the neighbours named by the placement, so inserts and moves write one row and
-never renumber siblings; undo restores a block's `(parent_id, order)` exactly.
+never renumber siblings.
 A unique index on `(document_id, parent_id or '', order)` covers top-level
 blocks too. Clients only ever sort by it (or rely on the order of `children`).
 
@@ -402,5 +402,4 @@ transaction:
   blocks are recomputed over the canonical content;
 - `text` is re-derived for every block, then links, asset links and the
   full-text index are rebuilt;
-- the dead `revisions` and `block_attrs` tables are dropped, and undo history
-  (stored in the old snapshot format) is cleared.
+- the dead `revisions` and `block_attrs` tables are dropped.

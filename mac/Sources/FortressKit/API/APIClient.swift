@@ -170,18 +170,6 @@ public struct APIClient: Sendable {
             body: try JSONEncoder().encode(transaction)))
     }
 
-    public func undo(documentId: String, revision: Int) async throws -> BlockDocument {
-        try await documentMutation(documentId, try makeRequest(
-            "POST", "api/block-documents/\(documentId)/undo",
-            body: try JSONEncoder().encode(["base_revision": JSONValue.number(Double(revision))])))
-    }
-
-    public func redo(documentId: String, revision: Int) async throws -> BlockDocument {
-        try await documentMutation(documentId, try makeRequest(
-            "POST", "api/block-documents/\(documentId)/redo",
-            body: try JSONEncoder().encode(["base_revision": JSONValue.number(Double(revision))])))
-    }
-
     /// Runs a change to one note: its answer becomes the cached copy, kept under the
     /// `X-Document-ETag` it came with (so the next read is a 304); a rejection (409
     /// conflict, 404 gone) drops the cached copy so the next read asks the server.

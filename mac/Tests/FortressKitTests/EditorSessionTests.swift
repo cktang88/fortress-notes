@@ -57,7 +57,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
 
     private func document(revision: Int, text: String) -> BlockDocument {
         let node = BlockNode.paragraph("p1", text)
-        return BlockDocument(id: "d", revision: revision, titleAuto: true, canUndo: false, canRedo: false, title: text,
+        return BlockDocument(id: "d", revision: revision, titleAuto: true, title: text,
                              status: .rough, createdAt: "2026-11-18T00:00:00+00:00", updatedAt: "2026-11-18T00:00:00+00:00",
                              children: [node])
     }

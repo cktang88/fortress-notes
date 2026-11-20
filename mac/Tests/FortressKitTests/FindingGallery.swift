@@ -129,7 +129,6 @@ enum FindingFixtures {
         counts["blocks"] = 14
         counts["outgoing_links"] = 3
         counts["backlinks"] = 2
-        counts["edits"] = 9
         object["counts"] = counts
         object["blocks_by_source"] = ["onenote_import": 12, "manual": 2]
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)

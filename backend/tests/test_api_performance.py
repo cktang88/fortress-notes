@@ -257,7 +257,6 @@ class ApiWorkTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["children"], [])
-        self.assertTrue(body["can_undo"])
         full = self.client.get(f"/api/block-documents/{self.note['id']}")
         self.assertEqual(full.json()["revision"], body["revision"])
         self.assertEqual(

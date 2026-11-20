@@ -57,12 +57,6 @@ class AutoTitleTests(unittest.TestCase):
             "Book the hotel near the river",
         )
 
-        undone = self.client.post(
-            f"/api/block-documents/{document['id']}/undo",
-            json={"base_revision": document["revision"]},
-        ).json()
-        self.assertEqual(undone["title"], "Trip to Lisbon")
-
     def test_naming_a_note_stops_auto_titles_and_clearing_resumes_them(self) -> None:
         document = self.client.post("/api/block-documents", json={}).json()
         document = self.write(document, "First thoughts")

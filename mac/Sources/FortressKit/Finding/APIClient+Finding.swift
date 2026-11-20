@@ -60,10 +60,9 @@ public struct DocumentInfo: Decodable, Hashable, Sendable {
         public var blocks: Int?
         public var outgoingLinks: Int?
         public var backlinks: Int?
-        public var edits: Int?
 
         enum CodingKeys: String, CodingKey {
-            case words, characters, blocks, backlinks, edits
+            case words, characters, blocks, backlinks
             case outgoingLinks = "outgoing_links"
         }
     }

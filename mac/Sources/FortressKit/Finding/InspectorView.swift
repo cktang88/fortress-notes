@@ -253,7 +253,6 @@ struct InfoSection: View {
                 if info.linksOut != nil || info.backlinksIn != nil {
                     row("Links", "\(info.linksOut ?? 0) out · \(info.backlinksIn ?? 0) in")
                 }
-                if let edits = info.edits, edits > 0 { row("Edits", edits.formatted()) }
             }
         }
     }

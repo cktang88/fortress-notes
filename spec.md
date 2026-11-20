@@ -28,7 +28,7 @@ sheet) is never overridden. The policy and the decision for every format are in
 ## 2. Data model
 
 SQLite (`NOTES_DIR/.fortress.sqlite3`) is the only source of truth: documents,
-folders, nested blocks with stable IDs, references, history, assets, OCR text and the
+folders, nested blocks with stable IDs, references, assets, OCR text and the
 FTS index. Every write goes to SQLite first. Each active note also gets a read-only
 Markdown mirror, so notes stay readable outside the app: the notes folder is an
 **Obsidian vault** of plain CommonMark/GFM/Obsidian Markdown (`vault.py`,
@@ -149,7 +149,6 @@ with **422**.
 | `PATCH` | `/api/block-documents/{id}` | `{title?, status?}` (anything else: 422) | metadata payload (`children: []`); header `X-Document-ETag`. Title `""` hands it back to the first line |
 | `DELETE` | `/api/block-documents/{id}` | — | `204` (to the Trash) |
 | `POST` | `/api/block-documents/{id}/opened` | — | `204`; records `last_opened_at` (debounced, skipped while a writer is busy; not in the ETag) |
-| `POST` | `/api/block-documents/{id}/undo` · `/redo` | `{base_revision}` | document tree; header `X-Document-ETag` |
 | `GET` | `/api/block-documents/{id}/related` | `?k=5&block_id=` | `RelatedResult[]` |
 | `GET` | `/api/block-documents/{id}/backlinks` | — | backlinks |
 | `GET` | `/api/block-link-targets` | `?q=&limit=` | link autocomplete |
@@ -184,7 +183,7 @@ with **422**.
   (keep, but revalidate); a request whose `If-None-Match` matches gets `304` with no
   body:
   - `GET /api/block-documents/{id}` — changes with anything in the payload: the note's
-    own rows (blocks, user attrs, links, history, title/status/provenance/...)
+    own rows (blocks, user attrs, links, title/status/provenance/...)
     and every linked note or block (titles and text in
     `resolved_links`, `[[id|Title]]` labels).
   - `GET /api/navigation` (per `recent_limit`), `GET /api/trash`,
@@ -424,9 +423,8 @@ was created with). Provenance is never part of block text, FTS or embeddings.
   "folder_id", "folder_path": [{"id", "name"}],          // top folder first
   "provenance": {…},
   "counts": {"words", "characters", "blocks", "outgoing_links", "outgoing_document_links",
-             "outgoing_block_links", "backlinks", "edits"},  // backlinks from other notes
+             "outgoing_block_links", "backlinks"},  // backlinks from other notes
   "blocks_by_source": {"manual": 3, "onenote_import": 12},
-  "can_undo", "can_redo",
   "sync": null | {"synced_at", "checked_at", "source_title", "blocks_edited_here",
                   "blocks_removed_in_source": [block_id]},
   "conflicts": [{"kind": "title", "local_title", "source_title", "detected_at"} |
@@ -436,7 +434,7 @@ was created with). Provenance is never part of block text, FTS or embeddings.
 ```
 
 `POST /api/block-documents/{id}/blocks/{block_id}/source-conflict` `{"keep": "source"|"local"}`
-settles a block conflict (taking the source's version is an ordinary undoable edit).
+settles a block conflict (taking the source's version is an ordinary edit).
 
 **Living documents** (`sources.py`): importers call
 `documents.upsert_from_source(source=, external_id=, title=, blocks=, folder_path=,
@@ -474,7 +472,7 @@ updated like changed text; conflicts on structured blocks keep the source's
 folders by source id (`sources.ensure_folder_path`). It returns
 `UpsertResult(document_id, status=created|updated|unchanged|skipped_deleted, revision,
 blocks_created, blocks_updated, blocks_deleted, blocks_skipped, conflicts)`. The note
-keeps its Fortress id, links, backlinks and history; a re-import is one undo step.
+keeps its Fortress id, links and backlinks.
 Policy: untouched blocks follow the source; locally edited blocks keep the local
 text and record the source's version as a conflict; local additions stay after the
 block they followed; local deletions stick; blocks gone from the source are deleted
@@ -535,7 +533,7 @@ app bundle), else `PATH`. Converter timeout: `FORTRESS_ONENOTE_TIMEOUT_S`
 - Block source ids: `<page>/obj:<object_id>` when the manifest block has a
   OneNote object id (ExGUID `{GUID}&N`, stable across edits — SCHEMA.md
   "Object ids"), so a paragraph edited in OneNote updates the **same** Fortress
-  block (id, links, backlinks and history kept; a block edited here keeps the
+  block (id, links and backlinks kept; a block edited here keeps the
   local text and records the source's version as a conflict, §7a). Blocks
   without one (older manifests, ambiguous content) use `<page>/<type>:<hash of
   the block's content>` (duplicates get `#n`; a paragraph edited in OneNote then

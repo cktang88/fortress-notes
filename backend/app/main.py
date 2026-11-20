@@ -49,7 +49,6 @@ from .models import (
     NoteStatus,
     NoteUpdate,
     BlockTransaction,
-    BlockHistoryRequest,
     BlockLinkTarget,
     Backlink,
     RelatedResult,
@@ -901,36 +900,6 @@ def apply_block_transaction(
     except BlockShapeError as exc:
         # An unknown type, illegal nesting or attrs/content the registry rejects.
         raise HTTPException(422, str(exc)) from exc
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/block-documents/{document_id}/undo")
-def undo_block_transaction(document_id: str, request: BlockHistoryRequest):
-    try:
-        block_store.undo_transaction(
-            _db(), document_id, request.base_revision
-        )
-        return _written_response(document_id)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except block_store.DocumentRevisionConflict as exc:
-        raise HTTPException(409, exc.detail()) from exc
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/block-documents/{document_id}/redo")
-def redo_block_transaction(document_id: str, request: BlockHistoryRequest):
-    try:
-        block_store.redo_transaction(
-            _db(), document_id, request.base_revision
-        )
-        return _written_response(document_id)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except block_store.DocumentRevisionConflict as exc:
-        raise HTTPException(409, exc.detail()) from exc
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(409, str(exc)) from exc
 

@@ -26,7 +26,6 @@ from app.block_store import (
     register_asset,
     render_markdown,
     store_asset_text,
-    undo_transaction,
 )
 from app.corpus import embedding_documents
 from app.models import BlockOperation
@@ -63,8 +62,6 @@ class BlockMoveTests(unittest.TestCase):
                     ("b", 2, []),
                 ],
             )
-            undone = undo_transaction(database, created["id"], moved["revision"])
-            self.assertEqual(_shape(undone["children"]), _shape(created["children"]))
 
     def test_inserting_an_existing_block_id_is_a_conflict_not_a_crash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

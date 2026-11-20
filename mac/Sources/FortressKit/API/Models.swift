@@ -204,8 +204,6 @@ public struct BlockDocument: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var revision: Int
     public var titleAuto: Bool?
-    public var canUndo: Bool?
-    public var canRedo: Bool?
     public var title: String
     public var status: NoteStatus
     public var createdAt: String
@@ -221,8 +219,6 @@ public struct BlockDocument: Codable, Hashable, Identifiable, Sendable {
         case id
         case revision
         case titleAuto = "title_auto"
-        case canUndo = "can_undo"
-        case canRedo = "can_redo"
         case title
         case status
         case createdAt = "created_at"

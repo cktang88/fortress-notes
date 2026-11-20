@@ -29,12 +29,10 @@ from app.block_store import (
     list_documents,
     rename_document,
     rename_folder,
-    redo_transaction,
     rebuild_fts,
     register_asset,
     search_blocks,
     store_asset_text,
-    undo_transaction,
 )
 from app.corpus import embedding_documents
 from app.block_schema import BlockShapeError
@@ -392,59 +390,7 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(recovered["revision"], updated["revision"])
 
 
-    def test_persistent_undo_redo_restores_block_state_and_invalidates_redo(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", "Start")
-            block = created["children"][0]
-            apply_transaction(
-                database,
-                created["id"],
-                [
-                    BlockOperation(
-                        operation="update", block_id=block["id"], type="heading",
-                        attrs={"level": 2}, content=runs("Changed"),
-                        user_attrs={"review": "keep"},
-                    ),
-                ],
-                created["revision"],
-            )
-
-            # History remains available after the database is reopened.
-            recovered = document_tree(database, created["id"])
-            assert recovered is not None
-            self.assertTrue(recovered["can_undo"])
-            undone = undo_transaction(database, created["id"], recovered["revision"])
-            restored = undone["children"][0]
-            for key in ("id", "type", "attrs", "content", "payload", "text", "order", "updated_at"):
-                self.assertEqual(restored[key], block[key], key)
-            self.assertEqual(restored["user_attrs"], {})
-            self.assertTrue(undone["can_redo"])
-
-            redone = redo_transaction(database, created["id"], undone["revision"])
-            replayed = redone["children"][0]
-            self.assertEqual(replayed["id"], block["id"])
-            self.assertEqual(replayed["text"], "Changed")
-            self.assertEqual(replayed["attrs"], {"level": 2})
-            self.assertEqual(replayed["user_attrs"], {"review": "keep"})
-
-            undone_again = undo_transaction(database, created["id"], redone["revision"])
-            branched = apply_transaction(
-                database, created["id"],
-                [BlockOperation(operation="update", block_id=block["id"], content=runs("Branch"))],
-                undone_again["revision"],
-            )
-            self.assertFalse(branched["can_redo"])
-            with self.assertRaises(ValueError):
-                redo_transaction(database, created["id"], branched["revision"])
-            with self.assertRaises(DocumentRevisionConflict):
-                undo_transaction(database, created["id"], branched["revision"] - 1)
-            unchanged = document_tree(database, created["id"])
-            assert unchanged is not None
-            self.assertEqual(unchanged["children"][0]["text"], "Branch")
-
-
-    def test_undo_restores_a_deleted_subtree_and_links_into_it(self) -> None:
+    def test_deleting_a_subtree_breaks_links_into_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             created = create_block_document(database, "Draft", "rough", "Parent")
@@ -467,65 +413,16 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(document_backlinks(database, created["id"]), [])
             # The link stays, reading as broken while its target is gone.
             self.assertEqual(document_tree(database, reference["id"])["children"][0]["text"], "Link ")
-            restored = undo_transaction(database, created["id"], deleted["revision"])
-            self.assertEqual(restored["children"][0]["id"], parent["id"])
-            self.assertEqual(restored["children"][0]["children"][0]["id"], child["id"])
-            self.assertEqual(len(document_backlinks(database, created["id"])), 1)
-            self.assertEqual(document_tree(database, reference["id"])["children"][0]["text"], "Link Parent")
-            self.assertTrue(fts_is_consistent(database))
-            redone = redo_transaction(database, created["id"], restored["revision"])
-            self.assertEqual(redone["children"], [])
+            self.assertEqual(deleted["children"], [])
+            with connection_scope(database) as connection:
+                self.assertIsNone(
+                    connection.execute("SELECT 1 FROM blocks WHERE id = ?", (child["id"],)).fetchone()
+                )
             self.assertTrue(fts_is_consistent(database))
 
 
 
-    def test_undo_redo_restore_sibling_order_exactly(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / ".fortress.sqlite3"
-            created = create_block_document(database, "Draft", "rough", "A\n\nB\n\nC")
-            initial_ids = [node["id"] for node in created["children"]]
-            inserted = apply_transaction(
-                database, created["id"], [paragraph("B2", after_id=initial_ids[1])], created["revision"]
-            )
-            new_id = inserted["children"][2]["id"]
-            undo_insert = undo_transaction(database, created["id"], inserted["revision"])
-            self.assertEqual([node["id"] for node in undo_insert["children"]], initial_ids)
-            redo_insert = redo_transaction(database, created["id"], undo_insert["revision"])
-            self.assertEqual(
-                [node["id"] for node in redo_insert["children"]],
-                [*initial_ids[:2], new_id, initial_ids[2]],
-            )
-
-            moved = apply_transaction(
-                database, created["id"],
-                [BlockOperation(operation="move", block_id=initial_ids[0], after_id=initial_ids[2])],
-                redo_insert["revision"],
-            )
-            moved_ids = [node["id"] for node in moved["children"]]
-            self.assertEqual(moved_ids, [initial_ids[1], new_id, initial_ids[2], initial_ids[0]])
-            undo_move = undo_transaction(database, created["id"], moved["revision"])
-            self.assertEqual(
-                [node["id"] for node in undo_move["children"]], [*initial_ids[:2], new_id, initial_ids[2]]
-            )
-            redo_move = redo_transaction(database, created["id"], undo_move["revision"])
-            self.assertEqual([node["id"] for node in redo_move["children"]], moved_ids)
-
-            deleted = apply_transaction(
-                database, created["id"],
-                [BlockOperation(operation="delete", block_id=moved_ids[1])],
-                redo_move["revision"],
-            )
-            # The freed slot is reused by an insert between the same neighbours...
-            refilled = apply_transaction(
-                database, created["id"], [paragraph("again", after_id=moved_ids[0])], deleted["revision"]
-            )
-            undo_refill = undo_transaction(database, created["id"], refilled["revision"])
-            undo_delete = undo_transaction(database, created["id"], undo_refill["revision"])
-            # ...and undoing both puts the original block back in its own slot.
-            self.assertEqual([node["id"] for node in undo_delete["children"]], moved_ids)
-
-
-    def test_nested_move_undo_redo_restores_sibling_order(self) -> None:
+    def test_nested_moves_keep_sibling_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"
             created = create_block_document(database, "Draft", "rough", "Parent")
@@ -548,15 +445,11 @@ class BlockStoreTests(unittest.TestCase):
             )
             moved_ids = [node["id"] for node in moved["children"][0]["children"]]
             self.assertEqual(moved_ids, [original_ids[1], original_ids[2], original_ids[0]])
-            undone = undo_transaction(database, created["id"], moved["revision"])
-            self.assertEqual([node["id"] for node in undone["children"][0]["children"]], original_ids)
-            redone = redo_transaction(database, created["id"], undone["revision"])
-            self.assertEqual([node["id"] for node in redone["children"][0]["children"]], moved_ids)
             # Moving a block to the top level, before its old parent.
             out = apply_transaction(
                 database, created["id"],
                 [BlockOperation(operation="move", block_id=original_ids[1], before_id=parent_id)],
-                redone["revision"],
+                moved["revision"],
             )
             self.assertEqual([node["id"] for node in out["children"]], [original_ids[1], parent_id])
             with self.assertRaisesRegex(ValueError, "descendant"):

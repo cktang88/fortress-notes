@@ -260,10 +260,10 @@ flowchart LR
 ```
 
 - **SQLite is the only source of truth** (`NOTES_DIR/.fortress.sqlite3`): folders,
-  documents, nested blocks with stable ids, links, history, assets, OCR text, FTS5. The
+  documents, nested blocks with stable ids, links, assets, OCR text, FTS5. The
   block model is the contract between backend and clients:
   [docs/block-model.md](docs/block-model.md). Edits are revision-checked block
-  transactions; each is one undo step.
+  transactions; undo is the editor's own, per note, and saves as ordinary edits.
 - **Background work** runs in one manager (`backend/app/background.py`), one thread per
   lane: Markdown mirrors (`NOTES_DIR/<folder>/<Title>.md`, an Obsidian vault, write-only), OneNote import jobs, daily
   backups, OCR and ColBERT indexing. Low-priority lanes yield while a search is scoring.
@@ -289,7 +289,7 @@ identity. It still writes every note out as Markdown, so the files stay open.
 | **Paragraph links and embeds** | Every block has a stable id; links survive edits, renames and moves | Ids must live in the text (`^abc123`); a paste, rename or edit in another editor can drop or duplicate them and break links silently |
 | **Related notes and search speed** | The ColBERT index updates only the paragraphs that changed (from SQLite's change log) | Each save means re-reading and re-parsing the file and guessing which paragraphs are the old ones before re-indexing |
 | **Concurrent edits** | Edits are block operations; two windows conflict only on the same paragraph | Git merges by line, and a prose paragraph is one line, so edits conflict or the last write wins |
-| **Undo** | One undo step per transaction, per note | Editor-local only; history is per commit |
+| **Undo** | Per note in the editor, named steps; an undo saves like any edit | Editor-local only; history is per commit |
 | **Rich content** | Tables whose cells hold blocks, columns, math, callouts and OneNote layout are kept without loss | No faithful Markdown form; each round trip loses some of it |
 | **Pictures** | Stored once by content hash, with cached OCR text | A git repo grows forever unless you add Git LFS |
 | **Open format, no lock-in** | ✅ via the Markdown mirror (an Obsidian vault in `NOTES_DIR`) | ✅ natively |

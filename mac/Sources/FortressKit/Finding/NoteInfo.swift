@@ -13,7 +13,6 @@ struct NoteInfo: Hashable, Sendable {
     var blocks: Int?
     var linksOut: Int?
     var backlinksIn: Int?
-    var edits: Int?
     /// Blocks per source kind when a note mixes sources (e.g. imported, then written in).
     var blocksBySource: [String: Int] = [:]
     var provenance: NoteProvenance?
@@ -32,7 +31,6 @@ struct NoteInfo: Hashable, Sendable {
         blocks = info.counts?.blocks
         linksOut = info.counts?.outgoingLinks
         backlinksIn = info.counts?.backlinks
-        edits = info.counts?.edits
         blocksBySource = info.blocksBySource ?? [:]
         conflicts = info.conflicts?.count ?? 0
         provenance = info.provenance.map { NoteProvenance($0, sync: info.sync) }

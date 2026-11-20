@@ -186,7 +186,7 @@ enum SpyJSON {
     static func document(_ id: String, revision: Int = 1, title: String = "Note", updatedAt: String = "2026-11-18T10:00:00.000000+00:00") -> BlockDocument {
         let block = BlockNode.paragraph("\(id)-b1", title, documentId: id, createdAt: "2026-11-01T00:00:00+00:00", updatedAt: updatedAt)
         return BlockDocument(
-            id: id, revision: revision, titleAuto: false, canUndo: false, canRedo: false, title: title, status: .rough,
+            id: id, revision: revision, titleAuto: false, title: title, status: .rough,
             createdAt: "2026-11-01T00:00:00+00:00", updatedAt: updatedAt, children: [block])
     }
 
