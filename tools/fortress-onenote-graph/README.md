@@ -85,8 +85,9 @@ notebooks resolve when both are in the import (or were imported before).
 Run the same `download` again whenever you like: it lists sections and pages (one
 request per section and per 100 pages), then fetches only pages whose
 `lastModifiedDateTime` changed and pictures/files not cached yet. Importing the new zip
-updates the notes in place and keeps your edits in Fortress (conflicts are shown in
-the inspector), exactly like re-importing a `.one` export.
+refreshes the notes whose page changed (pages you edited in Fortress since the last
+import are left alone and listed in the report), exactly like re-importing a `.one`
+export.
 
 ### Time, throttling, interruptions
 

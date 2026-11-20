@@ -171,7 +171,7 @@ def _uncategorized_folder(db_path: Path) -> str:
         return str(block_store.create_folder(db_path, UNCATEGORIZED, None, position=0)["id"])
 
 
-# --- Living documents --------------------------------------------------------
+# --- Re-imports ---------------------------------------------------------------
 
 
 def upsert_from_source(**kwargs):

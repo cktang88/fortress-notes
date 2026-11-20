@@ -127,14 +127,14 @@ with **422**.
 - `search.py` — unified search (words + meaning + titles) and related notes.
 - `ask.py` / `llm.py` — Ask your notes over OpenRouter chat completions.
 - `ocr.py`, `images.py`, `assets.py` — text in pictures and PDFs (§6), uploaded files.
-- `provenance.py`, `sources.py` — provenance and living documents (§7a).
+- `provenance.py`, `sources.py` — where notes came from, and re-imports (§7a).
 - `main.py` — FastAPI app and routes.
 - `document_service.py` — rendered note bodies and the one document ETag, shared by
   the single GET, the batch read and the writes that answer with a tree.
 - `http_cache.py` — ETags, `If-None-Match` → 304, rendered-body caches.
 - `media.py` — `/media` file serving (immutable caching, ranges, content types).
 - `batch.py` — batch reads and moves for the native app.
-- `onenote_import.py` — OneNote importer: runs `fortress-onenote`, imports its manifest as living documents, import jobs (§7b).
+- `onenote_import.py` — OneNote importer: runs `fortress-onenote`, imports its manifest (re-imports refresh changed pages), import jobs (§7b).
 
 ### API
 
@@ -169,8 +169,7 @@ with **422**.
 | `GET` · `POST` | `/api/backups` | — | list snapshots · take a manual snapshot |
 | `POST` | `/api/backups/{name}/restore` | — | `{restored, safety_backup}` |
 | `GET` | `/api/block-documents/{id}/markdown` | `?download=true` | one note as Markdown (with provenance, §7a) |
-| `GET` | `/api/block-documents/{id}/info` | — | note metadata: dates, provenance, counts, conflicts (§7a) |
-| `POST` | `/api/block-documents/{id}/blocks/{block_id}/source-conflict` | `{keep}` | document tree (§7a) |
+| `GET` | `/api/block-documents/{id}/info` | — | note metadata: dates, source, counts (§7a) |
 | `POST` | `/api/markdown-import/files` | multipart `files[]`, `folder_id?` | `{imported, errors}` |
 | `POST` | `/api/import/onenote` | multipart `file` (+ `folder_id?`) or JSON `{path, folder_id?}` | `202 {job_id, status: "queued"}` (§7b) |
 | `GET` | `/api/import/onenote/{job_id}` | — | import job (§7b) |
@@ -361,31 +360,26 @@ BackendController.swift`: the repository's `backend/.venv/bin/uvicorn`, else
   wikilinks between the files resolve) or a OneNote export; each note exports as
   Markdown. The notes folder itself is an Obsidian vault (§2).
 
-## 7a. Provenance, metadata and living documents
+## 7a. Provenance, metadata and re-imports
 
-Every note and every block records where it came from (`provenance.py`, schema v13).
-Notes store it in `documents.provenance_json` (plus `source_kind` /
-`source_external_id`, the re-import key, unique when set); blocks in
-`blocks.provenance_json`, where NULL means "same as the note" (the blocks a note
-was created with). Provenance is never part of block text, FTS or embeddings.
+Every note records where it came from (`provenance.py`) in
+`documents.provenance_json`, plus `source_kind` / `source_external_id`, the
+re-import key (unique when set). Blocks record nothing of the kind (a block's
+`created_at`, `updated_at` and `revision` are all it has). Provenance is never part
+of block text, FTS or embeddings.
 
 ```jsonc
-// provenance (all keys but "source" optional)
+// a note's provenance (all keys but "source" optional)
 {
-  "source": "onenote_import",   // manual | capture | markdown_import | onenote_import | paste | web | ai | <any lower-case word>
+  "source": "onenote_import",   // manual | capture | markdown_import | onenote_import | web | ai | <any lower-case word>
   "external_id": "{GUID}",      // id in the source; (source, external_id) keys re-imports
   "source_path": "Work › Meetings › Standup",  // or a file path
   "source_url": "https://…",
   "source_created_at": "…", "source_modified_at": "…",  // the source's own timestamps
-  "imported_at": "…", "synced_at": "…",                  // first import, last re-import that changed it
+  "imported_at": "…", "synced_at": "…",                  // first import, last refresh
   "importer": {"name": "onenote", "version": "1.0"},
-  "origin": {"operation": "move_into", "document_id": "…",   // "duplicate"/"split" are still accepted
-             "document_title": "…", "block_id": "…", "at": "…"},
   "extra": {},                   // importer-specific
-  // server-maintained on blocks: "source_hash", "conflict", "source_removed", "dismissed_hash";
-  // on notes: "source_removed" + "source_removed_at" (the source no longer has the page;
-  // sources.mark_documents_source_removed, cleared by the next upsert);
-  // "backfilled": true marks the migration's guess
+  "backfilled": true             // the migration's guess (server-only)
 }
 ```
 
@@ -393,23 +387,17 @@ was created with). Provenance is never part of block text, FTS or embeddings.
   `provenance`, `last_opened_at` (set by `POST …/opened`, at most once a minute) and
   `resolved_links: {documents: {id: {title}}, blocks: {id: {document_id, document_title, type, text}}}`.
   `[[id|Title]]` links are served with the target's current title (stored text is
-  untouched). Each block adds `provenance` (its own, or the note's with
-  `"inherited": true`) and `revision` (the note revision that last changed it; null
-  if unchanged since creation/import).
+  untouched). Each block adds `revision` (the note revision that last changed it;
+  null if unchanged since creation/import).
 - **Navigation / list items** add `source` (the note's provenance kind).
 - **Writes**: `NoteCreate.provenance` (e.g. `{"source": "ai", "extra": {"question": …}}`
-  for a saved Ask answer), `CaptureRequest.provenance` (e.g. `source_url`), and
-  `BlockOperation.provenance` on `insert` (default `{"source": "manual"}`) and
-  `update` (omitted keeps it). Client input is validated (422/409) and cannot set the
-  server-maintained keys. Blocks folded in by the former move-into keep
-  `origin.operation = "move_into"`.
+  for a saved Ask answer) and `CaptureRequest.provenance` (e.g. `source_url`). Client
+  input is validated (422) and cannot set server-only keys.
 - **Markdown**: export and mirror front matter carry `fortress: {provenance: …}`
-  (and `source:` for a `source_url`); a block whose provenance differs from the
-  note's carries it in an invisible comment, e.g.
-  `<!-- fortress:block {"provenance":{"external_id":"{GUID}","source":"onenote_import"}} -->`.
-  Import (directory, upload, mirrors) restores both, so export → import → export is
-  identical. A copy whose source key is already taken gives it up
-  (`extra.copy_of_external_id`).
+  (and `source:` for a `source_url`); import (directory, upload, mirrors) restores
+  it, so export → import → export is identical. A copy whose source key is already
+  taken gives it up (`extra.copy_of_external_id`). Older exports' per-block
+  provenance comments are ignored.
 
 `GET /api/block-documents/{id}/info`:
 
@@ -417,62 +405,53 @@ was created with). Provenance is never part of block text, FTS or embeddings.
 {
   "id", "title", "status", "created_at", "updated_at", "last_opened_at", "revision",
   "folder_id", "folder_path": [{"id", "name"}],          // top folder first
-  "provenance": {…},
+  "source": "onenote_import",                            // the note's provenance kind
   "counts": {"words", "characters", "blocks", "outgoing_links", "outgoing_document_links",
              "outgoing_block_links", "backlinks"},  // backlinks from other notes
-  "blocks_by_source": {"manual": 3, "onenote_import": 12},
-  "sync": null | {"synced_at", "checked_at", "source_title", "blocks_edited_here",
-                  "blocks_removed_in_source": [block_id]},
-  "conflicts": [{"kind": "title", "local_title", "source_title", "detected_at"} |
-                {"kind": "block", "block_id", "local_text", "source_markdown",
-                 "source_modified_at", "detected_at"}]
+  "picture_text": [...]                                  // pictures/PDFs and their text (§6)
 }
 ```
 
-`POST /api/block-documents/{id}/blocks/{block_id}/source-conflict` `{"keep": "source"|"local"}`
-settles a block conflict (taking the source's version is an ordinary edit).
-
-**Living documents** (`sources.py`): importers call
+**Re-imports** (`sources.py`): importers call
 `documents.upsert_from_source(source=, external_id=, title=, blocks=, folder_path=,
 created_at=, modified_at=, provenance=, importer=)` (or
 `sources.upsert_document_from_source(db_path, …)`), with `blocks` a list of
-`SourceBlock(markdown, external_id, type, attrs, children, created_at, modified_at,
-provenance, content, payload, previous_external_ids)` or a Markdown body. A SourceBlock carries either
-Markdown or a canonical `type` + `attrs`/`content`/`payload` (§2a; text is derived).
-`sources.source_block(dict)` / `source_blocks([dict])` build them from plain dicts:
+`SourceBlock(markdown, external_id, type, attrs, children, content, payload,
+previous_external_ids, anchors)` or a Markdown body. A SourceBlock carries either
+Markdown or a canonical `type` + `attrs`/`content`/`payload` (§2a; text is
+derived); `sources.source_block(dict)` / `source_blocks([dict])` build them from
+plain dicts (keys `id`, `previous_ids`, `anchors`, `markdown`, the canonical
+fields, `children`). A block without a source id is named by its position under
+its parent, or (top level) by a hash of its content. `folder_path=[(external_id,
+name), …]` finds/creates folders by source id (`sources.ensure_folder_path`) and
+only places a new note.
 
-```python
-source_blocks([
-  {"id": "{P1}", "type": "heading", "level": 2, "inline": [{"text": "Plan", "u": 1}]},
-  {"id": "{P2}", "text": "plain paragraph"},
-  {"id": "{P3}", "type": "list", "checked": True, "inline": [{"text": "done", "s": 1}]},
-  {"id": "{T1}", "type": "table", "borders": True, "column_widths": [96, None],
-   "header_rows": 0, "rows": [["a", {"inline": [...], "background": "#DEEAF6",
-     "blocks": [{"type": "list", "text": "in cell"}, {"type": "table", "rows": [["x"]]}]}]]},
-  {"id": "{O1}", "type": "columns", "columns": [
-     {"id": "{O1a}", "width": 0.5, "blocks": [{"text": "left"}]},
-     {"id": "{O1b}", "width": 0.5, "blocks": [{"type": "image", "url": "/media/…",
-                                                "alt": "OCR", "width": 300}]}]},
-  {"id": "{F1}", "type": "file", "url": "/media/….pdf", "name": "a.pdf", "size": 1, "mime": "application/pdf"},
-])
-```
+It returns `UpsertResult(document_id, status, revision, blocks_created,
+blocks_updated, blocks_deleted)`:
 
-Runs may be canonical or compact (`{"text", "b", "i", "u", "s", "sup", "sub", "code",
-"color", "highlight", "link"}`; other keys such as `font`/`size` are ignored).
-`table_content(rows, column_widths=, header_rows=)` and `nested_block(dict)` build
-table content and in-cell blocks; invalid shapes raise `BlockShapeError`. A block
-whose structured content changed in the source (a table cell, a column width) is
-updated like changed text; conflicts on structured blocks keep the source's
-`source_content`/`source_attrs` so `keep: "source"` restores them. `folder_path=[(external_id, name), …]` finds/creates
-folders by source id (`sources.ensure_folder_path`). It returns
-`UpsertResult(document_id, status=created|updated|unchanged|skipped_deleted, revision,
-blocks_created, blocks_updated, blocks_deleted, blocks_skipped, conflicts)`. The note
-keeps its Fortress id, links and backlinks.
-Policy: untouched blocks follow the source; locally edited blocks keep the local
-text and record the source's version as a conflict; local additions stay after the
-block they followed; local deletions stick; blocks gone from the source are deleted
-unless edited (then marked `source_removed`); structure follows the source; title and
-folder follow the source unless changed locally; trashed notes are skipped.
+- `created`: a new note (also for a page whose note was purged from the trash).
+- `unchanged`: the source has the same title and blocks as at the last import;
+  nothing is written.
+- `updated` (a refresh): the note's blocks are replaced by the source's, and its
+  title follows the source. The note keeps its id and folder; a block whose source
+  id (or an earlier id in `previous_external_ids`) matches a block of the last
+  import keeps its Fortress id, so links and references into it survive and show
+  the new text. Blocks the source no longer has go. One revision, like an edit.
+- `skipped_edited`: the note was edited here since the last import (its revision
+  moved on), so it is left alone; importers report it as not refreshed.
+- `skipped_deleted`: the note is in the trash.
+
+The state a refresh needs is the note's `sync_json`: `{hash, revision, imported_at,
+synced_at, blocks: {source id: block id}, anchors: {anchor: block id},
+source_removed_at?}`. `anchors` are extra ids a block is known by (OneNote's
+element/object ids, which links name). `sources.mark_documents_source_removed`
+sets `source_removed_at` for notes the source no longer has (nothing is deleted);
+the next upsert of the page clears it.
+
+Databases from before refreshes convert once (`block_store._retire_block_sync`):
+each imported note's per-block state becomes its `sync_json`, a note with a block
+edited, added or deleted here counts as edited (never refreshed), and the
+`block_sync` table and `blocks.provenance_json` column are dropped.
 
 ## 7b. OneNote import (`onenote_import.py`)
 
@@ -507,7 +486,8 @@ Graph cannot give (ink, custom tags, equations as math, TOC order): the tool's
 README.
 
 **Mapping** (all through `sources.upsert_document_from_source`, source
-`onenote_import`, §7a — re-imports update in place, keep local edits, report
+`onenote_import`, §7a — a re-import refreshes changed pages in place, leaves
+pages edited here alone (reported in `pages_not_refreshed`) and reports the rest
 `unchanged`):
 
 - Notebook › section group › section → folders via `ensure_folder_path`, keyed
@@ -546,42 +526,40 @@ README.
   fonts → `code`; font sizes are dropped.
 - Block source ids: `<page>/obj:<object_id>` when the manifest block has a
   OneNote object id (ExGUID `{GUID}&N`, stable across edits — SCHEMA.md
-  "Object ids"), so a paragraph edited in OneNote updates the **same** Fortress
-  block (id, links and backlinks kept; a block edited here keeps the
-  local text and records the source's version as a conflict, §7a). Blocks
+  "Object ids"), so a paragraph edited in OneNote refreshes into the **same**
+  Fortress block (id, links and backlinks kept, §7a). Blocks
   without one (older manifests, ambiguous content) use `<page>/<type>:<hash of
   the block's content>` (duplicates get `#n`; a paragraph edited in OneNote then
   becomes a new block). The hash id is passed as the block's previous id
   (`SourceBlock.previous_external_ids`, dict key `previous_ids`), so notes
-  imported before object ids existed are matched and re-keyed in place. Block
-  provenance keeps `extra.onenote: {object_id, element_id}` (a table also
-  `nested`: the ids of the blocks in its cells).
+  imported before object ids existed are matched and re-keyed in place. A
+  block's OneNote `element_id`/`object_id` (a table's also those of the blocks
+  in its cells) are its `anchors`.
 - `onenote:` links → `[[document_id|Title]]` when the target page (by
   `link_target_id`) is in this export or an earlier import. Paragraph links
   (`object-id={GUID}&N`, manifest `onenote.object_ref`) become block references
   `(( block_id ))` — the link previews the paragraph's current text and records
-  a backlink — when the target page has a block whose `element_id`/`object_id`
-  (or, for a paragraph inside a table cell, the table's `nested` ids) matches
+  a backlink — when the target page has a block with that id among its anchors (a
+  paragraph inside a table cell points at the table)
   (`links.block_references`); otherwise they link to the page
   (`links.block_links_as_page_links`).
   Targets created later in the same run are resolved in a second pass (status
   `linking`), so a re-run resolves everything in one pass and stays `unchanged`.
-  Unresolved links stay as plain text (the URL is kept in the block's
-  `provenance.extra.unresolved_links`) and are listed in the report.
+  Unresolved links stay as plain text and are listed in the report.
 - Assets are copied once to `NOTES_DIR/assets/<sha256>.<ext>` and registered in
   `assets` (dedup by hash). Extensions outside an allowlist (html, js, attachment
   svg, ...) are stored as `.bin` (served as a download); a stored `.svg` (pictures
   imported from ink by earlier versions) is served with
   `Content-Security-Policy: sandbox`.
 - The same page GUID in two different exports is the same note: the later import
-  updates it (and moves it to its folder unless moved locally).
+  refreshes it where it is.
 - **Removed in OneNote**: for each notebook in the export, notes imported from
   it earlier (by `extra.onenote.notebook_id`, or for older imports by their
   folder chain) whose page is not in the export are **not deleted**: the note's
-  provenance gets `source_removed: true` and `source_removed_at` (first run that
-  missed it), and the notebook's report lists it in `pages_removed_in_source`
-  (every run while it stays missing; `newly_removed` on the first). Importing
-  the page again clears both keys. Section and section-group folders of the
+  `sync_json` gets `source_removed_at` (first run that missed it), and the
+  notebook's report lists it in `pages_removed_in_source` (every run while it
+  stays missing; `newly_removed` on the first). Importing the page again clears
+  it. Section and section-group folders of the
   notebook that the export no longer has are listed in
   `sections_removed_in_source` (folders are kept). Pages of sections that failed
   to read this time are never counted as removed; notebooks not in the export
@@ -594,8 +572,7 @@ README.
   table cells, image alt/OCR text) are compared with the
   imported note's blocks (case-folded words weighted by length, as a multiset;
   importer-added subpage lists excluded). Pages below 98 % are listed in
-  `low_coverage_pages` so nothing is lost silently (a page edited here can show
-  up too).
+  `low_coverage_pages` so nothing is lost silently.
 
 **Jobs**: `POST /api/import/onenote` takes multipart `file` (`.zip`, `.onepkg`,
 `.one`, `.onetoc2`; streamed to `NOTES_DIR/.fortress-imports/<job_id>-upload/`,
@@ -609,7 +586,7 @@ change, about once a second while it runs, and at the end, so `GET` still finds
 it after a restart. A record a restart left `queued`/`converting`/`importing`/
 `linking` reads as `failed` with `"interrupted": true` and the error "The import
 was interrupted by a restart. Import the export again; pages that were already
-imported are kept and updated in place." (re-running is idempotent; leftover
+imported are kept and refreshed in place." (re-running is idempotent; leftover
 upload/work folders are removed).
 
 `POST /api/import/onenote/{job_id}/cancel` → `202` with the record: a queued
@@ -630,7 +607,9 @@ ended.
       "name", "folder_id", "sections",
       "pages_created", "pages_updated", "pages_unchanged", "pages_skipped",  // skipped: trashed here or failed
       "images", "files", "tables", "columns_pages",
-      "check_items", "conflicts",                                           // extras
+      "check_items",
+      // edited here since the last import, so not refreshed (also one warning each)
+      "pages_not_refreshed": [{"page": "Work › A › Page", "document_id"}],
       "ink_skipped",                       // ink drawings not imported (Fortress has no ink)
       "images_ocr_queued": 2,
       "low_coverage_pages": [{"page": "Work › A › Page", "document_id", "coverage": 0.93,

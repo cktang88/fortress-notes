@@ -1600,7 +1600,7 @@ def imports_dir(notes_path: Path) -> Path:
 TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled"})
 INTERRUPTED_MESSAGE = (
     "The import was interrupted by a restart. Import the export again; "
-    "pages that were already imported are kept and updated in place."
+    "pages that were already imported are kept and refreshed in place."
 )
 CANCELLED_MESSAGE = "Import cancelled. Pages imported before cancelling are kept."
 _SAVE_INTERVAL_S = 1.0
