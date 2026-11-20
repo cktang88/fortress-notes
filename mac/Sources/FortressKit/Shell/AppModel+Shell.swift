@@ -69,6 +69,9 @@ extension AppModel {
         }
         if backend.startsAutomatically && backend.canStart && !Self.isRunningTests {
             notice = nil
+            // Not connected until it answers: the window shows "Starting Fortress…" (or
+            // why it couldn't start) instead of an empty library.
+            isConnected = false
             await startBackend()
             return
         }
@@ -193,7 +196,12 @@ extension AppModel {
     /// Tries the backend again (after it was started by hand, or the address changed).
     public func retryConnection() async {
         applyBackendAddress()
-        if backend.ownsServer, !(await backendAnswers()) { return }
+        if backend.ownsServer, !(await backendAnswers()) {
+            // The backend this app started is gone (it stopped, or restarting it gave
+            // up): Retry starts it again rather than doing nothing.
+            if backend.canStart { await startBackend() }
+            return
+        }
         await refreshNavigation()
         if isConnected {
             hasLoadedNavigation = true
@@ -301,7 +309,9 @@ extension AppModel {
 
     /// Moves a note to the Trash and offers Undo.
     public func trashNote(id: String) async {
-        let visible = NoteListing.sorted(NoteListing.notes(in: scope, navigation: navigation), by: .edited)
+        // In the order the list shows them (View ▸ Sort By), so the next note opened is
+        // the one that was under it.
+        let visible = NoteListing.sorted(NoteListing.notes(in: scope, navigation: navigation), by: listSort)
         do {
             try await api.trashDocument(id: id)
             if openNoteId == id {
@@ -331,8 +341,17 @@ extension AppModel {
         }
     }
 
+    /// The note list's sort (View ▸ Sort By), as `NoteListView` reads it.
+    var listSort: NoteSort {
+        listDefaults.string(forKey: "noteSort").flatMap(NoteSort.init(rawValue:)) ?? .edited
+    }
+
     public func moveNote(id: String, toFolder folderId: String?) async {
-        let previous = NoteListing.allDocuments(in: navigation.items).first { $0.id == id }?.folderId
+        let note = NoteListing.allDocuments(in: navigation.items).first { $0.id == id }
+        let previous = note?.folderId
+        // Dropped back on its own folder: nothing to do (the server would stamp it as
+        // edited now and it would jump to the top of the list).
+        if note != nil, previous == folderId { return }
         do {
             try await api.moveDocument(id: id, folderId: folderId)
             if previous != folderId {
@@ -593,7 +612,9 @@ extension AppModel {
     public func restoreBackup(_ backup: Backup) async -> Bool {
         do {
             try await api.restoreBackup(name: backup.name)
-            route = .empty
+            // Every window lets go of the note it showed (restored from Settings, the
+            // windows would otherwise keep showing the notes as they were before).
+            for window in library.windowModels + [self] { window.route = .empty }
             await refreshNavigation()
             await refreshBackups()
             show(Toast(message: "Restored the backup"))

@@ -55,6 +55,9 @@ public struct MainWindow: View {
     @State private var visibility: NavigationSplitViewVisibility = .all
     /// The layout to return to when Focus mode ends.
     @State private var layoutBeforeFocus: NavigationSplitViewVisibility = .all
+    /// The note open at the last quit, reopened once the library has loaded (opened while
+    /// the backend is still starting, it would show "Couldn't Open This Note").
+    @State private var noteToRestore: String?
     @FocusState private var isSearchFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let initialNoteId: String?
@@ -109,7 +112,12 @@ public struct MainWindow: View {
         .onChange(of: model.scope) { _, scope in storedScope = scope.storageKey }
         .onChange(of: model.openNoteId) { _, id in storedNote = id ?? "" }
         .onChange(of: model.isInspectorShown) { _, shown in storedInspector = shown }
-        .onChange(of: model.hasLoadedNavigation) { _, loaded in if loaded { dropMissingSelection() } }
+        .onChange(of: model.hasLoadedNavigation) { _, loaded in
+            guard loaded else { return }
+            if let id = noteToRestore, model.route == .empty { model.open(noteId: id) }
+            noteToRestore = nil
+            dropMissingSelection()
+        }
         .onChange(of: visibility) { _, new in
             storedColumns = ColumnLayout(new).rawValue
             if new != .detailOnly && model.isFocusMode { model.isFocusMode = false }
@@ -135,7 +143,11 @@ extension MainWindow {
         if let initialNoteId {
             model.open(noteId: initialNoteId)
         } else if !storedNote.isEmpty, model.route == .empty {
-            model.open(noteId: storedNote)
+            if model.hasLoadedNavigation || !model.connectsOnAppear {
+                model.open(noteId: storedNote)
+            } else {
+                noteToRestore = storedNote
+            }
         }
     }
 

@@ -3,6 +3,9 @@ import SwiftUI
 /// Trashed notes, newest first, with Restore and Delete Permanently.
 struct TrashListView: View {
     @Environment(AppModel.self) private var model
+    /// The note waiting for "Delete Permanently?" (the Delete key or the context menu):
+    /// it can't be undone, so it always asks, as the detail view's Delete… does.
+    @State private var confirmingDelete: TrashedDocument?
 
     var body: some View {
         @Bindable var model = model
@@ -14,9 +17,7 @@ struct TrashListView: View {
                     .contextMenu {
                         Button("Restore") { Task { await model.restore(trashedId: note.id) } }
                         Divider()
-                        Button("Delete Permanently", role: .destructive) {
-                            Task { await model.deleteForever(trashedId: note.id) }
-                        }
+                        Button("Delete Permanently…", role: .destructive) { confirmingDelete = note }
                     }
             }
         }
@@ -31,7 +32,16 @@ struct TrashListView: View {
             }
         }
         .onDeleteCommand {
-            if let id = model.selectedTrashId { Task { await model.deleteForever(trashedId: id) } }
+            confirmingDelete = model.trash.first { $0.id == model.selectedTrashId }
+        }
+        .confirmationDialog(
+            "Delete “\(confirmingDelete.map { NoteListing.displayTitle($0.title) } ?? "")” permanently?",
+            isPresented: Binding(get: { confirmingDelete != nil }, set: { if !$0 { confirmingDelete = nil } }),
+            presenting: confirmingDelete
+        ) { note in
+            Button("Delete Permanently", role: .destructive) { Task { await model.deleteForever(trashedId: note.id) } }
+        } message: { _ in
+            Text("This can't be undone.")
         }
         .toolbar {
             ToolbarItem {

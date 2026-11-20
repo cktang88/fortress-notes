@@ -89,7 +89,7 @@ struct BackendSettingsView: View {
             } header: {
                 Text("Starting the Backend")
             } footer: {
-                Text("When nothing answers at launch, Fortress starts the backend from this folder and stops it when you quit.")
+                Text("At launch, Fortress starts the backend from this folder (on another port if the address’s port is taken) and stops it when you quit. Turn this off to run the backend yourself.")
                     .foregroundStyle(.secondary)
             }
 

@@ -98,6 +98,8 @@ public final class AppModel {
     public var editorFocusRequest = 0
     /// Set false (snapshots, previews) to skip contacting the backend when a window opens.
     public var connectsOnAppear = true
+    /// Where the note list keeps its sort (`@AppStorage("noteSort")`); tests use their own.
+    @ObservationIgnored var listDefaults: UserDefaults = .standard
 
     /// The note open in the editor, if any.
     public var openNoteId: String? {
