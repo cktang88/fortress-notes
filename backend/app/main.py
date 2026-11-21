@@ -206,13 +206,7 @@ async def unexpected_error(_request: Request, exc: Exception) -> JSONResponse:
 # Serve stored files at /media/<file> (immutable caching, ranges, real types).
 app.mount("/media", media.MediaFiles(lambda: get_settings().assets_path), name="media")
 
-# Rendered note bodies and the one document ETag live in app/document_service.py
-# (shared with the batch read).
-_api_cache = document_service.responses
-
-
-def _clear_response_caches() -> None:
-    document_service.clear_caches()
+# Rendered note bodies and the one document ETag live in app/document_service.py.
 
 
 def _document_response(request: Request, document_id: str) -> Response:
@@ -223,7 +217,7 @@ def _document_response(request: Request, document_id: str) -> Response:
         raise HTTPException(404, "Block document not found")
     if http_cache.if_none_match(request.headers.get("if-none-match"), tag):
         return http_cache.not_modified(tag)
-    rendered = document_service.body(document_id, tag)
+    rendered = document_service.body(document_id)
     if rendered is None:
         raise HTTPException(404, "Block document not found")
     return http_cache.json_response(rendered[1], rendered[0])
@@ -245,35 +239,26 @@ def _written_response(document_id: str, status_code: int = 200) -> Response:
     return response
 
 
-def _tree_response(
-    document_id: str, tree: dict, validator: tuple, cache: bool = True
-) -> Response:
+def _tree_response(document_id: str, tree: dict, validator: tuple) -> Response:
     """A tree (or metadata payload) a write returned with the validator it read.
 
     ``X-Document-ETag`` is the ETag ``GET /api/block-documents/{id}`` now
-    answers 304 to; a full tree is cached for the GETs that follow.
+    answers 304 to.
     """
 
-    tag, body = document_service.remember(document_id, tree, validator, cache=cache)
+    tag, body = document_service.rendered(document_id, tree, validator)
     response = http_cache.json_response(body)
     response.headers["X-Document-ETag"] = tag
     return response
 
 
-def _workspace_response(request: Request, name: str, build, *key_parts) -> Response:
-    """A response that depends on the whole workspace (navigation, trash, ...)."""
+def _json(payload) -> Response:
+    """Large payloads (the tree, the trash) encoded directly, skipping FastAPI's
+    field-by-field ``jsonable_encoder`` walk."""
 
-    epoch, seq = block_store.change_state(_db())
-    tag = http_cache.etag(name, epoch, seq, *key_parts)
-    return http_cache.conditional(
-        request.headers.get("if-none-match"),
-        tag,
-        lambda: http_cache.render(build()),
-        _api_cache,
-        (_db(), name, *key_parts),
-    )
+    return http_cache.json_response(http_cache.render(payload))
 
-# Batch reads and moves for the native app (app/batch.py).
+# Batch moves for the native app (app/batch.py).
 from .batch import router as batch_router  # noqa: E402
 
 app.include_router(batch_router)
@@ -361,13 +346,8 @@ def ocr_store(content_hash: str, result: ExternalOcrResult) -> dict:
 
 
 @app.get("/api/navigation")
-def get_navigation(request: Request, recent_limit: int = Query(10, ge=1, le=50)):
-    return _workspace_response(
-        request,
-        "navigation",
-        lambda: block_store.navigation(_db(), recent_limit),
-        recent_limit,
-    )
+def get_navigation(recent_limit: int = Query(10, ge=1, le=50)):
+    return _json(block_store.navigation(_db(), recent_limit))
 
 
 @app.post("/api/folders", response_model=Folder, status_code=201)
@@ -456,7 +436,7 @@ def update_block_document(document_id: str, data: NoteUpdate):
         meta, validator = documents.update(document_id, data)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return _tree_response(document_id, meta, validator, cache=False)
+    return _tree_response(document_id, meta, validator)
 
 
 @app.delete("/api/block-documents/{document_id}", status_code=204)
@@ -494,26 +474,13 @@ def record_opened(document_id: str):
 
 
 @app.get("/api/block-documents/{document_id}/info")
-def get_block_document_info(document_id: str, request: Request):
+def get_block_document_info(document_id: str):
     """Metadata for an info panel: dates, where the note came from, counts."""
 
-    validator = block_store.document_info_validator(_db(), document_id)
-    if validator is None:
-        raise HTTPException(404, "Block document not found")
-
-    def build() -> bytes:
-        try:
-            return http_cache.render(sources.document_info(_db(), document_id))
-        except KeyError as exc:
-            raise HTTPException(404, "Block document not found") from exc
-
-    return http_cache.conditional(
-        request.headers.get("if-none-match"),
-        http_cache.etag("info", document_id, *validator),
-        build,
-        _api_cache,
-        (_db(), "info", document_id),
-    )
+    try:
+        return _json(sources.document_info(_db(), document_id))
+    except KeyError as exc:
+        raise HTTPException(404, "Block document not found") from exc
 
 
 @app.get("/api/block-documents/{document_id}/markdown")
@@ -778,10 +745,8 @@ def capture(data: CaptureRequest):
 
 
 @app.get("/api/trash")
-def list_trash(request: Request):
-    return _workspace_response(
-        request, "trash", lambda: workspace.list_trash(_db())
-    )
+def list_trash():
+    return _json(workspace.list_trash(_db()))
 
 
 @app.post("/api/trash/{document_id}/restore")
@@ -810,11 +775,8 @@ def empty_trash():
 
 
 @app.get("/api/backups")
-def list_backups(request: Request):
-    body = http_cache.render(backups.list_backups(backups.backup_directory(get_settings().notes_path)))
-    return http_cache.conditional(
-        request.headers.get("if-none-match"), http_cache.body_etag(body), lambda: body
-    )
+def list_backups():
+    return backups.list_backups(backups.backup_directory(get_settings().notes_path))
 
 
 @app.post("/api/backups", status_code=201)
@@ -840,7 +802,6 @@ def restore_backup(name: str):
                 safety = backups.restore_backup(_db(), directory, name)
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
-            _clear_response_caches()
             documents.rebuild_mirrors(directory / f"mirrors-before-{safety.stem}")
     except background.Busy as exc:
         raise HTTPException(409, f"{exc}; try again when it has finished") from exc
@@ -902,20 +863,10 @@ def block_link_targets(q: str = "", limit: int = Query(50, ge=1, le=200)):
 
 
 @app.get("/api/block-documents/{document_id}/backlinks", response_model=list[Backlink])
-def get_backlinks(document_id: str, request: Request, limit: int = Query(100, ge=1, le=500)):
-    # (This used to build the note's whole tree just to answer 404.)
-    validator = block_store.document_info_validator(_db(), document_id)
-    if validator is None:
+def get_backlinks(document_id: str, limit: int = Query(100, ge=1, le=500)):
+    if not block_store.document_exists(_db(), document_id):
         raise HTTPException(404, "Block document not found")
-    return http_cache.conditional(
-        request.headers.get("if-none-match"),
-        http_cache.etag("backlinks", document_id, limit, *validator[:2]),
-        lambda: http_cache.render(
-            block_store.document_backlinks(_db(), document_id, limit)
-        ),
-        _api_cache,
-        (_db(), "backlinks", document_id, limit),
-    )
+    return _json(block_store.document_backlinks(_db(), document_id, limit))
 
 
 @app.post("/api/block-documents/{document_id}/transactions")
@@ -941,7 +892,7 @@ def apply_block_transaction(
         )
         if not validator:
             return _written_response(document_id)
-        return _tree_response(document_id, tree, validator[0], cache=response == "document")
+        return _tree_response(document_id, tree, validator[0])
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except block_store.DocumentRevisionConflict as exc:

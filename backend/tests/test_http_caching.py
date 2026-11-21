@@ -1,4 +1,4 @@
-"""ETags, 304s, compression, media caching, batch reads and error shapes."""
+"""The note ETag and 304s, Cache-Control, media caching and error shapes."""
 
 import hashlib
 import sqlite3
@@ -15,14 +15,13 @@ from starlette.routing import Mount
 
 from app import block_store, http_cache
 from app.media import MediaFiles
-from app.models import BlockOperation
 
 from support import make_settings, use_settings
 
 
 class ApiCase(unittest.TestCase):
     def setUp(self) -> None:
-        from app import documents, main
+        from app import main
 
         self.main = main
         self._directory = tempfile.TemporaryDirectory()
@@ -33,7 +32,6 @@ class ApiCase(unittest.TestCase):
         patcher = use_settings(settings)
         patcher.start()
         self.addCleanup(patcher.stop)
-        main._clear_response_caches()
         self.client = TestClient(main.app, raise_server_exceptions=False)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
@@ -170,10 +168,14 @@ class DocumentValidatorTests(ApiCase):
     def test_reading_never_writes_and_opening_keeps_the_etag(self) -> None:
         note = self.create("Note", "x")
         url = f"/api/block-documents/{note['id']}"
-        state = block_store.change_state(self.db)
+        def change_state():
+            with closing(sqlite3.connect(self.db)) as connection:
+                return connection.execute("SELECT epoch, seq FROM change_log").fetchone()
+
+        state = change_state()
         first = self.client.get(url)
         self.assertNotIn("last_opened_at", first.json())
-        self.assertEqual(block_store.change_state(self.db), state)  # a GET wrote nothing
+        self.assertEqual(change_state(), state)  # a GET wrote nothing
         block_store._opened_marks.clear()
         self.assertEqual(self.client.post(f"{url}/opened").status_code, 204)
         self.assertEqual(self.revalidate(url, first.headers["etag"]), 304)
@@ -217,54 +219,33 @@ class DocumentValidatorTests(ApiCase):
         self.assertEqual(response.json(), {"detail": "Block document not found"})
 
 
-class WorkspaceValidatorTests(ApiCase):
-    def test_navigation_trash_info_backlinks_and_backups_revalidate(self) -> None:
+class WorkspaceResponseTests(ApiCase):
+    def test_workspace_routes_are_plain_no_cache_json(self) -> None:
         note = self.create("Note", "x")
-        other = self.create("Other", f"[[{note['id']}|Note]]")
-        urls = [
+        self.create("Other", f"[[{note['id']}|Note]]")
+        for url in [
             "/api/navigation",
             "/api/trash",
             f"/api/block-documents/{note['id']}/info",
             f"/api/block-documents/{note['id']}/backlinks",
             "/api/backups",
-        ]
-        tags = {}
-        for url in urls:
+        ]:
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200, url)
             self.assertEqual(response.headers["cache-control"], "no-cache", url)
-            tags[url] = response.headers["etag"]
-            self.assertEqual(self.revalidate(url, tags[url]), 304, url)
-        self.assertEqual(len(self.client.get(urls[3]).json()), 1)
-
-        # Editing the linking note changes backlinks/info/navigation.
-        self.transact(other["id"], {
-            "operation": "insert", "block_id": "01J00000000000000000000002", "type": "paragraph",
-            "content": [{"type": "text", "text": "more"}],
-        })
-        for url in urls[:1] + urls[2:4]:
-            self.assertEqual(self.revalidate(url, tags[url]), 200, url)
-        self.client.delete(f"/api/block-documents/{other['id']}")
-        self.assertEqual(self.revalidate("/api/trash", tags["/api/trash"]), 200)
-        self.assertEqual(self.client.post("/api/backups").status_code, 201)
-        self.assertEqual(self.revalidate("/api/backups", tags["/api/backups"]), 200)
-
-    def test_cached_navigation_matches_a_fresh_render(self) -> None:
-        self.create("Note", "x")
-        first = self.client.get("/api/navigation").json()
-        second = self.client.get("/api/navigation").json()
-        self.assertEqual(first, second)
-        self.assertEqual(first, block_store.navigation(self.db))
-        self.client.post("/api/folders", json={"name": "Folder"})
+        self.assertEqual(len(self.client.get(f"/api/block-documents/{note['id']}/backlinks").json()), 1)
         self.assertEqual(self.client.get("/api/navigation").json(), block_store.navigation(self.db))
+        for url in ["/api/block-documents/nope/info", "/api/block-documents/nope/backlinks"]:
+            self.assertEqual(self.client.get(url).status_code, 404, url)
 
-    def test_restore_never_reuses_an_old_validator(self) -> None:
-        self.create("Note", "x")
+    def test_restore_never_reuses_an_old_document_etag(self) -> None:
+        note = self.create("Note", "x")
+        url = f"/api/block-documents/{note['id']}"
         backup = self.client.post("/api/backups").json()["name"]
-        before = self.client.get("/api/navigation").headers["etag"]
+        before = self.client.get(url).headers["etag"]
         restored = self.client.post(f"/api/backups/{backup}/restore")
         self.assertEqual(restored.status_code, 200, restored.text)
-        self.assertEqual(self.revalidate("/api/navigation", before), 200)
+        self.assertEqual(self.revalidate(url, before), 200)
 
 
 class AskStreamTests(ApiCase):
@@ -290,14 +271,15 @@ class ErrorShapeTests(ApiCase):
     def test_unknown_route_and_unexpected_errors_are_json(self) -> None:
         self.assertEqual(self.client.get("/api/nothing-here").json(), {"detail": "Not Found"})
         with patch.object(block_store, "navigation", side_effect=RuntimeError("boom")):
-            self.main._clear_response_caches()
             response = self.client.get("/api/navigation")
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json(), {"detail": "Internal server error"})
 
     def test_a_locked_database_is_503_json(self) -> None:
         error = sqlite3.OperationalError("database is locked")
-        with patch.object(block_store, "change_state", side_effect=error):
+        from app import workspace
+
+        with patch.object(workspace, "list_trash", side_effect=error):
             response = self.client.get("/api/trash")
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.headers["retry-after"], "1")

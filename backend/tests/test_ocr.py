@@ -485,7 +485,7 @@ class OcrTextIsSearchableTests(unittest.TestCase):
         prompt = " ".join(str(arg) for arg in fake.call_args.args)
         self.assertIn("Zeppelin NT flight 7731", prompt)
 
-    def test_info_shows_the_text_and_status_and_its_etag_changes(self) -> None:
+    def test_info_shows_the_text_and_status_and_follows_new_text(self) -> None:
         response = self.client.get(f"/api/block-documents/{self.document_id}/info")
         [picture] = response.json()["picture_text"]
         self.assertEqual(picture["status"], "done")
@@ -496,14 +496,11 @@ class OcrTextIsSearchableTests(unittest.TestCase):
         status = self.client.get("/api/ocr").json()
         self.assertEqual((status["done"], status["queued"]), (1, 0))
 
-        etag = response.headers["etag"]
         with patch.object(ocr, "MODEL", "next-model/1"), patch.object(
             ocr, "read_asset", return_value=ocr.Result("Zeppelin NT flight 7731, gate B", "ocr")
         ):
             ocr.process_one(self.db)
-        again = self.client.get(
-            f"/api/block-documents/{self.document_id}/info", headers={"If-None-Match": etag}
-        )
+        again = self.client.get(f"/api/block-documents/{self.document_id}/info")
         self.assertEqual(again.status_code, 200)
         self.assertIn("gate B", again.json()["picture_text"][0]["text"])
 
@@ -572,14 +569,10 @@ class VisionTextIsSearchableTests(OcrTextIsSearchableTests):
             self.assertEqual(ok.status_code, 200)
 
     # The inherited CPU-only expectation no longer holds once Vision's text is in.
-    def test_info_shows_the_text_and_status_and_its_etag_changes(self) -> None:
-        response = self.client.get(f"/api/block-documents/{self.document_id}/info")
-        etag = response.headers["etag"]
+    def test_info_shows_the_text_and_status_and_follows_new_text(self) -> None:
         digest = hashlib.sha256(b"\x89PNG fake screenshot").hexdigest()
         self.client.put(f"/api/ocr/{digest}", json={"model": "apple-vision/27", "text": "gate B"})
-        again = self.client.get(
-            f"/api/block-documents/{self.document_id}/info", headers={"If-None-Match": etag}
-        )
+        again = self.client.get(f"/api/block-documents/{self.document_id}/info")
         self.assertEqual(again.status_code, 200)
         self.assertEqual(again.json()["picture_text"][0]["text"], "gate B")
 

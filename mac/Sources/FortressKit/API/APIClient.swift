@@ -30,13 +30,13 @@ public struct APIError: LocalizedError, Sendable {
 
 /// Talks to the Fortress Notes backend (FastAPI, by default on localhost:8000).
 ///
-/// Copies share one `APIStore`: concurrent identical GETs make one request, documents are
-/// cached (and kept current from every mutation's answer), and ETags are honoured.
+/// Copies share one `APIStore`: concurrent identical GETs make one request, and notes are
+/// cached (kept current from every mutation's answer) and revalidated with their ETags.
 public struct APIClient: Sendable {
     public var baseURL: URL
     /// Internal so feature-area extensions (e.g. Finding) send through the same session.
     let session: URLSession
-    /// In-flight requests, caches and counters, shared by every copy of this client.
+    /// In-flight requests, the note cache and a request counter, shared by every copy.
     public let store: APIStore
 
     public init(
@@ -74,13 +74,9 @@ public struct APIClient: Sendable {
     /// make one request). Concurrent reads of one note share one request.
     public func document(id: String) async throws -> BlockDocument {
         if let cached = store.freshDocument(id) { return cached }
-        do {
-            return try await store.coalesced("GET document \(id) @\(store.epoch)") { [self] in
-                // A read that finished between the check above and here filled the cache.
-                if let cached = store.freshDocument(id) { return cached }
-                return try await fetchDocument(id: id)
-            }
-        } catch is PrefetchMiss {
+        return try await store.coalesced("GET document \(id) @\(store.epoch)") { [self] in
+            // A read that finished between the check above and here filled the cache.
+            if let cached = store.freshDocument(id) { return cached }
             return try await fetchDocument(id: id)
         }
     }
@@ -99,7 +95,6 @@ public struct APIClient: Sendable {
         let (data, response) = try await load(request)
         if response.statusCode == 304, let cached {
             store.refresh(id)
-            store.count { $0.notModified += 1 }
             return cached.document
         }
         do {
@@ -218,7 +213,7 @@ public struct APIClient: Sendable {
                     var request = try makeRequest(
                         "POST", "api/ask", body: try JSONEncoder().encode(["question": question]), kind: .stream)
                     request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
-                    store.count { $0.requests += 1 }
+                    store.countRequest()
                     let (bytes, response) = try await session.bytes(for: request)
                     if let http = response as? HTTPURLResponse { try check(http, body: nil) }
                     for try await line in bytes.lines where !line.isEmpty {
@@ -306,8 +301,8 @@ public struct APIClient: Sendable {
         request.httpMethod = method
         let kind = kind ?? (method == "GET" ? .metadata : .mutation)
         request.timeoutInterval = kind.timeout
-        // The client keeps its own caches; nothing (least of all a mutation) is answered
-        // from URLCache.
+        // The client keeps its own note cache; nothing (least of all a mutation) is
+        // answered from URLCache.
         request.cachePolicy = .reloadIgnoringLocalCacheData
         if let body {
             request.httpBody = body
@@ -316,32 +311,18 @@ public struct APIClient: Sendable {
         return request
     }
 
-    /// Coalesced, ETag-validated, counted GET. Internal so feature-area extensions
-    /// (Finding's `documentInfo`) go through the store too.
+    /// Coalesced, counted GET. Internal so feature-area extensions (Finding's
+    /// `documentInfo`) go through the store too.
     func get<T: Decodable & Sendable>(
         _ path: String, query: [String: String] = [:], kind: RequestKind = .metadata
     ) async throws -> T {
         let request = try makeRequest("GET", path, query: query, kind: kind)
         let key = "GET \(request.url!.absoluteString) \(T.self) @\(store.epoch)"
-        return try await store.coalesced(key) { [self] in try await performGET(request) }
-    }
-
-    /// A GET that sends the stored ETag and answers a 304 from the stored body.
-    private func performGET<T: Decodable>(_ request: URLRequest) async throws -> T {
-        var request = request
-        let key = request.url!.absoluteString
-        let stored = store.validated(key)
-        if let stored { request.setValue(stored.etag, forHTTPHeaderField: "If-None-Match") }
-        let (data, response) = try await load(request)
-        if response.statusCode == 304, let stored {
-            store.count { $0.notModified += 1 }
-            return try Self.decode(T.self, from: stored.body)
+        return try await store.coalesced(key) { [self] in
+            let (data, response) = try await load(request)
+            try check(response, body: data)
+            return try Self.decode(T.self, from: data)
         }
-        try check(response, body: data)
-        if let etag = response.value(forHTTPHeaderField: "ETag") {
-            store.keepValidated(key, etag: etag, body: data)
-        }
-        return try Self.decode(T.self, from: data)
     }
 
     private func send<T: Decodable>(_ method: String, _ path: String, body: [String: JSONValue]) async throws -> T {
@@ -372,7 +353,7 @@ public struct APIClient: Sendable {
 
     /// Sends a request through the session, counting it.
     func load(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        store.count { $0.requests += 1 }
+        store.countRequest()
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         return (data, http)
@@ -392,6 +373,3 @@ public struct APIClient: Sendable {
         throw APIError(status: response.statusCode, body: body)
     }
 }
-
-/// A prefetch that didn't bring the note a reader joined it for.
-struct PrefetchMiss: Error {}

@@ -124,10 +124,10 @@ with **422**.
 - `provenance.py`, `sources.py` — where notes came from, and re-imports (§7a).
 - `main.py` — FastAPI app and routes.
 - `document_service.py` — rendered note bodies and the one document ETag, shared by
-  the single GET, the batch read and the writes that answer with a tree.
-- `http_cache.py` — ETags, `If-None-Match` → 304, rendered-body caches.
+  the GET and the writes that answer with a tree.
+- `http_cache.py` — ETags, `If-None-Match` → 304, JSON responses.
 - `media.py` — `/media` file serving (immutable caching, ranges, content types).
-- `batch.py` — batch reads and moves for the native app.
+- `batch.py` — batch moves for the native app.
 - `onenote_import.py` — OneNote importer: runs `fortress-onenote`, imports its manifest (re-imports refresh changed pages), import jobs (§7b).
 
 ### API
@@ -154,7 +154,6 @@ with **422**.
 | `GET` | `/api/ocr/pending` | `?model=apple-vision/…&limit=8` | pictures/PDFs an external reader has yet to read (§6) |
 | `GET` · `PUT` | `/api/ocr/{content_hash}` | — · `{model, status, text, method, pages, error, duration_ms}` | all text read from one picture/PDF · store an external reader's result (§6) |
 | `GET` | `/media/{file}` | — | stored file bytes (ranges, immutable caching; see below) |
-| `POST` | `/api/batch/block-documents` | `{ids: [≤50], known: {id: ETag}}` | `{documents: [tree], etags: {id: ETag}, unchanged: [id], missing: [id]}`; never writes |
 | `POST` | `/api/batch/move` | `{documents: [{id, folder_id}], folders: [{id, parent_id}]}` | `{folders, documents}` (counts moved) |
 | `POST` | `/api/block-documents/{id}/transactions` | `BlockTransaction`, `?response=meta\|document` | metadata payload (`children: []`, the default) or the tree; header `X-Document-ETag` |
 | `GET` | `/api/trash` | — | trashed documents, newest first |
@@ -177,32 +176,20 @@ with **422**.
 
 ### HTTP caching, compression, errors
 
-- **Validators.** These GETs carry a strong `ETag` and `Cache-Control: no-cache`
-  (keep, but revalidate); a request whose `If-None-Match` matches gets `304` with no
-  body:
-  - `GET /api/block-documents/{id}` — changes with anything in the payload: the note's
-    own rows (blocks, user attrs, links, title/provenance/...)
-    and every linked note or block (titles and text in
-    `resolved_links`, `[[id|Title]]` labels).
-  - `GET /api/navigation` (per `recent_limit`), `GET /api/trash`,
-    `GET /api/block-documents/{id}/info`, `GET /api/block-documents/{id}/backlinks`
-    — change with any change in the workspace (they show other notes); `/info` also
-    with `last_opened_at`.
-  - One document validator everywhere: the batch read's `known`/`etags` are these
-    ETags, and every write that answers with a note sends `X-Document-ETag`.
-  - `GET /api/backups` — changes with the snapshot list.
-
-  The server tracks changes with SQLite triggers (`change_log.seq`, an `epoch` renewed
-  by every restore, and `documents.change_seq`), so writes from any code path — and
-  restores — invalidate validators. Other API responses also get
+- **Validators.** `GET /api/block-documents/{id}` carries a strong `ETag`; a request
+  whose `If-None-Match` matches gets `304` with no body. The ETag changes with anything
+  in the payload: the note's own rows (blocks, user attrs, links,
+  title/provenance/...) and every linked note or block (titles and text in
+  `resolved_links`, `[[id|Title]]` labels). Every write that answers with a note sends
+  the same ETag as `X-Document-ETag`. The server tracks changes with SQLite triggers
+  (`change_log.seq`, an `epoch` renewed by every restore, and `documents.change_seq`),
+  so writes from any code path — and restores — invalidate it. API responses get
   `Cache-Control: no-cache` unless they set their own (the Ask stream: `no-store`).
-- **Reads never write.** `GET /api/block-documents/{id}` and the batch read change
-  nothing (no `last_opened_at`, no repair): the app records an open with
-  `POST .../opened`, and the empty paragraph an empty note needs is made when the
-  note is created. A write's
-  `X-Document-ETag` is the ETag the next GET of that note answers 304 to.
-- **Server caches.** Rendered bodies are cached per validator (documents: 256 entries
-  / 64 MB; others: 256 / 32 MB), so repeated GETs skip SQLite and JSON encoding.
+  Other GETs (navigation, trash, info, backlinks, backups) are plain JSON: on a
+  loopback API rebuilding them is cheaper than keeping them current.
+- **Reads never write.** `GET /api/block-documents/{id}` changes nothing (no
+  `last_opened_at`, no repair): the app records an open with `POST .../opened`, and
+  the empty paragraph an empty note needs is made when the note is created.
 - **Media.** `/media/<name>` files named by a ULID (uploads) or SHA-256 (imports) never
   change: `Cache-Control: public, max-age=31536000, immutable`, `ETag` = the SHA-256
   for content-addressed names (else size/mtime), `Last-Modified`, `Accept-Ranges`

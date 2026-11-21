@@ -141,7 +141,7 @@ public final class EditorSession {
     /// first, so skimming the list (a selection every few milliseconds, each view
     /// cancelled by the next) fetches only the note the person stops on.
     func load(debounce: Duration? = nil, latest: Bool = false) async {
-        if let debounce, api.store.freshDocument(documentId, counting: false) == nil {
+        if let debounce, api.store.freshDocument(documentId) == nil {
             try? await Task.sleep(for: debounce)
             if Task.isCancelled { return }
         }

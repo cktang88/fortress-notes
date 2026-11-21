@@ -25,31 +25,17 @@ import Testing
         // A long max age: on a busy CI machine (other suites hold the main thread while
         // they render) this test has taken over 30 s, the default, and the last read
         // then revalidated, which is right but not what this test is about.
-        var options = APIStore.Options()
-        options.documentMaxAge = 3600
-        let api = SpyProtocol.client(options: options)
+        let api = SpyProtocol.client(documentMaxAge: 3600)
         async let a = api.document(id: "d1")
         async let b = api.document(id: "d1")
         async let c = api.document(id: "d1")
         let results = try await [a, b, c]
         #expect(results.allSatisfy { $0.id == "d1" })
         #expect(SpyProtocol.count("GET", "/api/block-documents/d1") == 1)
-        // Joined the request in flight (or, on a busy machine, came late and found the cache).
-        #expect(api.store.stats.coalesced + api.store.stats.cacheHits == 2)
 
         // And reading it again right away comes from memory.
         _ = try await api.document(id: "d1")
         #expect(SpyProtocol.count("GET", "/api/block-documents/d1") == 1)
-    }
-
-    @Test func withoutTheStoreEveryReadIsARequest() async throws {
-        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 0.02) }
-        let api = SpyProtocol.client(options: .uncached)
-        async let a = api.document(id: "d1")
-        async let b = api.document(id: "d1")
-        _ = try await [a, b]
-        _ = try await api.document(id: "d1")
-        #expect(SpyProtocol.count("GET", "/api/block-documents/d1") == 3)
     }
 
     /// A stale cached note is revalidated with its ETag; a 304 is answered from memory.
@@ -58,31 +44,12 @@ import Testing
             if seen.headers["If-None-Match"] == "\"r1\"" { return SpyProtocol.Reply(status: 304, body: Data()) }
             return .document(SpyJSON.document("d1", title: "First"), etag: "\"r1\"")
         }
-        var options = APIStore.Options()
-        options.documentMaxAge = 0
-        let api = SpyProtocol.client(options: options)
+        let api = SpyProtocol.client(documentMaxAge: 0)
         let first = try await api.document(id: "d1")
         let second = try await api.document(id: "d1")
         #expect(first == second)
         #expect(SpyProtocol.seen.count == 2)
         #expect(SpyProtocol.seen[1].headers["If-None-Match"] == "\"r1\"")
-        #expect(api.store.stats.notModified == 1)
-    }
-
-    /// GETs other than documents (navigation) honour ETags too.
-    @Test func navigationAnswers304FromTheStoredBody() async throws {
-        let body = SpyJSON.navigation([.document(SpyJSON.note("n1"))])
-        SpyProtocol.reset { seen in
-            seen.headers["If-None-Match"] == "\"nav1\""
-                ? SpyProtocol.Reply(status: 304, body: Data())
-                : .json(body, headers: ["ETag": "\"nav1\""])
-        }
-        let api = SpyProtocol.client()
-        let first = try await api.navigation(recentLimit: 20)
-        let second = try await api.navigation(recentLimit: 20)
-        #expect(first == second)
-        #expect(SpyProtocol.seen.last?.headers["If-None-Match"] == "\"nav1\"")
-        #expect(api.store.stats.notModified == 1)
     }
 
     /// A save's answer is the new note: reading it afterwards needs no request.
@@ -94,9 +61,7 @@ import Testing
         }
         // Served from memory within `documentMaxAge` (2 s by default; a busy CI machine
         // can stall longer than that between two lines).
-        var options = APIStore.Options()
-        options.documentMaxAge = 3600
-        let api = SpyProtocol.client(options: options)
+        let api = SpyProtocol.client(documentMaxAge: 3600)
         _ = try await api.document(id: "d1")
         _ = try await api.apply(BlockTransaction(baseRevision: 1, operations: []), to: "d1")
         let after = try await api.document(id: "d1")
@@ -178,12 +143,16 @@ import Testing
 
     /// One of two readers going away doesn't cancel the other's request.
     @Test func cancellingOneReaderKeepsTheSharedRequest() async throws {
-        SpyProtocol.reset { _ in .document(SpyJSON.document("d1"), delay: 0.5) }
+        // Held open until both readers wait on it (a delay a busy runner can outlast).
+        let answer = StubGate()
+        SpyProtocol.reset { _ in .json(SpyJSON.encoded(SpyJSON.document("d1")), gate: answer) }
         let api = SpyProtocol.client()
         let leaving = Task { try await api.document(id: "d1") }
         let staying = Task { try await api.document(id: "d1") }
-        try await waitUntil { api.store.stats.coalesced >= 1 && SpyProtocol.seen.count >= 1 }
+        try await waitUntil { api.store.waiters("GET document d1 @\(api.store.epoch)") >= 2 }
         leaving.cancel()
+        try await waitUntil { api.store.waiters("GET document d1 @\(api.store.epoch)") == 1 }
+        answer.open()
         #expect(try await staying.value.id == "d1")
         #expect(SpyProtocol.count("GET", "/api/block-documents/d1") == 1)
     }
@@ -198,10 +167,11 @@ import Testing
         SpyProtocol.reset { _ in
             calls.next() == 0 ? .json(old, delay: 0.5) : .json(new)
         }
-        // Without coalescing both refreshes go out (a mutation in between does the same).
-        let model = makeModel(SpyProtocol.client(options: .uncached))
+        let api = SpyProtocol.client()
+        let model = makeModel(api)
         async let first: Void = model.refreshNavigation()
         try await waitUntil { SpyProtocol.seen.count >= 1 }
+        api.store.mutationStarted()  // A change in between: the second refresh doesn't join the first.
         await model.refreshNavigation()
         await first
         #expect(model.navigation.items.first.map { if case .document(let n) = $0 { n.title } else { "" } } == "New")
@@ -211,15 +181,23 @@ import Testing
     /// (holding the tree from before the save) arrived.
     @Test func editDuringARefreshSurvivesIt() async throws {
         let before = SpyJSON.navigation([.document(SpyJSON.note("n1", title: "Before"))])
-        SpyProtocol.reset { _ in .json(before, delay: 0.5) }
+        let answer = StubGate()
+        SpyProtocol.reset { _ in .json(before, gate: answer) }
         let model = makeModel(SpyProtocol.client())
         model.navigation = NavigationResponse(items: [.document(SpyJSON.note("n1", title: "Before"))], recent: [])
         async let refresh: Void = model.refreshNavigation()
         try await waitUntil { SpyProtocol.seen.count >= 1 }
         model.noteDidChange(SpyJSON.document("n1", revision: 2, title: "After", updatedAt: "2026-11-18T10:00:00.000000+00:00"))
+        answer.open()
         await refresh
         #expect(model.openNoteTitle("n1") == "After")
         #expect(model.navigation.recent.first?.title == "After")
+
+        // A refresh that started after the save shows the server's tree as it is.
+        SpyProtocol.reset { _ in .json(SpyJSON.navigation([.document(SpyJSON.note("n1", title: "Server"))])) }
+        model.api.store.mutationStarted()
+        await model.refreshNavigation()
+        #expect(model.openNoteTitle("n1") == "Server")
     }
 
     /// Bug: a note edited that wasn't among the 20 most recent never showed up in Recent
@@ -236,11 +214,18 @@ import Testing
         #expect(model.navigation.recent.count == 20)
     }
 
-    /// Bug: every new note, move, trash and folder change reloaded the whole tree.
-    @Test func changesPatchTheTreeWithoutReloadingIt() async throws {
+    /// Every change to notes and folders ends with a reload of the tree: the server's
+    /// is the truth (NavigationEdits used to re-implement its moves on the client).
+    @Test func changesReloadTheTree() async throws {
+        let creates = Counter()
         SpyProtocol.reset { seen in
             switch (seen.method, seen.path) {
-            case ("POST", "/api/block-documents"): return .document(SpyJSON.document("new", title: ""))
+            case ("POST", "/api/block-documents"):
+                _ = creates.next()
+                return .document(SpyJSON.document("new", title: ""))
+            case ("GET", "/api/navigation"):
+                let notes = [SpyJSON.note("b")] + (creates.value > 0 ? [SpyJSON.note("new", updatedAt: "2026-11-19T00:00:00.000000+00:00")] : [])
+                return .json(SpyJSON.navigation(notes.map(NavigationNode.document)))
             case ("POST", "/api/folders"): return .json(Data(#"{"id":"f2","parent_id":null,"name":"New Folder","position":1}"#.utf8), status: 201)
             case ("PATCH", "/api/folders/f2"): return .json(Data(#"{"id":"f2","parent_id":null,"name":"Ideas","position":1}"#.utf8))
             case ("DELETE", _): return SpyProtocol.Reply(status: 204, body: Data())
@@ -248,35 +233,33 @@ import Testing
             }
         }
         let model = makeModel(SpyProtocol.client())
-        model.navigation = NavigationResponse(
-            items: [.folder(NavigationFolder(id: "f1", parentId: nil, name: "Work", position: 0, children: [.document(SpyJSON.note("a", folder: "f1"))])),
-                    .document(SpyJSON.note("b"))],
-            recent: [SpyJSON.note("a", folder: "f1"), SpyJSON.note("b")])
+        model.navigation = NavigationResponse(items: [.document(SpyJSON.note("b"))], recent: [SpyJSON.note("b")])
 
         await model.newNote()
         #expect(NoteListing.allDocuments(in: model.navigation.items).contains { $0.id == "new" })
         #expect(model.navigation.recent.first?.id == "new")
         #expect(model.openNoteId == "new")
+        #expect(SpyProtocol.count("GET", "/api/navigation") == 1)
 
         await model.moveNote(id: "b", toFolder: "f1")
-        #expect(NoteListing.folder(id: "f1", in: model.navigation.items)?.children.contains { $0.id == "document:b" } == true)
-
-        await model.trashNote(id: "a")
-        #expect(!NoteListing.allDocuments(in: model.navigation.items).contains { $0.id == "a" })
-        #expect(!model.navigation.recent.contains { $0.id == "a" })
-
+        await model.trashNote(id: "b")
         await model.newFolder()
         await model.renameFolder(id: "f2", to: "Ideas")
-        #expect(NoteListing.folder(id: "f2", in: model.navigation.items)?.name == "Ideas")
-
-        #expect(SpyProtocol.count("GET", "/api/navigation") == 0)
+        #expect(SpyProtocol.count("GET", "/api/navigation") == 5)
         #expect(model.notice == nil)
     }
 
     /// Bug: deleting a folder sent one move per note and subfolder in it.
     @Test func deletingAFolderMovesItsContentsInOneRequest() async throws {
         SpyProtocol.reset { seen in
-            seen.method == "DELETE" ? SpyProtocol.Reply(status: 204, body: Data()) : .json(Data(#"{"folders":1,"documents":3}"#.utf8))
+            switch seen.method {
+            case "DELETE": return SpyProtocol.Reply(status: 204, body: Data())
+            case "GET":
+                // The server's tree afterwards: the folder's contents moved up.
+                let sub = NavigationNode.folder(NavigationFolder(id: "sub", parentId: nil, name: "Sub", position: 0, children: []))
+                return .json(SpyJSON.navigation([sub] + (1...3).map { .document(SpyJSON.note("n\($0)")) }))
+            default: return .json(Data(#"{"folders":1,"documents":3}"#.utf8))
+            }
         }
         let model = makeModel(SpyProtocol.client())
         let children: [NavigationNode] = (1...3).map { .document(SpyJSON.note("n\($0)", folder: "f1")) }
@@ -284,7 +267,7 @@ import Testing
         model.navigation = NavigationResponse(
             items: [.folder(NavigationFolder(id: "f1", parentId: nil, name: "Old", position: 0, children: children))], recent: [])
         await model.deleteFolder(id: "f1")
-        #expect(SpyProtocol.seen.map { "\($0.method) \($0.path)" } == ["POST /api/batch/move", "DELETE /api/folders/f1"])
+        #expect(SpyProtocol.seen.map { "\($0.method) \($0.path)" } == ["POST /api/batch/move", "DELETE /api/folders/f1", "GET /api/navigation"])
         #expect(NoteListing.folder(id: "f1", in: model.navigation.items) == nil)
         #expect(NoteListing.folder(id: "sub", in: model.navigation.items)?.parentId == nil)
         #expect(NoteListing.allDocuments(in: model.navigation.items).allSatisfy { $0.folderId == nil })
@@ -292,71 +275,16 @@ import Testing
 
     // MARK: Prefetch
 
-    /// Prefetching the neighbours is one request; opening them is then instant, and a
-    /// note opened while its prefetch is in flight joins it.
-    @Test func prefetchLoadsNeighboursInOneRequest() async throws {
-        // The batch answers when the test says so (after the open has joined it), not
-        // after a delay a busy machine could outlast before the test looks.
-        let answer = StubGate()
-        SpyProtocol.reset { seen in
-            if seen.path == "/api/batch/block-documents" {
-                struct Asked: Decodable { var ids: [String] }
-                let ids = (try? JSONDecoder().decode(Asked.self, from: seen.body))?.ids ?? []
-                let documents = ids.map { SpyJSON.document($0) }
-                let body = try! JSONSerialization.data(withJSONObject: [
-                    "documents": documents.map { try! JSONSerialization.jsonObject(with: SpyJSON.encoded($0)) },
-                    "etags": Dictionary(uniqueKeysWithValues: ids.map { ($0, "\"e-\($0)\"") }),
-                    "unchanged": [String](), "missing": [String](),
-                ])
-                return .json(body, gate: answer)
-            }
-            return .document(SpyJSON.document(String(seen.path.split(separator: "/").last!)))
-        }
-        let api = SpyProtocol.client()
+    /// Prefetching the neighbours loads them with plain GETs; opening them is then instant.
+    @Test func prefetchLoadsNeighbours() async throws {
+        SpyProtocol.reset { seen in .document(SpyJSON.document(String(seen.path.split(separator: "/").last!))) }
+        let api = SpyProtocol.client(documentMaxAge: 3600)
         let model = makeModel(api)
-        let prefetch = Task { await model.prefetch(noteIds: ["n2", "n3"]) }
-        try await waitUntil { api.store.isInFlight("GET document n2 @\(api.store.epoch)") }
-        let coalescedBefore = api.store.stats.coalesced
-        let opening = Task { try await api.document(id: "n2") }  // while the batch is in flight
-        try await waitUntil { api.store.stats.coalesced > coalescedBefore }
-        answer.open()
-        let joined = try await opening.value
-        await prefetch.value
-        let cached = try await api.document(id: "n3")
-        #expect(joined.id == "n2" && cached.id == "n3")
-        #expect(SpyProtocol.seen.map(\.path) == ["/api/batch/block-documents"])
-        #expect(SpyProtocol.seen.first?.headers["X-Fortress-Prefetch"] == "1")
-    }
-
-    /// One validator: a prefetch sends the ETags of the notes it holds (not revisions),
-    /// keeps the ETags it gets back, and a note opened later is revalidated with them.
-    @Test func prefetchUsesETagsBothWays() async throws {
-        SpyProtocol.reset { seen in
-            if seen.path == "/api/batch/block-documents" {
-                struct Asked: Decodable { var ids: [String]; var known: [String: String] }
-                let asked = try! JSONDecoder().decode(Asked.self, from: seen.body)
-                let unchanged = asked.ids.filter { asked.known[$0] == "\"e-\($0)\"" }
-                let sent = asked.ids.filter { !unchanged.contains($0) }
-                let body = try! JSONSerialization.data(withJSONObject: [
-                    "documents": sent.map { try! JSONSerialization.jsonObject(with: SpyJSON.encoded(SpyJSON.document($0))) },
-                    "etags": Dictionary(uniqueKeysWithValues: sent.map { ($0, "\"e-\($0)\"") }),
-                    "unchanged": unchanged, "missing": [String](),
-                ])
-                return .json(body)
-            }
-            if seen.headers["If-None-Match"] == "\"e-n2\"" { return SpyProtocol.Reply(status: 304, body: Data()) }
-            return .document(SpyJSON.document("n2"))
-        }
-        var options = APIStore.Options()
-        options.documentMaxAge = 0
-        let api = SpyProtocol.client(options: options)
-        await api.prefetchDocuments(ids: ["n2"])
-        await api.prefetchDocuments(ids: ["n2"])  // stale by now: sent with its ETag
+        await model.prefetch(noteIds: ["n2", "n3"])
         #expect(try await api.document(id: "n2").id == "n2")
-        #expect(SpyProtocol.seen.count == 3)
-        #expect(String(decoding: SpyProtocol.seen[1].body, as: UTF8.self).contains("e-n2"))
-        #expect(SpyProtocol.seen[2].headers["If-None-Match"] == "\"e-n2\"")
-        #expect(api.store.stats.notModified == 1)
+        #expect(try await api.document(id: "n3").id == "n3")
+        #expect(Set(SpyProtocol.seen.map(\.path)) == ["/api/block-documents/n2", "/api/block-documents/n3"])
+        #expect(SpyProtocol.seen.count == 2)
     }
 
     /// A save answered with the whole note and its `X-Document-ETag`: the next read
@@ -369,15 +297,12 @@ import Testing
             if seen.headers["If-None-Match"] == "\"r2\"" { return SpyProtocol.Reply(status: 304, body: Data()) }
             return .document(SpyJSON.document("d1", revision: 1), etag: "\"r1\"")
         }
-        var options = APIStore.Options()
-        options.documentMaxAge = 0
-        let api = SpyProtocol.client(options: options)
+        let api = SpyProtocol.client(documentMaxAge: 0)
         _ = try await api.document(id: "d1")
         _ = try await api.apply(BlockTransaction(baseRevision: 1, operations: []), to: "d1")
         #expect(SpyProtocol.seen.last?.query?.contains("response=document") == true)
         #expect(try await api.document(id: "d1").revision == 2)
         #expect(SpyProtocol.seen.last?.headers["If-None-Match"] == "\"r2\"")
-        #expect(api.store.stats.notModified == 1)
     }
 
     /// A rename is answered with metadata only: the cached note keeps its blocks.
@@ -390,9 +315,7 @@ import Testing
             }
             return .document(SpyJSON.document("d1", title: "Loaded"))
         }
-        var options = APIStore.Options()
-        options.documentMaxAge = 3600
-        let api = SpyProtocol.client(options: options)
+        let api = SpyProtocol.client(documentMaxAge: 3600)
         _ = try await api.document(id: "d1")
         let renamed = try await api.updateDocument(id: "d1", title: "Renamed")
         #expect(renamed.title == "Renamed" && renamed.children.count == 1)

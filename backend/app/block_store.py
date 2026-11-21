@@ -525,15 +525,6 @@ def new_change_epoch(path: Path) -> None:
         )
 
 
-def change_state(path: Path) -> tuple[str, int]:
-    """(epoch, seq): changes whenever anything a cached response shows changes."""
-
-    initialize(path)
-    with connection_scope(path) as connection:
-        row = connection.execute("SELECT epoch, seq FROM change_log WHERE id = 1").fetchone()
-    return str(row["epoch"]), int(row["seq"])
-
-
 def register_asset(db_path: Path, asset_path: Path, content_hash: str, mime_type: str) -> None:
     """Record an uploaded asset before a block references it."""
     initialize(db_path)
@@ -779,20 +770,6 @@ def document_tree_with_validator(path: Path, document_id: str) -> tuple[tuple, d
             return None
         tree = _document_tree(connection, document_id)
     return (validator, tree) if tree is not None else None
-
-
-def document_info_validator(path: Path, document_id: str) -> tuple | None:
-    """Info and backlinks show other notes too: the workspace change state."""
-
-    initialize(path)
-    with connection_scope(path) as connection:
-        row = connection.execute(
-            """SELECT change_log.epoch, change_log.seq, documents.last_opened_at
-                 FROM documents, change_log
-                WHERE documents.id = ? AND documents.deleted_at IS NULL AND change_log.id = 1""",
-            (document_id,),
-        ).fetchone()
-    return None if row is None else tuple(row)
 
 
 def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, object]]:

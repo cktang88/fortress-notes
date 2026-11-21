@@ -256,26 +256,48 @@ extension AppModel {
         editorFocusRequest += 1
     }
 
-    /// Lets the editor keep the sidebar and list current while a note is edited: the
-    /// save's answer patches the tree (no reload), and the note moves to the top of Recent.
+    /// Lets the editor keep the sidebar and list current while a note is edited, without
+    /// reloading the tree on every save: the note's row takes the save's title, snippet
+    /// and time, and the note moves to the top of Recent.
     public func noteDidChange(_ document: BlockDocument) {
-        let snippet = document.children.first?.text
-        let edited = Timestamp.date(document.updatedAt)
-        func patch(_ navigation: inout NavigationResponse, onlyIfNewer: Bool) {
-            var changed: NavigationDocument?
-            NavigationEdits.updateDocument(document.id, in: &navigation.items) { note in
-                // Over a tree fetched later, an older answer never replaces a newer one.
-                if onlyIfNewer, let edited, let current = Timestamp.date(note.updatedAt), current > edited { return }
-                note.title = document.title
-                note.updatedAt = document.updatedAt
-                if let snippet { note.snippet = snippet }
-                changed = note
-            }
-            guard let changed else { return }
-            NavigationEdits.touchRecent(changed, in: &navigation.recent, limit: Self.recentLimit)
-        }
-        patchNavigation({ patch(&$0, onlyIfNewer: false) }, replay: { patch(&$0, onlyIfNewer: true) })
+        // Kept until a reload that started after it lands, so one already in flight
+        // (holding the tree from before this save) doesn't put the old row back.
+        rowEditSequence += 1
+        rowEdits[document.id] = (rowEditSequence, document)
+        var updated = navigation
+        Self.applyRowEdit(document, to: &updated)
+        if updated != navigation { navigation = updated }
         recordBlockVersions(of: document)  // Finding: "Seen before" cache key.
+    }
+
+    /// A save's title, snippet and time on the note's row, and the note at the top of Recent.
+    static func applyRowEdit(_ document: BlockDocument, to navigation: inout NavigationResponse) {
+        editDocument(document.id, in: &navigation.items) { note in
+            note.title = document.title
+            note.updatedAt = document.updatedAt
+            if let snippet = document.children.first?.text { note.snippet = snippet }
+        }
+        guard let row = NoteListing.allDocuments(in: navigation.items).first(where: { $0.id == document.id }) else { return }
+        navigation.recent.removeAll { $0.id == document.id }
+        navigation.recent.insert(row, at: 0)
+        if navigation.recent.count > recentLimit { navigation.recent.removeLast(navigation.recent.count - recentLimit) }
+    }
+
+    private static func editDocument(
+        _ id: String, in items: inout [NavigationNode], _ edit: (inout NavigationDocument) -> Void
+    ) {
+        for index in items.indices {
+            switch items[index] {
+            case .document(var note) where note.id == id:
+                edit(&note)
+                items[index] = .document(note)
+            case .folder(var folder):
+                editDocument(id, in: &folder.children, edit)
+                items[index] = .folder(folder)
+            case .document:
+                continue
+            }
+        }
     }
 
     // MARK: Notes
@@ -288,15 +310,7 @@ extension AppModel {
             let document = try await api.createDocument(folderId: folder)
             if let folder { scope = .folder(id: folder) } else if scope != .all && scope != .recent { scope = .all }
             selectedTrashId = nil
-            // The answer is the whole note: add it to the tree without reloading it.
-            patchNavigation { navigation in
-                let note = NavigationDocument(
-                    id: document.id, title: document.title, updatedAt: document.updatedAt,
-                    createdAt: document.createdAt, snippet: document.children.first?.text ?? "", folderId: folder,
-                    position: 0)
-                NavigationEdits.insertDocument(note, in: &navigation.items)
-                NavigationEdits.touchRecent(note, in: &navigation.recent, limit: Self.recentLimit)
-            }
+            await refreshNavigation()
             open(noteId: document.id)
             requestEditorFocus()
         } catch {
@@ -329,13 +343,10 @@ extension AppModel {
             } redo: { model in
                 await model.trashNote(id: id)
             }
-            patchNavigation { navigation in
-                NavigationEdits.removeDocument(id, from: &navigation.items)
-                navigation.recent.removeAll { $0.id == id }
-            }
         } catch {
             report(error)
         }
+        await refreshNavigation()
     }
 
     /// The note list's sort (View ▸ Sort By), as `NoteListView` reads it.
@@ -356,19 +367,10 @@ extension AppModel {
                     await $0.moveNote(id: id, toFolder: folderId)
                 }
             }
-            // The server stamps a moved note as edited now.
-            let stamp = Timestamp.serverString()
-            patchNavigation { navigation in
-                guard var note = NavigationEdits.removeDocument(id, from: &navigation.items) else { return }
-                note.folderId = folderId
-                note.updatedAt = max(note.updatedAt, stamp)
-                NavigationEdits.insertDocument(note, in: &navigation.items)
-                NavigationEdits.touchRecent(note, in: &navigation.recent, limit: Self.recentLimit)
-            }
         } catch {
             report(error)
-            await refreshNavigation()
         }
+        await refreshNavigation()
     }
 
     // MARK: Folders
@@ -377,11 +379,7 @@ extension AppModel {
     public func newFolder(in parentId: String? = nil) async {
         do {
             let folder = try await api.createFolder(name: uniqueFolderName(in: parentId), parentId: parentId)
-            patchNavigation { navigation in
-                NavigationEdits.insertFolder(
-                    NavigationFolder(id: folder.id, parentId: folder.parentId, name: folder.name, position: folder.position, children: []),
-                    in: &navigation.items)
-            }
+            await refreshNavigation()
             scope = .folder(id: folder.id)
             renamingFolderId = folder.id
             let created = folder.id
@@ -414,18 +412,16 @@ extension AppModel {
         let oldName = NoteListing.folder(id: id, in: navigation.items)?.name
         guard !trimmed.isEmpty, oldName != trimmed else { return }
         do {
-            let renamed = try await api.renameFolder(id: id, name: trimmed)
+            _ = try await api.renameFolder(id: id, name: trimmed)
             if let oldName {
                 registerUndo("Rename Folder") { await $0.renameFolder(id: id, to: oldName) } redo: {
                     await $0.renameFolder(id: id, to: trimmed)
                 }
             }
-            patchNavigation { navigation in
-                NavigationEdits.updateFolder(id, in: &navigation.items) { $0.name = renamed.name }
-            }
         } catch {
             report(error)
         }
+        await refreshNavigation()
     }
 
     /// Deletes a folder; its notes and subfolders move up to its parent.
@@ -446,17 +442,10 @@ extension AppModel {
             if case .folder(let selected) = scope, NoteListing.isFolder(selected, inside: id, items: navigation.items) {
                 scope = folder.parentId.map { .folder(id: $0) } ?? .all
             }
-            let stamp = Timestamp.serverString()
-            patchNavigation { navigation in
-                // Its notes move up (stamped as edited now, as the server does).
-                for note in NavigationEdits.dissolveFolder(id, stamp: stamp, in: &navigation.items) {
-                    NavigationEdits.touchRecent(note, in: &navigation.recent, limit: Self.recentLimit)
-                }
-            }
         } catch {
             report(error)
-            await refreshNavigation()
         }
+        await refreshNavigation()
     }
 
     /// Moves a folder (with everything in it) into another folder, or to the top level.

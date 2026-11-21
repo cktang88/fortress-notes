@@ -2,61 +2,15 @@ import Foundation
 import Synchronization
 
 /// What an `APIClient` shares between its copies: requests in flight (so concurrent
-/// GETs for the same resource make one request), the document cache, HTTP validators
-/// (ETag → body, so a 304 can be answered from memory) and request counters.
+/// GETs for the same resource make one request), a small cache of notes kept with their
+/// ETags, and a request counter.
 ///
 /// Thread-safe; every method is synchronous and cheap (a lock around dictionaries).
 public final class APIStore: Sendable {
-    /// Behaviour switches, mainly so tests and benchmarks can compare with everything off.
-    public struct Options: Sendable, Hashable {
-        /// Concurrent identical GETs share one request.
-        public var coalescesRequests = true
-        /// Documents are kept in memory and revalidated with their ETags.
-        public var cachesDocuments = true
-        /// How long a cached document is served without asking the server at all: only
-        /// long enough for reads that arrive together (the editor and the inspector
-        /// opening one note) to share it. After that the ETag decides (a 304 is cheap).
-        public var documentMaxAge: TimeInterval = 2
-        /// Documents kept in memory.
-        public var documentCapacity = 64
-        /// Bytes of validated GET bodies kept for 304 answers.
-        public var validatorCapacity = 16 << 20
-
-        public init() {}
-
-        /// Every cache and coalescing turned off: how the client behaved before them.
-        public static var uncached: Options {
-            var options = Options()
-            options.coalescesRequests = false
-            options.cachesDocuments = false
-            options.validatorCapacity = 0
-            return options
-        }
-    }
-
-    /// Counters for tests, benchmarks and the debug log.
-    public struct Stats: Sendable, Hashable {
-        /// Requests that went to the network.
-        public var requests = 0
-        /// Calls that joined a request already in flight.
-        public var coalesced = 0
-        /// Documents served from memory.
-        public var cacheHits = 0
-        /// 304 answers served from a stored body.
-        public var notModified = 0
-        /// Documents loaded ahead of time.
-        public var prefetched = 0
-    }
-
     struct CachedDocument: Sendable {
         var document: BlockDocument
         var etag: String?
         var storedAt: Date
-    }
-
-    struct Validated: Sendable {
-        var etag: String
-        var body: Data
     }
 
     private struct InFlight: Sendable {
@@ -75,27 +29,32 @@ public final class APIStore: Sendable {
         /// put the old version back.
         var documentGenerations: [String: Int] = [:]
         var allGeneration = 0
-        var validated: [String: Validated] = [:]
-        var validatedOrder: [String] = []
-        var validatedBytes = 0
         /// Bumped by every mutation: a GET started before a change never answers one
         /// asked for after it.
         var epoch = 0
-        var stats = Stats()
+        var requests = 0
     }
 
-    public let options: Options
+    /// How long a cached note is served without asking the server at all: only long
+    /// enough for reads that arrive together (the editor and the inspector opening one
+    /// note, a prefetched neighbour opened with ↓) to share it. After that its ETag
+    /// decides (a 304 is cheap).
+    let documentMaxAge: TimeInterval
+    /// Notes kept in memory.
+    let documentCapacity: Int
     private let state = Mutex(State())
 
-    public init(options: Options = Options()) {
-        self.options = options
+    public init(documentMaxAge: TimeInterval = 2, documentCapacity: Int = 64) {
+        self.documentMaxAge = documentMaxAge
+        self.documentCapacity = documentCapacity
     }
 
-    public var stats: Stats { state.withLock { $0.stats } }
+    /// Requests that went to the network (for tests and benchmarks).
+    public var requests: Int { state.withLock { $0.requests } }
 
-    public func resetStats() { state.withLock { $0.stats = Stats() } }
+    public func resetRequests() { state.withLock { $0.requests = 0 } }
 
-    func count(_ update: (inout Stats) -> Void) { state.withLock { update(&$0.stats) } }
+    func countRequest() { state.withLock { $0.requests += 1 } }
 
     // MARK: Coalescing
 
@@ -109,12 +68,10 @@ public final class APIStore: Sendable {
     func coalesced<T: Sendable>(
         _ key: String, _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        guard options.coalescesRequests else { return try await operation() }
         let (id, task) = state.withLock { state -> (UInt64, Task<any Sendable, any Error>) in
             if var entry = state.inFlight[key] {
                 entry.waiters += 1
                 state.inFlight[key] = entry
-                state.stats.coalesced += 1
                 return (entry.id, entry.task)
             }
             state.nextId += 1
@@ -133,25 +90,8 @@ public final class APIStore: Sendable {
         }
     }
 
-    /// Puts a task others can join (a prefetch) under `key` without waiting for it.
-    func register<T: Sendable>(_ key: String, _ task: Task<T, any Error>) {
-        guard options.coalescesRequests else { return }
-        state.withLock { state in
-            guard state.inFlight[key] == nil else { return }
-            state.nextId += 1
-            let id = state.nextId
-            let erased = Task<any Sendable, any Error>.detached { try await task.value }
-            state.inFlight[key] = InFlight(id: id, task: erased, waiters: 0)
-        }
-        Task.detached { [weak self] in
-            _ = try? await task.value
-            self?.state.withLock { state in
-                if let entry = state.inFlight[key], entry.waiters == 0 { state.inFlight[key] = nil }
-            }
-        }
-    }
-
-    func isInFlight(_ key: String) -> Bool { state.withLock { $0.inFlight[key] != nil } }
+    /// Readers waiting on the request in flight under `key` (for tests).
+    func waiters(_ key: String) -> Int { state.withLock { $0.inFlight[key]?.waiters ?? 0 } }
 
     private func finish(_ key: String, id: UInt64) {
         state.withLock { state in
@@ -176,24 +116,18 @@ public final class APIStore: Sendable {
     // MARK: Documents
 
     /// The cached document while it is fresh enough to show without asking.
-    func freshDocument(_ id: String, now: Date = Date(), counting: Bool = true) -> BlockDocument? {
-        guard options.cachesDocuments else { return nil }
-        let maxAge = options.documentMaxAge
-        return state.withLock { state in
-            guard let entry = state.documents[id], now.timeIntervalSince(entry.storedAt) < maxAge
+    func freshDocument(_ id: String, now: Date = Date()) -> BlockDocument? {
+        state.withLock { state in
+            guard let entry = state.documents[id], now.timeIntervalSince(entry.storedAt) < documentMaxAge
             else { return nil }
-            if counting {
-                Self.touch(id, in: &state)
-                state.stats.cacheHits += 1
-            }
+            Self.touch(id, in: &state)
             return entry.document
         }
     }
 
     /// The cached document however old (to revalidate it).
     func cachedDocument(_ id: String) -> CachedDocument? {
-        guard options.cachesDocuments else { return nil }
-        return state.withLock { $0.documents[id] }
+        state.withLock { $0.documents[id] }
     }
 
     /// A token taken before reading a document; `store` drops the result if the document
@@ -209,7 +143,6 @@ public final class APIStore: Sendable {
 
     /// Keeps a document the server sent. An older revision never replaces a newer one.
     func store(_ document: BlockDocument, etag: String? = nil, token: DocumentToken? = nil) {
-        guard options.cachesDocuments else { return }
         state.withLock { state in
             if let token,
                token != DocumentToken(document: state.documentGenerations[document.id] ?? 0, all: state.allGeneration) {
@@ -218,7 +151,7 @@ public final class APIStore: Sendable {
             if let existing = state.documents[document.id], existing.document.revision > document.revision { return }
             state.documents[document.id] = CachedDocument(document: document, etag: etag, storedAt: Date())
             Self.touch(document.id, in: &state)
-            while state.documentOrder.count > max(1, options.documentCapacity) {
+            while state.documentOrder.count > max(1, documentCapacity) {
                 let evicted = state.documentOrder.removeFirst()
                 state.documents[evicted] = nil
             }
@@ -232,12 +165,8 @@ public final class APIStore: Sendable {
     /// dropped and the metadata comes back as it is.
     func mergeMetadata(_ metadata: BlockDocument) -> BlockDocument {
         state.withLock { state in
-            guard options.cachesDocuments, var entry = state.documents[metadata.id],
-                  entry.document.revision == metadata.revision
-            else {
-                state.documents[metadata.id] = nil
-                state.documentOrder.removeAll { $0 == metadata.id }
-                state.documentGenerations[metadata.id, default: 0] += 1
+            guard var entry = state.documents[metadata.id], entry.document.revision == metadata.revision else {
+                Self.drop(metadata.id, in: &state)
                 return metadata
             }
             var merged = metadata
@@ -249,7 +178,7 @@ public final class APIStore: Sendable {
         }
     }
 
-    /// Marks a cached document as just checked (a 304, or `unchanged` from a batch).
+    /// Marks a cached document as just checked (a 304).
     func refresh(_ id: String) {
         state.withLock { state in
             state.documents[id]?.storedAt = Date()
@@ -258,11 +187,7 @@ public final class APIStore: Sendable {
     }
 
     public func invalidateDocument(_ id: String) {
-        state.withLock { state in
-            state.documents[id] = nil
-            state.documentOrder.removeAll { $0 == id }
-            state.documentGenerations[id, default: 0] += 1
-        }
+        state.withLock { Self.drop(id, in: &$0) }
     }
 
     public func invalidateAllDocuments() {
@@ -275,54 +200,25 @@ public final class APIStore: Sendable {
 
     /// Drops cached documents the navigation tree says changed (or went away).
     public func reconcile(with navigation: NavigationResponse) {
-        var updated: [String: String] = [:]
-        func walk(_ nodes: [NavigationNode]) {
-            for node in nodes {
-                switch node {
-                case .document(let document): updated[document.id] = document.updatedAt
-                case .folder(let folder): walk(folder.children)
-                }
-            }
-        }
-        walk(navigation.items)
+        let updated = Dictionary(
+            NoteListing.allDocuments(in: navigation.items).map { ($0.id, $0.updatedAt) }, uniquingKeysWith: { a, _ in a })
         state.withLock { state in
             for (id, entry) in state.documents where updated[id] != entry.document.updatedAt {
-                state.documents[id] = nil
-                state.documentOrder.removeAll { $0 == id }
-                state.documentGenerations[id, default: 0] += 1
+                Self.drop(id, in: &state)
             }
         }
     }
 
     public var cachedDocumentIds: Set<String> { state.withLock { Set($0.documents.keys) } }
 
+    private static func drop(_ id: String, in state: inout State) {
+        state.documents[id] = nil
+        state.documentOrder.removeAll { $0 == id }
+        state.documentGenerations[id, default: 0] += 1
+    }
+
     private static func touch(_ id: String, in state: inout State) {
         if let index = state.documentOrder.lastIndex(of: id) { state.documentOrder.remove(at: index) }
         state.documentOrder.append(id)
-    }
-
-    // MARK: HTTP validators
-
-    func validated(_ key: String) -> Validated? {
-        guard options.validatorCapacity > 0 else { return nil }
-        return state.withLock { $0.validated[key] }
-    }
-
-    func keepValidated(_ key: String, etag: String, body: Data) {
-        let capacity = options.validatorCapacity
-        guard capacity > 0, body.count <= capacity / 4 else { return }
-        state.withLock { state in
-            if let old = state.validated[key] {
-                state.validatedBytes -= old.body.count
-                state.validatedOrder.removeAll { $0 == key }
-            }
-            state.validated[key] = Validated(etag: etag, body: body)
-            state.validatedOrder.append(key)
-            state.validatedBytes += body.count
-            while state.validatedBytes > capacity, !state.validatedOrder.isEmpty {
-                let evicted = state.validatedOrder.removeFirst()
-                state.validatedBytes -= state.validated.removeValue(forKey: evicted)?.body.count ?? 0
-            }
-        }
     }
 }
