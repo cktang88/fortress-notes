@@ -1027,10 +1027,11 @@ class OneNoteSamplesTests(_Base):
         self.assertIsNotNone(edited, "the converter found no object ids")
         page, block = edited
         with block_store.connection_scope(self.db) as connection:
-            [before] = [row["id"] for row in connection.execute(
-                "SELECT blocks.id, blocks.provenance_json FROM blocks JOIN documents ON documents.id = blocks.document_id"
-                " WHERE documents.source_external_id = ?", (page["id"],))
-                if block["object_id"] in (row["provenance_json"] or "")]
+            document_id = connection.execute(
+                "SELECT id FROM documents WHERE source_external_id = ?", (page["id"],)
+            ).fetchone()["id"]
+        anchors = sources.sync_state(self.db, document_id)["anchors"]
+        before = anchors[onenote_import._object_id(block["object_id"])]
         block["text"] += " (edited)"
         block.pop("marks", None)
         (out / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -1073,8 +1074,7 @@ class CompareFindingsTests(_Base):
             for n in range(1, 4)
         ])
         markdown = export_document_markdown(self.db, tree["id"])
-        # Every OneNote block carries a provenance comment, which ends a Markdown list:
-        # without real numbers each item would read "1." in any Markdown viewer.
+        # Each item is written with its own number, as OneNote shows it.
         self.assertIn("1. Step 1", markdown)
         self.assertIn("2. Step 2", markdown)
         self.assertIn("3. Step 3", markdown)
@@ -1102,10 +1102,8 @@ class CompareFindingsTests(_Base):
             {"type": "list_item", "indent": 2, "text": "Innermost", "list": info},
         ])
         html = MarkdownIt("commonmark", {"html": True}).render(export_document_markdown(self.db, tree["id"]))
-        # Indented OneNote paragraphs used to be written 4+ spaces deep: a code block
-        # showing the provenance comments.
+        # Indented OneNote paragraphs used to be written 4+ spaces deep: a code block.
         self.assertNotIn("<pre>", html)
-        self.assertNotIn("&lt;!-- fortress:block", html)
         self.assertRegex(html, r"<p>Indented twice\b")
         # Children of "1. " items need 3 spaces, or they fall out of the item.
         self.assertRegex(html, r"(?s)<ol>\s*<li>.*Outer.*<ol>\s*<li>.*Inner.*<ol>\s*<li>.*Innermost")

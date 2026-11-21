@@ -72,34 +72,6 @@ struct NoteInfo: Hashable, Sendable {
         return find(navigation.items) ?? navigation.recent.first { $0.id == documentId }?.updatedAt
     }
 
-    /// Adds what the full document says (counts and dates), for backends without `/info`.
-    mutating func add(_ document: BlockDocument) {
-        createdAt = Timestamp.date(document.createdAt) ?? createdAt
-        updatedAt = Timestamp.date(document.updatedAt) ?? updatedAt
-        var words = 0
-        var blocks = 0
-        var links = 0
-        func visit(_ nodes: [BlockNode]) {
-            for node in nodes {
-                blocks += 1
-                words += node.text.split(whereSeparator: { $0.isWhitespace })
-                    .filter { word in word.contains { $0.isLetter || $0.isNumber } }.count
-                links += Self.linkCount(in: node.content)
-                visit(node.children)
-            }
-        }
-        visit(document.children)
-        self.words = words
-        self.blocks = blocks
-        self.linksOut = links
-    }
-
-    /// Links in a block's inline content: note links, block references and web links.
-    static func linkCount(in content: JSONValue) -> Int {
-        guard case .array(let nodes) = content else { return 0 }
-        return nodes.filter { ["docLink", "blockRef", "link"].contains($0["type"]?.stringValue ?? "") }.count
-    }
-
     /// How the note entered Fortress in words ("Imported from OneNote"); nil for a note
     /// written here, which needs no line.
     var sourceLabel: String? {

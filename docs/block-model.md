@@ -69,8 +69,9 @@ Categories:
 Top-level blocks must be flow types.
 
 Fortress has no math or ink (drawings, handwriting): there is no `math` block
-and no ink attribute. Formulas are kept as `code` blocks with `language: "latex"` (schema
-15 converted stored ones, §10).
+and no ink attribute. Formulas are kept as `code` blocks: a OneNote equation as its
+plain linear text (`language: "text"`, docs/onenote-import.md), a Markdown `$$ … $$`
+formula verbatim (`language: "latex"`, §7). Schema 15 converted stored math blocks (§10).
 
 | type | category | attrs | payload | children |
 |---|---|---|---|---|

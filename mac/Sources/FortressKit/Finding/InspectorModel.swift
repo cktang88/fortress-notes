@@ -132,7 +132,7 @@ final class InspectorModel {
         do { return .success(try await api.backlinks(documentId: noteId)) } catch { return .failure(error) }
     }
 
-    /// Fresh info, keeping what only the sidebar knew (an older backend's fallback has no folder).
+    /// Fresh info, keeping what only the sidebar knew.
     private func merged(_ loaded: NoteInfo) -> NoteInfo {
         var merged = loaded
         if merged.backlinksIn == nil { merged.backlinksIn = info.backlinksIn }
@@ -142,17 +142,9 @@ final class InspectorModel {
         return merged
     }
 
-    /// `…/info`, or (older backends) counts from the document itself.
+    /// `…/info` (nil when it fails: the sidebar's info stays).
     nonisolated private static func loadInfo(noteId: String, api: APIClient) async -> NoteInfo? {
-        do {
-            return NoteInfo(try await api.documentInfo(id: noteId))
-        } catch {
-            if Task.isCancelled { return nil }
-            guard let document = try? await api.document(id: noteId) else { return nil }
-            var fallback = NoteInfo()
-            fallback.add(document)
-            return fallback
-        }
+        try? await NoteInfo(api.documentInfo(id: noteId))
     }
 
     private func refreshInfo(noteId: String, revision: String?, api: APIClient, after delay: Duration) {

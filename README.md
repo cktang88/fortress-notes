@@ -360,7 +360,7 @@ mac/
     App/              AppModel
     Shell/            window, sidebar, note list, settings, backend launcher, imports, backups, trash
     Editor/           TextKit 2 block editor (Model/, Text/)
-    Finding/          search, Ask, palette, inspector, Quick Capture, Apple Vision reader
+    Finding/          search, Ask, inspector, Quick Capture, Apple Vision reader
   Tests/              unit, snapshot, performance and integration tests
   Scripts/            seed_backend.py (integration seeding), fixture regeneration
 tools/

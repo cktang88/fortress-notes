@@ -311,19 +311,11 @@ private actor Calls {
 
 // MARK: Note info
 
-@Test func noteInfoCountsWordsBlocksAndLinks() throws {
+@Test func noteInfoFromTheSidebar() throws {
     let navigation = try JSONDecoder().decode(NavigationResponse.self, from: try findingFixture("navigation.json"))
-    var info = NoteInfo.from(navigation: navigation, documentId: "01M7NZXNDZHSR801AP2K15KMAQ")
+    let info = NoteInfo.from(navigation: navigation, documentId: "01M7NZXNDZHSR801AP2K15KMAQ")
     #expect(info.folderPath == ["Travel"])
     #expect(info.createdAt != nil)
-    info.add(try JSONDecoder().decode(BlockDocument.self, from: try findingFixture("document.json")))
-    #expect((info.blocks ?? 0) >= 4)
-    #expect((info.words ?? 0) > 8)
-    #expect(NoteInfo.linkCount(in: .array([
-        .object(["type": .string("text"), "text": .string("See ")]),
-        .object(["type": .string("docLink"), "id": .string("01M7")]),
-        .object(["type": .string("link"), "href": .string("https://x.y"), "content": .array([.object(["type": .string("text"), "text": .string("map")])])]),
-    ])) == 2)
 }
 
 @MainActor @Test func noteInfoFromTheRealInfoEndpoint() throws {

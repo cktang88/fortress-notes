@@ -209,8 +209,6 @@ public final class APIStore: Sendable {
         }
     }
 
-    public var cachedDocumentIds: Set<String> { state.withLock { Set($0.documents.keys) } }
-
     private static func drop(_ id: String, in state: inout State) {
         state.documents[id] = nil
         state.documentOrder.removeAll { $0 == id }

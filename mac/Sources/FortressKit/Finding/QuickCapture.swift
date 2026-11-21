@@ -82,9 +82,6 @@ public final class QuickCapture {
         }
     }
 
-    /// Whether the global shortcut is registered (false while another app holds it).
-    public var isShortcutRegistered: Bool { keeper?.status == .registered }
-
     public var isShown: Bool { (panel?.isVisible ?? false) && monitor != nil }
 
     public func toggle() {

@@ -53,9 +53,6 @@ public final class PictureTextReader {
 
     /// Whether the app reads pictures with Apple Vision (Settings; on by default).
     public static let enabledKey = "readsPictureTextWithVision"
-    public static var isEnabledInSettings: Bool {
-        UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
-    }
 
     public init(recognizer: any TextRecognizer = VisionTextRecognizer(),
                 concurrency: Int = PictureTextReader.defaultConcurrency, batchSize: Int = 8,

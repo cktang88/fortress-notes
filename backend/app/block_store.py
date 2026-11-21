@@ -12,7 +12,7 @@ use only the public names here, mostly
 
 * derived rows (text, links, asset links, the FTS row) of the documents a
   :class:`DocumentWrite` marks are rebuilt before it commits;
-* response caches, the search corpus (``corpus``) and the Markdown mirrors
+* HTTP validators (ETags), the search corpus (``corpus``) and the Markdown mirrors
   (``documents.MirrorWriter``) follow ``change_log``, which triggers keep, so
   no writer has to tell them.
 """
@@ -458,7 +458,7 @@ def _initialize(path: Path) -> None:
             )
 
 
-# Change tracking for HTTP validators (ETags) and server-side response caches.
+# Change tracking for HTTP validators (ETags), the search corpus and the mirrors.
 # ``change_log.seq`` grows with every change to anything a cached response
 # shows; ``documents.change_seq`` is the seq of the last change to that note's
 # own rows (blocks, user attrs, links, the document row). ``epoch``

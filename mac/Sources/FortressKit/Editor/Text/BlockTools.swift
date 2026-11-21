@@ -807,17 +807,6 @@ extension BlockEditorController {
         }
     }
 
-    /// Picks files and puts them in as picture or file blocks after the block at `location`.
-    func chooseAndInsertFiles(images: Bool, after location: Int) {
-        let picker = chooseFiles ?? { images, completion in Self.openPanel(images: images, completion: completion) }
-        let anchor = storage.blockInfo(at: paragraph(at: location).location)?.id
-        picker(images) { [weak self] urls in
-            guard let self, !urls.isEmpty else { return }
-            let at = anchor.flatMap { self.range(ofBlock: $0) }.map(\.location) ?? location
-            self.insertFiles(urls, after: at)
-        }
-    }
-
     /// Uploads files and puts them in as picture or file blocks after the block at `location`.
     func insertFiles(_ urls: [URL], after location: Int) {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("fortress.insert.\(UUID().uuidString)"))

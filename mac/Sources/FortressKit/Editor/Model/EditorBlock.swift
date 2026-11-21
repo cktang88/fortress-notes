@@ -119,13 +119,6 @@ public struct InlineMarks: Hashable, Sendable {
     }
 
     public var isPlain: Bool { self == InlineMarks() }
-
-    /// The same marks without the link (links are wrapper nodes).
-    var withoutLink: InlineMarks {
-        var copy = self
-        copy.link = nil
-        return copy
-    }
 }
 
 /// The object replacement character: stands in for an atomic inline node or block.
