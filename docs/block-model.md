@@ -357,3 +357,10 @@ to canonical blocks in 14, math and ink retired in 15, then the cleanup); a
 database at a newer version is refused as before (`block_store.stored_version`).
 Restoring a backup checks the same. The Mac app shows the backend's reason (the
 line after `Fortress can't start: ` in its log) instead of the exit code.
+
+**Schema changes within version 16** need no migration code. Startup (cheap, every
+time) creates missing tables and indexes (`CREATE ... IF NOT EXISTS`), runs the
+idempotent `DROP TABLE/INDEX IF EXISTS` statements in `block_store._RETIRED` for
+objects a release retired, and drops every trigger and creates the current ones
+again, so a changed or retired trigger reaches existing databases. Anything else
+(a new column, a changed table) needs the owner's decision on a version bump.

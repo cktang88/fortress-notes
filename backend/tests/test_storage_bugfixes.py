@@ -391,6 +391,34 @@ class InitializeTests(unittest.TestCase):
                     recorded = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
                 self.assertEqual(recorded, 16)
 
+    def test_startup_recreates_every_trigger_and_drops_retired_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = self._database_at(directory, SCHEMA_VERSION)
+            with connection_scope(database) as connection:
+                # An older build's body for a current trigger, and a retired one.
+                connection.execute("DROP TRIGGER folders_changed_insert")
+                connection.execute(
+                    "CREATE TRIGGER folders_changed_insert AFTER INSERT ON folders BEGIN SELECT 1; END"
+                )
+                connection.execute(
+                    "CREATE TRIGGER retired_trigger AFTER INSERT ON folders BEGIN SELECT 1; END"
+                )
+                connection.execute("CREATE TABLE retired_table (id INTEGER)")
+            block_store._ready_files.pop(database, None)
+            with patch.object(block_store, "_RETIRED", ("DROP TABLE IF EXISTS retired_table",)):
+                initialize(database)
+            with connection_scope(database) as connection:
+                names = {row[0]: row[1] for row in connection.execute(
+                    "SELECT name, sql FROM sqlite_master WHERE type IN ('trigger', 'table')"
+                )}
+                seq = connection.execute("SELECT seq FROM change_log").fetchone()[0]
+            self.assertNotIn("retired_trigger", names)
+            self.assertNotIn("retired_table", names)
+            self.assertLessEqual(set(block_store._CHANGE_TRIGGERS), set(names))
+            block_store.create_folder(database, "F")
+            with connection_scope(database) as connection:
+                self.assertEqual(connection.execute("SELECT seq FROM change_log").fetchone()[0], seq + 1)
+
     def test_a_backup_of_an_older_schema_is_not_restored(self) -> None:
         from app import backups
 

@@ -214,6 +214,11 @@ CREATE INDEX IF NOT EXISTS block_assets_asset ON block_assets(content_hash, medi
 CREATE INDEX IF NOT EXISTS transaction_receipts_document ON transaction_receipts(document_id);
 """
 
+# Idempotent ``DROP TABLE/INDEX IF EXISTS`` statements for objects a release
+# retired; run at every startup (cheap). Retired triggers need nothing: every
+# trigger is dropped and only the current ones are created again.
+_RETIRED: tuple[str, ...] = ()
+
 _ready_paths: set[Path] = set()
 # Databases whose schema is current, keyed by the path as given, with the file
 # identity checked (a deleted or replaced file is initialized again).
@@ -434,8 +439,19 @@ def _initialize(path: Path) -> None:
                 f"Unsupported block database version {version} (expected {SCHEMA_VERSION})"
             )
         connection.executescript(_SCHEMA)
+        # Schema policy (docs/block-model.md §10): tables and indexes are created
+        # if missing; objects a release retires are dropped here, idempotently;
+        # triggers are always dropped and created again, so a changed (or retired)
+        # trigger reaches existing databases without a version change.
+        connection.execute("BEGIN IMMEDIATE")
+        for statement in _RETIRED:
+            connection.execute(statement)
+        for (name,) in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        ).fetchall():
+            connection.execute(f'DROP TRIGGER IF EXISTS "{name}"')
         for name, (event, body) in _CHANGE_TRIGGERS.items():
-            connection.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {event} BEGIN {body} END")
+            connection.execute(f"CREATE TRIGGER {name} {event} BEGIN {body} END")
         recorded = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
         if recorded != SCHEMA_VERSION:  # new, or cleaned up at 15 by last-migrating-release
             connection.execute(
