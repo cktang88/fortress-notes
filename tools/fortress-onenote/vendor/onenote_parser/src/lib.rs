@@ -143,7 +143,6 @@ pub mod contents {
     // PATCH(fortress-onenote, P10)
     pub use crate::onenote::ink::Ink;
     pub use crate::onenote::list::List;
-    pub use crate::onenote::math_inline_object::{MathInlineObject, MathObjectType};
     pub use crate::onenote::note_tag::NoteTag;
     pub use crate::onenote::outline::{Outline, OutlineElement, OutlineGroup, OutlineItem};
     pub use crate::onenote::picture::Picture;

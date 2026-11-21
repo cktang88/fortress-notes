@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P6, P9, P10, P11).
+// Modified by fortress-onenote (vendor/PATCHES.md: P6, P9, P10, P11, P13).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::charset::Charset;
@@ -6,12 +6,10 @@ use crate::one::property::color_ref::ColorRef;
 use crate::one::property::layout_alignment::LayoutAlignment;
 use crate::one::property::paragraph_alignment::ParagraphAlignment;
 use crate::one::property_set::{
-    embedded_ink_container, math_inline_object, paragraph_style_object, rich_text_node,
-    text_run_data,
+    embedded_ink_container, paragraph_style_object, rich_text_node, text_run_data,
 };
 use crate::onenote::ParserContext;
 use crate::onenote::ink::{Ink, parse_ink};
-use crate::onenote::math_inline_object::{MathInlineObject, parse_math_inline_object};
 use crate::onenote::note_tag::{NoteTag, parse_note_tags};
 use crate::onestore::ObjectSpace;
 use itertools::Itertools;
@@ -51,7 +49,6 @@ pub struct RichText {
 
     pub(crate) note_tags: Vec<NoteTag>,
     pub(crate) embedded_objects: Vec<EmbeddedObject>,
-    pub(crate) math_inline_objects: Vec<MathInlineObject>,
 }
 
 /// A hyperlink attached to a visible range of rich text.
@@ -192,11 +189,6 @@ impl RichText {
     /// Objects embedded in this paragraph.
     pub fn embedded_objects(&self) -> &[EmbeddedObject] {
         &self.embedded_objects
-    }
-
-    /// Math inline objects embedded in this paragraph.
-    pub fn math_inline_objects(&self) -> &[MathInlineObject] {
-        &self.math_inline_objects
     }
 }
 
@@ -515,24 +507,8 @@ pub(crate) fn parse_rich_text(
     // Parse text run data
     let text_run_data = text_run_data::parse(object)?.unwrap_or_default();
 
-    // Parse math text runs
-    let math_inline_objects = text_run_data
-        .iter()
-        .zip(&styles_data)
-        .map(|(text_run_data, style_data)| {
-            if style_data.math_formatting {
-                let math_data = math_inline_object::Data::parse(text_run_data)?;
-                let math_inline_object = parse_math_inline_object(math_data)?;
-
-                return Ok(Some(math_inline_object));
-            }
-
-            Ok(None)
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect_vec();
+    // PATCH(fortress-onenote, P13): the math inline objects of math text
+    // runs are not parsed; equations are read as their linear text.
 
     // Parse the embedded objects
     let objects = text_run_data
@@ -628,7 +604,6 @@ pub(crate) fn parse_rich_text(
         layout_alignment_in_parent: data.layout_alignment_in_parent,
         layout_alignment_self: data.layout_alignment_self,
         note_tags: parse_note_tags(&data.note_tags, space)?,
-        math_inline_objects,
     };
 
     Ok(text)

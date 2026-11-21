@@ -145,6 +145,16 @@ crate features `native-fs`, `backtrace` and `onepkg`, the unused error kinds
 `errors.rs`, `fs/{mod,native_fs,file_source}.rs`,
 `onenote/{mod,notebook,section}.rs`.
 
+**P13 — math is read as linear text only.** Fortress has no math; the
+converter writes equations as their plain linear text (text runs with
+`ParagraphStyling::math_formatting`, which stays). The math inline objects
+of math text runs (`RichText::math_inline_objects`, `MathInlineObject`,
+`MathObjectType`) are no longer parsed, so a damaged one no longer drops its
+paragraph. Removed files: `onenote/math_inline_object.rs`,
+`one/property_set/math_inline_object.rs`; the `MathInlineObject*` property
+types went. Files: `lib.rs`, `onenote/{mod,rich_text}.rs`,
+`one/property/mod.rs`, `one/property_set/mod.rs`.
+
 ## cab 0.6.0
 
 **C1 — no panic on corrupt cabinets.** In `folder.rs`, a file offset beyond

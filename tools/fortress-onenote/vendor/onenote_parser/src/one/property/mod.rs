@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P10).
+// Modified by fortress-onenote (vendor/PATCHES.md: P10, P13).
 //! The properties of OneNote objects that we can parse.
 //!
 //! See [\[MS-ONE\] 2.1.12] for the list of properties the OneNote file format specifies.
@@ -25,7 +25,6 @@ pub(crate) mod time;
 
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, PartialEq)]
-#[allow(dead_code)]
 #[allow(clippy::enum_clike_unportable_variant)]
 pub(crate) enum PropertyType {
     ActionItemSchemaVersion = 0x0C003473,
@@ -206,13 +205,6 @@ pub(crate) enum PropertyType {
     EmbeddedInkSpaceHeight = 0x14001C28,
     ImageEmbedType = 0x140035F2,
     ImageEmbeddedUrl = 0x1C0035F3,
-    MathInlineObjectType = 0x1400344F,
-    MathInlineObjectCount = 0x14003450,
-    MathInlineObjectCol = 0x0C003451,
-    MathInlineObjectAlign = 0x0C003452,
-    MathInlineObjectChar = 0x10003453,
-    MathInlineObjectChar1 = 0x10003454,
-    MathInlineObjectChar2 = 0x10003455,
 
     // Undocumented (handwriting recognition / OCR):
     PageRecognizedTextContainer = 0x200035D7,
