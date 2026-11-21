@@ -1,7 +1,7 @@
 # Block model (the contract)
 
 This document is the single contract between the backend and every client (the
-Mac app, importers, and Markdown import/export and the mirror). The backend implements it in
+Mac app, importers, Markdown import and export, the mirror). The backend implements it in
 `backend/app/block_schema.py` (the type registry and inline content),
 `backend/app/order_keys.py` (sibling order), `backend/app/block_markdown.py`
 (Markdown in and out) and `backend/app/block_store.py` (storage and
@@ -31,7 +31,7 @@ document order):
   "document_id": "01JD5Q...",
   "parent_id": null,                      // null: a top-level block
   "order": "a3",                          // sibling order key (server-assigned, read-only)
-  "position": 3,                          // DEPRECATED: index among siblings (derived, read-only)
+  "position": 3,                          // index among siblings (derived, read-only)
   "type": "heading",
   "attrs": {"level": 2},
   "content": [                            // inline content: text-category types only, else null
@@ -47,9 +47,9 @@ document order):
 }
 ```
 
-The document payload around the blocks is unchanged (`id`, `title`, `revision`,
-`resolved_links`, `children`, ...; where a note came from is not in it, spec §7a).
-Blocks have no provenance of their own.
+The document payload around the blocks holds `id`, `title`, `revision`,
+`last_opened_at`, `resolved_links` and `children` (where a note came from is not in
+it: spec.md §7). Blocks have no provenance of their own.
 `resolved_links` gives the current title of every linked note and the current
 text of every referenced block, so clients render `docLink`/`blockRef` labels
 from it (labels are never stored).
@@ -70,7 +70,7 @@ Top-level blocks must be flow types.
 Fortress has no math or ink (drawings, handwriting): there is no `math` block
 and no ink attribute. Formulas are kept as `code` blocks: a OneNote equation as its
 plain linear text (`language: "text"`, docs/onenote-import.md), a Markdown `$$ … $$`
-formula verbatim (`language: "latex"`, §7). Schema 15 converted stored math blocks (§10).
+formula verbatim (`language: "latex"`, §7).
 
 | type | category | attrs | payload | children |
 |---|---|---|---|---|
@@ -167,7 +167,7 @@ serves):
   (refused on write; such links read from Markdown, HTML or old data stay text).
 - `"\n"` inside a text node is a line break within the block. Markdown soft
   breaks (a single newline inside a paragraph) are read as line breaks too, as
-  Obsidian and Bear show them; they are written back as hard breaks.
+  Obsidian and Bear show them; Markdown output writes them as hard breaks.
 - `docLink` and `blockRef` carry no label: their visible label is the target's
   current title / text, from `resolved_links`. A link to a trashed or missing
   target renders as a broken link; it is kept.
@@ -213,12 +213,9 @@ twice; with a different body it is rejected.
 Later operations in a transaction see the effects of earlier ones (insert a
 table, then its rows and cells, then the cells' paragraphs).
 
-Removed from the old API: `split`, `merge`, `duplicate`, `set_attrs` (use
-`update` with an attrs patch), `set_user_attrs` and `user_attrs` (per-block
-key/values nothing used; the table is dropped at startup, §10),
-`expected_updated_at` (the revision check covers it), `position` (use
-`after_id`/`before_id`), and client-sent `text` and `content.markdown`. An
-operation with a field not listed above is refused (422).
+There is no `split`, `merge` or `duplicate` (the editor sends inserts, updates and
+moves). An operation with a field not listed above (`position`, `text`, ...) or
+`content` that is not a list of inline nodes is refused (422).
 
 ## 5. What the server derives (never accepted from clients)
 
@@ -293,8 +290,7 @@ Writing (`render_markdown`, with `RenderLinks` naming notes and blocks):
 - An empty paragraph (no content, no children) is written as nothing: Markdown
   has no empty paragraph, and a blank line is just spacing.
 
-Reading Markdown (uploads, capture, new notes created with a body, importer
-sources) produces canonical blocks directly (`parse_markdown`, with
+Reading Markdown (uploaded files, capture, new notes created with a body) produces canonical blocks directly (`parse_markdown`, with
 `ParseLinks` resolving names). It is a plain CommonMark/GFM/Obsidian reader:
 wikilinks by file name, path, title or alias, `[[Note#Heading]]`,
 `[[Note#^id]]`, embeds `![[file.png|300]]` / `![[file.pdf]]`, callouts,
@@ -316,45 +312,17 @@ never renumber siblings.
 A unique index on `(document_id, parent_id or '', order)` covers top-level
 blocks too. Clients only ever sort by it (or rely on the order of `children`).
 
-## 9. Client migration (Mac app) — done
+## 9. Schema version and policy
 
-The Mac app reads and writes the canonical model (`mac/Sources/FortressKit/Editor/Model/`:
-`BlockCodec` reads and writes inline nodes, `BlockDiff` sends `insert`/`update`/
-`move`/`delete` with `after_id`/`before_id`/`parent_id` and attrs patches,
-`docLink`/`blockRef` nodes for note links, tables and quotes as child blocks).
-The boundary compatibility layer the server kept during the migration is
-removed: the transaction API accepts only the shapes of §2-§4, and anything else
-is refused with HTTP 422 (nothing is written):
-
-- older or BlockNote type names (`bulletListItem`, `numberedListItem`,
-  `checkListItem`, `list`, `codeBlock`, `blockquote`, `hr`, ...) are unknown
-  types;
-- `content` must be a list of inline nodes (or null): `{"blocknote": runs}`,
-  `{"markdown": …}` and `{"latex": …}` objects are refused; `[[id|Title]]`/`((id))` typed as text stay text (send `docLink`/
-  `blockRef` nodes);
-- inline content on a `quote`/`callout` (a container: send paragraph children),
-  BlockNote attrs such as image `previewWidth` (use `width`);
-- fields outside §4 — `position` (use `after_id`/`before_id`/`parent_id`),
-  `text`, `expected_updated_at`, ... — are refused, not ignored.
-
-The `position` in responses (§1) is still served, read-only.
-
-## 10. Stored data and older databases
-
-A new database is created at schema version 16 with every table, index and
-trigger (`block_store._SCHEMA`); a database at 16 opens as it is. Version 16 is
-the schema the `last-migrating-release` branch leaves a database in after its
-startup cleanup, which keeps the database recorded as 15: a database at 15
-with nothing of that cleanup left (`block_sync`, `blocks.provenance_json`,
-`documents.status`/`tags_json`, the undo history and other retired tables) is
-recorded as 16 and opens. This version no longer migrates: anything older (an
-older version, a 15 not yet cleaned up, or notes with no version) is refused at
-startup with a message saying to run `./upgrade-database.sh`, which backs the
-file up and upgrades it with the code of `last-migrating-release`, the last release with the migrations (BlockNote shapes
-to canonical blocks in 14, math and ink retired in 15, then the cleanup); a
-database at a newer version is refused as before (`block_store.stored_version`).
-Restoring a backup checks the same. The Mac app shows the backend's reason (the
-line after `Fortress can't start: ` in its log) instead of the exit code.
+A new database is created at schema version 16 (`block_store._SCHEMA`); a
+database at 16 opens as it is (so does one recorded at 15 that
+`last-migrating-release`'s startup cleanup has already run on: it is recorded as
+16). This code does not migrate: an older database (or
+one with no version) is refused at startup with a message saying to run
+`./upgrade-database.sh`, which backs the file up and upgrades it with the
+`last-migrating-release` branch, the last code with the migrations. A newer
+version is refused too (`block_store.stored_version`); restoring a backup checks
+the same.
 
 **Schema changes within version 16** need no migration code. Startup (cheap, every
 time) creates missing tables and indexes (`CREATE ... IF NOT EXISTS`), runs the
