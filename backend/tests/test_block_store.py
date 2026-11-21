@@ -405,52 +405,6 @@ class BlockStoreTests(unittest.TestCase):
                 )
 
 
-    def test_user_attributes_round_trip_update_separately_from_rendering_props(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            database = Path(directory) / ".fortress.sqlite3"
-            create_document(
-                database, "user-attrs", "User attributes", "",
-                "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
-            )
-            empty = document_tree(database, "user-attrs")
-            assert empty is not None
-            self.assertEqual([child["text"] for child in empty["children"]], [""])
-            inserted = apply_transaction(
-                database,
-                "user-attrs",
-                [
-                    BlockOperation(
-                        operation="insert", type="heading", attrs={"level": 2},
-                        user_attrs={"topic": "plan", "labels": ["work"]}, content=runs("Heading"),
-                    ),
-                    BlockOperation(
-                        operation="insert", type="image",
-                        attrs={"url": "/media/picture.png", "width": 320},
-                        user_attrs={"purpose": "cover"},
-                    ),
-                ],
-                empty["revision"],
-            )
-            heading_id = inserted["children"][1]["id"]
-
-            updated = apply_transaction(
-                database,
-                "user-attrs",
-                [BlockOperation(operation="update", block_id=heading_id,
-                                user_attrs={"topic": "final", "labels": None})],
-                inserted["revision"],
-            )
-            _paragraph, heading, image = updated["children"]
-
-            self.assertEqual(heading["user_attrs"], {"topic": "final"})
-            self.assertEqual(heading["attrs"], {"level": 2})
-            self.assertEqual(image["user_attrs"], {"purpose": "cover"})
-            self.assertEqual(image["attrs"], {"url": "/media/picture.png", "width": 320})
-            self.assertEqual(document_tree(database, "user-attrs"), updated)
-
-
-
-
     def test_failed_structural_operation_rolls_back_the_whole_transaction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / ".fortress.sqlite3"

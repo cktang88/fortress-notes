@@ -177,7 +177,7 @@ with **422**.
 
 - **Validators.** `GET /api/block-documents/{id}` carries a strong `ETag`; a request
   whose `If-None-Match` matches gets `304` with no body. The ETag changes with anything
-  in the payload: the note's own rows (blocks, user attrs, links,
+  in the payload: the note's own rows (blocks, links,
   title/...) and every linked note or block (titles and text in
   `resolved_links`, `[[id|Title]]` labels). Every write that answers with a note sends
   the same ETag as `X-Document-ETag`. The server tracks changes with SQLite triggers

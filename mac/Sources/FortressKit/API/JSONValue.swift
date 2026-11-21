@@ -1,6 +1,6 @@
 import Foundation
 
-/// Any JSON value: block `attrs`, `user_attrs` and `content` are free-form on the server.
+/// Any JSON value: block `attrs` and `content` are free-form on the server.
 public enum JSONValue: Codable, Hashable, Sendable {
     case null
     case bool(Bool)

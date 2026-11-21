@@ -150,7 +150,6 @@ public struct InlineRun: Hashable, Sendable {
 public struct BlockOrigin: Hashable, Sendable {
     public var type: String
     public var attrs: [String: JSONValue]
-    public var userAttrs: [String: JSONValue]
     public var content: JSONValue
     public var payload: JSONValue?
     public var text: String
@@ -164,7 +163,7 @@ public struct BlockOrigin: Hashable, Sendable {
     public var revision: Int?
 
     public init(
-        type: String, attrs: [String: JSONValue] = [:], userAttrs: [String: JSONValue] = [:],
+        type: String, attrs: [String: JSONValue] = [:],
         content: JSONValue = .null, payload: JSONValue? = nil, text: String = "", kind: BlockKind,
         createdAt: String = "", updatedAt: String = "", children: [BlockNode] = [],
         revision: Int? = nil
@@ -172,7 +171,6 @@ public struct BlockOrigin: Hashable, Sendable {
         self.revision = revision
         self.type = type
         self.attrs = attrs
-        self.userAttrs = userAttrs
         self.content = content
         self.payload = payload
         self.text = text
@@ -183,7 +181,7 @@ public struct BlockOrigin: Hashable, Sendable {
     }
 
     public init(_ node: BlockNode, kind: BlockKind, keepingChildren: Bool = false) {
-        self.init(type: node.type, attrs: node.attrs, userAttrs: node.userAttrs, content: node.content,
+        self.init(type: node.type, attrs: node.attrs, content: node.content,
                   payload: node.payload, text: node.text, kind: kind, createdAt: node.createdAt,
                   updatedAt: node.updatedAt, children: keepingChildren ? node.children : [],
                   revision: node.revision)

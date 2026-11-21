@@ -120,13 +120,6 @@ CREATE TABLE IF NOT EXISTS blocks (
 -- makes that a lookup instead of a scan of every block.
 CREATE INDEX IF NOT EXISTS blocks_updated_at ON blocks(updated_at);
 
-CREATE TABLE IF NOT EXISTS block_user_attrs (
-    block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    value TEXT NOT NULL,
-    PRIMARY KEY (block_id, name)
-);
-
 -- Links derived from docLink/blockRef nodes. Targets may be missing or trashed
 -- (readers join to live ones), so a link survives its target being deleted and
 -- restored without any bookkeeping.
@@ -216,7 +209,9 @@ CREATE INDEX IF NOT EXISTS transaction_receipts_document ON transaction_receipts
 # Idempotent ``DROP TABLE/INDEX IF EXISTS`` statements for objects a release
 # retired; run at every startup (cheap). Retired triggers need nothing: every
 # trigger is dropped and only the current ones are created again.
-_RETIRED: tuple[str, ...] = ()
+_RETIRED: tuple[str, ...] = (
+    "DROP TABLE IF EXISTS block_user_attrs",  # per-block user attributes, never used
+)
 
 # Databases whose schema is current, keyed by the path as given, with the file
 # identity checked (a deleted or replaced file is initialized again).
@@ -508,7 +503,6 @@ _CHANGE_TRIGGERS["assets_text_changed_update"] = (
     ),
 )
 for _table, _column in (
-    ("block_user_attrs", "block_id"),
     ("block_refs", "source_block_id"),
     ("document_refs", "source_block_id"),
 ):
@@ -1766,7 +1760,7 @@ _BLOCK_COLUMNS = """id, document_id, parent_id, order_key, type, attrs_json, con
                    payload_json, text, created_at, updated_at, revision"""
 
 
-def _node(row: sqlite3.Row, user_attrs: dict) -> dict:
+def _node(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "document_id": row["document_id"],
@@ -1778,7 +1772,6 @@ def _node(row: sqlite3.Row, user_attrs: dict) -> dict:
         "content": _loads(row["content_json"]),
         "payload": _loads(row["payload_json"]),
         "text": row["text"],
-        "user_attrs": user_attrs,
         # The document revision that last changed this block (null: never since
         # it was created or imported).
         "revision": row["revision"],
@@ -1800,22 +1793,11 @@ def _document_tree(
         return None
     roots: list[dict] = []
     if include_children:
-        user_attrs_by_block: dict[str, dict[str, object]] = {}
-        for row in connection.execute(
-            """SELECT attrs.block_id, attrs.name, attrs.value
-                 FROM block_user_attrs AS attrs
-                 JOIN blocks ON blocks.id = attrs.block_id
-                WHERE blocks.document_id = ?""",
-            (document_id,),
-        ):
-            user_attrs_by_block.setdefault(row["block_id"], {})[row["name"]] = json.loads(row["value"])
         rows = connection.execute(
             f"SELECT {_BLOCK_COLUMNS} FROM blocks WHERE document_id = ? ORDER BY order_key",
             (document_id,),
         ).fetchall()
-        nodes = {
-            row["id"]: _node(row, user_attrs_by_block.get(row["id"], {})) for row in rows
-        }
+        nodes = {row["id"]: _node(row) for row in rows}
         for node in nodes.values():
             parent = nodes.get(node["parent_id"])
             siblings = parent["children"] if parent else roots
@@ -2084,12 +2066,11 @@ class _Writer:
                 self.now, self.now, self.revision,
             ),
         )
-        self.set_user_attrs(block_id, {}, operation.user_attrs)
         self.content_changed.append(block_id)
 
     def update(self, operation: BlockOperation) -> None:
-        if not operation.model_fields_set & {"type", "attrs", "content", "payload", "user_attrs"}:
-            raise BlockShapeError("an update names what to change: type, attrs, content, payload or user_attrs")
+        if not operation.model_fields_set & {"type", "attrs", "content", "payload"}:
+            raise BlockShapeError("an update names what to change: type, attrs, content or payload")
         row = self.row(operation.block_id)
         current = stored_block(row)
         new_type = current.type
@@ -2121,8 +2102,6 @@ class _Writer:
                 self.now, self.revision, row["id"],
             ),
         )
-        if operation.user_attrs is not None:
-            self.set_user_attrs(row["id"], None, operation.user_attrs)
         self.content_changed.append(row["id"])
 
     def move(self, operation: BlockOperation) -> None:
@@ -2152,23 +2131,6 @@ class _Writer:
         self.removed.extend(subtree)
         removed = set(subtree)
         self.content_changed = [block_id for block_id in self.content_changed if block_id not in removed]
-
-    def set_user_attrs(self, block_id: str, current: dict | None, patch: dict | None) -> None:
-        if patch is None:
-            return
-        if not isinstance(patch, dict):
-            raise BlockShapeError("user_attrs must be an object")
-        for name, value in patch.items():
-            if value is None:
-                self.connection.execute(
-                    "DELETE FROM block_user_attrs WHERE block_id = ? AND name = ?", (block_id, name)
-                )
-            else:
-                self.connection.execute(
-                    """INSERT INTO block_user_attrs(block_id, name, value) VALUES (?, ?, ?)
-                       ON CONFLICT(block_id, name) DO UPDATE SET value = excluded.value""",
-                    (block_id, name, json.dumps(value)),
-                )
 
 
 def _operation_block(operation: BlockOperation) -> schema.Block:

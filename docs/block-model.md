@@ -40,7 +40,6 @@ document order):
   ],
   "payload": null,                        // structured data: html only, else null
   "text": "Hello world",                 // derived plain text (read-only)
-  "user_attrs": {},                       // the person's own key/values (see §5)
   "revision": 41,                         // document revision that last changed it (null: never)
   "created_at": "2026-11-18T09:00:00+00:00",
   "updated_at": "2026-11-18T09:05:00+00:00",
@@ -184,8 +183,8 @@ serves):
 
 | operation | fields |
 |---|---|
-| `insert` | `block_id`? (ULID/UUID; server generates one if omitted), placement (below), `type` (required), `attrs`?, `content`?, `payload`?, `user_attrs`? |
-| `update` | `block_id`, and at least one of: `type`, `attrs` (PATCH), `content` (replaces the inline content), `payload` (replaces it), `user_attrs` (PATCH); an update naming none of them is refused (422) |
+| `insert` | `block_id`? (ULID/UUID; server generates one if omitted), placement (below), `type` (required), `attrs`?, `content`?, `payload`? |
+| `update` | `block_id`, and at least one of: `type`, `attrs` (PATCH), `content` (replaces the inline content), `payload` (replaces it); an update naming none of them is refused (422) |
 | `move` | `block_id`, placement |
 | `delete` | `block_id` (deletes the whole subtree) |
 
@@ -196,7 +195,7 @@ or `before_id` (right before it), or neither (append as the last child of
 agree. Give one of `after_id`/`before_id`, not both. The server assigns the
 order key; clients never send one.
 
-**PATCH semantics** (`attrs`, `user_attrs` on update): keys present are set, a
+**PATCH semantics** (`attrs` on update): keys present are set, a
 key set to `null` is deleted, keys not mentioned are kept. On insert, `attrs` is
 the full set (null values are ignored). Defaults (`heading.level = 1`,
 `check_item.checked = false`) are filled in by the server.
@@ -215,7 +214,8 @@ Later operations in a transaction see the effects of earlier ones (insert a
 table, then its rows and cells, then the cells' paragraphs).
 
 Removed from the old API: `split`, `merge`, `duplicate`, `set_attrs` (use
-`update` with an attrs patch), `set_user_attrs` (use `update.user_attrs`),
+`update` with an attrs patch), `set_user_attrs` and `user_attrs` (per-block
+key/values nothing used; the table is dropped at startup, §10),
 `expected_updated_at` (the revision check covers it), `position` (use
 `after_id`/`before_id`), and client-sent `text` and `content.markdown`. An
 operation with a field not listed above is refused (422).
@@ -232,9 +232,6 @@ operation with a field not listed above is refused (422).
 | asset links | `/media/...` URLs in attrs |
 | `revision`, `created_at`, `updated_at` | the transaction that wrote the block |
 | re-import state | the importer (the note's `sync_json`, §6) |
-
-`user_attrs` are the person's own key/value pairs on a block (due dates, ...);
-they are not part of the content and don't affect `text`.
 
 ## 6. Re-import state
 

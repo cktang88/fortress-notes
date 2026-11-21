@@ -47,8 +47,6 @@ class BlockOperation(BaseModel):
     type: str | None = None
     # Insert: the block's attrs. Update: a patch (null deletes a key).
     attrs: dict[str, Any] | None = None
-    # Update: a patch of the person's own attributes (null deletes a key).
-    user_attrs: dict[str, Any] | None = None
     # Inline nodes (text types).
     content: list[dict[str, Any]] | None = None
     # Structured data (html).

@@ -373,6 +373,22 @@ class InitializeTests(unittest.TestCase):
             with connection_scope(database) as connection:
                 self.assertEqual(connection.execute("SELECT seq FROM change_log").fetchone()[0], seq + 1)
 
+    def test_the_retired_user_attributes_table_is_dropped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = self._database_at(directory, SCHEMA_VERSION)
+            with connection_scope(database) as connection:
+                connection.execute(
+                    "CREATE TABLE block_user_attrs (block_id TEXT, name TEXT, value TEXT)"
+                )
+            block_store._ready_files.pop(database, None)
+            initialize(database)
+            with connection_scope(database) as connection:
+                tables = {row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )}
+            self.assertNotIn("block_user_attrs", tables)
+            self.assertEqual([item["title"] for item in block_store.list_documents(database)], ["Kept"])
+
     def test_a_backup_of_an_older_schema_is_not_restored(self) -> None:
         from app import backups
 

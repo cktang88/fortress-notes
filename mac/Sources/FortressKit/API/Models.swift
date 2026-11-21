@@ -115,7 +115,6 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
     public var order: String?
     public var type: String
     public var attrs: [String: JSONValue]
-    public var userAttrs: [String: JSONValue]
     /// Inline nodes (text blocks), or `.null`.
     public var content: JSONValue
     /// Structured data (html `{html}`), or nil.
@@ -130,7 +129,7 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
 
     public init(
         id: String, documentId: String = "", parentId: String? = nil, order: String? = nil, type: String,
-        attrs: [String: JSONValue] = [:], userAttrs: [String: JSONValue] = [:], content: JSONValue = .null,
+        attrs: [String: JSONValue] = [:], content: JSONValue = .null,
         payload: JSONValue? = nil, text: String = "", createdAt: String = "", updatedAt: String = "",
         children: [BlockNode] = [], revision: Int? = nil
     ) {
@@ -140,7 +139,6 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
         self.order = order
         self.type = type
         self.attrs = attrs
-        self.userAttrs = userAttrs
         self.content = content
         self.payload = payload
         self.text = text
@@ -158,7 +156,6 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
         order = try c.decodeIfPresent(String.self, forKey: .order)
         type = try c.decode(String.self, forKey: .type)
         attrs = try c.decodeIfPresent([String: JSONValue].self, forKey: .attrs) ?? [:]
-        userAttrs = try c.decodeIfPresent([String: JSONValue].self, forKey: .userAttrs) ?? [:]
         content = try c.decodeIfPresent(JSONValue.self, forKey: .content) ?? .null
         let payload = try c.decodeIfPresent(JSONValue.self, forKey: .payload)
         self.payload = payload == .null ? nil : payload
@@ -177,7 +174,6 @@ public struct BlockNode: Codable, Hashable, Identifiable, Sendable {
         case order
         case type
         case attrs
-        case userAttrs = "user_attrs"
         case content
         case payload
         case text
