@@ -841,6 +841,26 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         return body()
     }
 
+    /// `undoStep` for an edit made between events (the Markdown shortcut a run loop pass
+    /// after the space, an upload finishing): one step of its own whatever the run loop
+    /// does around it. The undo manager groups by event, and ends the group only when
+    /// the run loop starts its next pass in the default mode, so the typing before it
+    /// (still open) or the keystroke after it (handled first) joined the step: ⌘Z after
+    /// typing "- item" removed the list and the word together. The open group ends
+    /// first, the step is a group of its own, and the event's group opens again for the
+    /// run loop to end as before.
+    func undoStepBetweenEvents(_ name: String, _ body: () -> Void) {
+        guard let undo = textView.undoManager, undo.groupsByEvent, undo.groupingLevel <= 1,
+              !undo.isUndoing, !undo.isRedoing
+        else { return undoStep(name, body) }
+        let eventGroupOpen = undo.groupingLevel == 1
+        if eventGroupOpen { undo.endUndoGrouping() }
+        undo.beginUndoGrouping()
+        undoStep(name, body)
+        undo.endUndoGrouping()
+        if eventGroupOpen { undo.beginUndoGrouping() }
+    }
+
     /// Names the current step after what the command turned out to do (Return that
     /// makes a code block is "Code Block", not typing).
     func renameStep(_ name: String) {
@@ -1553,7 +1573,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
         let prefix = string.substring(with: NSRange(location: paragraph.location, length: caret - paragraph.location))
         guard let kind = Self.shortcutKind(prefix, current: info.kind) else { return }
         // A run loop pass later (not a GCD hop, which can't run while the main queue is
-        // busy), so the transform is its own undo group.
+        // busy), after the space is in the text; its own undo group (`undoStepBetweenEvents`).
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
             MainActor.assumeIsolated { self?.applyMarkdownShortcut(paragraph: paragraph, prefix: prefix, info: info, kind: kind) }
         }
@@ -1571,7 +1591,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
             let rest = NSRange(location: now.location + prefix.utf16.count, length: NSMaxRange(now) - now.location - prefix.utf16.count)
             let replacement = self.retagged(rest, info: updated)
             let caretOffset = max(0, self.textView.selectedRange().location - now.location - prefix.utf16.count)
-            self.undoStep(UndoNames.kind(kind.kind)) {
+            self.undoStepBetweenEvents(UndoNames.kind(kind.kind)) {
                 self.replace(now, with: replacement, selecting: NSRange(location: now.location + caretOffset, length: 0))
             }
         }
@@ -2019,7 +2039,7 @@ final class BlockEditorController: NSObject, NSTextViewDelegate, NSTextStorageDe
                     let paragraph = DocumentText.paragraph(block, context: context)
                     let insertAt = min(anchorId.flatMap { range(ofBlock: $0) }.map(NSMaxRange) ?? string.length, string.length)
                     // Uploads finish one by one, after the paste: each block is a step.
-                    undoStep(location == nil ? UndoNames.paste : UndoNames.drop) {
+                    undoStepBetweenEvents(location == nil ? UndoNames.paste : UndoNames.drop) {
                         replace(NSRange(location: insertAt, length: 0), with: paragraph,
                                 selecting: NSRange(location: insertAt + paragraph.length, length: 0))
                     }
