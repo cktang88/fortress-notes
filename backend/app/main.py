@@ -658,7 +658,7 @@ def capture(data: CaptureRequest):
     """Save a quick thought as its own note in the Uncategorized folder."""
 
     try:
-        return documents.capture(data.text, data.provenance)
+        return documents.capture(data.text)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

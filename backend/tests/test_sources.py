@@ -379,12 +379,9 @@ class SourceApiTests(unittest.TestCase):
         self.addCleanup(self.client.__exit__, None, None, None)
 
     def test_capture_and_ai_notes_carry_their_source(self) -> None:
-        captured = self.client.post(
-            "/api/capture",
-            json={"text": "A thought", "provenance": {"source_url": "https://example.com/x"}},
-        ).json()
+        captured = self.client.post("/api/capture", json={"text": "A thought"}).json()
         tree = self.client.get(f"/api/block-documents/{captured['document_id']}").json()
-        self.assertEqual(tree["provenance"], {"source": "capture", "source_url": "https://example.com/x"})
+        self.assertEqual(tree["provenance"], {"source": "capture"})
         self.assertEqual(
             self.client.post(f"/api/block-documents/{captured['document_id']}/opened").status_code,
             204,
@@ -394,14 +391,34 @@ class SourceApiTests(unittest.TestCase):
         navigation = self.client.get("/api/navigation").json()
         self.assertEqual(navigation["recent"][0]["source"], "capture")
 
-        answer = self.client.post("/api/block-documents", json={
-            "title": "Answer", "body": "The answer",
-            "provenance": {"source": "ai", "extra": {"question": "What?"}},
+
+    def test_a_client_cannot_claim_an_imported_pages_source_key(self) -> None:
+        from app import documents
+
+        page = documents.upsert_from_source(
+            source="onenote_import", external_id="{P}", title="Page",
+            blocks=[SourceBlock("Para", external_id="{B}")],
+        )
+        claim = {"source": "onenote_import", "external_id": "{Q}"}
+        created = self.client.post("/api/block-documents", json={
+            "title": "Mine", "body": "x", "provenance": claim,
         })
-        self.assertEqual(answer.status_code, 201)
-        self.assertEqual(answer.json()["provenance"]["source"], "ai")
-        bad = self.client.post("/api/block-documents", json={"provenance": {"source": "BAD"}})
-        self.assertEqual(bad.status_code, 422)
+        self.assertEqual(created.status_code, 201)
+        self.client.post("/api/capture", json={"text": "y", "provenance": claim})
+        from app.config import get_settings
+
+        with connection_scope(get_settings().block_db_path) as connection:
+            keys = connection.execute(
+                "SELECT id, source_kind, source_external_id FROM documents ORDER BY created_at"
+            ).fetchall()
+        claimed = [tuple(row) for row in keys if row["source_external_id"] is not None]
+        self.assertEqual(claimed, [(page.document_id, "onenote_import", "{P}")])
+        # A later import of page {Q} creates its own note.
+        other = documents.upsert_from_source(
+            source="onenote_import", external_id="{Q}", title="Other",
+            blocks=[SourceBlock("Para", external_id="{B}")],
+        )
+        self.assertEqual(other.status, "created")
 
     def test_info_endpoint_shape(self) -> None:
         created = self.client.post("/api/block-documents", json={"title": "N", "body": "one two"}).json()

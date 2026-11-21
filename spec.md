@@ -148,7 +148,7 @@ with **422**.
 | `GET` | `/api/block-link-targets` | `?q=&limit=` | link autocomplete |
 | `GET` | `/api/unified-search` | `?q=&limit=` + filters | ranked blocks (words, meaning, titles) |
 | `POST` | `/api/ask` | `{question}` (`Accept: application/x-ndjson` streams) | cited answer |
-| `POST` | `/api/capture` | `{text, provenance?}` | `201 {document_id, title, folder}` |
+| `POST` | `/api/capture` | `{text}` | `201 {document_id, title, folder}` |
 | `POST` | `/api/files` | multipart `file` | `{props: {url, name}}` (images and PDFs get OCR in the background) |
 | `GET` | `/api/ocr` | — | `{enabled, model, queued, done, failed, running}` (background OCR state) |
 | `GET` | `/api/ocr/pending` | `?model=apple-vision/…&limit=8` | pictures/PDFs an external reader has yet to read (§6) |
@@ -369,9 +369,9 @@ of block text, FTS or embeddings.
   untouched). Each block adds `revision` (the note revision that last changed it;
   null if unchanged since creation/import).
 - **Navigation / list items** add `source` (the note's provenance kind).
-- **Writes**: `NoteCreate.provenance` (e.g. `{"source": "ai", "extra": {"question": …}}`
-  for a saved Ask answer) and `CaptureRequest.provenance` (e.g. `source_url`). Client
-  input is validated (422) and cannot set server-only keys.
+- **Writes**: clients never set provenance (a note they create is `manual`, a
+  capture `capture`): a source key from a client could take over an imported
+  page's identity.
 - **Markdown**: export and mirror front matter carry `fortress: {provenance: …}`
   (and `source:` for a `source_url`); import (directory, upload, mirrors) restores
   it, so export → import → export is identical. A copy whose source key is already

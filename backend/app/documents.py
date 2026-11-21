@@ -20,7 +20,7 @@ from pathlib import Path
 
 import frontmatter
 
-from . import background, block_store, images, provenance, vault, workspace
+from . import background, block_store, images, vault, workspace
 from .config import get_settings
 from .models import NoteCreate, NoteSummary, NoteUpdate
 
@@ -55,14 +55,14 @@ def create(
 ) -> dict:
     """Create a note and return its tree; raises KeyError when the folder does not exist.
 
-    ``source`` is server-side provenance (an import); otherwise the client's
-    ``data.provenance`` is validated (ValueError when unusable), defaulting to
-    a note written by hand.
+    ``source`` is server-side provenance (an import); a note from a client is
+    one written by hand. (Clients never set provenance: a source key there would
+    let them take over an imported page's identity.)
     """
 
     db_path, _ = _paths()
     if source is None:
-        source = provenance.normalize(data.provenance) or {"source": "manual"}
+        source = {"source": "manual"}
     tree = block_store.create_block_document(
         db_path,
         data.title or block_store.derive_title(data.body),
@@ -132,7 +132,7 @@ UNCATEGORIZED = "Uncategorized"
 _uncategorized_lock = threading.Lock()
 
 
-def capture(text: str, extra_provenance: dict | None = None) -> dict[str, object]:
+def capture(text: str) -> dict[str, object]:
     """Save a quick thought as its own note in the Uncategorized folder.
 
     The note is titled from its first line and placed at the top of the folder
@@ -143,7 +143,7 @@ def capture(text: str, extra_provenance: dict | None = None) -> dict[str, object
     body = text.strip()
     if not body:
         raise ValueError("nothing to capture")
-    source = {**provenance.normalize(extra_provenance), "source": "capture"}
+    source = {"source": "capture"}
     db_path, _ = _paths()
     folder_id = _uncategorized_folder(db_path)
     tree = block_store.create_block_document(

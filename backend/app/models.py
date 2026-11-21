@@ -20,10 +20,6 @@ class NoteCreate(BaseModel):
     title: str = ""
     body: str = ""
     folder_id: str | None = None
-    # Where the note came from (see app/provenance.py), e.g.
-    # {"source": "ai", "extra": {"question": "..."}} for a saved Ask answer or
-    # {"source": "web", "source_url": "https://..."} for a clipped page.
-    provenance: dict[str, Any] | None = None
 
 
 class NoteUpdate(BaseModel):
@@ -170,8 +166,6 @@ class AskRequest(BaseModel):
 
 class CaptureRequest(BaseModel):
     text: str = Field(min_length=1, max_length=20_000)
-    # Optional extra provenance (e.g. the source_url of a page captured from).
-    provenance: dict[str, Any] | None = None
 
 
 class ExternalOcrResult(BaseModel):
