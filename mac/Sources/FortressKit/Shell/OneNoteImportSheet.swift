@@ -272,7 +272,9 @@ private struct OneNoteMicrosoftForm: View {
                     .labelsHidden()
                 }
                 GridRow {
+                    // With a list of notebooks, the label goes next to its first row.
                     Text("Notebooks:")
+                        .gridCellAnchor(importer.notebookChoices == nil ? nil : .topTrailing)
                     notebooks
                 }
             }
@@ -475,7 +477,9 @@ private struct OneNoteProgressStep: View {
 
     private var title: String {
         if listing { return String(localized: "Finding your notebooks") }
-        if fromMicrosoft { return String(localized: "Downloading from Microsoft") }
+        if fromMicrosoft {
+            return job == nil ? String(localized: "Downloading from Microsoft") : String(localized: "Importing your notebooks")
+        }
         return String(localized: "Importing “\(importer.fileName)”")
     }
 
