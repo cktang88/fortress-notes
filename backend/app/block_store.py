@@ -628,11 +628,12 @@ def create_document(
     folder_id: str | None = None,
     provenance: dict[str, object] | None = None,
     specs: list[BlockSpec] | None = None,
+    title_auto: bool = False,
 ) -> None:
     """Create a note from Markdown ``body`` (or already parsed ``specs``).
 
     A note with no blocks gets one empty paragraph: the editor types into a
-    block the server knows."""
+    block the server knows. With ``title_auto`` its title follows its first line."""
 
     initialize(path)
     with connection_scope(path, immediate=True) as connection:
@@ -650,6 +651,7 @@ def create_document(
             _iso(updated_at),
             provenance,
             specs,
+            title_auto,
         )
         if folder_id is not None:
             position = document_insert_position(connection, folder_id, None)
@@ -843,13 +845,8 @@ def create_block_document(
         folder_id=folder_id,
         provenance=provenance,
         specs=specs,
+        title_auto=title_auto,
     )
-    if title_auto:
-        with connection_scope(path) as connection:
-            connection.execute(
-                "UPDATE documents SET title_auto = 1 WHERE id = ?", (document_id,)
-            )
-            _refresh_auto_title(connection, document_id)
     tree = document_tree(path, document_id)
     assert tree is not None
     return tree
@@ -1441,6 +1438,7 @@ def _insert_document(
     updated_at: str,
     provenance: dict[str, object] | None = None,
     specs: list[BlockSpec] | None = None,
+    title_auto: bool = False,
 ) -> None:
     position = connection.execute(
         """SELECT COALESCE(MAX(position) + 1, 0)
@@ -1450,14 +1448,16 @@ def _insert_document(
     connection.execute(
         """INSERT INTO documents(
                    id, title, folder_id, position, deleted_at,
-                   created_at, updated_at
-               ) VALUES (?, ?, NULL, ?, NULL, ?, ?)""",
-        (document_id, title, position, created_at, updated_at),
+                   created_at, updated_at, title_auto
+               ) VALUES (?, ?, NULL, ?, NULL, ?, ?, ?)""",
+        (document_id, title, position, created_at, updated_at, int(title_auto)),
     )
     _set_document_provenance(
         connection, document_id, _unclaimed_source_key(connection, provenance or {"source": "manual"})
     )
     _insert_markdown_body(connection, document_id, body, created_at, updated_at, specs)
+    if title_auto:
+        _refresh_auto_title(connection, document_id)
 
 
 def _unclaimed_source_key(

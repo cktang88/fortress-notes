@@ -57,6 +57,21 @@ class AutoTitleTests(unittest.TestCase):
             "Book the hotel near the river",
         )
 
+    def test_an_unnamed_note_is_created_with_its_auto_title_in_one_transaction(self) -> None:
+        from app import block_store
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            document = block_store.create_block_document(
+                database, "Untitled", "# From the body", title_auto=True
+            )
+            self.assertEqual((document["title"], document["title_auto"]), ("From the body", True))
+            # A failure part-way leaves no half-made note behind.
+            with patch.object(block_store, "_refresh_auto_title", side_effect=RuntimeError):
+                with self.assertRaises(RuntimeError):
+                    block_store.create_block_document(database, "Untitled", "Other", title_auto=True)
+            self.assertEqual(len(block_store.list_documents(database)), 1)
+
     def test_naming_a_note_stops_auto_titles_and_clearing_resumes_them(self) -> None:
         document = self.client.post("/api/block-documents", json={}).json()
         document = self.write(document, "First thoughts")
