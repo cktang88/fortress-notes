@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app import block_store, documents, workspace
+from app import block_store, documents
 from app.block_store import (
     apply_transaction,
     block_link_targets,
@@ -113,7 +113,7 @@ class TrashRestoreTests(unittest.TestCase):
                 database, "source", "Source", f"See [[target]] and [[#^{block_id}]]", _T, _T,
             )
 
-            workspace.restore_document(database, "target")
+            documents.restore_document(database, "target")
 
             self.assertEqual(
                 {(link["source_document_id"], link["target_block_id"])

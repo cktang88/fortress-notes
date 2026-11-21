@@ -6,7 +6,7 @@ contract. This module stores blocks, applies transactions,
 and keeps the derived data in step: text, links, asset links and full-text
 search.
 
-Other modules that write documents with SQL of their own (sources, workspace)
+Other modules that write documents with SQL of their own (sources, documents)
 use only the public names here, mostly
 :func:`document_write`. Everything that must follow a write follows from it:
 
@@ -774,6 +774,12 @@ def document_tree_with_validator(path: Path, document_id: str) -> tuple[tuple, d
     return (validator, tree) if tree is not None else None
 
 
+# A note's snippet: the text of its first non-empty top-level block (else nested one).
+SNIPPET_SQL = """COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
+                            AND text <> '' ORDER BY parent_id IS NOT NULL, order_key
+                            LIMIT 1), '') AS snippet"""
+
+
 def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, object]]:
     """Active documents, newest first; only ``ids`` when given (one query either way)."""
 
@@ -782,10 +788,7 @@ def list_documents(path: Path, ids: list[str] | None = None) -> list[dict[str, o
     with connection_scope(path) as connection:
         rows = connection.execute(
             f"""SELECT id, title, folder_id, position,
-                      created_at, updated_at, source_kind,
-                      COALESCE((SELECT text FROM blocks WHERE blocks.document_id = documents.id
-                                AND text <> '' ORDER BY parent_id IS NOT NULL, order_key
-                                LIMIT 1), '') AS snippet
+                      created_at, updated_at, source_kind, {SNIPPET_SQL}
                  FROM documents
                 WHERE deleted_at IS NULL {only}
                 ORDER BY updated_at DESC, id ASC""",

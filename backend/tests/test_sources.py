@@ -318,12 +318,12 @@ class SourceStoreTests(unittest.TestCase):
         self.assertEqual(block_store.navigation(self.db)["items"][0]["name"], "Job")
 
     def test_trashed_notes_are_not_resurrected_but_purged_ones_are_reimported(self) -> None:
-        from app import workspace
+        from app import documents
 
         first = self.page([Block("x", external_id="{A}")])
         block_store.delete_document(self.db, first.document_id)
         self.assertEqual(self.page([Block("y", external_id="{A}")]).status, "skipped_deleted")
-        workspace.purge_document(self.db, first.document_id)
+        documents.purge_document(self.db, first.document_id)
         again = self.page([Block("y", external_id="{A}")])
         self.assertEqual(again.status, "created")
         self.assertNotEqual(again.document_id, first.document_id)

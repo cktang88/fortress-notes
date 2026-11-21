@@ -32,7 +32,6 @@ from . import (
     onenote_graph,
     onenote_import,
     search,
-    workspace,
 )
 from .portability import (
     export_document_markdown,
@@ -745,7 +744,7 @@ def capture(data: CaptureRequest):
 
 @app.get("/api/trash")
 def list_trash():
-    return _json(workspace.list_trash(_db()))
+    return _json(documents.list_trash(_db()))
 
 
 @app.post("/api/trash/{document_id}/restore")

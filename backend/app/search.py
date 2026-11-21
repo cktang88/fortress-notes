@@ -9,10 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from . import block_query, block_store, documents, embeddings, relevance, textutil
+from . import block_query, block_store, embeddings, relevance, textutil
 from . import corpus as corpus_store
 from .config import get_settings
-from .models import RelatedResult
+from .models import NoteSummary, RelatedResult
 
 _RELATED_EXCERPT_LENGTH = 240
 
@@ -146,7 +146,12 @@ def _results(matches: dict[str, tuple[float, str, str]], k: int) -> list[Related
     # Summaries only for the notes that can make the list (every one is active).
     if not ranked:
         return []
-    summaries = documents.summaries([nid for nid, _match in ranked[: k * 2]])
+    summaries = {
+        str(item["id"]): NoteSummary(**{key: item[key] for key in NoteSummary.model_fields})
+        for item in block_store.list_documents(
+            get_settings().block_db_path, [nid for nid, _match in ranked[: k * 2]]
+        )
+    }
     results = [
         RelatedResult(
             note=summaries[nid],

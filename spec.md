@@ -106,9 +106,9 @@ with **422**.
 - `block_markdown.py` — Markdown (CommonMark/GFM/Obsidian) in and out of canonical blocks.
 - `vault.py` — the notes folder as an Obsidian vault: file names, front matter,
   wikilink resolution across files uploaded together.
-- `documents.py` — note lifecycle (create/update/trash/restore/purge/capture)
-  and the Markdown mirror writer.
-- `workspace.py` — the Trash listing. `backups.py` — snapshots and restore.
+- `documents.py` — note lifecycle (create/update/capture), the Trash
+  (list/restore/purge), note info, and the Markdown mirror writer.
+- `backups.py` — snapshots and restore.
 - `portability.py` — one-way Markdown export of a note, reading uploaded Markdown
   files, and the Welcome note of a new workspace.
 - `background.py` — the one owner of background work (lanes, below).

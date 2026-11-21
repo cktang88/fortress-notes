@@ -277,9 +277,9 @@ class ErrorShapeTests(ApiCase):
 
     def test_a_locked_database_is_503_json(self) -> None:
         error = sqlite3.OperationalError("database is locked")
-        from app import workspace
+        from app import documents
 
-        with patch.object(workspace, "list_trash", side_effect=error):
+        with patch.object(documents, "list_trash", side_effect=error):
             response = self.client.get("/api/trash")
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.headers["retry-after"], "1")

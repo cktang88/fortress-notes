@@ -22,27 +22,14 @@ from typing import Any
 
 import frontmatter
 
-from . import background, block_store, images, ocr as _ocr, sources, vault, workspace
+from . import background, block_store, images, ocr as _ocr, sources, vault
 from .config import get_settings
-from .models import NoteCreate, NoteSummary, NoteUpdate
+from .models import NoteCreate, NoteUpdate
 
 
 def _paths() -> tuple[Path, Path]:
     settings = get_settings()
     return settings.block_db_path, settings.notes_path
-
-
-# --- Reads -------------------------------------------------------------------
-
-
-def summaries(ids: list[str]) -> dict[str, NoteSummary]:
-    """Summaries of the active notes among ``ids``."""
-
-    db_path, _ = _paths()
-    return {
-        str(item["id"]): NoteSummary(**{key: item[key] for key in NoteSummary.model_fields})
-        for item in block_store.list_documents(db_path, list(ids))
-    }
 
 
 # --- Metadata -----------------------------------------------------------------
@@ -229,6 +216,9 @@ def update(document_id: str, data: NoteUpdate) -> tuple[dict, tuple]:
     )
 
 
+# --- Trash: deleted notes stay recoverable until someone empties it ---------------
+
+
 def trash(document_id: str) -> None:
     db_path, _ = _paths()
     block_store.delete_document(db_path, document_id)
@@ -236,20 +226,99 @@ def trash(document_id: str) -> None:
 
 def restore(document_id: str) -> dict[str, object]:
     db_path, _ = _paths()
-    return workspace.restore_document(db_path, document_id)
+    return restore_document(db_path, document_id)
 
 
 def purge(document_id: str) -> None:
     db_path, _ = _paths()
-    workspace.purge_document(db_path, document_id)
+    purge_document(db_path, document_id)
     mirrors.removed(db_path, [document_id])
 
 
 def empty_trash() -> int:
     db_path, _ = _paths()
-    purged = workspace.empty_trash(db_path)
+    purged = empty_trash_at(db_path)
     mirrors.removed(db_path, purged)
     return len(purged)
+
+
+def list_trash(path: Path) -> list[dict[str, object]]:
+    block_store.initialize(path)
+    with block_store.connection_scope(path) as connection:
+        rows = connection.execute(
+            f"""SELECT id, title, deleted_at, {block_store.SNIPPET_SQL}
+                 FROM documents
+                WHERE deleted_at IS NOT NULL
+                ORDER BY deleted_at DESC, id ASC"""
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "deleted_at": row["deleted_at"],
+            "snippet": row["snippet"][:160],
+        }
+        for row in rows
+    ]
+
+
+def restore_document(path: Path, document_id: str) -> dict[str, object]:
+    """Bring a trashed document back to the end of its folder (or the top level)."""
+
+    now = block_store.utc_now()
+    with block_store.document_write(path) as write:
+        connection = write.connection
+        row = connection.execute(
+            "SELECT folder_id FROM documents WHERE id = ? AND deleted_at IS NOT NULL",
+            (document_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError("document is not in the trash")
+        folder_id = row["folder_id"]
+        if folder_id is not None and connection.execute(
+            "SELECT 1 FROM folders WHERE id = ?", (folder_id,)
+        ).fetchone() is None:
+            folder_id = None
+        position = connection.execute(
+            """SELECT COALESCE(MAX(position) + 1, 0) FROM documents
+                WHERE folder_id IS ? AND deleted_at IS NULL""",
+            (folder_id,),
+        ).fetchone()[0]
+        connection.execute(
+            """UPDATE documents
+                  SET deleted_at = NULL, folder_id = ?, position = ?, updated_at = ?
+                WHERE id = ?""",
+            (folder_id, position, now, document_id),
+        )
+        # Trashing removed the document from search; put it back. (Links to and
+        # from it were kept: link rows don't depend on their target being live.)
+        write.rederive(document_id)
+    return {"id": document_id, "folder_id": folder_id, "position": position}
+
+
+def purge_document(path: Path, document_id: str) -> None:
+    """Permanently remove one trashed document and everything that hangs off it."""
+
+    with block_store.document_write(path) as write:
+        if write.connection.execute(
+            "SELECT 1 FROM documents WHERE id = ? AND deleted_at IS NOT NULL", (document_id,)
+        ).fetchone() is None:
+            raise KeyError("document is not in the trash")
+        write.purge([document_id])
+
+
+def empty_trash_at(path: Path) -> list[str]:
+    """Purge every trashed document; returns the purged IDs."""
+
+    with block_store.document_write(path) as write:
+        ids = [
+            row["id"]
+            for row in write.connection.execute(
+                "SELECT id FROM documents WHERE deleted_at IS NOT NULL"
+            ).fetchall()
+        ]
+        write.purge(ids)
+    return ids
 
 
 # --- Quick capture -----------------------------------------------------------
