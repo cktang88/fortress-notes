@@ -9,6 +9,7 @@ lane       priority what
 ========== ======== ===========================================================
 mirrors    high     Markdown mirrors follow SQLite (``documents.MirrorWriter``)
 imports    normal   OneNote import jobs, one at a time (``onenote_import.jobs``)
+downloads  normal   OneNote downloads from Microsoft (``onenote_graph.downloads``)
 backups    normal   the daily snapshot (``backups.DailyBackup``)
 ocr        low      text in pictures and PDFs (``ocr.OcrQueue``)
 index      low      ColBERT embeddings (``embeddings.Reindexer``)
@@ -24,7 +25,8 @@ cores.
 database with no background writer active); :func:`run_inline` runs a lane's
 work in the caller's thread, serialized with the lane itself (flushing mirrors
 before a restore or at shutdown). :func:`stop` (lifespan shutdown) stops every
-lane and the child processes their services started (the OneNote converter).
+lane and the child processes their services started (the OneNote converter, the
+OneNote download tool).
 """
 
 from __future__ import annotations

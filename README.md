@@ -188,32 +188,35 @@ macOS binary (artifact `fortress-onenote-macos-universal`).
 ## Importing from OneNote
 
 OneNote for the web no longer offers *Export notebook* (2026), OneDrive doesn't
-download notebooks, and OneNote for Mac only saves PDFs. So there are two routes:
+download notebooks, and OneNote for Mac only saves PDFs. **File › Import › From
+OneNote…** (or Settings › General) therefore offers two ways:
 
-- **Windows (best fidelity):** OneNote for Windows › *File › Export › Notebook ›
+- **Download from Microsoft** (the default; no Terminal). The sheet asks for the
+  *Application (client) ID* of a free app you register once in Microsoft Entra (about
+  five minutes; the sheet lists the steps and opens <https://entra.microsoft.com>), and
+  whether it's a personal or a work/school account. Optionally sign in first with
+  *Choose…* to pick notebooks. **Download and Import** opens your browser to sign in
+  (read-only; if the browser can't be used, the sheet shows a code to enter at
+  microsoft.com/devicelogin), downloads with live progress, and imports the result
+  automatically. Microsoft limits reads to 400 requests an hour, so a large first
+  download takes a while (roughly an hour per 200–400 pages; the sheet shows when a
+  rate-limit pause ends). You can close the sheet, stop, or quit: running it again
+  continues where it stopped, and later runs fetch only changed pages.
+
+  The backend runs the optional tool
+  [`tools/fortress-onenote-graph`](tools/fortress-onenote-graph/README.md) for this
+  (it needs [uv](https://docs.astral.sh/uv/), e.g. `brew install uv`; the sheet says
+  so if it's missing). The tool also works on its own from the command line. Graph loses
+  some things the `.one` route keeps: ink/handwriting, equations (kept as text in a code
+  block), custom note tags, section order and colours (full list in the tool's README).
+  Sign-in tokens stay with the tool (in the Keychain); the app id is remembered in the
+  app's settings.
+- **Import a file** (best fidelity): OneNote for Windows › *File › Export › Notebook ›
   OneNote Package (.onepkg)* (or a section as `.one`). Unlock password-protected
-  sections first. Copy the file to the Mac.
-- **Mac (or no Windows PC):** download the notebooks with Microsoft Graph using the
-  optional tool [`tools/fortress-onenote-graph`](tools/fortress-onenote-graph/README.md).
-  Register a free app in Microsoft Entra once (five minutes, steps in the tool's
-  README), then:
+  sections first, copy the file to the Mac and drop it on the sheet (a `.zip` the
+  download tool wrote works too, imported as is without the converter).
 
-  ```sh
-  cd tools/fortress-onenote-graph
-  export FORTRESS_ONENOTE_CLIENT_ID=<your app's client id>
-  ./fortress-onenote-graph download --out ~/Desktop/OneNote.zip
-  ```
-
-  Microsoft limits reads to 400 requests an hour, so a large first download takes a
-  while (roughly an hour per 200–400 pages); it can be interrupted and resumed, and
-  later runs fetch only changed pages. Graph loses some things the `.one` route keeps:
-  ink/handwriting, equations (kept as text in a code block), custom note tags, section
-  order and colours (full list in the tool's README). Fortress itself never signs in to
-  Microsoft.
-
-Then in Fortress: **File › Import › From OneNote…** (or Settings › General),
-drop the `.onepkg`, `.one` or `.zip` (the Graph tool's zip is imported as it is, without
-the converter), and choose where the notebooks go.
+Either way you choose where the notebooks go.
 
 Notebooks, section groups and sections become folders; pages become notes (subpages
 stay next to their parent, which gets a *Subpages* list). The report lists counts per
@@ -250,6 +253,7 @@ relative to `backend/`. See [`backend/.env.example`](backend/.env.example).
 | `AUTO_BACKUP_ENABLED` | `true` | Daily snapshot in `NOTES_DIR/.fortress-backups` |
 | `FORTRESS_ONENOTE_BIN` | — | The converter binary (else the repository build, next to Python, `../Resources/bin`, or `PATH`) |
 | `FORTRESS_ONENOTE_TIMEOUT_S` | `3600` | Seconds before a conversion is stopped |
+| `FORTRESS_ONENOTE_GRAPH_DIR` | — | The OneNote download tool's folder (else `tools/fortress-onenote-graph` in the repository) |
 
 Read from the process environment only (not from `.env`): `FORTRESS_TOKEN`,
 `FORTRESS_PARENT_PID` (both set by the app) and `FORTRESS_ALLOWED_HOSTS` (extra `Host`

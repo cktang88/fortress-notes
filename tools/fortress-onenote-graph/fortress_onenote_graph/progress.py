@@ -6,6 +6,9 @@ host app can parse. Every JSON line is one object with an ``event`` field:
 * ``{"event": "wait", "seconds": s, "reason": "..."}`` (throttling)
 * ``{"event": "warning", "message": "..."}``
 * ``{"event": "requests", "sent": n}`` at the end of a download
+* ``{"event": "device_code", "user_code": "…", "verification_uri": "…", "expires_in": s}``
+  when the browser sign-in did not work and the user must enter a code instead
+* ``{"event": "info", "message": "..."}``
 
 The final summary goes to stdout as one JSON line (like fortress-onenote).
 """
@@ -54,6 +57,12 @@ class Progress:
 
     def info(self, message: str) -> None:
         self._emit({"event": "info", "message": message}, message, important=False)
+
+    def device_code(self, flow: dict[str, Any]) -> None:
+        if self.mode == "json":
+            self._emit({"event": "device_code", "user_code": flow.get("user_code"),
+                        "verification_uri": flow.get("verification_uri"),
+                        "expires_in": flow.get("expires_in"), "message": flow.get("message")}, None)
 
     def event(self, event: dict[str, Any]) -> None:
         self._emit(event, None)

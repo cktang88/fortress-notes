@@ -43,7 +43,9 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("login", parents=[common], help="sign in and show the account")
     commands.add_parser("logout", parents=[common], help="forget the cached sign-in")
-    commands.add_parser("notebooks", parents=[common], help="list your notebooks")
+    notebooks = commands.add_parser("notebooks", parents=[common], help="list your notebooks")
+    notebooks.add_argument("--json", action="store_true",
+                           help='one JSON line: {"notebooks": [{"name": …, "sections": n}, …]}')
     download = commands.add_parser("download", parents=[common],
                                    help="download notebooks (only what changed) and write the manifest")
     convert = commands.add_parser("convert", parents=[common],
@@ -71,7 +73,8 @@ def main(argv: list[str] | None = None) -> int:
             client_id = resolve_client_id(args.client_id)
             session = Session(client_id, config_dir, account_type=args.account, tenant=args.tenant,
                               device_code=args.device_code, say=progress.info if args.progress == "json"
-                              else lambda message: print(message, file=sys.stderr))
+                              else lambda message: print(message, file=sys.stderr),
+                              on_device_code=progress.device_code)
             if args.command == "logout":
                 removed = session.logout()
                 print(json.dumps({"signed_out": removed}))
@@ -95,10 +98,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "notebooks":
             from .download import sections_of
 
+            listed = []
             for notebook in client.notebooks():
                 name = str(notebook.get("displayName"))
-                count = sum(1 for _ in sections_of(notebook, [name]))
-                print(f"{name}\t{count} section(s)")
+                listed.append({"name": name, "sections": sum(1 for _ in sections_of(notebook, [name]))})
+            if args.json:
+                print(json.dumps({"notebooks": listed}, ensure_ascii=False))
+            else:
+                for item in listed:
+                    print(f"{item['name']}\t{item['sections']} section(s)")
             return 0
         from .download import Downloader
 
