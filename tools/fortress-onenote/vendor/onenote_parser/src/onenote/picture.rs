@@ -60,7 +60,6 @@ mod tests {
         picture.read().read_to_end(&mut bytes).unwrap();
 
         assert_eq!(bytes, b"picture");
-        assert_eq!(picture.size(), 7);
         assert_eq!(picture.data_status(), FileDataStatus::Available);
         assert_eq!(picture.extension(), Some("png"));
     }

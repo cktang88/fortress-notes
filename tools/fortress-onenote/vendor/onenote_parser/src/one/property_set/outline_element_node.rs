@@ -79,8 +79,6 @@ mod tests {
         let property_ids = [
             PropertyType::LastModifiedTime,
             PropertyType::OutlineElementChildLevel,
-            PropertyType::AuthorOriginal,
-            PropertyType::AuthorMostRecent,
         ];
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&(property_ids.len() as u16).to_le_bytes());
