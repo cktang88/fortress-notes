@@ -97,7 +97,7 @@ code blocks: Fortress has no math), block ids
 (`^id`, also on a line of its own after a list/quote/table), HTML tables and
 images. Files uploaded together (File › Import) link to each other and to notes
 already in the workspace; an HTML block that is only a comment is dropped. Front matter: `created`/`created_at`/`date`, `updated`/`updated_at`/`modified`,
-`aliases`/`alias`, `source` (a URL becomes the note's `source_url`). Not yet: Obsidian
+`aliases`/`alias` (`source` is not kept). Not yet: Obsidian
 attachments are not copied in (an upload has only the `.md` files), `#tags` stay text (tags are not a feature),
 `%%comments%%` stay visible text, inline `$…$` stays text, transclusion
 `![[Note]]` becomes a note link.
@@ -133,7 +133,7 @@ would fix that (below).
 | Search | plain words, all must match (FTS5, operators not exposed) + embeddings | no query language needed; if one is added, the de-facto web/GitHub one: `"phrase"`, `-word`, `OR` | **keep**; adopt that syntax if a query language is ever added |
 | Quick capture inbox | an `Uncategorized` folder, newest first | no standard (Things/OmniFocus "Inbox") | **keep**; it is a plain folder in the vault |
 | Themes | (another change adopts Base16/Base24) | Base16/Base24 | out of scope here |
-| Provenance | our JSON (`provenance.py`), in the database only | W3C PROV (too heavy), Dublin Core `source`/`created`/`modified` | only `source_url` → `source` goes into front matter (done); a Dublin Core / PROV-O export is not worth it |
+| Provenance | `documents.source_kind` and an imported page's details (`sources.import_details`), in the database only | W3C PROV (too heavy), Dublin Core `source`/`created`/`modified` | only `source_url` → `source` goes into front matter (done); a Dublin Core / PROV-O export is not worth it |
 | Text read from pictures | `picture_text` in front matter | none (Spotlight indexes file contents) | **keep**, so other tools find it |
 
 ## Not done yet: high-value moves, with effort

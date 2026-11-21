@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from app import block_store, onenote_import
 from app.block_store import document_tree
-from support import make_settings, use_settings
+from support import import_details, make_settings, use_settings
 
 TOOL = Path(__file__).resolve().parents[2] / "tools" / "fortress-onenote-graph"
 sys.path.insert(0, str(TOOL))
@@ -139,11 +139,13 @@ class GraphImportTests(unittest.TestCase):
         self.assertTrue(all(link["id"] == standup["id"] for link in doc_links))
         marks = {mark for item in rich["content"] for mark in (item.get("marks") or {})}
         self.assertTrue({"bold", "italic", "underline", "strike", "sup", "sub", "color", "highlight"} <= marks, marks)
-        self.assertEqual(plan["provenance"]["source_url"], "https://source.example.org/article")
-        self.assertEqual(plan["provenance"]["extra"]["onenote"]["level"], 0)
+        details = import_details(self.db, plan["id"])
+        self.assertEqual(details["source_url"], "https://source.example.org/article")
+        self.assertEqual(details["extra"]["onenote"]["level"], 0)
         # The subpage list on the parent, and the subpage's link back to it.
         child = self.tree("GRAPH:0-P2!1-ABC")
-        self.assertEqual(child["provenance"]["extra"]["onenote"]["parent_page_id"], "GRAPH:0-P1!1-ABC")
+        self.assertEqual(import_details(self.db, child["id"])["extra"]["onenote"]["parent_page_id"],
+                         "GRAPH:0-P1!1-ABC")
         back = next(node for node in _walk(child["children"]) if node["text"].startswith("Back to"))
         self.assertEqual(_inline(back, "docLink")[0]["id"], plan["id"])
         self.assertTrue(any(link["id"] == child["id"] for node in nodes for link in _inline(node, "docLink")))

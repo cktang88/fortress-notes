@@ -190,7 +190,7 @@ Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff a
 | Section | folder (section colours are not kept) |
 | Page (level 0) | note in the section folder; title = page title (untitled pages: first line); keyed by the page GUID |
 | Subpage (level 1/2) | note in the same folder, right after its parent; the parent gets a trailing **Subpages** list of links. `extra.onenote.level`/`parent_page_id` keep the tree |
-| created / modified | the note's `created_at` / `updated_at` (and provenance `source_created_at`/`source_modified_at`) |
+| created / modified | the note's `created_at` / `updated_at` (and `source_created_at`/`source_modified_at` in its import details, spec §7a) |
 | Outlines stacked vertically | blocks in reading order |
 | **Outlines side by side** | `columns` block with one `column` per outline (`width` = relative fraction); bands of more than 4 are stacked |
 | Paragraph `style_id` h1..h6 | `heading` with `level` |
@@ -209,7 +209,7 @@ Pipeline: upload → temp dir → run CLI → read manifest → **plan** (diff a
 | Ink | not imported: Fortress does not support ink or handwriting (decision, Nov 2026). The converter skips ink and counts it (`ink_skipped`, a warning per page) so nothing disappears silently |
 | Math | Fortress does not support math (same decision): a paragraph that is only an equation becomes a `code` block with OneNote's plain linear text (`language: "text"`); inline equations stay plain text; each page with equations gets a report warning |
 | `onenote:` links | rewritten in a second pass: page links → `docLink`; paragraph links (`object-id`) → `blockRef` when the paragraph is found, else a page link; unresolved → plain text, listed in the report |
-| "Pasted from <url>" | `source_url` in the note's provenance |
+| "Pasted from <url>" | `source_url` in the note's import details (front matter `source:` in its Markdown) |
 
 **Columns detection** (outline geometry; units = half-inches):
 1. Collect outlines + floating images/files as boxes `(x, y, w, h_est)`; `h_est` = Σ estimated line heights (≈0.18 in per text line at 11pt, wrap by width; image height from picture height) — no height is stored.
@@ -240,7 +240,7 @@ Keep raw geometry in each column's attrs (`onenote_x/y/w`) so we can re-run with
 7. **Note tags** — kept as `attrs.onenote_tags` labels only; Fortress deliberately has no tags or tag views.
 8. **Math** — not supported, by decision: equations are kept as their plain linear text (stored math blocks were converted by schema 15).
 9. **Ink** — not supported, by decision: skipped and counted in the report (images imported from ink earlier stay plain images).
-10. **Source URL on notes** — done (provenance `source_url`); folder colours and embedded video players are not built.
+10. **Source URL on notes** — done (`source_url` in the import details); folder colours and embedded video players are not built.
 
 ## F5. Licensing
 - `onenote_parser` — **MPL-2.0** (file-level weak copyleft): fine to link into our CLI (static linking OK) as long as any *modified MPL files* are published. We vendor it with fixes in `tools/fortress-onenote/vendor/onenote_parser/` (changes listed in `vendor/PATCHES.md`). Its test fixtures include AGPL-3.0 samples — not copied into our repo.

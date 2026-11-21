@@ -533,7 +533,7 @@ async def import_uploaded_markdown(
                 created = documents.create(
                     NoteCreate(title=note.title, body=note.body, folder_id=folder_id),
                     created_at=note.created_at,
-                    source=note.provenance,
+                    source_kind="markdown_import",
                     document_id=document_id,
                     specs=specs,
                 )

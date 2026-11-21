@@ -44,6 +44,19 @@ def mirror_file(notes: Path, document_id: str) -> Path:
     return MirrorWriter().path(Path(notes), document_id) or Path(notes) / f".no-mirror-{document_id}.md"
 
 
+def import_details(database: Path, document_id: str) -> dict:
+    """What an importer recorded about a note (``sources.import_details``)."""
+
+    from app import sources
+    from app.block_store import connection_scope
+
+    with connection_scope(database) as connection:
+        row = connection.execute(
+            "SELECT provenance_json FROM documents WHERE id = ?", (document_id,)
+        ).fetchone()
+    return sources.import_details(row[0])
+
+
 def add_markdown_notes(notes: Path, database: Path) -> None:
     """Each ``*.md`` file in ``notes`` as a note whose id is the file name.
 
@@ -78,6 +91,6 @@ def import_markdown_files(database: Path, root: Path) -> list[str]:
     ids = []
     for note, (document_id, specs) in zip(notes, parse_uploaded_batch(database, notes, block_store.new_id)):
         create_document(database, document_id, note.title, note.body,
-                        note.created_at or "t", "t", provenance=note.provenance, specs=specs)
+                        note.created_at or "t", "t", source_kind="markdown_import", specs=specs)
         ids.append(document_id)
     return ids

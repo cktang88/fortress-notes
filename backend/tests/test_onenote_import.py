@@ -26,7 +26,7 @@ from app import block_store, documents, images, onenote_import, sources
 from app.block_store import apply_transaction, document_tree, search_blocks
 from app.models import BlockOperation
 from app.portability import export_document_markdown
-from support import make_settings, use_settings, mirror_file
+from support import import_details, make_settings, use_settings, mirror_file
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"fake image bytes"
@@ -306,12 +306,11 @@ class ImportManifestTests(_Base):
         self.assertEqual({guid: self.doc_id(guid) for guid in ids}, ids)
         plan = self.tree(P1)
         self.assertEqual(plan["created_at"], "2024-01-02T03:04:05.000Z")
-        provenance = plan["provenance"]
-        self.assertEqual(provenance["source"], "onenote_import")
+        provenance = import_details(self.db, plan["id"])
         self.assertEqual(provenance["source_path"], "Work › Projects › Alpha › Plan")
         self.assertEqual(provenance["source_modified_at"], "2024-02-03T04:05:06.000Z")
         self.assertEqual(provenance["importer"]["name"], "fortress-onenote-import")
-        standup = self.tree(P3)["provenance"]
+        standup = import_details(self.db, self.doc_id(P3))
         self.assertEqual(standup["source_url"], "https://example.org/source")
         self.assertTrue(standup["extra"]["onenote"]["title_derived"])
         documents.flush_mirrors()  # Markdown mirrors follow in the background
@@ -475,8 +474,8 @@ class ImportManifestTests(_Base):
         [item] = heading["children"]
         self.assertEqual(item["content"][0], {"type": "docLink", "id": self.doc_id(P2)})
         child = self.tree(P2)
-        self.assertEqual(child["provenance"]["extra"]["onenote"]["parent_page_id"], P1)
-        self.assertEqual(child["provenance"]["extra"]["onenote"]["level"], 1)
+        state = import_details(self.db, child["id"])["extra"]["onenote"]
+        self.assertEqual((state["parent_page_id"], state["level"]), (P1, 1))
         [grand] = child["children"][-1]["children"]
         self.assertEqual(grand["content"][0], {"type": "docLink", "id": self.doc_id(P2B)})
         self.assertFalse(any(node["text"] == "Subpages" for node in self.tree(P2B)["children"]))
@@ -826,7 +825,7 @@ class LivingDocumentTests(_Base):
         other["notebooks"][0].update(id="nb-2", file_identity="nb-2", name="Home", children=[])
         result = self.run_import(other)["notebooks"][0]
         self.assertEqual(result["pages_removed_in_source"], [])
-        self.assertNotIn("source_removed", self.tree(P3)["provenance"])
+        self.assertNotIn("source_removed_at", sources.sync_state(self.db, self.doc_id(P3)))
 
     def test_text_coverage(self) -> None:
         result = self.run_import()
@@ -1264,7 +1263,7 @@ class CompareFindingsTests(_Base):
         page["source_url"] = "https://example.com/" + "u" * 3000
         tree = self.import_blocks([{"type": "paragraph", "indent": 0, "text": "still imported"}])
         self.assertEqual(tree["children"][0]["text"], "still imported")
-        path = tree["provenance"]["source_path"]
+        path = import_details(self.db, tree["id"])["source_path"]
         self.assertLessEqual(len(path), onenote_import.MAX_SOURCE_PATH)
         self.assertTrue(path.startswith("Work › ") and path.endswith("Meetings › " + page["title"]), path)
 

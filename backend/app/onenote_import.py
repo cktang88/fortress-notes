@@ -86,7 +86,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from . import assets, background, block_store, provenance, sources
+from . import assets, background, block_store, sources
 from .config import get_settings
 
 SOURCE = "onenote_import"
@@ -354,6 +354,14 @@ def _norm_guid(value: object) -> str | None:
     if _GUID_RE.match(value) and not value.startswith("{"):
         value = "{" + value + "}"
     return value
+
+
+def _onenote_state(row: sqlite3.Row) -> dict[str, Any]:
+    """What this importer recorded about a page's note (``provenance["extra"]["onenote"]``
+    of :meth:`_import_page`): its level, parent page, notebook/section, link target."""
+
+    state = (sources.import_details(row["provenance_json"]).get("extra") or {}).get("onenote")
+    return state if isinstance(state, dict) else {}
 
 
 def _page_key(page: dict[str, Any]) -> str | None:
@@ -898,7 +906,7 @@ def _file(block: dict[str, Any], ctx: _PageContext) -> dict[str, Any]:
 
 
 MAX_FILE_NAME = 200
-# provenance.source_path / source_url limit (provenance._STRING_FIELDS).
+# The longest source_path / source_url recorded for a page.
 MAX_SOURCE_PATH = 2000
 MAX_PATH_PART = 200
 
@@ -1187,13 +1195,10 @@ class _Importer:
             guid = _norm_guid(row["source_external_id"])
             if guid and "~" not in guid:
                 self.targets[guid] = _Target(row["id"], row["title"])
-            if '"link_target_id"' in (row["provenance_json"] or ""):
-                # Pages keyed by something else than their GUID (Graph downloads).
-                with contextlib.suppress(ValueError, AttributeError, TypeError):
-                    extra = json.loads(row["provenance_json"])["extra"]["onenote"]
-                    link = _norm_guid(extra.get("link_target_id"))
-                    if link:
-                        self.targets.setdefault(link, _Target(row["id"], row["title"]))
+            # Pages keyed by something else than their GUID (Graph downloads).
+            link = _norm_guid(_onenote_state(row).get("link_target_id"))
+            if link:
+                self.targets.setdefault(link, _Target(row["id"], row["title"]))
 
     def run(self) -> dict[str, Any]:
         started = time.monotonic()
@@ -1500,7 +1505,7 @@ class _Importer:
         for doc in docs:
             if doc["source_external_id"] in info["page_keys"]:
                 continue
-            extra = (provenance.loads(doc["provenance_json"]).get("extra") or {}).get("onenote") or {}
+            extra = _onenote_state(doc)
             keys = source_keys(chain(doc["folder_id"]))
             in_notebook = (
                 extra.get("notebook_id") == info["key"] if extra.get("notebook_id") is not None

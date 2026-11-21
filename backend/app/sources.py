@@ -16,6 +16,11 @@ note; later calls find that same note again:
 * A note the user **trashed** is left alone (``skipped_deleted``); a purged one
   is imported afresh.
 
+What the importer says about the page (``provenance``: e.g. its source path,
+URL and importer-specific ``extra``) is kept in ``documents.provenance_json``,
+written here only and read with :func:`import_details`; it is never searched
+and not part of the note's payload.
+
 What a refresh needs lives in ``documents.sync_json``: the note's revision
 after the last import, a hash of what the source had, the title it was given
 (``title``), and which block each
@@ -35,7 +40,6 @@ from typing import Any, Iterable
 from . import ocr as _ocr
 from . import block_schema as schema
 from . import order_keys
-from . import provenance as _provenance
 from .block_markdown import BlockSpec, legalize, parse_markdown
 from .block_schema import BlockShapeError
 from .block_store import (
@@ -86,6 +90,35 @@ class UpsertResult:
     blocks_created: int = 0
     blocks_updated: int = 0
     blocks_deleted: int = 0
+
+
+def _json_object(raw: object) -> dict[str, Any]:
+    """Stored JSON (or NULL) as a dict; damaged values read as empty."""
+
+    try:
+        value = json.loads(str(raw)) if raw else {}
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def import_details(raw: object) -> dict[str, Any]:
+    """A note's ``provenance_json``: what its importer recorded (``source_path``,
+    ``source_url``, ``importer``, ``source_created_at`` / ``source_modified_at``,
+    ``extra``). Empty for notes that were not imported."""
+
+    return _json_object(raw)
+
+
+def source_url(path: Path, document_id: str) -> str | None:
+    """The web page an imported note says it came from (OneNote's "Pasted from")."""
+
+    with connection_scope(path) as connection:
+        row = connection.execute(
+            "SELECT provenance_json FROM documents WHERE id = ?", (document_id,)
+        ).fetchone()
+    url = import_details(row[0]).get("source_url") if row is not None else None
+    return url if isinstance(url, str) else None
 
 
 # --- Building source blocks from plain dicts ------------------------------------------
@@ -285,8 +318,9 @@ def upsert_document_from_source(
     """Create, refresh or leave alone the note for one source page (see the module docstring).
 
     ``blocks`` is a list of :class:`SourceBlock` or a Markdown body.
-    ``provenance`` adds document fields such as ``source_path`` ("Notebook ›
-    Section › Page"), ``source_url`` or ``extra``. ``folder_path`` (source-id,
+    ``provenance`` is what the importer records about the page (see
+    :func:`import_details`): ``source_path`` ("Notebook › Section › Page"),
+    ``source_url`` (http(s) only), ``extra``. ``folder_path`` (source-id,
     name pairs) is resolved with :func:`ensure_folder_path`; otherwise
     ``folder_id`` is used (None: top level). Both only place a new note.
     """
@@ -296,16 +330,14 @@ def upsert_document_from_source(
     title = " ".join(str(title).split()) or "Untitled"
     planned = _prepare(blocks)
     source_hash = _source_hash(title, planned)
-    document_provenance = _provenance.normalize(
-        {
+    document_provenance = {
+        key: value for key, value in {
             **(provenance or {}),
-            "source": source,
-            "external_id": external_id,
             "importer": importer,
             "source_created_at": created_at,
             "source_modified_at": modified_at,
-        }
-    )
+        }.items() if value not in (None, "", {})
+    }
     if folder_path is not None:
         folder_id = ensure_folder_path(path, source, folder_path)
     initialize(path)
@@ -319,11 +351,11 @@ def upsert_document_from_source(
             (source, external_id),
         ).fetchone()
         if row is None:
-            return _create(connection, title, planned, folder_id, created_at,
-                           modified_at, document_provenance, source_hash)
+            return _create(connection, source, external_id, title, planned, folder_id,
+                           created_at, modified_at, document_provenance, source_hash)
         if row["deleted_at"] is not None:
             return UpsertResult(row["id"], "skipped_deleted", row["revision"])
-        sync = _provenance.loads(row["sync_json"])
+        sync = _json_object(row["sync_json"])
         if sync.get("hash") != source_hash and sync.get("revision") == row["revision"]:
             return _refresh(connection, row, title, planned, modified_at,
                             document_provenance, source_hash, sync)
@@ -348,7 +380,7 @@ def sync_state(path: Path, document_id: str) -> dict[str, Any]:
         row = connection.execute(
             "SELECT sync_json FROM documents WHERE id = ?", (document_id,)
         ).fetchone()
-    return _provenance.loads(row["sync_json"]) if row is not None else {}
+    return _json_object(row["sync_json"]) if row is not None else {}
 
 
 def mark_documents_source_removed(
@@ -374,7 +406,7 @@ def mark_documents_source_removed(
             ).fetchone()
             if row is None:
                 continue
-            sync = _provenance.loads(row["sync_json"])
+            sync = _json_object(row["sync_json"])
             newly = not sync.get("source_removed_at")
             if newly:
                 sync["source_removed_at"] = now
@@ -382,7 +414,7 @@ def mark_documents_source_removed(
             result.append({
                 "document_id": row["id"],
                 "title": row["title"],
-                "source_path": _provenance.loads(row["provenance_json"]).get("source_path"),
+                "source_path": import_details(row["provenance_json"]).get("source_path"),
                 "source_removed_at": sync.get("source_removed_at") or now,
                 "newly_removed": newly,
             })
@@ -462,6 +494,8 @@ def _row_block(row: sqlite3.Row) -> schema.Block:
 
 def _create(
     connection: sqlite3.Connection,
+    source: str,
+    external_id: str,
     title: str,
     planned: list[_Planned],
     folder_id: str | None,
@@ -480,8 +514,7 @@ def _create(
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             document_id, title, folder_id, position, created, modified_at or created,
-            _provenance.dumps({**document_provenance, "imported_at": now}),
-            document_provenance["source"], document_provenance["external_id"],
+            _dumps(document_provenance), source, external_id,
         ),
     )
     result = UpsertResult(document_id, "created", 0)
@@ -543,13 +576,7 @@ def _refresh(
     # (Notes imported before this was recorded follow the source, as they did.)
     if sync.get("title", document["title"]) != document["title"]:
         title = document["title"]
-    old_provenance = _provenance.loads(document["provenance_json"])
-    new_provenance = {
-        **{key: value for key, value in old_provenance.items() if key != "backfilled"},
-        **document_provenance,
-        "synced_at": now,
-    }
-    new_provenance.setdefault("imported_at", now)
+    new_provenance = {**import_details(document["provenance_json"]), **document_provenance}
     connection.execute(
         """UPDATE documents SET title = ?, title_auto = CASE WHEN ? THEN 0 ELSE title_auto END,
                   updated_at = ?, revision = ?, provenance_json = ?
@@ -557,7 +584,7 @@ def _refresh(
         (
             title, title != document["title"],
             max(str(document["updated_at"]), modified_at or now), revision,
-            _provenance.dumps(new_provenance), document_id,
+            _dumps(new_provenance), document_id,
         ),
     )
     _save_sync(connection, document_id,

@@ -13,14 +13,13 @@ from pathlib import Path
 
 import frontmatter
 
-from . import vault
+from . import sources, vault
 from .block_markdown import parse_markdown
 from .block_store import (
     connection_scope,
     create_document,
     derive_title as _derive_title,
     document_tree,
-    markdown_import_provenance,
     render_markdown as _render_markdown,
 )
 
@@ -46,7 +45,10 @@ def export_document_markdown(database_path: Path, document_id: str) -> str:
         document["children"], links=links,
     )
     stem = Path(layout.paths.get(document_id, "x.md")).stem
-    return vault.dump(vault.front_matter(document, stem, None), body)
+    return vault.dump(
+        vault.front_matter(document, stem, None, sources.source_url(database_path, document_id)),
+        body,
+    )
 
 
 WELCOME_NOTE = Path(__file__).with_name("welcome.md")
@@ -59,7 +61,7 @@ def seed_welcome_note(database_path: Path) -> None:
     note = vault.read_front_matter(post.metadata)
     now = datetime.now(timezone.utc).isoformat()
     create_document(database_path, "welcome", note.title or "Welcome", post.content,
-                    now, now, provenance={"source": "manual"})
+                    now, now)
 
 
 # --- Download filenames / uploaded import ----------------------------------
@@ -80,7 +82,6 @@ class UploadedNote:
     title: str
     body: str
     created_at: object | None = None
-    provenance: dict | None = None
     # What wikilinks in other files of the same upload may call this note.
     names: tuple[str, ...] = ()
 
@@ -104,9 +105,6 @@ def parse_uploaded_markdown(filename: str, raw: bytes) -> UploadedNote:
         title=title[:200],
         body=post.content,
         created_at=note.created,
-        provenance=markdown_import_provenance(
-            post.metadata, Path(filename).name, datetime.now(timezone.utc).isoformat()
-        ),
         names=tuple(name for name in (filename, stem, note.title, *note.aliases) if name),
     )
 

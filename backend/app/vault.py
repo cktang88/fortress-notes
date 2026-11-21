@@ -155,7 +155,8 @@ def compute_layout(
 # --- Front matter -------------------------------------------------------------------------------
 
 def front_matter(tree: dict[str, Any], stem: str | None,
-                 picture_text: dict[str, str] | None) -> dict[str, Any]:
+                 picture_text: dict[str, str] | None,
+                 source_url: str | None = None) -> dict[str, Any]:
     """The YAML front matter of a note's Markdown (key order as written): plain keys
     other tools know, nothing Fortress-only."""
 
@@ -166,8 +167,7 @@ def front_matter(tree: dict[str, Any], stem: str | None,
     meta["created"] = _plain(tree["created_at"])
     meta["updated"] = _plain(tree["updated_at"])
     meta["id"] = tree["id"]
-    source_url = (tree.get("provenance") or {}).get("source_url")
-    if isinstance(source_url, str):
+    if source_url:
         # What web clippers (Obsidian's included) call the page a note came from.
         meta["source"] = source_url
     if picture_text:

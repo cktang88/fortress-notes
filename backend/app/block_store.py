@@ -34,7 +34,6 @@ from ulid import ULID
 
 from . import order_keys, textutil
 from . import block_schema as schema
-from . import provenance as _provenance
 from . import vault
 from .block_markdown import BlockSpec, parse_markdown
 from .block_markdown import render_markdown as _render_markdown
@@ -590,34 +589,6 @@ def is_ready(path: Path) -> bool:
     return path.resolve() in _ready_paths
 
 
-MARKDOWN_IMPORTER = {"name": "fortress-markdown", "version": "1"}
-
-
-def markdown_import_provenance(
-    metadata: dict, source_path: str, now: str
-) -> dict[str, object]:
-    """Provenance for a note read from a Markdown file: a ``markdown_import``
-    (with its ``source`` URL, as web clippers write it)."""
-
-    note = vault.read_front_matter(metadata)
-    value: dict[str, object] = {
-        "source": "markdown_import",
-        "source_path": source_path,
-        "imported_at": now,
-        "importer": dict(MARKDOWN_IMPORTER),
-    }
-    for stamp, name in ((note.created, "source_created_at"), (note.updated, "source_modified_at")):
-        if stamp is not None:
-            value[name] = _iso(stamp)
-    source = metadata.get("source")
-    if isinstance(source, str) and re.match(r"^https?://", source.strip()):
-        value["source_url"] = source.strip()
-    try:
-        return _provenance.normalize(value, trusted=True) or value
-    except _provenance.ProvenanceError:
-        return {key: item for key, item in value.items() if key != "source_url"}
-
-
 def create_document(
     path: Path,
     document_id: str,
@@ -626,11 +597,13 @@ def create_document(
     created_at: object,
     updated_at: object,
     folder_id: str | None = None,
-    provenance: dict[str, object] | None = None,
+    source_kind: str = "manual",
     specs: list[BlockSpec] | None = None,
     title_auto: bool = False,
 ) -> None:
     """Create a note from Markdown ``body`` (or already parsed ``specs``).
+
+    ``source_kind`` says where it came from (manual, capture, markdown_import).
 
     A note with no blocks gets one empty paragraph: the editor types into a
     block the server knows. With ``title_auto`` its title follows its first line."""
@@ -649,7 +622,7 @@ def create_document(
             body,
             _iso(created_at),
             _iso(updated_at),
-            provenance,
+            source_kind,
             specs,
             title_auto,
         )
@@ -826,7 +799,7 @@ def create_block_document(
     folder_id: str | None = None,
     created_at: object | None = None,
     title_auto: bool = False,
-    provenance: dict[str, object] | None = None,
+    source_kind: str = "manual",
     document_id: str | None = None,
     specs: list[BlockSpec] | None = None,
 ) -> dict:
@@ -843,7 +816,7 @@ def create_block_document(
         path, document_id, title, body,
         _iso(created_at) if created_at is not None else now, now,
         folder_id=folder_id,
-        provenance=provenance,
+        source_kind=source_kind,
         specs=specs,
         title_auto=title_auto,
     )
@@ -1436,7 +1409,7 @@ def _insert_document(
     body: str,
     created_at: str,
     updated_at: str,
-    provenance: dict[str, object] | None = None,
+    source_kind: str = "manual",
     specs: list[BlockSpec] | None = None,
     title_auto: bool = False,
 ) -> None:
@@ -1448,56 +1421,13 @@ def _insert_document(
     connection.execute(
         """INSERT INTO documents(
                    id, title, folder_id, position, deleted_at,
-                   created_at, updated_at, title_auto
-               ) VALUES (?, ?, NULL, ?, NULL, ?, ?, ?)""",
-        (document_id, title, position, created_at, updated_at, int(title_auto)),
-    )
-    _set_document_provenance(
-        connection, document_id, _unclaimed_source_key(connection, provenance or {"source": "manual"})
+                   created_at, updated_at, title_auto, source_kind
+               ) VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?)""",
+        (document_id, title, position, created_at, updated_at, int(title_auto), source_kind),
     )
     _insert_markdown_body(connection, document_id, body, created_at, updated_at, specs)
     if title_auto:
         _refresh_auto_title(connection, document_id)
-
-
-def _unclaimed_source_key(
-    connection: sqlite3.Connection, value: dict[str, object]
-) -> dict[str, object]:
-    """``value``, minus its source id when another note already holds that key.
-
-    Importing a copy (e.g. our own Markdown export of a OneNote page, into the
-    same workspace) must not take over the original's identity for re-imports.
-    """
-
-    external_id = value.get("external_id")
-    if not external_id or connection.execute(
-        "SELECT 1 FROM documents WHERE source_kind = ? AND source_external_id = ?",
-        (value.get("source", _provenance.DEFAULT_SOURCE), external_id),
-    ).fetchone() is None:
-        return value
-    copy = {key: item for key, item in value.items() if key != "external_id"}
-    extra = copy.get("extra") if isinstance(copy.get("extra"), dict) else {}
-    copy["extra"] = {**extra, "copy_of_external_id": external_id}
-    return copy
-
-
-def _set_document_provenance(
-    connection: sqlite3.Connection, document_id: str, value: dict[str, object]
-) -> None:
-    """Store a document's provenance and the source key re-imports look it up by."""
-
-    value = {**value}
-    value.setdefault("source", _provenance.DEFAULT_SOURCE)
-    connection.execute(
-        """UPDATE documents SET provenance_json = ?, source_kind = ?, source_external_id = ?
-            WHERE id = ?""",
-        (
-            _provenance.dumps(value),
-            value["source"],
-            value.get("external_id") or None,
-            document_id,
-        ),
-    )
 
 
 def _navigation_document(row: sqlite3.Row) -> dict[str, object]:
@@ -1888,9 +1818,6 @@ def _document_tree(
         "updated_at": document["updated_at"],
         "revision": document["revision"],
         "title_auto": bool(document["title_auto"]),
-        "provenance": _provenance.document_provenance(
-            document["provenance_json"], document["source_kind"]
-        ),
         # Current titles/text of every note and block this document links to.
         "resolved_links": _resolved_links(connection, document_id),
         "children": roots,

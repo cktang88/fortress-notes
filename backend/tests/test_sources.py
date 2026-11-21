@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app import backups, block_store, provenance, sources
+from app import backups, block_store, sources
 from app.block_store import (
     apply_transaction,
     connection_scope,
@@ -18,7 +18,7 @@ from app.models import BlockOperation
 from app.portability import export_document_markdown
 from app.sources import SourceBlock, document_info, upsert_document_from_source
 
-from support import import_markdown_files, make_settings, use_settings, mirror_file
+from support import import_details, import_markdown_files, make_settings, use_settings, mirror_file
 
 
 def _texts(nodes):
@@ -62,20 +62,12 @@ class SourceStoreTests(unittest.TestCase):
     def test_new_documents_default_to_manual_and_blocks_have_no_provenance(self) -> None:
         create_document(self.db, "doc", "Doc", "One\n\nTwo", "t", "t")
         tree = document_tree(self.db, "doc")
-        self.assertEqual(tree["provenance"], {"source": "manual"})
+        self.assertEqual(document_info(self.db, "doc")["source"], "manual")
+        self.assertEqual(import_details(self.db, "doc"), {})
+        self.assertNotIn("provenance", tree)
         self.assertNotIn("provenance", tree["children"][0])
         self.assertIsNone(tree["children"][0]["revision"])
         self.assertNotIn("last_opened_at", tree)  # in /info; not part of the note's ETag
-
-    def test_client_provenance_is_validated_and_cannot_set_internal_fields(self) -> None:
-        with self.assertRaises(provenance.ProvenanceError):
-            provenance.normalize({"source": "Not A Kind"})
-        with self.assertRaises(provenance.ProvenanceError):
-            provenance.normalize({"source": "web", "source_url": "javascript:alert(1)"})
-        self.assertEqual(
-            provenance.normalize({"source": "paste", "source_hash": "x", "conflict": {}}),
-            {"source": "paste"},
-        )
 
     def test_provenance_is_not_searchable_text(self) -> None:
         self.page([SourceBlock("Plain words", external_id="{A}")],
@@ -107,19 +99,23 @@ class SourceStoreTests(unittest.TestCase):
         [copy_id] = import_markdown_files(self.db, other)
         self.assertNotEqual(copy_id, document_id)
         copy = document_tree(self.db, copy_id)
-        self.assertEqual(copy["provenance"]["source"], "markdown_import")
+        self.assertEqual(document_info(self.db, copy_id)["source"], "markdown_import")
         self.assertEqual(_texts(copy["children"]), ["Agenda", "Item"])
+
+    def test_an_imported_pages_source_url_is_the_front_matter_source(self) -> None:
+        result = self.page([SourceBlock("Clipped", external_id="{A}")], provenance={
+            "source_path": "Work › Clip", "source_url": "https://example.com/article",
+        })
+        markdown = export_document_markdown(self.db, result.document_id)
+        self.assertIn("\nsource: https://example.com/article\n", markdown.split("---", 2)[1])
 
     def test_plain_markdown_imports_are_marked_markdown_import(self) -> None:
         (self.root / "note.md").write_text(
             "---\ntitle: Hi\ncreated_at: '2019-05-01T00:00:00+00:00'\n---\nBody\n", encoding="utf-8"
         )
         [note_id] = import_markdown_files(self.db, self.root)
-        tree = document_tree(self.db, note_id)
-        self.assertEqual(tree["provenance"]["source"], "markdown_import")
-        self.assertEqual(tree["provenance"]["source_path"], "note.md")
-        self.assertEqual(tree["provenance"]["source_created_at"], "2019-05-01T00:00:00+00:00")
-        self.assertEqual(tree["provenance"]["importer"]["name"], "fortress-markdown")
+        self.assertEqual(document_info(self.db, note_id)["source"], "markdown_import")
+        self.assertEqual(document_tree(self.db, note_id)["created_at"], "2019-05-01T00:00:00+00:00")
 
     # --- Links follow renames ----------------------------------------------
 
@@ -180,9 +176,10 @@ class SourceStoreTests(unittest.TestCase):
         tree = document_tree(self.db, result.document_id)
         self.assertEqual(tree["created_at"], "2020-01-01T09:00:00+00:00")
         self.assertEqual(tree["updated_at"], "2020-01-02T09:00:00+00:00")
-        self.assertEqual(tree["provenance"]["external_id"], "{PAGE-1}")
-        self.assertEqual(tree["provenance"]["importer"], ONENOTE)
-        self.assertIn("imported_at", tree["provenance"])
+        details = import_details(self.db, result.document_id)
+        self.assertEqual(details["importer"], ONENOTE)
+        self.assertEqual(details["source_path"], "Work › Meetings › Meeting")
+        self.assertIn("imported_at", sources.sync_state(self.db, result.document_id))
         info = document_info(self.db, result.document_id)
         self.assertEqual(info["source"], "onenote_import")
         self.assertEqual([item["name"] for item in info["folder_path"]], ["Work", "Meetings"])
@@ -237,8 +234,8 @@ class SourceStoreTests(unittest.TestCase):
         # The source's title; the note's own folder.
         self.assertEqual(tree["title"], "Meeting v2")
         self.assertEqual(document_info(self.db, first.document_id)["folder_id"], folder["id"])
-        self.assertEqual(tree["provenance"]["source_modified_at"], "2020-02-01T00:00:00+00:00")
-        self.assertIn("synced_at", tree["provenance"])
+        self.assertEqual(import_details(self.db, first.document_id)["source_modified_at"],
+                         "2020-02-01T00:00:00+00:00")
         # Links into the refreshed blocks still resolve, and show the new text.
         self.assertEqual(len(block_store.document_backlinks(self.db, first.document_id)), 3)
         self.assertEqual(document_tree(self.db, "linker")["children"][-1]["text"],
@@ -355,7 +352,8 @@ class SourceStoreTests(unittest.TestCase):
         block_store.delete_document(self.db, first.document_id)
         backups.restore_backup(self.db, directory, snapshot.name)
         tree = document_tree(self.db, first.document_id)
-        self.assertEqual(tree["provenance"]["external_id"], "{PAGE-1}")
+        self.assertEqual(import_details(self.db, first.document_id)["source_path"],
+                         "Work › Meetings › Meeting")
         # And the restored note is still the one re-imports refresh, by the same block id.
         self.assertEqual(self.page([SourceBlock("Saved v2", external_id="{A}")]).document_id,
                          first.document_id)
@@ -381,7 +379,7 @@ class SourceApiTests(unittest.TestCase):
     def test_capture_and_ai_notes_carry_their_source(self) -> None:
         captured = self.client.post("/api/capture", json={"text": "A thought"}).json()
         tree = self.client.get(f"/api/block-documents/{captured['document_id']}").json()
-        self.assertEqual(tree["provenance"], {"source": "capture"})
+        self.assertNotIn("provenance", tree)
         self.assertEqual(
             self.client.post(f"/api/block-documents/{captured['document_id']}/opened").status_code,
             204,
@@ -451,7 +449,8 @@ class SourceApiTests(unittest.TestCase):
         ).json()
         [imported] = response["imported"]
         tree = self.client.get(f"/api/block-documents/{imported['id']}").json()
-        self.assertEqual(tree["provenance"]["source"], "markdown_import")
+        info = self.client.get(f"/api/block-documents/{imported['id']}/info").json()
+        self.assertEqual(info["source"], "markdown_import")
         self.assertEqual(tree["children"][0]["text"], "Para")
 
 

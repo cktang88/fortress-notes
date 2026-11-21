@@ -20,7 +20,7 @@ from pathlib import Path
 
 import frontmatter
 
-from . import background, block_store, images, vault, workspace
+from . import background, block_store, images, sources, vault, workspace
 from .config import get_settings
 from .models import NoteCreate, NoteSummary, NoteUpdate
 
@@ -49,20 +49,17 @@ def summaries(ids: list[str]) -> dict[str, NoteSummary]:
 def create(
     data: NoteCreate,
     created_at: object | None = None,
-    source: dict[str, object] | None = None,
+    source_kind: str = "manual",
     document_id: str | None = None,
     specs: list | None = None,
 ) -> dict:
     """Create a note and return its tree; raises KeyError when the folder does not exist.
 
-    ``source`` is server-side provenance (an import); a note from a client is
-    one written by hand. (Clients never set provenance: a source key there would
-    let them take over an imported page's identity.)
+    ``source_kind`` is ``markdown_import`` for an uploaded file; a note from a
+    client is one written by hand (clients never name a source).
     """
 
     db_path, _ = _paths()
-    if source is None:
-        source = {"source": "manual"}
     tree = block_store.create_block_document(
         db_path,
         data.title or block_store.derive_title(data.body),
@@ -71,7 +68,7 @@ def create(
         created_at=created_at,
         # An unnamed note takes its title from its first line until someone names it.
         title_auto=not data.title,
-        provenance=source,
+        source_kind=source_kind,
         document_id=document_id,
         specs=specs if specs is not None else _linked_specs(db_path, data.body),
     )
@@ -143,7 +140,6 @@ def capture(text: str) -> dict[str, object]:
     body = text.strip()
     if not body:
         raise ValueError("nothing to capture")
-    source = {"source": "capture"}
     db_path, _ = _paths()
     folder_id = _uncategorized_folder(db_path)
     tree = block_store.create_block_document(
@@ -151,7 +147,7 @@ def capture(text: str) -> dict[str, object]:
         block_store.derive_title(body)[:80],
         body,
         folder_id=folder_id,
-        provenance=source,
+        source_kind="capture",
         specs=_linked_specs(db_path, body),
     )
     block_store.move_document(db_path, tree["id"], folder_id, position=0)
@@ -175,8 +171,6 @@ def upsert_from_source(**kwargs):
     Takes the keyword arguments of ``sources.upsert_document_from_source``
     (``source``, ``external_id``, ``title``, ``blocks``, ``folder_path``, ...).
     """
-
-    from . import sources
 
     db_path, _ = _paths()
     return sources.upsert_document_from_source(db_path, **kwargs)
@@ -497,7 +491,8 @@ def _mirror_document(db_path: Path, notes_path: Path, document_id: str, layout: 
     target = notes_path / relative
     # Always overwritten: the mirror is an export, never edited in place.
     metadata = vault.front_matter(
-        tree, Path(relative).stem, images.collect_image_texts(db_path, body)
+        tree, Path(relative).stem, images.collect_image_texts(db_path, body),
+        sources.source_url(db_path, document_id),
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(target, vault.dump(metadata, body))

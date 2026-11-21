@@ -233,9 +233,10 @@ class ObsidianVaultImportTests(unittest.TestCase):
 
     def test_notes_and_front_matter(self) -> None:
         self.assertEqual(sorted(self.notes), ["People", "Project Alpha", "Roadmap"])
-        alpha = self.notes["Project Alpha"]["provenance"]
-        self.assertEqual((alpha["source"], alpha["source_url"], alpha["source_created_at"]),
-                         ("markdown_import", "https://example.com/alpha-brief", "2024-03-01T09:30"))
+        alpha = self.notes["Project Alpha"]
+        self.assertTrue(alpha["created_at"].startswith("2024-03-01T09:30"), alpha["created_at"])
+        [summary] = block_store.list_documents(self.db, [alpha["id"]])
+        self.assertEqual(summary["source"], "markdown_import")
 
     def test_wikilinks_by_name_alias_path_heading_and_block_id(self) -> None:
         alpha, roadmap, people = (self.notes[name] for name in ("Project Alpha", "Roadmap", "People"))

@@ -121,7 +121,7 @@ with **422**.
 - `search.py` — unified search (words + meaning + titles) and related notes.
 - `ask.py` / `llm.py` — Ask your notes over OpenRouter chat completions.
 - `ocr.py`, `images.py`, `assets.py` — text in pictures and PDFs (§6), uploaded files.
-- `provenance.py`, `sources.py` — where notes came from, and re-imports (§7a).
+- `sources.py` — imported notes and re-imports (§7a).
 - `main.py` — FastAPI app and routes.
 - `document_service.py` — rendered note bodies and the one document ETag, shared by
   the GET and the writes that answer with a tree.
@@ -161,7 +161,7 @@ with **422**.
 | `DELETE` | `/api/trash/{id}` · `/api/trash` | — | delete one forever · empty the trash |
 | `GET` · `POST` | `/api/backups` | — | list snapshots · take a manual snapshot |
 | `POST` | `/api/backups/{name}/restore` | — | `{restored, safety_backup}` |
-| `GET` | `/api/block-documents/{id}/markdown` | `?download=true` | one note as Markdown (with provenance, §7a) |
+| `GET` | `/api/block-documents/{id}/markdown` | `?download=true` | one note as Markdown (§7a) |
 | `GET` | `/api/block-documents/{id}/info` | — | note metadata: dates, source, counts (§7a) |
 | `POST` | `/api/markdown-import/files` | multipart `files[]`, `folder_id?` | `{imported, errors}` |
 | `POST` | `/api/import/onenote` | multipart `file` (+ `folder_id?`) or JSON `{path, folder_id?}` | `202 {job_id, status: "queued"}` (§7b) |
@@ -174,7 +174,7 @@ with **422**.
 - **Validators.** `GET /api/block-documents/{id}` carries a strong `ETag`; a request
   whose `If-None-Match` matches gets `304` with no body. The ETag changes with anything
   in the payload: the note's own rows (blocks, user attrs, links,
-  title/provenance/...) and every linked note or block (titles and text in
+  title/...) and every linked note or block (titles and text in
   `resolved_links`, `[[id|Title]]` labels). Every write that answers with a note sends
   the same ETag as `X-Document-ETag`. The server tracks changes with SQLite triggers
   (`change_log.seq`, an `epoch` renewed by every restore, and `documents.change_seq`),
@@ -341,42 +341,38 @@ BackendController.swift`: the repository's `backend/.venv/bin/uvicorn`, else
 
 ## 7a. Provenance, metadata and re-imports
 
-Every note records where it came from (`provenance.py`) in
-`documents.provenance_json`, plus `source_kind` / `source_external_id`, the
-re-import key (unique when set). Blocks record nothing of the kind (a block's
-`created_at`, `updated_at` and `revision` are all it has). Provenance is never part
-of block text, FTS or embeddings.
+Every note records where it came from in `documents.source_kind` (`manual`,
+`capture`, `markdown_import`, `onenote_import`, …), and an imported note its
+source id in `source_external_id`, the re-import key (unique when set). Blocks
+record nothing of the kind (a block's `created_at`, `updated_at` and `revision`
+are all it has). Clients never set either: a note they create is `manual`, a
+capture `capture` (a source key from a client could take over an imported page's
+identity).
+
+What an importer says about a page lives in `documents.provenance_json`, written
+only by `sources.upsert_document_from_source` and read with
+`sources.import_details`; it is never searched and not part of any payload:
 
 ```jsonc
-// a note's provenance (all keys but "source" optional)
 {
-  "source": "onenote_import",   // manual | capture | markdown_import | onenote_import | web | ai | <any lower-case word>
-  "external_id": "{GUID}",      // id in the source; (source, external_id) keys re-imports
-  "source_path": "Work › Meetings › Standup",  // or a file path
-  "source_url": "https://…",
+  "source_path": "Work › Meetings › Standup",
+  "source_url": "https://…",            // OneNote's "Pasted from"; front matter `source:`
   "source_created_at": "…", "source_modified_at": "…",  // the source's own timestamps
-  "imported_at": "…", "synced_at": "…",                  // first import, last refresh
-  "importer": {"name": "onenote", "version": "1.0"},
-  "extra": {},                   // importer-specific
-  "backfilled": true             // the migration's guess (server-only)
+  "importer": {"name": "fortress-onenote-import", "version": "…"},
+  "extra": {"onenote": {…}}              // the importer's own state (onenote_import._onenote_state)
 }
 ```
 
 - **Document payload** (`GET /api/block-documents/{id}` and every tree response) adds
-  `provenance`, `last_opened_at` (set by `POST …/opened`, at most once a minute) and
+  `last_opened_at` (set by `POST …/opened`, at most once a minute) and
   `resolved_links: {documents: {id: {title}}, blocks: {id: {document_id, document_title, type, text}}}`.
   `[[id|Title]]` links are served with the target's current title (stored text is
   untouched). Each block adds `revision` (the note revision that last changed it;
   null if unchanged since creation/import).
-- **Navigation / list items** add `source` (the note's provenance kind).
-- **Writes**: clients never set provenance (a note they create is `manual`, a
-  capture `capture`): a source key from a client could take over an imported
-  page's identity.
-- **Markdown**: export and mirror front matter carry `fortress: {provenance: …}`
-  (and `source:` for a `source_url`); import (directory, upload, mirrors) restores
-  it, so export → import → export is identical. A copy whose source key is already
-  taken gives it up (`extra.copy_of_external_id`). Older exports' per-block
-  provenance comments are ignored.
+- **Navigation / list items** add `source` (the note's `source_kind`).
+- **Markdown**: export and mirror front matter carry plain keys only, `source:` for
+  an imported page's `source_url` (§2). An uploaded Markdown file becomes a new
+  `markdown_import` note.
 
 `GET /api/block-documents/{id}/info`:
 
@@ -384,7 +380,7 @@ of block text, FTS or embeddings.
 {
   "id", "title", "created_at", "updated_at", "last_opened_at", "revision",
   "folder_id", "folder_path": [{"id", "name"}],          // top folder first
-  "source": "onenote_import",                            // the note's provenance kind
+  "source": "onenote_import",                            // the note's source_kind
   "counts": {"words", "characters", "blocks", "outgoing_links", "outgoing_document_links",
              "outgoing_block_links", "backlinks"},  // backlinks from other notes
   "picture_text": [...]                                  // pictures/PDFs and their text (§6)
@@ -474,7 +470,7 @@ pages edited here alone (reported in `pages_not_refreshed`) and reports the rest
   identities, stable across renames/moves), created under `folder_id` if given.
 - Page → note keyed by the page id (GUID; a second copy of the same notebook in
   one export carries `~hash`). Title (derived titles flagged in
-  `provenance.extra.onenote.title_derived`), `source_path` "Notebook › Section ›
+  `extra.onenote.title_derived` of its import details, §7a), `source_path` "Notebook › Section ›
   Page", `source_url` (pasted-from citation), source created/modified (also the
   note's `created_at`/`updated_at`), importer `{name: "fortress-onenote-import",
   version}`, `extra.onenote: {level, order, parent_page_id, section_path, author,

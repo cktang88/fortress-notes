@@ -49,8 +49,8 @@ document order):
 ```
 
 The document payload around the blocks is unchanged (`id`, `title`, `revision`,
-`provenance` (the note's: where it came from, spec §7a), `resolved_links`,
-`children`, ...). Blocks have no provenance of their own.
+`resolved_links`, `children`, ...; where a note came from is not in it, spec §7a).
+Blocks have no provenance of their own.
 `resolved_links` gives the current title of every linked note and the current
 text of every referenced block, so clients render `docLink`/`blockRef` labels
 from it (labels are never stored).
