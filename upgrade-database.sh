@@ -17,7 +17,15 @@ db="$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")"
 python="${FORTRESS_PYTHON:-$root/backend/.venv/bin/python}"
 [[ -x "$python" ]] || (cd "$root/backend" && uv sync --frozen --quiet)
 
-cp "$db" "$db.before-upgrade"
+# SQLite's own backup, so changes still in the -wal file are included.
+rm -f "$db.before-upgrade"
+"$python" -c "
+import sqlite3, sys
+source = sqlite3.connect(sys.argv[1])
+target = sqlite3.connect(sys.argv[2])
+source.backup(target)
+target.close(); source.close()
+" "$db" "$db.before-upgrade"
 echo "Backed up to $db.before-upgrade"
 
 checkout="$(mktemp -d)/fortress-upgrade"
