@@ -497,18 +497,9 @@ _CHANGE_TRIGGERS = {
     "folders_changed_update": ("AFTER UPDATE ON folders", _bump(None)),
     "folders_changed_delete": ("AFTER DELETE ON folders", _bump(None)),
 }
-# A picture's OCR state and text show in the info of every note that contains it.
-for _event, _row in (("insert", "NEW"), ("update", "NEW")):
-    _CHANGE_TRIGGERS[f"ocr_results_changed_{_event}"] = (
-        f"AFTER {_event.upper()} ON ocr_results",
-        _bump(
-            "SELECT blocks.document_id FROM block_assets"
-            " JOIN blocks ON blocks.id = block_assets.block_id"
-            f" WHERE block_assets.content_hash = {_row}.content_hash"
-        ),
-    )
-# Text read from a picture (OCR) shows in the mirror and info of every note showing
-# it. It lands after the ocr_results row that bumped them: bump them again.
+# Text read from a picture (OCR) shows in the mirror of every note showing it.
+# (Its OCR state does not bump anything: /info, which shows it, has no
+# validator and the inspector polls it while a picture is being read.)
 _CHANGE_TRIGGERS["assets_text_changed_update"] = (
     "AFTER UPDATE OF text ON assets",
     _bump(

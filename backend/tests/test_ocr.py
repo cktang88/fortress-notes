@@ -152,6 +152,24 @@ class QueueAndCacheTests(_Workspace):
             models = [row[0] for row in connection.execute("SELECT model FROM ocr_results")]
         self.assertEqual(models, ["next-model/1"])
 
+    def test_reading_steps_leave_the_notes_validators_alone_until_text_lands(self) -> None:
+        self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"picture", "image/png")
+        document_id, _ = self.note_with("Pictured", ["01JAAAAAAAAAAAAAAAAAAAAAAA.png"])
+
+        def seqs():
+            with block_store.connection_scope(self.db) as connection:
+                return (connection.execute("SELECT seq FROM change_log").fetchone()[0],
+                        connection.execute("SELECT change_seq FROM documents WHERE id = ?",
+                                           (document_id,)).fetchone()[0])
+
+        before = seqs()
+        with patch.object(ocr, "read_asset", side_effect=OSError("cannot identify image")):
+            ocr.process_one(self.db)  # running, then a failed attempt: no text yet
+        self.assertEqual(seqs(), before)
+        with patch.object(ocr, "read_asset", return_value=ocr.Result("Some words", "ocr")):
+            self.drain()
+        self.assertGreater(seqs()[1], before[1])  # the text shows in its mirror
+
     def test_failures_are_retried_then_given_up_and_survive_a_restart(self) -> None:
         self.asset("01JAAAAAAAAAAAAAAAAAAAAAAA.png", b"broken", "image/png")
         with patch.object(ocr, "read_asset", side_effect=OSError("cannot identify image")) as read:
