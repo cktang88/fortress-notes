@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: C3).
+// Modified by fortress-onenote (vendor/PATCHES.md: C3, C4).
 //! A library for reading/writing [Windows
 //! cabinet](https://en.wikipedia.org/wiki/Cabinet_(file_format)) (CAB) files.
 //!
@@ -35,13 +35,10 @@
 //!
 //! let cab_file = fs::File::open("path/to/cabinet.cab").unwrap();
 //! let mut cabinet = cab::Cabinet::new(cab_file).unwrap();
-//! // List all files in the cabinet, with file sizes and compression types:
+//! // List all files in the cabinet, with file sizes:
 //! for folder in cabinet.folder_entries() {
 //!     for file in folder.file_entries() {
-//!         println!("File {} ({} B) is compressed with {:?}",
-//!                  file.name(),
-//!                  file.uncompressed_size(),
-//!                  folder.compression_type());
+//!         println!("File {} ({} B)", file.name(), file.uncompressed_size());
 //!     }
 //! }
 //! // Decompress a particular file in the cabinet and save it to disk:
@@ -51,7 +48,9 @@
 //! ```
 //!
 //! PATCH(fortress-onenote, C3): the writer (`CabinetBuilder`, `builder.rs`)
-//! was removed; this copy only reads cabinets.
+//! was removed; this copy only reads cabinets. PATCH(fortress-onenote, C4):
+//! cabinet set ids, reserve data, file dates and attributes and folder
+//! compression types are not exposed.
 
 #![warn(missing_docs)]
 
@@ -69,7 +68,6 @@ mod cabinet;
 mod checksum;
 mod consts;
 mod ctype;
-mod datetime;
 mod file;
 mod folder;
 mod mszip;

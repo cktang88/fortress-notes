@@ -1,6 +1,7 @@
 # Vendored copy of cab 0.6.0 (MIT) with fortress-onenote hardening
 # patches; see ../PATCHES.md. Normalised from the crates.io package:
-# examples, tests and dev-dependencies removed.
+# examples, tests and dev-dependencies removed. C4 removed the time
+# dependency (file dates are not read).
 
 [package]
 edition = "2021"
@@ -28,7 +29,3 @@ default-features = false
 
 [dependencies.lzxd]
 version = "0.2.5"
-
-[dependencies.time]
-version = "0.3"
-

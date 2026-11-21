@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: C1, C2).
+// Modified by fortress-onenote (vendor/PATCHES.md: C1, C2, C4).
 use std::io::{self, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::slice;
@@ -21,7 +21,6 @@ pub struct FolderEntry {
     first_data_block_offset: u32,
     num_data_blocks: u16,
     compression_type: CompressionType,
-    reserve_data: Vec<u8>,
     pub(crate) files: Vec<FileEntry>,
 }
 
@@ -67,21 +66,6 @@ impl<'a> Iterator for FolderEntries<'a> {
 impl<'a> ExactSizeIterator for FolderEntries<'a> {}
 
 impl FolderEntry {
-    /// Returns the scheme used to compress this folder's data.
-    pub fn compression_type(&self) -> CompressionType {
-        self.compression_type
-    }
-
-    /// Returns the number of data blocks used to store this folder's data.
-    pub fn num_data_blocks(&self) -> u16 {
-        self.num_data_blocks
-    }
-
-    /// Returns the application-defined reserve data for this folder.
-    pub fn reserve_data(&self) -> &[u8] {
-        &self.reserve_data
-    }
-
     /// Returns an iterator over the file entries in this folder.
     pub fn file_entries(&self) -> FileEntries<'_> {
         FileEntries { iter: self.files.iter() }
@@ -276,7 +260,6 @@ pub(crate) fn parse_folder_entry<R: Read>(
         first_data_block_offset: first_data_offset,
         num_data_blocks,
         compression_type,
-        reserve_data: folder_reserve_data,
         files: vec![],
     };
     Ok(entry)

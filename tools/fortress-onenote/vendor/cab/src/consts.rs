@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: C3).
+// Modified by fortress-onenote (vendor/PATCHES.md: C3, C4).
 pub const FILE_SIGNATURE: u32 = 0x4643534d; // "MSCF" stored little-endian
 
 pub const VERSION_MAJOR: u8 = 1;
@@ -12,10 +12,5 @@ pub const FLAG_PREV_CABINET: u16 = 0x1;
 pub const FLAG_NEXT_CABINET: u16 = 0x2;
 pub const FLAG_RESERVE_PRESENT: u16 = 0x4;
 
-// File attributes:
-pub const ATTR_READ_ONLY: u16 = 0x01;
-pub const ATTR_HIDDEN: u16 = 0x02;
-pub const ATTR_SYSTEM: u16 = 0x04;
-pub const ATTR_ARCH: u16 = 0x20;
-pub const ATTR_EXEC: u16 = 0x40;
+// File attributes (PATCH(fortress-onenote, C4): only the name encoding):
 pub const ATTR_NAME_IS_UTF: u16 = 0x80;

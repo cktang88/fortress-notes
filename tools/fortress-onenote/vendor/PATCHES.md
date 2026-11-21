@@ -223,3 +223,13 @@ Removed `builder.rs` (`CabinetBuilder`, `CabinetWriter`, `FolderBuilder`,
 `consts.rs`, and the inline unit tests of those (the inline tests needed
 removed dev-dependencies already). Files: `lib.rs`, `mszip.rs`, `ctype.rs`,
 `datetime.rs`, `consts.rs`.
+
+**C4 — only what the converter reads.** The converter lists file names and
+sizes and extracts files. The cabinet set id and index, header and folder
+reserve data, folder compression type and block count accessors, file dates
+and attributes (`FileEntry::{datetime, is_read_only, is_hidden, is_system,
+is_archive, is_exec, is_name_utf}`) went; the fields are still read past (the
+name-encoding attribute is still honoured). Removed `datetime.rs` and with it
+the `time` dependency; the inline tests no longer check the removed
+accessors. Files: `Cargo.toml`, `lib.rs`, `cabinet.rs`, `file.rs`,
+`folder.rs`, `consts.rs`.

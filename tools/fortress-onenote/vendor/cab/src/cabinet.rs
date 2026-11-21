@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: C2).
+// Modified by fortress-onenote (vendor/PATCHES.md: C2, C4).
 use std::cell::RefCell;
 use std::io::{self, Read, Seek, SeekFrom};
 
@@ -20,10 +20,7 @@ pub struct Cabinet<R: ?Sized> {
 }
 
 pub(crate) struct CabinetInner<R: ?Sized> {
-    cabinet_set_id: u16,
-    cabinet_set_index: u16,
     data_reserve_size: u8,
-    reserve_data: Vec<u8>,
     folders: Vec<FolderEntry>,
     files: Vec<FileEntry>,
     reader: RefCell<R>,
@@ -64,8 +61,10 @@ impl<R: Read + Seek> Cabinet<R> {
         let num_folders = reader.read_u16::<LittleEndian>()? as usize;
         let num_files = reader.read_u16::<LittleEndian>()?;
         let flags = reader.read_u16::<LittleEndian>()?;
-        let cabinet_set_id = reader.read_u16::<LittleEndian>()?;
-        let cabinet_set_index = reader.read_u16::<LittleEndian>()?;
+        // PATCH(fortress-onenote, C4): the cabinet set id and index are
+        // not kept.
+        let _cabinet_set_id = reader.read_u16::<LittleEndian>()?;
+        let _cabinet_set_index = reader.read_u16::<LittleEndian>()?;
         let mut header_reserve_size = 0u16;
         let mut folder_reserve_size = 0u8;
         let mut data_reserve_size = 0u8;
@@ -112,32 +111,12 @@ impl<R: Read + Seek> Cabinet<R> {
         }
         Ok(Cabinet {
             inner: CabinetInner {
-                cabinet_set_id,
-                cabinet_set_index,
                 data_reserve_size,
-                reserve_data: header_reserve_data,
                 folders,
                 files,
                 reader: RefCell::new(reader),
             },
         })
-    }
-
-    /// Returns the cabinet set ID for this cabinet (an arbitrary number used
-    /// to group together a set of cabinets).
-    pub fn cabinet_set_id(&self) -> u16 {
-        self.inner.cabinet_set_id
-    }
-
-    /// Returns this cabinet's (zero-based) index within its cabinet set.
-    pub fn cabinet_set_index(&self) -> u16 {
-        self.inner.cabinet_set_index
-    }
-
-    /// Returns the application-defined reserve data stored in the cabinet
-    /// header.
-    pub fn reserve_data(&self) -> &[u8] {
-        &self.inner.reserve_data
     }
 
     /// Returns an iterator over the folder entries in this cabinet.
@@ -220,22 +199,10 @@ mod tests {
             \x4c\x1a\x2e\x7f\x0e\0\x0e\0Hello, world!\n";
         assert_eq!(binary.len(), 0x59);
         let mut cabinet = Cabinet::new(Cursor::new(binary)).unwrap();
-        assert_eq!(cabinet.cabinet_set_id(), 0x1234);
-        assert_eq!(cabinet.cabinet_set_index(), 0);
-        assert_eq!(cabinet.reserve_data(), &[]);
         assert_eq!(cabinet.folder_entries().len(), 1);
         {
             let file = cabinet.get_file_entry("hi.txt").unwrap();
             assert_eq!(file.name(), "hi.txt");
-            assert!(!file.is_name_utf());
-            let dt = file.datetime().unwrap();
-
-            assert_eq!(dt.year(), 1997);
-            assert_eq!(dt.month(), time::Month::March);
-            assert_eq!(dt.day(), 12);
-            assert_eq!(dt.hour(), 11);
-            assert_eq!(dt.minute(), 13);
-            assert_eq!(dt.second(), 52);
         }
 
         let mut data = Vec::new();
@@ -282,10 +249,6 @@ mod tests {
         assert_eq!(binary.len(), 0x61);
         let mut cabinet = Cabinet::new(Cursor::new(binary)).unwrap();
         assert_eq!(cabinet.folder_entries().len(), 1);
-        assert_eq!(
-            cabinet.folder_entries().nth(0).unwrap().num_data_blocks(),
-            2
-        );
 
         let mut data = Vec::new();
         cabinet.read_folder(0).unwrap().read_to_end(&mut data).unwrap();
@@ -306,9 +269,6 @@ mod tests {
             CK\xf3H\xcd\xc9\xc9\xd7Q(\xcf/\xcaIQ\xe4\x02\x00$\xf2\x04\x94";
         assert_eq!(binary.len(), 0x61);
         let mut cabinet = Cabinet::new(Cursor::new(binary)).unwrap();
-        assert_eq!(cabinet.cabinet_set_id(), 0x1234);
-        assert_eq!(cabinet.cabinet_set_index(), 0);
-        assert_eq!(cabinet.reserve_data(), &[]);
         assert_eq!(cabinet.folder_entries().len(), 1);
 
         let mut data = Vec::new();
@@ -387,7 +347,6 @@ mod tests {
         {
             let file_entry = cabinet.get_file_entry("\u{2603}.txt").unwrap();
             assert_eq!(file_entry.name(), "\u{2603}.txt");
-            assert!(file_entry.is_name_utf());
         }
         {
             let mut file_reader = cabinet.read_file("\u{2603}.txt").unwrap();
