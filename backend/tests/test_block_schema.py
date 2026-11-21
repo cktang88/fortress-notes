@@ -1,5 +1,7 @@
 """The block registry, inline nodes and order keys (docs/block-model.md §2-§4)."""
 
+import json
+import os
 import random
 import tempfile
 import unittest
@@ -13,7 +15,34 @@ from app.block_schema import BlockShapeError
 from support import make_settings, use_settings
 
 
+# The Mac app's copy of the registry (BlockSchema.swift) is checked against this file
+# by its tests (BlockSchemaTests); this test keeps the file in step with block_schema.py.
+MAC_FIXTURE = (Path(__file__).resolve().parents[2]
+               / "mac/Tests/FortressKitTests/Fixtures/block-schema.json")
+
+
+def registry_fixture() -> dict:
+    return {
+        "flow": sorted(schema.FLOW),
+        "types": {
+            name: {"category": block.category, "children": sorted(block.children),
+                   "change_group": block.change_group}
+            for name, block in sorted(schema.TYPES.items())
+        },
+    }
+
+
 class RegistryTests(unittest.TestCase):
+    def test_the_mac_apps_registry_fixture_matches(self) -> None:
+        text = json.dumps(registry_fixture(), indent=2, sort_keys=True) + "\n"
+        if os.environ.get("FORTRESS_WRITE_FIXTURES") == "1":
+            MAC_FIXTURE.write_text(text, encoding="utf-8")
+        self.assertEqual(
+            MAC_FIXTURE.read_text(encoding="utf-8"), text,
+            "block_schema.py changed: run this test with FORTRESS_WRITE_FIXTURES=1, then "
+            "update mac/Sources/FortressKit/Editor/Model/BlockSchema.swift to match",
+        )
+
     def test_unknown_types_and_illegal_nesting_are_refused(self) -> None:
         with self.assertRaises(BlockShapeError):
             schema.block_type("bogus")

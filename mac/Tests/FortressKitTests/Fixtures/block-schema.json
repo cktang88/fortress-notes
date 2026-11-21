@@ -1,0 +1,244 @@
+{
+  "flow": [
+    "bullet_item",
+    "callout",
+    "check_item",
+    "code",
+    "columns",
+    "divider",
+    "file",
+    "heading",
+    "html",
+    "image",
+    "numbered_item",
+    "paragraph",
+    "quote",
+    "table"
+  ],
+  "types": {
+    "bullet_item": {
+      "category": "text",
+      "change_group": "text",
+      "children": [
+        "bullet_item",
+        "callout",
+        "check_item",
+        "code",
+        "columns",
+        "divider",
+        "file",
+        "heading",
+        "html",
+        "image",
+        "numbered_item",
+        "paragraph",
+        "quote",
+        "table"
+      ]
+    },
+    "callout": {
+      "category": "container",
+      "change_group": "quote",
+      "children": [
+        "bullet_item",
+        "callout",
+        "check_item",
+        "code",
+        "columns",
+        "divider",
+        "file",
+        "heading",
+        "html",
+        "image",
+        "numbered_item",
+        "paragraph",
+        "quote",
+        "table"
+      ]
+    },
+    "check_item": {
+      "category": "text",
+      "change_group": "text",
+      "children": [
+        "bullet_item",
+        "callout",
+        "check_item",
+        "code",
+        "columns",
+        "divider",
+        "file",
+        "heading",
+        "html",
+        "image",
+        "numbered_item",
+        "paragraph",
+        "quote",
+        "table"
+      ]
+    },
+    "code": {
+      "category": "text",
+      "change_group": "text",
+      "children": []
+    },
+    "column": {
+      "category": "container",
+      "change_group": null,
+      "children": [
+        "bullet_item",
+        "callout",
+        "check_item",
+        "code",
+        "divider",
+        "file",
+        "heading",
+        "html",
+        "image",
+        "numbered_item",
+        "paragraph",
+        "quote",
+        "table"
+      ]
+    },
+    "columns": {
+      "category": "container",
+      "change_group": null,
+      "children": [
+        "column"
+      ]
+    },
+    "divider": {
+      "category": "atomic",
+      "change_group": null,
+      "children": []
+    },
+    "file": {
+      "category": "atomic",
+      "change_group": null,
+      "children": []
+    },
+    "heading": {
+      "category": "text",
+      "change_group": "text",
+      "children": [
+        "bullet_item",
+        "callout",
+        "check_item",
+        "code",
+        "columns",
+        "divider",
+        "file",
+        "heading",
+        "html",
+        "image",
+        "numbered_item",
+        "paragraph",
+        "quote",
+        "table"
+      ]
+    },
+    "html": {
+      "category": "atomic",
+      "change_group": null,
+      "children": []
+    },
+    "image": {
+      "category": "atomic",
+      "change_group": null,
+      "children": []
+    },
+    "numbered_item": {
+      "category": "text",
+      "change_group": "text",
+      "children": [
+        "bullet_item",
+        "callout",
+        "check_item",
+        "code",
+        "columns",
+        "divider",
+        "file",
+        "heading",
+        "html",
+        "image",
+        "numbered_item",
+        "paragraph",
+        "quote",
+        "table"
+      ]
+    },
+    "paragraph": {
+      "category": "text",
+      "change_group": "text",
+      "children": [
+        "bullet_item",
+        "callout",
+        "check_item",
+        "code",
+        "columns",
+        "divider",
+        "file",
+        "heading",
+        "html",
+        "image",
+        "numbered_item",
+        "paragraph",
+        "quote",
+        "table"
+      ]
+    },
+    "quote": {
+      "category": "container",
+      "change_group": "quote",
+      "children": [
+        "bullet_item",
+        "callout",
+        "check_item",
+        "code",
+        "columns",
+        "divider",
+        "file",
+        "heading",
+        "html",
+        "image",
+        "numbered_item",
+        "paragraph",
+        "quote",
+        "table"
+      ]
+    },
+    "table": {
+      "category": "container",
+      "change_group": null,
+      "children": [
+        "table_row"
+      ]
+    },
+    "table_cell": {
+      "category": "container",
+      "change_group": null,
+      "children": [
+        "bullet_item",
+        "callout",
+        "check_item",
+        "code",
+        "divider",
+        "file",
+        "heading",
+        "html",
+        "image",
+        "numbered_item",
+        "paragraph",
+        "quote",
+        "table"
+      ]
+    },
+    "table_row": {
+      "category": "container",
+      "change_group": null,
+      "children": [
+        "table_cell"
+      ]
+    }
+  }
+}

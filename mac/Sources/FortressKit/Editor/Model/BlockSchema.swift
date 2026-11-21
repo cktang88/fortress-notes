@@ -2,24 +2,19 @@ import Foundation
 
 /// The block type registry (docs/block-model.md §2): a copy of the server's
 /// (`backend/app/block_schema.py`). The editor uses it to decide which types
-/// it may change into each other with an `update` and which may nest where; a type it
-/// doesn't know (from a newer server) is shown read-only and never rewritten.
-public struct BlockSchema: Decodable, Hashable, Sendable {
-    public struct TypeInfo: Decodable, Hashable, Sendable {
+/// it may change into each other with an `update` and which may nest where.
+/// `BlockSchemaTests` checks it against `Fixtures/block-schema.json`, which the
+/// backend's tests keep in step with `block_schema.py`.
+public struct BlockSchema: Hashable, Sendable {
+    public struct TypeInfo: Hashable, Sendable {
         /// `text`, `container` or `atomic`.
         public var category: String
         /// Types allowed as children.
         public var children: [String]
         /// Types it may change into with an update share its group (nil: none).
         public var changeGroup: String?
-
-        enum CodingKeys: String, CodingKey {
-            case category, children
-            case changeGroup = "change_group"
-        }
     }
 
-    public var version: Int
     /// What a document body may hold (also the top level).
     public var flow: [String]
     public var types: [String: TypeInfo]
@@ -32,7 +27,7 @@ public struct BlockSchema: Decodable, Hashable, Sendable {
         func type(_ category: String, _ children: [String] = [], _ group: String? = nil) -> TypeInfo {
             TypeInfo(category: category, children: children, changeGroup: group)
         }
-        return BlockSchema(version: 1, flow: flow, types: [
+        return BlockSchema(flow: flow, types: [
             "paragraph": type("text", flow, "text"), "heading": type("text", flow, "text"),
             "bullet_item": type("text", flow, "text"), "numbered_item": type("text", flow, "text"),
             "check_item": type("text", flow, "text"), "code": type("text", [], "text"),
@@ -44,8 +39,6 @@ public struct BlockSchema: Decodable, Hashable, Sendable {
             "html": type("atomic"),
         ])
     }()
-
-    public func knows(_ type: String) -> Bool { types[type] != nil }
 
     /// Whether an `update` may change a block from `old` to `new` (same type, or the
     /// same change group); otherwise it is deleted and inserted again.
