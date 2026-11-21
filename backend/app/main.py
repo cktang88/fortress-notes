@@ -31,7 +31,6 @@ from . import (
     ocr,
     onenote_import,
     search,
-    sources,
     workspace,
 )
 from .portability import (
@@ -477,7 +476,7 @@ def get_block_document_info(document_id: str):
     """Metadata for an info panel: dates, where the note came from, counts."""
 
     try:
-        return _json(sources.document_info(_db(), document_id))
+        return _json(documents.document_info(_db(), document_id))
     except KeyError as exc:
         raise HTTPException(404, "Block document not found") from exc
 

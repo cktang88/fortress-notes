@@ -388,18 +388,15 @@ only by `sources.upsert_document_from_source` and read with
 ```
 
 **Re-imports** (`sources.py`): importers call
-`documents.upsert_from_source(source=, external_id=, title=, blocks=, folder_path=,
-created_at=, modified_at=, provenance=, importer=)` (or
-`sources.upsert_document_from_source(db_path, …)`), with `blocks` a list of
-`SourceBlock(markdown, external_id, type, attrs, children, content, payload,
-previous_external_ids, anchors)` or a Markdown body. A SourceBlock carries either
-Markdown or a canonical `type` + `attrs`/`content`/`payload` (§2a; text is
-derived); `sources.source_block(dict)` / `source_blocks([dict])` build them from
-plain dicts (keys `id`, `previous_ids`, `anchors`, `markdown`, the canonical
-fields, `children`). A block without a source id is named by its position under
-its parent, or (top level) by a hash of its content. `folder_path=[(external_id,
-name), …]` finds/creates folders by source id (`sources.ensure_folder_path`) and
-only places a new note.
+`sources.upsert_document_from_source(db_path, source=, external_id=, title=, blocks=,
+folder_path=, created_at=, modified_at=, provenance=, importer=)`, with `blocks` a
+list of `SourceBlock(type, attrs, content, payload, children, external_id,
+previous_external_ids, anchors)` in the canonical shape (§2a; text is derived);
+`sources.source_block(dict)` / `source_blocks([dict])` build them from plain dicts
+(keys `id`, `previous_ids`, `anchors`, the canonical fields, `children`). A block
+without a source id is named by its position under its parent, or (top level) by a
+hash of its content. `folder_path=[(external_id, name), …]` finds/creates folders by
+source id (`sources.ensure_folder_path`) and only places a new note.
 
 It returns `UpsertResult(document_id, status, revision, blocks_created,
 blocks_updated, blocks_deleted)`:
@@ -408,7 +405,8 @@ blocks_updated, blocks_deleted)`:
 - `unchanged`: the source has the same title and blocks as at the last import;
   nothing is written.
 - `updated` (a refresh): the note's blocks are replaced by the source's, and its
-  title follows the source. The note keeps its id and folder; a block whose source
+  title follows the source unless the user renamed the note since the last import
+  (`sync_json.title` is the title the import gave). The note keeps its id and folder; a block whose source
   id (or an earlier id in `previous_external_ids`) matches a block of the last
   import keeps its Fortress id, so links and references into it survive and show
   the new text. Blocks the source no longer has go. One revision, like an edit.
@@ -416,7 +414,7 @@ blocks_updated, blocks_deleted)`:
   moved on), so it is left alone; importers report it as not refreshed.
 - `skipped_deleted`: the note is in the trash.
 
-The state a refresh needs is the note's `sync_json`: `{hash, revision, imported_at,
+The state a refresh needs is the note's `sync_json`: `{hash, revision, title, imported_at,
 synced_at, blocks: {source id: block id}, anchors: {anchor: block id},
 source_removed_at?}`. `anchors` are extra ids a block is known by (OneNote's
 element/object ids, which links name). `sources.mark_documents_source_removed`

@@ -31,53 +31,50 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import ocr as _ocr
 from . import block_schema as schema
 from . import order_keys
-from .block_markdown import BlockSpec, legalize, parse_markdown
+from .block_markdown import BlockSpec, legalize
 from .block_schema import BlockShapeError
 from .block_store import (
     connection_scope,
     document_insert_position,
     document_retitled,
     initialize,
+    insert_block_row,
     new_id,
     rebuild_document_derived,
     refresh_derived,
+    stored_block,
+    update_block_row,
     utc_now,
 )
 
 
 @dataclass
 class SourceBlock:
-    """One block as the source has it.
-
-    Either ``markdown`` (the block's own Markdown; it may read as several
-    blocks) or a ``type`` with canonical ``attrs``, ``content`` (inline nodes)
-    and ``payload`` (docs/block-model.md); nothing else is read. Nested blocks go in
-    ``children`` (a table's are ``table_row`` blocks, a ``columns`` block's are
-    ``column`` blocks). :func:`source_block` builds one from a plain dict.
+    """One block as the source has it: a canonical ``type`` with ``attrs``,
+    ``content`` (inline nodes) and ``payload`` (docs/block-model.md). Nested
+    blocks go in ``children`` (a table's are ``table_row`` blocks, a ``columns``
+    block's are ``column`` blocks). :func:`source_block` builds one from a plain dict.
     """
 
-    markdown: str = ""
-    external_id: str | None = None
-    type: str | None = None
+    type: str
     attrs: dict[str, Any] = field(default_factory=dict)
-    children: list["SourceBlock"] = field(default_factory=list)
     content: list[dict[str, Any]] | None = None
     payload: dict[str, Any] | None = None
+    children: list["SourceBlock"] = field(default_factory=list)
+    external_id: str | None = None
     # Source ids this block had in earlier imports (e.g. a content hash before
     # the source exposed a stable id): the block imported under one of them is
     # this block, and takes ``external_id`` from now on.
     previous_external_ids: list[str] = field(default_factory=list)
     # Other source ids that name this block (e.g. the ids links point at); see
-    # :func:`find_block`.
+    # ``sync_state(...)["anchors"]``.
     anchors: list[str] = field(default_factory=list)
 
 
@@ -124,37 +121,31 @@ def source_url(path: Path, document_id: str) -> str | None:
 # --- Building source blocks from plain dicts ------------------------------------------
 
 
-def source_block(data: dict[str, Any] | str) -> SourceBlock:
+def source_block(data: dict[str, Any]) -> SourceBlock:
     """A :class:`SourceBlock` from a plain dict in the canonical shape
     (docs/block-model.md): ``type``, ``attrs``, ``content`` (inline nodes, text
-    types), ``payload`` (html) and ``children`` (a table's are
-    ``table_row`` blocks, whose children are ``table_cell`` blocks; a
-    ``columns`` block's are ``column`` blocks). Source keys: ``id`` (the
-    source's id for this block), ``previous_ids``, ``anchors``. ``markdown``
-    instead of ``type`` is the block's own Markdown. A bare string is Markdown.
+    types), ``payload`` (html) and ``children``. Source keys: ``id`` (the
+    source's id for this block), ``previous_ids``, ``anchors``.
     """
 
-    if isinstance(data, str):
-        return SourceBlock(markdown=data)
-    if not isinstance(data, dict):
-        raise BlockShapeError("a source block must be a dict or a Markdown string")
+    if not isinstance(data, dict) or not isinstance(data.get("type"), str):
+        raise BlockShapeError("a source block must be a dict with a type")
     content = data.get("content")
     if content is not None and not isinstance(content, list):
         raise BlockShapeError("a source block's content must be a list of inline nodes")
     return SourceBlock(
-        markdown=str(data.get("markdown") or ""),
-        external_id=data.get("id", data.get("external_id")),
-        type=data.get("type"),
+        type=data["type"],
         attrs=dict(data.get("attrs") or {}),
-        children=[source_block(child) for child in data.get("children") or []],
         content=content,
         payload=data.get("payload"),
+        children=[source_block(child) for child in data.get("children") or []],
+        external_id=data.get("id"),
         previous_external_ids=[str(item) for item in data.get("previous_ids") or [] if item],
         anchors=[str(item) for item in data.get("anchors") or [] if item],
     )
 
 
-def source_blocks(items: Iterable[dict[str, Any] | str]) -> list[SourceBlock]:
+def source_blocks(items: Iterable[dict[str, Any]]) -> list[SourceBlock]:
     """:func:`source_block` for each item."""
 
     return [source_block(item) for item in items]
@@ -166,7 +157,7 @@ def source_blocks(items: Iterable[dict[str, Any] | str]) -> list[SourceBlock]:
 def ensure_folder_path(
     path: Path,
     source: str,
-    segments: Iterable[tuple[str, str] | dict[str, str]],
+    segments: Iterable[tuple[str, str]],
     parent_id: str | None = None,
 ) -> str | None:
     """Find or create a folder chain by source ids; returns the last folder's id.
@@ -180,11 +171,7 @@ def ensure_folder_path(
 
     initialize(path)
     with connection_scope(path, immediate=True) as connection:
-        for segment in segments:
-            if isinstance(segment, dict):
-                external_id, name = segment["external_id"], segment["name"]
-            else:
-                external_id, name = segment
+        for external_id, name in segments:
             if not external_id:
                 raise ValueError("every folder segment needs an external id")
             name = str(name).strip() or "Untitled"
@@ -232,32 +219,18 @@ class _Planned(BlockSpec):
         return schema.canonical_hash(self.block())
 
 
-def _resolve(block: SourceBlock) -> list[BlockSpec]:
-    """Canonical blocks for one source block (a Markdown string may hold several)."""
-
-    if block.type is None:
-        return parse_markdown(block.markdown) or [BlockSpec("paragraph", content=[])]
-    value = schema.normalize_block(block.type, block.attrs, block.content, block.payload)
-    return [BlockSpec(value.type, value.attrs, value.content, value.payload)]
-
-
-def _prepare(blocks: list[SourceBlock] | str) -> list[_Planned]:
-    if isinstance(blocks, str):
-        blocks = [SourceBlock(markdown=blocks)]
-
-    def convert(block: SourceBlock) -> list[BlockSpec]:
-        resolved = _resolve(block)
-        first = resolved[0]
-        planned = _Planned(
-            first.type, first.attrs, first.content, first.payload,
-            first.children + [child for item in block.children for child in convert(item)],
+def _prepare(blocks: list[SourceBlock]) -> list[_Planned]:
+    def convert(block: SourceBlock) -> _Planned:
+        value = schema.normalize_block(block.type, block.attrs, block.content, block.payload)
+        return _Planned(
+            value.type, value.attrs, value.content, value.payload,
+            [convert(child) for child in block.children],
             external_id=block.external_id or "",
             previous_external_ids=list(block.previous_external_ids),
             anchors=list(block.anchors),
         )
-        return [planned, *resolved[1:]]
 
-    roots = legalize([spec for block in blocks for spec in convert(block)])
+    roots = legalize([convert(block) for block in blocks])
     seen: dict[str, int] = {}
 
     def planned(spec: BlockSpec, parent: _Planned | None, index: int) -> _Planned:
@@ -307,9 +280,9 @@ def upsert_document_from_source(
     source: str,
     external_id: str,
     title: str,
-    blocks: list[SourceBlock] | str,
+    blocks: list[SourceBlock],
     folder_id: str | None = None,
-    folder_path: Iterable[tuple[str, str] | dict[str, str]] | None = None,
+    folder_path: Iterable[tuple[str, str]] | None = None,
     created_at: str | None = None,
     modified_at: str | None = None,
     provenance: dict[str, Any] | None = None,
@@ -317,7 +290,6 @@ def upsert_document_from_source(
 ) -> UpsertResult:
     """Create, refresh or leave alone the note for one source page (see the module docstring).
 
-    ``blocks`` is a list of :class:`SourceBlock` or a Markdown body.
     ``provenance`` is what the importer records about the page (see
     :func:`import_details`): ``source_path`` ("Notebook › Section › Page"),
     ``source_url`` (http(s) only), ``extra``. ``folder_path`` (source-id,
@@ -436,23 +408,11 @@ def _write_blocks(
     for block, key in zip(blocks, order_keys.keys_between(None, None, len(blocks))):
         if block.id is None:
             block.id = new_id()
-            connection.execute(
-                """INSERT INTO blocks(id, document_id, parent_id, order_key, type, attrs_json,
-                       content_json, payload_json, text, created_at, updated_at, revision)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)""",
-                (block.id, document_id, parent_id, key, block.type, _dumps(block.attrs),
-                 _dumps_nullable(block.content), _dumps_nullable(block.payload), now, now,
-                 revision),
-            )
+            insert_block_row(connection, block.id, document_id, parent_id, key, block,
+                             now, now, revision)
             counts.blocks_created += 1
-        elif schema.canonical_hash(_row_block(stored[block.id])) != block.hash:
-            connection.execute(
-                """UPDATE blocks SET parent_id = ?, order_key = ?, type = ?, attrs_json = ?,
-                          content_json = ?, payload_json = ?, updated_at = ?, revision = ?
-                    WHERE id = ?""",
-                (parent_id, key, block.type, _dumps(block.attrs), _dumps_nullable(block.content),
-                 _dumps_nullable(block.payload), now, revision, block.id),
-            )
+        elif schema.canonical_hash(stored_block(stored[block.id])) != block.hash:
+            update_block_row(connection, block.id, parent_id, key, block, now, revision)
             counts.blocks_updated += 1
         else:
             connection.execute(
@@ -476,20 +436,8 @@ def _new_sync(planned: list[_Planned], source_hash: str, revision: int, now: str
             "blocks": blocks, "anchors": anchors}
 
 
-def _dumps(value: object) -> str:
+def _dumps(value: dict[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
-def _dumps_nullable(value: object) -> str | None:
-    return None if value is None else _dumps(value)
-
-
-def _row_block(row: sqlite3.Row) -> schema.Block:
-    return schema.Block(
-        row["type"], json.loads(row["attrs_json"]),
-        None if row["content_json"] is None else json.loads(row["content_json"]),
-        None if row["payload_json"] is None else json.loads(row["payload_json"]),
-    )
 
 
 def _create(
@@ -596,134 +544,4 @@ def _refresh(
         refresh_derived(connection, document_id, [], removed=removed)
     if title != document["title"]:
         document_retitled(connection, document_id)
-    return result
-
-
-# --- Metadata -----------------------------------------------------------------
-
-_WORD_RE = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*", re.UNICODE)
-
-
-def document_info(path: Path, document_id: str) -> dict[str, Any]:
-    """Everything an info panel shows about one note, in a fixed number of queries."""
-
-    initialize(path)
-    with connection_scope(path) as connection:
-        document = connection.execute(
-            "SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
-        ).fetchone()
-        if document is None:
-            raise KeyError("document not found")
-        folders = connection.execute(
-            """WITH RECURSIVE chain(id, parent_id, name, depth) AS (
-                   SELECT id, parent_id, name, 0 FROM folders WHERE id = ?
-                   UNION ALL
-                   SELECT folders.id, folders.parent_id, folders.name, chain.depth + 1
-                     FROM folders JOIN chain ON folders.id = chain.parent_id
-               ) SELECT id, name FROM chain ORDER BY depth DESC""",
-            (document["folder_id"],),
-        ).fetchall()
-        texts = [row[0] for row in connection.execute(
-            "SELECT text FROM blocks WHERE document_id = ?", (document_id,)
-        )]
-        outgoing_documents = connection.execute(
-            """SELECT COUNT(DISTINCT refs.target_document_id)
-                 FROM document_refs AS refs
-                 JOIN blocks ON blocks.id = refs.source_block_id
-                 JOIN documents AS target ON target.id = refs.target_document_id
-                WHERE blocks.document_id = ? AND target.deleted_at IS NULL""",
-            (document_id,),
-        ).fetchone()[0]
-        outgoing_blocks = connection.execute(
-            """SELECT COUNT(DISTINCT refs.target_block_id)
-                 FROM block_refs AS refs
-                 JOIN blocks AS source ON source.id = refs.source_block_id
-                 JOIN blocks AS target ON target.id = refs.target_block_id
-                 JOIN documents AS target_doc ON target_doc.id = target.document_id
-                WHERE source.document_id = ? AND target_doc.deleted_at IS NULL""",
-            (document_id,),
-        ).fetchone()[0]
-        backlinks = connection.execute(
-            """SELECT
-                 (SELECT COUNT(*) FROM block_refs AS refs
-                    JOIN blocks AS source ON source.id = refs.source_block_id
-                    JOIN documents AS source_doc ON source_doc.id = source.document_id
-                    JOIN blocks AS target ON target.id = refs.target_block_id
-                   WHERE target.document_id = ? AND source.document_id <> ?
-                     AND source_doc.deleted_at IS NULL)
-               + (SELECT COUNT(*) FROM document_refs AS refs
-                    JOIN blocks AS source ON source.id = refs.source_block_id
-                    JOIN documents AS source_doc ON source_doc.id = source.document_id
-                   WHERE refs.target_document_id = ? AND source.document_id <> ?
-                     AND source_doc.deleted_at IS NULL)""",
-            (document_id, document_id, document_id, document_id),
-        ).fetchone()[0]
-        pictures = connection.execute(
-            f"""SELECT block_assets.block_id, assets.media_name, assets.mime_type,
-                       assets.content_hash, assets.text
-                  FROM block_assets
-                  JOIN blocks ON blocks.id = block_assets.block_id
-                  JOIN assets USING (content_hash, media_name)
-                 WHERE blocks.document_id = ?
-                   AND assets.mime_type IN ({",".join("?" for _ in _ocr.OCR_TYPES)})
-                 ORDER BY blocks.order_key, assets.media_name""",
-            (document_id, *sorted(_ocr.OCR_TYPES)),
-        ).fetchall()
-
-
-    return {
-        "id": document["id"],
-        "title": document["title"],
-        "created_at": document["created_at"],
-        "updated_at": document["updated_at"],
-        "last_opened_at": document["last_opened_at"],
-        "revision": document["revision"],
-        "folder_id": document["folder_id"],
-        "folder_path": [{"id": row["id"], "name": row["name"]} for row in folders],
-        # Where the note came from: manual, capture, onenote_import, ...
-        "source": document["source_kind"],
-        "counts": {
-            "words": sum(len(_WORD_RE.findall(text)) for text in texts),
-            "characters": sum(len(text) for text in texts),
-            "blocks": len(texts),
-            "outgoing_links": outgoing_documents + outgoing_blocks,
-            "outgoing_document_links": outgoing_documents,
-            "outgoing_block_links": outgoing_blocks,
-            "backlinks": backlinks,
-        },
-        "picture_text": _picture_text(path, pictures),
-    }
-
-
-PICTURE_TEXT_CHARS = 4000
-
-
-def _picture_text(path: Path, rows: list) -> list[dict[str, Any]]:
-    """Text read from each picture/PDF of the note (searchable, not in the body)."""
-
-    status = _ocr.asset_status(path, list({row["content_hash"] for row in rows}))
-    result = []
-    for row in rows:
-        state = status.get(row["content_hash"], {})
-        text = str(row["text"] or "")
-        result.append(
-            {
-                "block_id": row["block_id"],
-                "media_name": row["media_name"],
-                "content_hash": row["content_hash"],
-                "mime_type": row["mime_type"],
-                # queued, running (or retrying), done, failed
-                "status": state.get("status", "queued"),
-                "method": state.get("method") or None,  # ocr, pdf-text, pdf-text+ocr
-                "pages": state.get("pages"),
-                "error": state.get("error"),
-                # The reading whose text is used (apple-vision/… from the Mac app, or
-                # this process's model), or the model that is to read it.
-                "model": state.get("model") or _ocr.MODEL,
-                "read_at": state.get("updated_at"),
-                # The text in use; it can predate the current model while that is queued.
-                "text": text[:PICTURE_TEXT_CHARS],
-                "text_chars": len(text),
-            }
-        )
     return result

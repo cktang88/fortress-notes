@@ -13,14 +13,16 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import os
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any
 
 import frontmatter
 
-from . import background, block_store, images, sources, vault, workspace
+from . import background, block_store, images, ocr as _ocr, sources, vault, workspace
 from .config import get_settings
 from .models import NoteCreate, NoteSummary, NoteUpdate
 
@@ -41,6 +43,135 @@ def summaries(ids: list[str]) -> dict[str, NoteSummary]:
         str(item["id"]): NoteSummary(**{key: item[key] for key in NoteSummary.model_fields})
         for item in block_store.list_documents(db_path, list(ids))
     }
+
+
+# --- Metadata -----------------------------------------------------------------
+
+_WORD_RE = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*", re.UNICODE)
+
+
+def document_info(path: Path, document_id: str) -> dict[str, Any]:
+    """Everything an info panel shows about one note, in a fixed number of queries."""
+
+    block_store.initialize(path)
+    with block_store.connection_scope(path) as connection:
+        document = connection.execute(
+            "SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL", (document_id,)
+        ).fetchone()
+        if document is None:
+            raise KeyError("document not found")
+        folders = connection.execute(
+            """WITH RECURSIVE chain(id, parent_id, name, depth) AS (
+                   SELECT id, parent_id, name, 0 FROM folders WHERE id = ?
+                   UNION ALL
+                   SELECT folders.id, folders.parent_id, folders.name, chain.depth + 1
+                     FROM folders JOIN chain ON folders.id = chain.parent_id
+               ) SELECT id, name FROM chain ORDER BY depth DESC""",
+            (document["folder_id"],),
+        ).fetchall()
+        texts = [row[0] for row in connection.execute(
+            "SELECT text FROM blocks WHERE document_id = ?", (document_id,)
+        )]
+        outgoing_documents = connection.execute(
+            """SELECT COUNT(DISTINCT refs.target_document_id)
+                 FROM document_refs AS refs
+                 JOIN blocks ON blocks.id = refs.source_block_id
+                 JOIN documents AS target ON target.id = refs.target_document_id
+                WHERE blocks.document_id = ? AND target.deleted_at IS NULL""",
+            (document_id,),
+        ).fetchone()[0]
+        outgoing_blocks = connection.execute(
+            """SELECT COUNT(DISTINCT refs.target_block_id)
+                 FROM block_refs AS refs
+                 JOIN blocks AS source ON source.id = refs.source_block_id
+                 JOIN blocks AS target ON target.id = refs.target_block_id
+                 JOIN documents AS target_doc ON target_doc.id = target.document_id
+                WHERE source.document_id = ? AND target_doc.deleted_at IS NULL""",
+            (document_id,),
+        ).fetchone()[0]
+        backlinks = connection.execute(
+            """SELECT
+                 (SELECT COUNT(*) FROM block_refs AS refs
+                    JOIN blocks AS source ON source.id = refs.source_block_id
+                    JOIN documents AS source_doc ON source_doc.id = source.document_id
+                    JOIN blocks AS target ON target.id = refs.target_block_id
+                   WHERE target.document_id = ? AND source.document_id <> ?
+                     AND source_doc.deleted_at IS NULL)
+               + (SELECT COUNT(*) FROM document_refs AS refs
+                    JOIN blocks AS source ON source.id = refs.source_block_id
+                    JOIN documents AS source_doc ON source_doc.id = source.document_id
+                   WHERE refs.target_document_id = ? AND source.document_id <> ?
+                     AND source_doc.deleted_at IS NULL)""",
+            (document_id, document_id, document_id, document_id),
+        ).fetchone()[0]
+        pictures = connection.execute(
+            f"""SELECT block_assets.block_id, assets.media_name, assets.mime_type,
+                       assets.content_hash, assets.text
+                  FROM block_assets
+                  JOIN blocks ON blocks.id = block_assets.block_id
+                  JOIN assets USING (content_hash, media_name)
+                 WHERE blocks.document_id = ?
+                   AND assets.mime_type IN ({",".join("?" for _ in _ocr.OCR_TYPES)})
+                 ORDER BY blocks.order_key, assets.media_name""",
+            (document_id, *sorted(_ocr.OCR_TYPES)),
+        ).fetchall()
+
+    return {
+        "id": document["id"],
+        "title": document["title"],
+        "created_at": document["created_at"],
+        "updated_at": document["updated_at"],
+        "last_opened_at": document["last_opened_at"],
+        "revision": document["revision"],
+        "folder_id": document["folder_id"],
+        "folder_path": [{"id": row["id"], "name": row["name"]} for row in folders],
+        # Where the note came from: manual, capture, onenote_import, ...
+        "source": document["source_kind"],
+        "counts": {
+            "words": sum(len(_WORD_RE.findall(text)) for text in texts),
+            "characters": sum(len(text) for text in texts),
+            "blocks": len(texts),
+            "outgoing_links": outgoing_documents + outgoing_blocks,
+            "outgoing_document_links": outgoing_documents,
+            "outgoing_block_links": outgoing_blocks,
+            "backlinks": backlinks,
+        },
+        "picture_text": _picture_text(path, pictures),
+    }
+
+
+PICTURE_TEXT_CHARS = 4000
+
+
+def _picture_text(path: Path, rows: list) -> list[dict[str, Any]]:
+    """Text read from each picture/PDF of the note (searchable, not in the body)."""
+
+    status = _ocr.asset_status(path, list({row["content_hash"] for row in rows}))
+    result = []
+    for row in rows:
+        state = status.get(row["content_hash"], {})
+        text = str(row["text"] or "")
+        result.append(
+            {
+                "block_id": row["block_id"],
+                "media_name": row["media_name"],
+                "content_hash": row["content_hash"],
+                "mime_type": row["mime_type"],
+                # queued, running (or retrying), done, failed
+                "status": state.get("status", "queued"),
+                "method": state.get("method") or None,  # ocr, pdf-text, pdf-text+ocr
+                "pages": state.get("pages"),
+                "error": state.get("error"),
+                # The reading whose text is used (apple-vision/… from the Mac app, or
+                # this process's model), or the model that is to read it.
+                "model": state.get("model") or _ocr.MODEL,
+                "read_at": state.get("updated_at"),
+                # The text in use; it can predate the current model while that is queued.
+                "text": text[:PICTURE_TEXT_CHARS],
+                "text_chars": len(text),
+            }
+        )
+    return result
 
 
 # --- Writes ------------------------------------------------------------------
@@ -160,20 +291,6 @@ def _uncategorized_folder(db_path: Path) -> str:
             if item.get("kind") == "folder" and item.get("name") == UNCATEGORIZED:
                 return str(item["id"])
         return str(block_store.create_folder(db_path, UNCATEGORIZED, None, position=0)["id"])
-
-
-# --- Re-imports ---------------------------------------------------------------
-
-
-def upsert_from_source(**kwargs):
-    """Create or update the note for one source page.
-
-    Takes the keyword arguments of ``sources.upsert_document_from_source``
-    (``source``, ``external_id``, ``title``, ``blocks``, ``folder_path``, ...).
-    """
-
-    db_path, _ = _paths()
-    return sources.upsert_document_from_source(db_path, **kwargs)
 
 
 # --- Mirrors -----------------------------------------------------------------

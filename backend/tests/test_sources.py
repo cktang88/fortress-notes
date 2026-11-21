@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app import backups, block_store, sources
+from app.config import get_settings
 from app.block_store import (
     apply_transaction,
     connection_scope,
@@ -16,7 +17,8 @@ from app.block_store import (
 )
 from app.models import BlockOperation
 from app.portability import export_document_markdown
-from app.sources import SourceBlock, document_info, upsert_document_from_source
+from app.documents import document_info
+from app.sources import SourceBlock, upsert_document_from_source
 
 from support import import_details, import_markdown_files, make_settings, use_settings, mirror_file
 
@@ -34,6 +36,12 @@ def _paragraph(text, **fields):
 
 
 ONENOTE = {"name": "onenote", "version": "1.0"}
+
+
+def Block(text, external_id=None, children=(), type="paragraph", **attrs):
+    """A source block of ``type`` holding ``text``."""
+
+    return SourceBlock(type, attrs, _runs(text), children=list(children), external_id=external_id)
 
 
 class SourceStoreTests(unittest.TestCase):
@@ -70,7 +78,7 @@ class SourceStoreTests(unittest.TestCase):
         self.assertNotIn("last_opened_at", tree)  # in /info; not part of the note's ETag
 
     def test_provenance_is_not_searchable_text(self) -> None:
-        self.page([SourceBlock("Plain words", external_id="{A}")],
+        self.page([Block("Plain words", external_id="{A}")],
                   provenance={"source_path": "Zebraword › Section"})
         self.assertEqual(block_store.search_blocks(self.db, "Zebraword"), [])
         self.assertEqual(len(block_store.search_blocks(self.db, "Plain")), 1)
@@ -80,9 +88,9 @@ class SourceStoreTests(unittest.TestCase):
 
     def test_the_markdown_export_carries_no_provenance(self) -> None:
         self.page([
-            SourceBlock("# Agenda", external_id="{H}"),
-            SourceBlock("- Item", external_id="{L}", children=[
-                SourceBlock("- Child", external_id="{C}"),
+            Block("Agenda", "{H}", type="heading", level=1),
+            Block("Item", "{L}", type="bullet_item", children=[
+                Block("Child", "{C}", type="bullet_item"),
             ]),
         ])
         document_id = self._page_id()
@@ -103,7 +111,7 @@ class SourceStoreTests(unittest.TestCase):
         self.assertEqual(_texts(copy["children"]), ["Agenda", "Item"])
 
     def test_an_imported_pages_source_url_is_the_front_matter_source(self) -> None:
-        result = self.page([SourceBlock("Clipped", external_id="{A}")], provenance={
+        result = self.page([Block("Clipped", external_id="{A}")], provenance={
             "source_path": "Work › Clip", "source_url": "https://example.com/article",
         })
         markdown = export_document_markdown(self.db, result.document_id)
@@ -169,8 +177,8 @@ class SourceStoreTests(unittest.TestCase):
 
     def test_first_import_creates_the_note_with_source_dates_and_provenance(self) -> None:
         result = self.page([
-            SourceBlock("First", external_id="{A}"),
-            SourceBlock("Second", external_id="{B}"),
+            Block("First", external_id="{A}"),
+            Block("Second", external_id="{B}"),
         ], folder_path=[("{NB}", "Work"), ("{SEC}", "Meetings")])
         self.assertEqual((result.status, result.blocks_created), ("created", 2))
         tree = document_tree(self.db, result.document_id)
@@ -185,7 +193,7 @@ class SourceStoreTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in info["folder_path"]], ["Work", "Meetings"])
 
     def test_an_unchanged_page_is_a_no_op(self) -> None:
-        blocks = [SourceBlock("First", external_id="{A}"), SourceBlock("Second")]
+        blocks = [Block("First", external_id="{A}"), Block("Second")]
         first = self.page(blocks)
         before = document_tree(self.db, first.document_id)
         second = self.page(blocks)
@@ -197,9 +205,9 @@ class SourceStoreTests(unittest.TestCase):
 
     def test_a_changed_page_is_refreshed_keeping_matching_block_ids_and_links(self) -> None:
         first = self.page([
-            SourceBlock("Keep me", external_id="{A}"),
-            SourceBlock("Old text", external_id="{B}", children=[SourceBlock("Child", external_id="{K}")]),
-            SourceBlock("Dropped", external_id="{C}"),
+            Block("Keep me", external_id="{A}"),
+            Block("Old text", external_id="{B}", children=[Block("Child", external_id="{K}")]),
+            Block("Dropped", external_id="{C}"),
         ])
         tree = document_tree(self.db, first.document_id)
         ids = {node["text"]: node["id"] for node in tree["children"]}
@@ -216,9 +224,9 @@ class SourceStoreTests(unittest.TestCase):
         block_store.move_document(self.db, first.document_id, folder["id"])
 
         result = self.page([
-            SourceBlock("New first", external_id="{N}"),
-            SourceBlock("Keep me", external_id="{A}", children=[SourceBlock("Child v2", external_id="{K}")]),
-            SourceBlock("New text", external_id="{B}"),
+            Block("New first", external_id="{N}"),
+            Block("Keep me", external_id="{A}", children=[Block("Child v2", external_id="{K}")]),
+            Block("New text", external_id="{B}"),
         ], title="Meeting v2", modified_at="2020-02-01T00:00:00+00:00",
             folder_path=[("{NB}", "Elsewhere")])
         self.assertEqual(result.status, "updated")
@@ -243,54 +251,59 @@ class SourceStoreTests(unittest.TestCase):
         self.assertTrue(block_store.fts_is_consistent(self.db))
         self.assertEqual(len(block_store.search_blocks(self.db, "Keep me")), 1)
         self.assertEqual(self.page([
-            SourceBlock("New first", external_id="{N}"),
-            SourceBlock("Keep me", external_id="{A}", children=[SourceBlock("Child v2", external_id="{K}")]),
-            SourceBlock("New text", external_id="{B}"),
+            Block("New first", external_id="{N}"),
+            Block("Keep me", external_id="{A}", children=[Block("Child v2", external_id="{K}")]),
+            Block("New text", external_id="{B}"),
         ], title="Meeting v2").status, "unchanged")
 
     def test_a_page_edited_here_is_not_refreshed(self) -> None:
-        first = self.page([SourceBlock("Shared", external_id="{A}"), SourceBlock("Other", external_id="{B}")])
+        first = self.page([Block("Shared", external_id="{A}"), Block("Other", external_id="{B}")])
         tree = document_tree(self.db, first.document_id)
         apply_transaction(self.db, first.document_id, [
             _paragraph("Mine", block_id="01J00000000000000000000006"),
         ], tree["revision"])
         # Source unchanged: nothing to do.
-        self.assertEqual(self.page([SourceBlock("Shared", external_id="{A}"),
-                                    SourceBlock("Other", external_id="{B}")]).status, "unchanged")
-        result = self.page([SourceBlock("Shared, edited in OneNote", external_id="{A}")])
+        self.assertEqual(self.page([Block("Shared", external_id="{A}"),
+                                    Block("Other", external_id="{B}")]).status, "unchanged")
+        result = self.page([Block("Shared, edited in OneNote", external_id="{A}")])
         self.assertEqual(result.status, "skipped_edited")
         tree = document_tree(self.db, first.document_id)
         self.assertEqual(_texts(tree["children"]), ["Shared", "Other", "Mine"])
         self.assertEqual(tree["revision"], 1)
 
     def test_a_rename_here_survives_a_refresh(self) -> None:
-        first = self.page([SourceBlock("One", external_id="{A}")])
+        first = self.page([Block("One", external_id="{A}")])
         # A rename does not move the revision, so the page is still refreshed...
         block_store.update_document_metadata(self.db, first.document_id, title="My name")
-        result = self.page([SourceBlock("One, edited", external_id="{A}")], title="Meeting v2")
+        result = self.page([Block("One, edited", external_id="{A}")], title="Meeting v2")
         self.assertEqual(result.status, "updated")
         tree = document_tree(self.db, first.document_id)
         self.assertEqual(_texts(tree["children"]), ["One, edited"])
         # ...but keeps the user's title, also on later refreshes.
         self.assertEqual(tree["title"], "My name")
-        self.page([SourceBlock("One, again", external_id="{A}")], title="Meeting v3")
+        self.page([Block("One, again", external_id="{A}")], title="Meeting v3")
         self.assertEqual(document_tree(self.db, first.document_id)["title"], "My name")
 
     def test_an_unrenamed_page_follows_the_source_title(self) -> None:
-        first = self.page([SourceBlock("One", external_id="{A}")])
-        self.page([SourceBlock("One", external_id="{A}")], title="Meeting v2")
-        self.page([SourceBlock("One", external_id="{A}")], title="Meeting v3")
+        first = self.page([Block("One", external_id="{A}")])
+        self.page([Block("One", external_id="{A}")], title="Meeting v2")
+        self.page([Block("One", external_id="{A}")], title="Meeting v3")
         self.assertEqual(document_tree(self.db, first.document_id)["title"], "Meeting v3")
 
-    def test_nested_source_blocks_and_markdown_bodies(self) -> None:
-        result = self.page("# Title\n\n- Parent\n  - Child\n\nTail")
+    def test_nested_source_blocks_without_source_ids(self) -> None:
+        def body(tail):
+            return [Block("Title", type="heading", level=1),
+                    Block("Parent", type="bullet_item", children=[Block("Child", type="bullet_item")]),
+                    Block(tail)]
+
+        result = self.page(body("Tail"))
         tree = document_tree(self.db, result.document_id)
         self.assertEqual(_texts(tree["children"]), ["Title", "Parent", "Tail"])
         self.assertEqual(_texts(tree["children"][1]["children"]), ["Child"])
         child_id = tree["children"][1]["children"][0]["id"]
         # Content-derived ids: an unchanged block keeps its Fortress id.
-        self.assertEqual(self.page("# Title\n\n- Parent\n  - Child\n\nTail").status, "unchanged")
-        self.page("# Title\n\n- Parent\n  - Child\n\nNew tail")
+        self.assertEqual(self.page(body("Tail")).status, "unchanged")
+        self.page(body("New tail"))
         tree = document_tree(self.db, result.document_id)
         self.assertEqual(tree["children"][1]["children"][0]["id"], child_id)
         self.assertEqual(_texts(tree["children"]), ["Title", "Parent", "New tail"])
@@ -299,7 +312,7 @@ class SourceStoreTests(unittest.TestCase):
         folder = sources.ensure_folder_path(self.db, "onenote_import", [("{NB}", "Work")])
         block_store.rename_folder(self.db, folder, "Job")
         again = sources.ensure_folder_path(
-            self.db, "onenote_import", [{"external_id": "{NB}", "name": "Work 2"}]
+            self.db, "onenote_import", [("{NB}", "Work 2")]
         )
         self.assertEqual(again, folder)
         self.assertEqual(block_store.navigation(self.db)["items"][0]["name"], "Job")
@@ -307,11 +320,11 @@ class SourceStoreTests(unittest.TestCase):
     def test_trashed_notes_are_not_resurrected_but_purged_ones_are_reimported(self) -> None:
         from app import workspace
 
-        first = self.page([SourceBlock("x", external_id="{A}")])
+        first = self.page([Block("x", external_id="{A}")])
         block_store.delete_document(self.db, first.document_id)
-        self.assertEqual(self.page([SourceBlock("y", external_id="{A}")]).status, "skipped_deleted")
+        self.assertEqual(self.page([Block("y", external_id="{A}")]).status, "skipped_deleted")
         workspace.purge_document(self.db, first.document_id)
-        again = self.page([SourceBlock("y", external_id="{A}")])
+        again = self.page([Block("y", external_id="{A}")])
         self.assertEqual(again.status, "created")
         self.assertNotEqual(again.document_id, first.document_id)
 
@@ -346,7 +359,7 @@ class SourceStoreTests(unittest.TestCase):
 
 
     def test_backup_and_restore_keep_provenance(self) -> None:
-        first = self.page([SourceBlock("Saved", external_id="{A}")])
+        first = self.page([Block("Saved", external_id="{A}")])
         directory = self.root / "backups"
         snapshot = backups.create_backup(self.db, directory, "manual")
         block_store.delete_document(self.db, first.document_id)
@@ -355,7 +368,7 @@ class SourceStoreTests(unittest.TestCase):
         self.assertEqual(import_details(self.db, first.document_id)["source_path"],
                          "Work › Meetings › Meeting")
         # And the restored note is still the one re-imports refresh, by the same block id.
-        self.assertEqual(self.page([SourceBlock("Saved v2", external_id="{A}")]).document_id,
+        self.assertEqual(self.page([Block("Saved v2", external_id="{A}")]).document_id,
                          first.document_id)
         self.assertEqual(document_tree(self.db, first.document_id)["children"][0]["id"],
                          tree["children"][0]["id"])
@@ -393,9 +406,10 @@ class SourceApiTests(unittest.TestCase):
     def test_a_client_cannot_claim_an_imported_pages_source_key(self) -> None:
         from app import documents
 
-        page = documents.upsert_from_source(
+        page = upsert_document_from_source(
+            get_settings().block_db_path,
             source="onenote_import", external_id="{P}", title="Page",
-            blocks=[SourceBlock("Para", external_id="{B}")],
+            blocks=[Block("Para", external_id="{B}")],
         )
         claim = {"source": "onenote_import", "external_id": "{Q}"}
         created = self.client.post("/api/block-documents", json={
@@ -403,8 +417,6 @@ class SourceApiTests(unittest.TestCase):
         })
         self.assertEqual(created.status_code, 201)
         self.client.post("/api/capture", json={"text": "y", "provenance": claim})
-        from app.config import get_settings
-
         with connection_scope(get_settings().block_db_path) as connection:
             keys = connection.execute(
                 "SELECT id, source_kind, source_external_id FROM documents ORDER BY created_at"
@@ -412,9 +424,10 @@ class SourceApiTests(unittest.TestCase):
         claimed = [tuple(row) for row in keys if row["source_external_id"] is not None]
         self.assertEqual(claimed, [(page.document_id, "onenote_import", "{P}")])
         # A later import of page {Q} creates its own note.
-        other = documents.upsert_from_source(
+        other = upsert_document_from_source(
+            get_settings().block_db_path,
             source="onenote_import", external_id="{Q}", title="Other",
-            blocks=[SourceBlock("Para", external_id="{B}")],
+            blocks=[Block("Para", external_id="{B}")],
         )
         self.assertEqual(other.status, "created")
 
@@ -434,9 +447,10 @@ class SourceApiTests(unittest.TestCase):
     def test_uploaded_exports_are_new_markdown_imports_and_mirrors_carry_no_provenance(self) -> None:
         from app import documents
 
-        result = documents.upsert_from_source(
+        result = upsert_document_from_source(
+            get_settings().block_db_path,
             source="onenote_import", external_id="{P}", title="Page",
-            blocks=[SourceBlock("Para", external_id="{B}")],
+            blocks=[Block("Para", external_id="{B}")],
         )
         exported = self.client.get(f"/api/block-documents/{result.document_id}/markdown").text
         documents.flush_mirrors()

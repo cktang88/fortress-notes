@@ -1501,22 +1501,49 @@ def insert_specs(
             "SELECT 1 FROM blocks WHERE id = ?", (block_id,)
         ).fetchone():
             block_id = new_id()
-        connection.execute(
-            """INSERT INTO blocks(id, document_id, parent_id, order_key, type, attrs_json,
-                   content_json, payload_json, text, created_at, updated_at, revision)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)""",
-            (
-                block_id, document_id, parent_id, key, block_spec.type,
-                _dumps(block_spec.attrs), _dumps_nullable(block_spec.content),
-                _dumps_nullable(block_spec.payload), created_at, updated_at, revision,
-            ),
-        )
+        insert_block_row(connection, block_id, document_id, parent_id, key, block_spec,
+                         created_at, updated_at, revision)
         written.append(block_id)
         written.extend(insert_specs(
             connection, document_id, block_spec.children, block_id, None, None,
             created_at, updated_at, revision,
         ))
     return written
+
+
+def insert_block_row(
+    connection: sqlite3.Connection, block_id: str, document_id: str, parent_id: str | None,
+    order_key: str, spec: BlockSpec, created_at: str, updated_at: str, revision: int | None,
+) -> None:
+    """Store one canonical block (its derived fields are left to ``refresh_derived``)."""
+
+    connection.execute(
+        """INSERT INTO blocks(id, document_id, parent_id, order_key, type, attrs_json,
+               content_json, payload_json, text, created_at, updated_at, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)""",
+        (
+            block_id, document_id, parent_id, order_key, spec.type, _dumps(spec.attrs),
+            _dumps_nullable(spec.content), _dumps_nullable(spec.payload),
+            created_at, updated_at, revision,
+        ),
+    )
+
+
+def update_block_row(
+    connection: sqlite3.Connection, block_id: str, parent_id: str | None, order_key: str,
+    spec: BlockSpec, updated_at: str, revision: int | None,
+) -> None:
+    """Replace one stored block's place and canonical fields."""
+
+    connection.execute(
+        """UPDATE blocks SET parent_id = ?, order_key = ?, type = ?, attrs_json = ?,
+                  content_json = ?, payload_json = ?, updated_at = ?, revision = ?
+            WHERE id = ?""",
+        (
+            parent_id, order_key, spec.type, _dumps(spec.attrs), _dumps_nullable(spec.content),
+            _dumps_nullable(spec.payload), updated_at, revision, block_id,
+        ),
+    )
 
 
 def _dumps(value: object) -> str:
@@ -1533,7 +1560,9 @@ def _loads(raw: str | None) -> object:
     return {} if raw == "{}" else json.loads(raw)
 
 
-def _row_block(row: sqlite3.Row) -> schema.Block:
+def stored_block(row: sqlite3.Row) -> schema.Block:
+    """A stored block row (type and the canonical JSON columns) as a :class:`schema.Block`."""
+
     return schema.Block(
         row["type"], _loads(row["attrs_json"]) or {}, _loads(row["content_json"]),
         _loads(row["payload_json"]),
@@ -1607,7 +1636,7 @@ def refresh_derived(
                       FROM blocks WHERE id IN ({",".join("?" for _ in chunk)})""",
                 chunk,
             ).fetchall():
-                block = _row_block(row)
+                block = stored_block(row)
                 text = schema.derive_text(block, fresh)
                 if text != row["text"]:
                     connection.execute("UPDATE blocks SET text = ? WHERE id = ?", (text, row["id"]))
@@ -1622,7 +1651,7 @@ def _chunks(items: list[str], size: int = 500):
 def _refresh_row(connection: sqlite3.Connection, row: sqlite3.Row, labels: _Labels) -> None:
     """Re-derive the text, refs, asset links and search row of one block."""
 
-    block = _row_block(row)
+    block = stored_block(row)
     block_id = row["id"]
     text = schema.derive_text(block, labels)
     if text != row["text"]:
@@ -2081,7 +2110,7 @@ class _Writer:
         if not operation.model_fields_set & {"type", "attrs", "content", "payload", "user_attrs"}:
             raise BlockShapeError("an update names what to change: type, attrs, content, payload or user_attrs")
         row = self.row(operation.block_id)
-        current = _row_block(row)
+        current = stored_block(row)
         new_type = current.type
         if operation.type is not None:
             new_type = operation.type
