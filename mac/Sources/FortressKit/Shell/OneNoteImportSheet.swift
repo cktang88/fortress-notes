@@ -272,9 +272,13 @@ private struct OneNoteMicrosoftForm: View {
                     .labelsHidden()
                 }
                 GridRow {
-                    // With a list of notebooks, the label goes next to its first row.
-                    Text("Notebooks:")
-                        .gridCellAnchor(importer.notebookChoices == nil ? nil : .topTrailing)
+                    if importer.notebookChoices == nil {
+                        Text("Notebooks:")
+                    } else {
+                        // Next to the list's first row, not its last.
+                        Text("Notebooks:")
+                            .gridCellAnchor(.topTrailing)
+                    }
                     notebooks
                 }
             }
