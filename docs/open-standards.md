@@ -29,8 +29,8 @@ expect, screenshots, system shortcuts, Quick Look, the share sheet, services —
 never overridden or reimplemented. (The Mac app's side of this is specified in
 `mac/DESIGN.md`.)
 
-This document lists every format Fortress invented that a user or another tool
-can see, the closest standard, and the decision. Status: **done** = implemented,
+This document lists every format a user or another tool can see, the closest
+standard, and the decision. Status: **done** = implemented,
 **keep** = deliberately ours, **later** = recommended, not implemented yet (see
 the end for effort estimates).
 
@@ -46,27 +46,27 @@ folder are not kept or read). The folder is a valid **Obsidian vault** of plain
 `vault.FORMAT_VERSION = 3`; a mirror state with another version makes the lane
 rewrite every mirror once.
 
-| Aspect | Before | Standard | Now (format 3) |
-|---|---|---|---|
-| File naming | `NOTES_DIR/<ULID>.md`, flat | Obsidian/Bear/iA Writer: the note's title is the file name; folders are folders | `<Folder>/<Subfolder>/<Title>.md`. Characters no OS or Obsidian accepts (`\ / : * ? " < > \| # ^ [ ]`) become spaces; clashes (case-insensitive, as on macOS) get ` 2`, ` 3` in creation order; a top-level folder may not be called `assets`. A file in the folder that isn't ours is never overwritten. Renames/moves rename the file and rewrite the links to it. |
-| Front matter keys | `id`, `title`, `status`, `created_at`, `updated_at`, `images`, `provenance` | YAML front matter; `title`, `aliases` (Obsidian), `created`/`updated` (most common pair; Dublin Core has `created`/`modified`), `source` (Obsidian Web Clipper, Dublin Core) | `title`, `aliases` (only when the file name differs from the title), `created`, `updated`, `id`, `source` (when the note came from a URL), `picture_text` (text read from its pictures and PDFs). Nothing else. |
-| Dates | ISO 8601 with offset | ISO 8601 / RFC 3339 | unchanged (ISO 8601, UTC offset) |
-| Note links | `[[<document id>]]` | Obsidian wikilink by file name | `[[Title]]`, `[[Folder/Title]]` when the name isn't unique (Obsidian's "shortest path"), `[[Name\|Title]]` when the file name differs from the title. A link to a trashed/unknown note stays `[[<id>]]`. |
-| Block references | `((<block id>))` | Obsidian `[[Note#^id]]`, `[[Note#Heading]]` | `[[Note#^id\|first line]]`; a reference to a heading is `[[Note#Heading]]`; within the note `[[#^id]]`. |
-| Block ids | a `<!-- fortress:block {"id":…} -->` comment on **every** block | Obsidian `^id` at the end of the block (structured blocks: on its own line after) | `^id` **only on blocks something refers to**; headings are linked by their text. See "Why ids only on referenced blocks". |
-| Other block metadata | the same comment | none exists | not written (extension attributes, callout icon/colour, provenance); a block nested under a paragraph or heading follows it. |
-| Callouts | a blockquote with `"type":"callout"` in a comment | Obsidian callouts `> [!type] Title`, `+`/`-` folding (also GitHub alerts for 5 types) | `> [!note]` (type, fold and title kept in `callout_type`/`callout_fold`/`callout_title` attributes) |
-| Highlight | `<mark style="background:…">` | Obsidian `==text==` | `==text==` for the default highlight; other colours stay `<mark style>` (no standard for colour) |
-| Text colour, underline | `<span style="color">`, `<u>` | none in Markdown; inline HTML is allowed by CommonMark | unchanged |
-| Super/subscript | `<sup>`, `<sub>` | Pandoc `^x^`/`~x~` (not read by Obsidian/GFM) | unchanged: HTML, which CommonMark, GFM and Obsidian all render |
-| Math | `$$…$$` blocks | `$`/`$$` (Obsidian, GitHub, Pandoc, MathJax/KaTeX) | Fortress has no math (product decision): a `$$…$$` block reads as a `latex` code block (written as a ```` ```latex ```` fence) so its source is kept; inline `$…$` stays typed text |
-| Task lists | `- [ ]` / `- [x]` | GFM task lists | unchanged |
-| Tables | GFM, or HTML with `data-block` on every row/cell | GFM tables | GFM whenever the table fits (one header row, at most one paragraph per cell, no spans/colours/widths). Otherwise a plain HTML `<table>`. |
-| Images | `<img src="/media/x.png" width=…>` | CommonMark `![alt](path "title")`, Obsidian `![alt\|300](path)` for size | `![alt\|300](assets/x.png "caption")` with a path relative to the note (`../assets/…` in folders) |
-| Attachments (files) | a comment with the file's attributes + `[name](/media/x)` + size text | CommonMark link; Obsidian embeds PDFs/audio/video with `![…](…)` | `![name](assets/x.pdf)` for PDF/audio/video (Obsidian shows them in place), `[name](assets/x.zip)` otherwise |
-| Attachment folder | `NOTES_DIR/assets/` | Obsidian: any folder ("Files and links › Default location for new attachments") | unchanged (`assets/`); embeds are relative, so Obsidian, VS Code and GitHub resolve them |
-| Columns | `<!-- fortress:columns -->`, `<!-- fortress:column {…} -->`, `<!-- /fortress:columns -->` around the contents | none (see below) | the contents in reading order, no markers |
-| Comments, escapes | — | Obsidian `%%comment%%`, `#tag`, `^id`, `==` | our text escapes `==`, `%%`, a `^word` after a space, `[[`, so it never turns into Obsidian syntax by accident |
+| Aspect | Standard | Fortress (format 3) |
+|---|---|---|
+| File naming | Obsidian/Bear/iA Writer: the note's title is the file name; folders are folders | `<Folder>/<Subfolder>/<Title>.md`. Characters no OS or Obsidian accepts (`\ / : * ? " < > \| # ^ [ ]`) become spaces; clashes (case-insensitive, as on macOS) get ` 2`, ` 3` in creation order; a top-level folder may not be called `assets`. A file in the folder that isn't ours is never overwritten. Renames/moves rename the file and rewrite the links to it. |
+| Front matter keys | YAML front matter; `title`, `aliases` (Obsidian), `created`/`updated` (most common pair; Dublin Core has `created`/`modified`), `source` (Obsidian Web Clipper, Dublin Core) | `title`, `aliases` (only when the file name differs from the title), `created`, `updated`, `id`, `source` (when the note came from a URL), `picture_text` (text read from its pictures and PDFs). Nothing else. |
+| Dates | ISO 8601 / RFC 3339 | ISO 8601 with UTC offset |
+| Note links | Obsidian wikilink by file name | `[[Title]]`, `[[Folder/Title]]` when the name isn't unique (Obsidian's "shortest path"), `[[Name\|Title]]` when the file name differs from the title. A link to a trashed/unknown note stays `[[<id>]]`. |
+| Block references | Obsidian `[[Note#^id]]`, `[[Note#Heading]]` | `[[Note#^id\|first line]]`; a reference to a heading is `[[Note#Heading]]`; within the note `[[#^id]]`. |
+| Block ids | Obsidian `^id` at the end of the block (structured blocks: on its own line after) | `^id` **only on blocks something refers to**; headings are linked by their text. See "Why ids only on referenced blocks". |
+| Other block metadata | none exists | not written (extension attributes, callout icon/colour, provenance); a block nested under a paragraph or heading follows it. |
+| Callouts | Obsidian callouts `> [!type] Title`, `+`/`-` folding (also GitHub alerts for 5 types) | `> [!note]` (type, fold and title kept in `callout_type`/`callout_fold`/`callout_title` attributes) |
+| Highlight | Obsidian `==text==` | `==text==` for the default highlight; other colours stay `<mark style>` (no standard for colour) |
+| Text colour, underline | none in Markdown; inline HTML is allowed by CommonMark | `<span style="color:…">`, `<u>` (inline HTML) |
+| Super/subscript | Pandoc `^x^`/`~x~` (not read by Obsidian/GFM) | `<sup>`, `<sub>`: HTML, which CommonMark, GFM and Obsidian all render |
+| Math | `$`/`$$` (Obsidian, GitHub, Pandoc, MathJax/KaTeX) | Fortress has no math (product decision): a `$$…$$` block reads as a `latex` code block (written as a ```` ```latex ```` fence) so its source is kept; inline `$…$` stays typed text |
+| Task lists | GFM task lists | `- [ ]` / `- [x]` |
+| Tables | GFM tables | GFM whenever the table fits (one header row, at most one paragraph per cell, no spans/colours/widths). Otherwise a plain HTML `<table>`. |
+| Images | CommonMark `![alt](path "title")`, Obsidian `![alt\|300](path)` for size | `![alt\|300](assets/x.png "caption")` with a path relative to the note (`../assets/…` in folders) |
+| Attachments (files) | CommonMark link; Obsidian embeds PDFs/audio/video with `![…](…)` | `![name](assets/x.pdf)` for PDF/audio/video (Obsidian shows them in place), `[name](assets/x.zip)` otherwise |
+| Attachment folder | Obsidian: any folder ("Files and links › Default location for new attachments") | `assets/`; embeds are relative, so Obsidian, VS Code and GitHub resolve them |
+| Columns | none (see below) | the contents in reading order, no markers |
+| Comments, escapes | Obsidian `%%comment%%`, `#tag`, `^id`, `==` | our text escapes `==`, `%%`, a `^word` after a space, `[[`, so it never turns into Obsidian syntax by accident |
 
 **Columns.** No Markdown dialect has columns. Candidates: Obsidian plugins —
 *Multi-Column Markdown* (`--- start-multi-column: ID` … `--- column-end ---` …
@@ -132,7 +132,7 @@ would fix that (below).
 | Colours | `#rgb`/`#rrggbb[aa]`, CSS names, `rgb()/hsl()` | CSS Color | **keep** |
 | Search | plain words, all must match (FTS5, operators not exposed) + embeddings | no query language needed; if one is added, the de-facto web/GitHub one: `"phrase"`, `-word`, `OR` | **keep**; adopt that syntax if a query language is ever added |
 | Quick capture inbox | an `Uncategorized` folder, newest first | no standard (Things/OmniFocus "Inbox") | **keep**; it is a plain folder in the vault |
-| Themes | (another change adopts Base16/Base24) | Base16/Base24 | out of scope here |
+| Themes | Base16/Base24 YAML schemes and VS Code colour themes, imported as files | Base16/Base24, VS Code theme JSON | **done**; no Fortress theme format |
 | Provenance | `documents.source_kind` and an imported page's details (`sources.import_details`), in the database only | W3C PROV (too heavy), Dublin Core `source`/`created`/`modified` | only `source_url` → `source` goes into front matter (done); a Dublin Core / PROV-O export is not worth it |
 | Text read from pictures | `picture_text` in front matter | none (Spotlight indexes file contents) | **keep**, so other tools find it |
 
