@@ -49,7 +49,7 @@ document order):
 
 The document payload around the blocks holds `id`, `title`, `revision`,
 `last_opened_at`, `resolved_links` and `children` (where a note came from is not in
-it: spec.md §7). Blocks have no provenance of their own.
+it: spec.md §7a). Blocks have no provenance of their own.
 `resolved_links` gives the current title of every linked note and the current
 text of every referenced block, so clients render `docLink`/`blockRef` labels
 from it (labels are never stored).
