@@ -37,7 +37,7 @@ pins and updates their version comments).
 ## Updating
 
 **Python.** `cd backend && uv lock --upgrade` (or `--upgrade-package NAME`), then
-`uv sync --frozen` and the tests. uv computes the cutoff as "now minus 7 days" at
+`uv sync --frozen` and the tests; the same in `tools/fortress-onenote-graph`. uv computes the cutoff as "now minus 7 days" at
 each resolution; the span (not the moment) is recorded in `uv.lock`, and a lock
 that already satisfies the project is never changed by time passing. Use uv ≥
 0.12.12 to lock: older uv can keep a wheel added to an older release after the
