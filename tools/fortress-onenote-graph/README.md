@@ -12,9 +12,19 @@ Notebook › OneNote Package (.onepkg)* still gives the most complete copy (see
 [What Graph loses](#what-graph-loses-compared-with-one-files)); use this tool when that
 is not an option.
 
+**In the app (the usual way):** **File › Import › From OneNote…** › *Download from
+Microsoft*. Paste your app's Application (client) ID (step 1 below; the sheet lists the
+same steps), pick Personal or Work or school, and click **Download and Import**:
+Fortress's backend runs this tool for you (`app/onenote_graph.py`: the wrapper below
+with `--progress json`, your id in `FORTRESS_ONENOTE_CLIENT_ID`), shows sign-in and
+download progress in the sheet, and imports the result. All it needs is
+[uv](https://docs.astral.sh/uv/) (`brew install uv`) and this folder next to the
+backend (or `FORTRESS_ONENOTE_GRAPH_DIR` pointing at it). The command line below still
+works on its own, e.g. on a machine without Fortress.
+
 The tool is a separate program with its own locked dependencies (MSAL for the
 sign-in; everything else is the Python standard library). Fortress itself never
-signs in to Microsoft.
+holds your Microsoft sign-in: the tool keeps it (Keychain on a Mac).
 
 ## 1. Register a (free) app in Microsoft Entra — once
 
@@ -52,7 +62,7 @@ It costs nothing and takes about five minutes.
 Every permission is read-only; the tool never asks for `Notes.ReadWrite*` or
 `Notes.Create`.
 
-## 2. Install
+## 2. Command line: install
 
 Needs [uv](https://docs.astral.sh/uv/) (Fortress's backend uses it too). No install
 step: `./fortress-onenote-graph` runs the tool with its locked dependencies
@@ -65,7 +75,7 @@ export FORTRESS_ONENOTE_CLIENT_ID=<your Application (client) ID>   # or --client
 ./fortress-onenote-graph notebooks    # lists your notebooks
 ```
 
-## 3. Download and import
+## 3. Command line: download and import
 
 ```sh
 ./fortress-onenote-graph download --out ~/Desktop/OneNote.zip            # every notebook
