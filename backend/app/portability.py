@@ -24,6 +24,53 @@ from .block_store import (
 )
 
 
+def note_markdown(database_path: Path, document_id: str, layout: vault.Layout,
+                  anchors, *, stem: str, media_files: bool) -> str | None:
+    """A note's Markdown file (front matter and body), as the vault mirror and the
+    export both write it; None if the note is gone.
+
+    ``media_files``: stored files are linked as the vault's ``assets/`` files;
+    otherwise they keep their ``/media/`` URLs.
+    """
+
+    tree = document_tree(database_path, document_id)
+    if tree is None:
+        return None
+    resolved = (tree.get("resolved_links") or {}).get("blocks") or {}
+    links = layout.render_links(document_id, anchors, resolved.get)
+    if not media_files:
+        links.media_prefix = None
+    body = _render_markdown(tree["children"], links=links)
+    meta = vault.front_matter(tree, stem, picture_texts(database_path, tree),
+                              sources.source_url(database_path, document_id))
+    return vault.dump(meta, body)
+
+
+def picture_texts(database_path: Path, tree: dict) -> dict[str, str]:
+    """Media name -> text read from it (OCR, ``ocr.py``), for every picture/PDF the
+    note shows, in the note's order."""
+
+    order: dict[str, int] = {}
+
+    def walk(nodes: list[dict]) -> None:
+        for node in nodes:
+            order[node["id"]] = len(order)
+            walk(node.get("children") or [])
+
+    walk(tree["children"])
+    with connection_scope(database_path) as connection:
+        rows = connection.execute(
+            """SELECT block_assets.block_id, assets.media_name, assets.text
+                 FROM block_assets
+                 JOIN blocks ON blocks.id = block_assets.block_id
+                 JOIN assets USING (content_hash, media_name)
+                WHERE blocks.document_id = ? AND trim(assets.text) <> ''""",
+            (tree["id"],),
+        ).fetchall()
+    rows.sort(key=lambda row: (order.get(row["block_id"], len(order)), row["media_name"]))
+    return {row["media_name"]: row["text"] for row in rows}
+
+
 def export_document_markdown(database_path: Path, document_id: str) -> str:
     """A note as one portable Markdown file, the same text as its vault mirror.
 
@@ -32,23 +79,16 @@ def export_document_markdown(database_path: Path, document_id: str) -> str:
     ``/media/`` URLs (a single file has no ``assets`` folder beside it).
     """
 
-    document = document_tree(database_path, document_id)
-    if document is None:
-        raise KeyError("document not found")
     with connection_scope(database_path) as connection:
         layout = vault.workspace_layout(connection)
         anchors = vault.referenced_blocks(connection, document_id).get(document_id, set())
-    resolved = (document.get("resolved_links") or {}).get("blocks") or {}
-    links = layout.render_links(document_id, anchors, resolved.get)
-    links.media_prefix = None
-    body = _render_markdown(
-        document["children"], links=links,
+    markdown = note_markdown(
+        database_path, document_id, layout, anchors,
+        stem=Path(layout.paths.get(document_id, "x.md")).stem, media_files=False,
     )
-    stem = Path(layout.paths.get(document_id, "x.md")).stem
-    return vault.dump(
-        vault.front_matter(document, stem, None, sources.source_url(database_path, document_id)),
-        body,
-    )
+    if markdown is None:
+        raise KeyError("document not found")
+    return markdown
 
 
 WELCOME_NOTE = Path(__file__).with_name("welcome.md")
@@ -64,17 +104,7 @@ def seed_welcome_note(database_path: Path) -> None:
                     now, now)
 
 
-# --- Download filenames / uploaded import ----------------------------------
-
-_UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
-
-
-def safe_filename(name: str, fallback: str = "Untitled") -> str:
-    """Turn a title into a filename that is valid on every desktop OS."""
-
-    cleaned = _UNSAFE_NAME.sub(" ", name).strip().strip(".")
-    cleaned = " ".join(cleaned.split())[:100]
-    return cleaned or fallback
+# --- Uploaded import ---------------------------------------------------------
 
 
 @dataclass(frozen=True)

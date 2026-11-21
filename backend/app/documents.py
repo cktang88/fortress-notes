@@ -22,8 +22,9 @@ from typing import Any
 
 import frontmatter
 
-from . import background, block_store, images, ocr as _ocr, sources, vault
+from . import background, block_store, ocr as _ocr, vault
 from .config import get_settings
+from .portability import note_markdown
 from .models import NoteCreate, NoteUpdate
 
 
@@ -665,23 +666,17 @@ def mirror_path(document_id: str, notes_path: Path | None = None) -> Path | None
 
 def _mirror_document(db_path: Path, notes_path: Path, document_id: str, layout: vault.Layout,
                      anchors) -> None:
-    tree = block_store.document_tree(db_path, document_id)
-    if tree is None or document_id not in layout.paths:
+    if document_id not in layout.paths:
         return
-    resolved = (tree.get("resolved_links") or {}).get("blocks") or {}
-    body = block_store.render_markdown(
-        tree["children"],
-        links=layout.render_links(document_id, anchors, resolved.get),
-    )
     relative = layout.paths[document_id]
+    markdown = note_markdown(db_path, document_id, layout, anchors,
+                             stem=Path(relative).stem, media_files=True)
+    if markdown is None:
+        return
     target = notes_path / relative
     # Always overwritten: the mirror is an export, never edited in place.
-    metadata = vault.front_matter(
-        tree, Path(relative).stem, images.collect_image_texts(db_path, body),
-        sources.source_url(db_path, document_id),
-    )
     target.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(target, vault.dump(metadata, body))
+    _atomic_write(target, markdown)
 
 
 def _atomic_write(path: Path, text: str) -> None:

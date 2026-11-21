@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app import background, block_store, documents
+from app import background, block_store, documents, portability
 from app.config import BACKEND_DIR, Settings
 from app.models import NoteCreate
 from support import make_settings, use_settings
@@ -44,14 +44,14 @@ class MirrorTests(_Workspace):
         self.assertTrue(self.mirror(note["id"]).exists())
         documents.update(note["id"], documents.NoteUpdate(title="t"))
         rendering = threading.Event()
-        original = block_store.render_markdown
+        original = portability._render_markdown
 
         def slow(*args, **kwargs):
             rendering.set()
             time.sleep(0.3)
             return original(*args, **kwargs)
 
-        with patch.object(block_store, "render_markdown", slow):
+        with patch.object(portability, "_render_markdown", slow):
             writer = threading.Thread(target=documents.flush_mirrors)
             writer.start()
             self.assertTrue(rendering.wait(5))

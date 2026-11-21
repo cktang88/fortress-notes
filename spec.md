@@ -120,7 +120,7 @@ with **422**.
 - `relevance.py` — the cutoff that decides which "related" paragraphs are related.
 - `search.py` — unified search (words + meaning + titles) and related notes.
 - `ask.py` / `llm.py` — Ask your notes over OpenRouter chat completions.
-- `ocr.py`, `images.py`, `assets.py` — text in pictures and PDFs (§6), uploaded files.
+- `ocr.py`, `assets.py` — text in pictures and PDFs (§6), uploaded files.
 - `sources.py` — imported notes and re-imports (§7a).
 - `main.py` — FastAPI app and routes.
 - `http_cache.py` — ETags, `If-None-Match` → 304, JSON responses, and every
@@ -289,7 +289,7 @@ BackendController.swift`: the repository's `backend/.venv/bin/uvicorn`, else
 `uv run --frozen uvicorn`, with `FORTRESS_TOKEN`, `FORTRESS_PARENT_PID` and
 `FORTRESS_ONENOTE_BIN`) and reads pictures and PDFs with Apple Vision (§6).
 
-## 6. Images & OCR (`ocr.py`, `images.py`)
+## 6. Images & OCR (`ocr.py`)
 
 - **Paste/drop**: the editor uploads pasted or dropped files with `POST /api/files` and
   inserts an image or file block with the returned `/media/…` URL. Markdown stays

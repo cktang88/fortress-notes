@@ -31,13 +31,13 @@ from . import (
     onenote_graph,
     onenote_import,
     search,
+    vault,
 )
 from .portability import (
     export_document_markdown,
     UploadedNote,
     parse_uploaded_batch,
     parse_uploaded_markdown,
-    safe_filename,
     seed_welcome_note,
 )
 from .block_schema import BlockShapeError
@@ -437,7 +437,7 @@ def export_block_document_markdown(document_id: str, download: bool = False):
     headers = {}
     if download:
         tree = block_store.document_tree(_db(), document_id)
-        title = safe_filename(str(tree["title"])) if tree else document_id
+        title = vault.file_stem(str(tree["title"])) if tree else document_id
         headers["Content-Disposition"] = _attachment(f"{title}.md")
     return Response(content=markdown, media_type="text/markdown", headers=headers)
 

@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app import block_store, documents, images, onenote_import, sources
+from app import block_store, documents, onenote_import, sources
 from app.block_store import apply_transaction, document_tree, search_blocks
 from app.models import BlockOperation
 from app.portability import export_document_markdown

@@ -465,7 +465,9 @@ class OcrTextIsSearchableTests(unittest.TestCase):
         self.assertEqual(results[0]["text"][start:end].lower(), "zeppelin")
         # The note body is unchanged: the text is searchable, not shown as content.
         markdown = self.client.get(f"/api/block-documents/{self.document_id}/markdown").text
-        self.assertNotIn("Zeppelin", markdown)
+        self.assertNotIn("Zeppelin", markdown.split("\n---\n", 1)[1])
+        # Its front matter has the text, as the vault mirror's does.
+        self.assertIn("Zeppelin", markdown.split("\n---\n", 1)[0])
 
     def test_embedding_index_reencodes_only_the_block_that_got_text(self) -> None:
         from app import embeddings
