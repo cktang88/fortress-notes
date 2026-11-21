@@ -13,7 +13,7 @@ final class FortressTextView: NSTextView {
         }
     }
     var theme = EditorTheme() { didSet { layoutColumn() } }
-    /// Measure in characters (DESIGN a.3: Narrow 60 / Comfortable 68 / Wide 80).
+    /// Measure in characters (mac/DESIGN.md, Principles: about 68).
     var measureCharacters: CGFloat = 68 { didSet { layoutColumn() } }
     /// A column's text inside a columns block: no header, no gutters.
     var isEmbedded = false { didSet { layoutColumn() } }

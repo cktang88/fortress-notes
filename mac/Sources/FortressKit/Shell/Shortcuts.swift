@@ -43,12 +43,12 @@ public struct AppShortcut: @unchecked Sendable {  // KeyEquivalent and EventModi
     }
 }
 
-/// Every keyboard shortcut the app defines, in one table (DESIGN b.12). The menu bar,
-/// the menu bar and the tests read it, so they can't disagree.
+/// Every keyboard shortcut the app defines, in one table (mac/DESIGN.md, Menus and
+/// shortcuts). The menu bar and the tests read it, so they can't disagree.
 ///
 /// Rule (principle of least surprise): no shortcut here takes a key combination that
 /// macOS, the HIG's standard table or Notes/TextEdit/Pages give a different meaning;
-/// `ShortcutTests` checks this table against `systemReserved`.
+/// `MacConventionsTests` checks this table against `systemReserved`.
 public enum Shortcuts {
     // File
     public static let newNote = AppShortcut("New Note", "n")

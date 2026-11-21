@@ -1,7 +1,7 @@
 import AppKit
 
 /// Creates layout fragments that draw block decorations: bullets, numbers, checkboxes,
-/// the quote bar and the code block background (DESIGN c, "custom NSTextLayoutFragment").
+/// the quote bar and the code block background (mac/DESIGN.md, Editor).
 final class BlockFragmentFactory: NSObject, NSTextLayoutManagerDelegate {
     var theme = EditorTheme()
     /// View ▸ Show Blocks: a faint outline and handle around every block.
