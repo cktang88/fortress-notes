@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P6).
+// Modified by fortress-onenote (vendor/PATCHES.md: P6, P16).
 use crate::Reader;
 use crate::errors::ErrorKind;
 use crate::errors::Result;
@@ -95,12 +95,6 @@ impl Parse for StringInStorageBuffer {
             data,
         })
     }
-}
-
-#[derive(Debug, Clone, Parse)]
-#[allow(dead_code)]
-pub(crate) struct ObjectRefAndId<Id: Parse> {
-    id: Id,
 }
 
 /// Points to encrypted data. See [\[MS-ONESTORE\] 2.5.19](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-onestore/542f09eb-9db8-4b6a-86e5-2d9a930b41c0).

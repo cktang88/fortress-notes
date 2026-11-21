@@ -195,6 +195,14 @@ Files: `lib.rs`, `onenote/{content,embedded_file,iframe,image,list,note_tag,outl
 `one/property/{mod,note_tag}.rs`, `one/property_set/*_node.rs`,
 `one/property_set/{page_metadata,note_tag_container,note_tag_shared_definition_container}.rs`.
 
+**P16 — unused declarations.** After P10 and P12–P15, 95 `PropertyType`
+ids (ink, handwriting recognition, layout, metadata) are no longer read and
+went, as did the never-used `ObjectSpaceObjectStreamHeader`
+(`onestore/desktop/common/object_space_object_stream_header.rs`) and
+`ObjectRefAndId`. The vendored crate now builds without warnings. Files:
+`one/property/mod.rs`, `onestore/desktop/common/mod.rs`,
+`onestore/desktop/file_node/shared.rs`.
+
 ## cab 0.6.0
 
 **C1 — no panic on corrupt cabinets.** In `folder.rs`, a file offset beyond

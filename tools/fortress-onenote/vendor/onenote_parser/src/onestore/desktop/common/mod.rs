@@ -1,7 +1,7 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P16).
 pub mod exguid;
 mod file_chunk_reference;
 mod object_declaration_with_ref_count_body;
-mod object_space_object_stream_header;
 
 pub(crate) use file_chunk_reference::{
     FileChunkReference, FileChunkReference32, FileChunkReference64, FileChunkReference64x32,
