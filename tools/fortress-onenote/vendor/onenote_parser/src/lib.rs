@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P3, P9, P10, P11).
+// Modified by fortress-onenote (vendor/PATCHES.md: P3, P9, P10, P11, P12).
 //! A OneNote file parser.
 //!
 //! `onenote_parser` provides a high-level API to parse OneNote notebooks and
@@ -17,23 +17,17 @@
 //! use typed_path::TypedPath;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut parser = Parser::new();
-//! let notebook = parser.parse_notebook(TypedPath::derive("My Notebook.onetoc2"))?;
-//! println!("sections: {}", notebook.entries().len());
+//! let parser = Parser::new();
+//! let section = parser.parse_section(TypedPath::derive("Notes.one"))?;
+//! println!("page series: {}", section.page_series().len());
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! # Features
-//!
-//! - `native-fs` (default): Enables the [`fs::NativeFs`] implementation
-//!   for standard file system operations. Disable this feature if you want to
-//!   provide a custom [`FileSystem`] implementation (e.g., for in-memory,
-//!   virtual file systems, or WASM bindings).
-//! - `backtrace`: Captures a `std::backtrace::Backtrace` on parse errors and
-//!   exposes it via `std::error::Error::backtrace()`.
-//! - `onepkg`: Enables [`Parser::parse_package`] for reading `.onepkg`
-//!   notebook archives (CAB files containing a `.onetoc2` and its sections).
+//! PATCH(fortress-onenote, P12): this vendored copy only reads native files
+//! (`Parser::parse_section`, `Parser::parse_toc`); the `FileSystem`
+//! abstraction, notebook / section-group / `.onepkg` parsing and the
+//! upstream features (`native-fs`, `backtrace`, `onepkg`) are removed.
 //!
 //! # Architecture
 //!
@@ -56,9 +50,7 @@
 //! # Error handling
 //!
 //! Most fallible APIs return [`errors::Result`], which wraps an [`errors::Error`]
-//! containing an error kind. You can format the error for user-facing messages
-//! and (with the `backtrace` feature enabled) access the captured backtrace via
-//! `std::error::Error::backtrace()`.
+//! containing an error kind that can be formatted for user-facing messages.
 //!
 //! # Input files
 //!
@@ -75,56 +67,13 @@
 //!
 //! # I/O behaviour
 //!
-//! With the default [`fs::NativeFs`] backend the notebook file is read
-//! on demand via positional reads (`pread` on Unix, overlapped
-//! `ReadFile` on Windows). The file's bytes never need to be resident
-//! in process memory in their entirety — multi-GB notebooks parse with
-//! a working set proportional to active reads, not file size. The
-//! kernel page cache fronts repeated reads cheaply.
-//!
+//! The file is read on demand via positional reads (`pread` on Unix,
+//! overlapped `ReadFile` on Windows), with a small page cache in front.
 //! Attachments returned by [`contents::Image`] / [`contents::EmbeddedFile`]
 //! hold a refcount-shared reference to the underlying source and pull
 //! bytes through the same lazy path when their reader is consumed.
-//!
-//! Custom [`FileSystem`] implementations can override
-//! [`FileSystem::open_file`] with their own [`fs::FileSource`] (e.g. a
-//! WASM-side `Blob`-backed reader) to avoid materialising the file in
-//! memory.
-//!
-//! Modifying the underlying file while a parse is in progress — or
-//! while any derived attachment is alive — is unsupported. The parse
-//! may fail with [`MalformedOneStoreData`](errors::ErrorKind::MalformedOneStoreData)
-//! or [`IO`](errors::ErrorKind::IO).
-//!
-//! # Path handling
-//!
-//! Paths cross two boundaries in this crate.
-//!
-//! **Inbound: caller → parser.** [`Parser::parse_notebook`] /
-//! [`Parser::parse_section`] / [`Parser::parse_package`] take a
-//! [`typed_path::TypedPath`], which carries a runtime
-//! [`PathType`](typed_path::PathType) tag selecting Unix or Windows
-//! parsing rules. Pick the encoding that matches your byte source:
-//!
-//! - From a host-shaped source (argv, `std::env`, `std::fs::read_dir`):
-//!   match the host. On Unix bridge via
-//!   [`OsStrExt::as_bytes`](std::os::unix::ffi::OsStrExt::as_bytes); on
-//!   Windows go through `to_str()`. `TypedPath::derive` is a convenience
-//!   for this case — it picks Windows iff the string starts with `\`,
-//!   otherwise Unix.
-//! - From bytes of unknown provenance: prefer
-//!   `TypedPath::new(_, PathType::Windows)`. Windows parsing treats both
-//!   `/` and `\` as separators, so component-level validation can't be
-//!   bypassed by switching separators. Do **not** use `derive` here.
-//!
-//! **Outbound: parser → host.** The parser hands `TypedPath`s back to
-//! the [`FileSystem`] impl, which is responsible for translating them
-//! into whatever the underlying storage expects. The bundled
-//! [`fs::NativeFs`] does an encoding-checked conversion (rejecting paths
-//! with the wrong encoding at the boundary) and routes Windows opens
-//! through the `\\?\` verbatim namespace to neutralise the DOS device-
-//! name trap (`CON`, `COM1`, …). Custom impls own the equivalent
-//! defence, see the security contract on the [`FileSystem`] trait.
+//! Modifying the file while a parse is in progress — or while any derived
+//! attachment is alive — is unsupported.
 //!
 //! # Stability
 //!
@@ -144,19 +93,16 @@
 
 #![warn(missing_docs)]
 #![deny(unused_must_use)]
-#![cfg_attr(feature = "backtrace", feature(error_generic_member_access))]
 
 #[macro_use]
 mod macros;
 
 mod debug;
-pub mod errors;
-pub mod fs;
+mod errors;
+mod fs;
 mod fsshttpb;
 mod one;
 pub(crate) mod onenote;
-#[cfg(feature = "onepkg")]
-mod onepkg;
 mod onestore;
 mod reader;
 mod shared;
@@ -165,20 +111,19 @@ pub mod warn;
 
 pub(crate) type Reader<'b> = &'b mut reader::Reader;
 
-pub use crate::fs::FileSystem;
 pub use crate::onenote::Parser;
 pub use crate::onenote::file_identity::FileIdentity;
 
 /// The data that represents a OneNote notebook.
 pub mod notebook {
-    pub use crate::onenote::notebook::Notebook;
-    // PATCH(fortress-onenote, P3)
+    // PATCH(fortress-onenote, P3, P12)
     pub use crate::onenote::notebook::TableOfContents;
 }
 
 /// The data that represents a OneNote section.
 pub mod section {
-    pub use crate::onenote::section::{Section, SectionEntry, SectionGroup};
+    // PATCH(fortress-onenote, P12)
+    pub use crate::onenote::section::Section;
 }
 
 /// The data that represents a OneNote page.

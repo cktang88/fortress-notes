@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P10).
+// Modified by fortress-onenote (vendor/PATCHES.md: P10, P12).
 use crate::errors::{ErrorKind, Result};
 use crate::one::property::color::Color;
 use crate::one::property_set::{section_metadata_node, section_node};
@@ -7,14 +7,6 @@ use crate::onenote::file_identity::FileIdentity;
 use crate::onenote::page_series::{PageSeries, parse_page_series};
 use crate::onestore::{ObjectSpace, OneStore};
 use crate::warn::Report;
-
-/// An entry in a section list.
-#[allow(missing_docs)]
-#[derive(Clone, Debug)]
-pub enum SectionEntry {
-    Section(Section),
-    SectionGroup(SectionGroup),
-}
 
 /// A OneNote section.
 ///
@@ -55,31 +47,6 @@ impl Section {
     /// Non-fatal warnings encountered while parsing this section.
     pub fn report(&self) -> &Report {
         &self.report
-    }
-}
-
-/// A group of sections.
-#[derive(Clone, Debug)]
-pub struct SectionGroup {
-    pub(crate) file_identity: FileIdentity,
-    pub(crate) display_name: String,
-    pub(crate) entries: Vec<SectionEntry>,
-}
-
-impl SectionGroup {
-    /// The identity stored in the section group's table-of-contents file.
-    pub fn file_identity(&self) -> FileIdentity {
-        self.file_identity
-    }
-
-    /// The group name.
-    pub fn display_name(&self) -> &str {
-        &self.display_name
-    }
-
-    /// The sections contained within the group.
-    pub fn entries(&self) -> &[SectionEntry] {
-        &self.entries
     }
 }
 

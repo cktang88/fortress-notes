@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P12).
 //! [`FileSource`] implementations and the page cache that fronts them.
 //!
 //! A [`FileSource`] is the byte-level interface the parser reads through:
@@ -5,9 +6,8 @@
 //! module provides the building blocks:
 //!
 //! - [`BytesSource`] — zero-copy view over an in-memory [`Bytes`] buffer.
-//!   Returned by the default [`FileSystem::open_file`] when the consumer
-//!   only implements [`FileSystem::read_file`].
-//! - [`FileBackedSource`] (native-fs only) — positional reads against an
+//!   Used for in-memory data.
+//! - [`FileBackedSource`] — positional reads against an
 //!   open [`std::fs::File`] via `pread` (Unix) or `seek_read` (Windows).
 //!   No caching of its own.
 //! - [`CachedFileSource`] — page-aligned LRU decorator (≈ 4 MiB resident)
@@ -15,22 +15,19 @@
 //!   structural-parse peek sequences that hammer the same page; a no-op
 //!   when the inner source is already fully in memory.
 //!
-//! [`NativeFs::open_file`] wraps a [`FileBackedSource`] in
+//! [`crate::fs::open_file`] wraps a [`FileBackedSource`] in
 //! [`CachedFileSource`] so multi-GB notebooks parse with a working set
 //! proportional to active reads, not file size.
 
 use crate::fs::FileSource;
 use bytes::Bytes;
-#[cfg(feature = "native-fs")]
 use std::fs::File;
 use std::io::Error;
 
 /// A [`FileSource`] backed by an in-memory [`Bytes`] buffer.
 ///
 /// `read_at` returns a refcount-shared slice into the buffer (zero-copy);
-/// `as_bytes` returns the full buffer. Used by the default
-/// [`FileSystem::open_file`] when the consumer only provides
-/// [`FileSystem::read_file`].
+/// `as_bytes` returns the full buffer.
 pub struct BytesSource {
     bytes: Bytes,
 }
@@ -72,7 +69,7 @@ impl FileSource for BytesSource {
 /// Page size for [`CachedFileSource`]'s LRU cache, in bytes.
 ///
 /// 4 KiB matches the OS page granularity, so every miss against a
-/// `NativeFs` source is exactly one kernel page fault into the OS page
+/// native file source is exactly one kernel page fault into the OS page
 /// cache. Larger pages amortise per-fetch setup but waste cache slots
 /// on the small (often single-byte) reads that dominate the
 /// structural-parse hot loop; smaller pages do the opposite.
@@ -92,15 +89,13 @@ const CACHE_PAGES: std::num::NonZeroUsize = std::num::NonZeroUsize::new(1024).un
 ///
 /// Issues positional reads via `FileExt::read_exact_at` (Unix) or
 /// `FileExt::seek_read` (Windows). No caching of its own — wrap in
-/// [`CachedFileSource`] for that, which is what [`NativeFs::open_file`]
+/// [`CachedFileSource`] for that, which is what [`crate::fs::open_file`]
 /// does.
-#[cfg(feature = "native-fs")]
 pub(crate) struct FileBackedSource {
     pub(crate) file: File,
     pub(crate) byte_length: u64,
 }
 
-#[cfg(feature = "native-fs")]
 impl FileSource for FileBackedSource {
     fn byte_length(&self) -> u64 {
         self.byte_length
@@ -219,13 +214,13 @@ impl<S: FileSource> FileSource for CachedFileSource<S> {
     }
 }
 
-#[cfg(all(feature = "native-fs", unix))]
+#[cfg(unix)]
 fn read_exact_at(file: &File, offset: u64, buf: &mut [u8]) -> Result<(), Error> {
     use std::os::unix::fs::FileExt;
     file.read_exact_at(buf, offset)
 }
 
-#[cfg(all(feature = "native-fs", windows))]
+#[cfg(windows)]
 fn read_exact_at(file: &File, offset: u64, buf: &mut [u8]) -> Result<(), Error> {
     use std::os::windows::fs::FileExt;
     let mut total = 0;

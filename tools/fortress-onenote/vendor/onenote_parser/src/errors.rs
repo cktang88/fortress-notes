@@ -1,8 +1,6 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P5).
+// Modified by fortress-onenote (vendor/PATCHES.md: P5, P12).
 //! OneNote parsing error handling.
 
-#[cfg(feature = "backtrace")]
-use std::backtrace::Backtrace;
 use std::borrow::Cow;
 use std::io;
 use thiserror::Error;
@@ -11,18 +9,10 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// A parsing error.
-///
-/// If the crate is compiled with the `backtrace` feature enabled, the
-/// parsing error struct will contain a backtrace of the location where
-/// the error occurred. The backtrace can be accessed using
-/// `std::error::Error::backtrace`.
 #[derive(Error, Debug)]
 #[error("{kind}")]
 pub struct Error {
     kind: ErrorKind,
-
-    #[cfg(feature = "backtrace")]
-    backtrace: Backtrace,
 }
 
 impl Error {
@@ -33,15 +23,6 @@ impl Error {
 }
 
 impl From<ErrorKind> for Error {
-    #[cfg(feature = "backtrace")]
-    fn from(kind: ErrorKind) -> Self {
-        Error {
-            kind,
-            backtrace: Backtrace::capture(),
-        }
-    }
-
-    #[cfg(not(feature = "backtrace"))]
     fn from(kind: ErrorKind) -> Self {
         Error { kind }
     }
@@ -87,10 +68,6 @@ pub enum ErrorKind {
     #[error("Not a section file: {file}")]
     NotASectionFile { file: String },
 
-    /// When parsing a section group the table-of-contents file for this group was found to be missing.
-    #[error("Table of contents file is missing in dir {dir}")]
-    TocFileMissing { dir: String },
-
     /// Malformed data was encountered when parsing the OneNote file.
     #[error("Malformed data: {0}")]
     MalformedData(Cow<'static, str>),
@@ -110,10 +87,6 @@ pub enum ErrorKind {
     /// Malformed data was encountered when parsing the FSSHTTPB data.
     #[error("Malformed FSSHTTPB data: {0}")]
     MalformedFssHttpBData(Cow<'static, str>),
-
-    /// The file was expected to be FSSHTTPB data, but was not.
-    #[error("Not FSSHTTPB data: {0}")]
-    NotFssHttpBData(Cow<'static, str>),
 
     /// The file was expected to be FSSHTTPB data, but was not.
     #[error("Not local OneStore data: {0}")]
@@ -162,9 +135,4 @@ pub enum ErrorKind {
     /// PATCH(fortress-onenote, P5).
     #[error("The section is password-protected (encrypted)")]
     Encrypted,
-
-    /// A `.onepkg` package could not be opened or did not contain a notebook.
-    #[cfg(feature = "onepkg")]
-    #[error("Malformed OneNote package: {message}")]
-    MalformedPackage { message: Cow<'static, str> },
 }

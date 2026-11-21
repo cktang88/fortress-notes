@@ -1,55 +1,17 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P3, P8).
+// Modified by fortress-onenote (vendor/PATCHES.md: P3, P8, P12).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property_set::toc_container;
 use crate::onenote::file_identity::FileIdentity;
-use crate::onenote::section::SectionEntry;
 use crate::onestore::ObjectSpace;
 use crate::property::common::Color;
-use crate::warn::Report;
 use std::collections::HashSet;
-
-/// A OneNote notebook.
-#[derive(Clone, Debug)]
-pub struct Notebook {
-    pub(crate) file_identity: FileIdentity,
-    pub(crate) entries: Vec<SectionEntry>,
-    pub(crate) color: Option<Color>,
-    pub(crate) report: Report,
-}
-
-impl Notebook {
-    /// The identity stored in the notebook table-of-contents file.
-    pub fn file_identity(&self) -> FileIdentity {
-        self.file_identity
-    }
-
-    /// The section entries of this notebook.
-    pub fn entries(&self) -> &[SectionEntry] {
-        &self.entries
-    }
-
-    /// The color of this notebook.
-    pub fn color(&self) -> Option<Color> {
-        self.color
-    }
-
-    /// The notebook-level report of non-fatal issues.
-    ///
-    /// Currently captures one warning per section that failed to parse; the
-    /// failing section is omitted from [`Notebook::entries`] rather than
-    /// aborting the entire notebook.
-    pub fn report(&self) -> &Report {
-        &self.report
-    }
-}
 
 /// The table of contents of a notebook or section group (`.onetoc2`),
 /// without its sections.
 ///
 /// PATCH(fortress-onenote, P3): lets callers resolve, parse and report the
-/// listed entries themselves (e.g. report entries whose file is missing,
-/// which [`crate::Parser::parse_notebook`] silently skips).
+/// listed entries themselves (e.g. report entries whose file is missing).
 #[derive(Clone, Debug)]
 pub struct TableOfContents {
     pub(crate) file_identity: FileIdentity,

@@ -128,6 +128,23 @@ recovered them by matching the text of `Parser::dump_onestore` against the
 content. Files: `lib.rs`, `fsshttpb/data/exguid.rs`,
 `onenote/{rich_text,table,image,embedded_file,outline}.rs`.
 
+**P12 — sections and tables of contents from native files only.** The
+converter calls only `Parser::new`, `Parser::parse_section` and
+`Parser::parse_toc` (P3) on files it has already extracted, and resolves
+the entries of a table of contents itself. Removed: notebook and section-group
+parsing (`Parser::parse_notebook`, `Notebook`, `SectionEntry`,
+`SectionGroup`, the entry-path resolution), `.onepkg` parsing (`onepkg.rs`,
+`Parser::parse_package`), `Parser::new_with_fs`,
+`Parser::parse_section_buffer`, `Parser::dump_onestore`, the `FileSystem`
+trait and `NativeFs` (a file is opened by `fs::open_file`, which keeps the
+positional, page-cached reads and the Windows verbatim-path handling), the
+crate features `native-fs`, `backtrace` and `onepkg`, the unused error kinds
+`TocFileMissing`, `NotFssHttpBData` and `MalformedPackage`, and the `cab` and
+`sanitize-filename` dependencies. `Parser` is now a unit struct and the
+`errors` and `fs` modules are private. Files: `Cargo.toml`, `lib.rs`,
+`errors.rs`, `fs/{mod,native_fs,file_source}.rs`,
+`onenote/{mod,notebook,section}.rs`.
+
 ## cab 0.6.0
 
 **C1 — no panic on corrupt cabinets.** In `folder.rs`, a file offset beyond
