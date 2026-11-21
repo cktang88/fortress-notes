@@ -1,6 +1,6 @@
 import AppKit
 
-/// Editor typography (DESIGN a.2, base M = 16) and the mapping from semantic attributes
+/// Editor typography (base size 16) and the mapping from semantic attributes
 /// to fonts, colors and paragraph styles.
 struct EditorTheme: Sendable {
     var baseSize: CGFloat = 16
@@ -128,7 +128,7 @@ struct EditorTheme: Sendable {
         return style
     }
 
-    /// Centers glyphs in the fixed line height (DESIGN a.2: min = max line height).
+    /// Centers glyphs in the fixed line height (min = max line height).
     func baselineOffset(font: NSFont, kind: BlockKind) -> CGFloat {
         let natural = font.ascender - font.descender
         return max(0, (lineHeight(for: kind) - natural) / 2) / 2

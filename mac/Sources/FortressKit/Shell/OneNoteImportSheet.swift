@@ -48,7 +48,7 @@ struct OneNoteImportSheet: View {
 
 /// The exact wording of the export how-to (the "Import a file" way).
 enum OneNoteExportHelp {
-    static let windows = "On Windows, OneNote's File › Export › Notebook › OneNote Package (.onepkg) keeps the most: ink, equations and custom tags come along."
+    static let windows = "On Windows, OneNote's File › Export › Notebook › OneNote Package (.onepkg) keeps the most: custom tags, section colours and the page order come along."
     static let other = "A .zip from an earlier download from Microsoft, or a .one section file, works too."
     static let locked = "Password-protected sections must be unlocked in OneNote first, or they're skipped."
 }

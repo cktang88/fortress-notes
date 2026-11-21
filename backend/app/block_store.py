@@ -430,7 +430,7 @@ def _initialize(path: Path) -> None:
                 f"Unsupported block database version {version} (expected {SCHEMA_VERSION})"
             )
         connection.executescript(_SCHEMA)
-        # Schema policy (docs/block-model.md §10): tables and indexes are created
+        # Schema policy (docs/block-model.md §9): tables and indexes are created
         # if missing; objects a release retires are dropped here, idempotently;
         # triggers are always dropped and created again, so a changed (or retired)
         # trigger reaches existing databases without a version change.

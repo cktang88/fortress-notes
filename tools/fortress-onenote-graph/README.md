@@ -193,8 +193,8 @@ Everything in [SCHEMA.md](../fortress-onenote/SCHEMA.md) applies; on top of that
 
 | | `.one` / `.onepkg` (fortress-onenote) | Graph (this tool) |
 |---|---|---|
-| Ink / handwriting | SVG + recognised text | **not downloaded** (the report says so once) |
-| Equations | LaTeX/MathML | text in a code block |
+| Ink / handwriting | skipped and counted (Fortress has no ink) | **not downloaded** (the report says so once) |
+| Equations | plain linear text (a `code` block when alone in a paragraph) | text in a code block |
 | Custom note tags | kept with their labels | **dropped by Graph** (the text stays) |
 | Section order | table-of-contents order | Graph's listing order, sections before section groups |
 | Section colours, author, page height | kept | not available |

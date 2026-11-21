@@ -4,7 +4,7 @@ import Testing
 
 @testable import FortressKit
 
-// Blocks made visible and movable (DESIGN c, "Block interactions"): the handle beside a
+// Blocks made visible and movable (mac/DESIGN.md, Block tools): the handle beside a
 // block and its menu, block selection with Esc, the `/` insert menu, dragging blocks,
 // columns, Show Blocks. Each action is checked for the blocks it leaves (ids included),
 // the block operations a save sends, and one named step on the note's undo stack.
