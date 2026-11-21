@@ -26,7 +26,7 @@ import sqlite3
 import threading
 import time
 from contextlib import closing, contextmanager, suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -452,6 +452,7 @@ def _initialize(path: Path) -> None:
             connection.execute(f'DROP TRIGGER IF EXISTS "{name}"')
         for name, (event, body) in _CHANGE_TRIGGERS.items():
             connection.execute(f"CREATE TRIGGER {name} {event} BEGIN {body} END")
+        _prune_receipts(connection)
         recorded = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
         if recorded != SCHEMA_VERSION:  # new, or cleaned up at 15 by last-migrating-release
             connection.execute(
@@ -519,6 +520,25 @@ for _table, _column in (
             f"AFTER {_event.upper()} ON {_table}",
             _bump(f"SELECT document_id FROM blocks WHERE id = {_row}.{_column}"),
         )
+
+
+# A transaction id is replayed (a client retrying a request it got no answer to)
+# within seconds; its receipt is kept a day, then dropped at startup and with the
+# daily backup.
+RECEIPT_TTL = timedelta(days=1)
+
+
+def _prune_receipts(connection: sqlite3.Connection) -> None:
+    cutoff = (datetime.now(timezone.utc) - RECEIPT_TTL).isoformat()
+    connection.execute("DELETE FROM transaction_receipts WHERE created_at < ?", (cutoff,))
+
+
+def prune_transaction_receipts(path: Path) -> None:
+    """Drop transaction receipts older than :data:`RECEIPT_TTL`."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        _prune_receipts(connection)
 
 
 def new_change_epoch(path: Path) -> None:

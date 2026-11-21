@@ -2,7 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.block_store import apply_transaction, create_block_document
+from app import block_store
+from app.block_store import apply_transaction, connection_scope, create_block_document
 from app.models import BlockOperation
 
 
@@ -61,6 +62,27 @@ class TransactionReplayTests(unittest.TestCase):
                     document["revision"],
                     "tx-2",
                 )
+
+    def test_receipts_older_than_a_day_are_dropped_at_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            document = create_block_document(database, "Replay", "First line")
+            for revision, transaction_id in enumerate(("old", "new")):
+                apply_transaction(database, document["id"], [BlockOperation(
+                    operation="insert", type="paragraph",
+                    content=[{"type": "text", "text": transaction_id}],
+                )], revision, transaction_id)
+            with connection_scope(database) as connection:
+                connection.execute(
+                    "UPDATE transaction_receipts SET created_at = '2020-01-01T00:00:00+00:00'"
+                    " WHERE transaction_id = 'old'"
+                )
+            block_store.initialize(database, force=True)
+            with connection_scope(database) as connection:
+                kept = [row[0] for row in connection.execute(
+                    "SELECT transaction_id FROM transaction_receipts"
+                )]
+            self.assertEqual(kept, ["new"])
 
 
 if __name__ == "__main__":

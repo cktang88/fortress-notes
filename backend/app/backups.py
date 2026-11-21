@@ -86,7 +86,8 @@ class DailyBackup(background.Service):
     def step(self) -> float | None:
         settings = get_settings()
         if settings.block_db_path.exists():
-            ensure_daily_backup(settings.block_db_path, backup_directory(settings.notes_path))
+            if ensure_daily_backup(settings.block_db_path, backup_directory(settings.notes_path)):
+                block_store.prune_transaction_receipts(settings.block_db_path)
         return None
 
 
