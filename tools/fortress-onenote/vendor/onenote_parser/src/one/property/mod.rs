@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P10, P13, P14).
+// Modified by fortress-onenote (vendor/PATCHES.md: P10, P13, P14, P15).
 //! The properties of OneNote objects that we can parse.
 //!
 //! See [\[MS-ONE\] 2.1.12] for the list of properties the OneNote file format specifies.
@@ -9,14 +9,10 @@ pub(crate) mod author;
 pub(crate) mod color;
 pub(crate) mod color_ref;
 pub(crate) mod file_type;
-pub(crate) mod layout_alignment;
 pub(crate) mod note_tag;
-pub(crate) mod note_tag_property_status;
 pub(crate) mod note_tag_shape;
 pub(crate) mod object_reference;
 pub(crate) mod object_space_reference;
-pub(crate) mod outline_indent_distance;
-pub(crate) mod page_size;
 pub(crate) mod paragraph_alignment;
 mod references;
 pub(crate) mod simple;

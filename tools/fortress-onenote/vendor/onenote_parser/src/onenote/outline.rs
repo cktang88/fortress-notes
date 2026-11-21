@@ -1,7 +1,6 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P7, P11).
+// Modified by fortress-onenote (vendor/PATCHES.md: P7, P11, P15).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
-use crate::one::property::layout_alignment::LayoutAlignment;
 use crate::one::property_set::{PropertySetId, outline_element_node, outline_group, outline_node};
 use crate::onenote::{ParserContext, skip_damaged};
 use crate::onenote::content::{Content, parse_content};
@@ -16,17 +15,8 @@ use crate::onestore::ObjectSpace;
 /// [\[MS-ONE\] 2.2.20]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/b25fa331-e07e-474e-99c9-b3603b7bf937
 #[derive(Clone, Debug)]
 pub struct Outline {
-    pub(crate) child_level: u8,
-    pub(crate) list_spacing: Option<f32>,
-    pub(crate) indents: Vec<f32>,
 
-    pub(crate) alignment_in_parent: Option<LayoutAlignment>,
-    pub(crate) alignment_self: Option<LayoutAlignment>,
-
-    pub(crate) layout_max_height: Option<f32>,
     pub(crate) layout_max_width: Option<f32>,
-    pub(crate) layout_reserved_width: Option<f32>,
-    pub(crate) layout_minimum_outline_width: Option<f32>,
     pub(crate) is_layout_size_set_by_user: bool,
     pub(crate) offset_horizontal: Option<f32>,
     pub(crate) offset_vertical: Option<f32>,
@@ -40,61 +30,6 @@ impl Outline {
         &self.items
     }
 
-    /// The nesting level of this outline's contents.
-    ///
-    /// See [\[MS-ONE\] 2.3.8].
-    ///
-    /// [\[MS-ONE\] 2.3.8]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/b631036a-9152-4385-8165-60fc324e5efd
-    pub fn child_level(&self) -> u8 {
-        self.child_level
-    }
-
-    /// The horizontal distance between a list index number or bullet and the outline content.
-    ///
-    /// See [\[MS-ONE\] 2.3.45].
-    ///
-    /// [\[MS-ONE\] 2.3.45]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/3139a52f-fc22-48a3-9765-cebc6774d109
-    pub fn list_spacing(&self) -> Option<f32> {
-        self.list_spacing
-    }
-
-    /// The indentation of each level in the outline.
-    ///
-    /// The contents are specified in [\[MS-ONE\] 2.2.2] but the semantics described there
-    /// don't really match what the OneNote desktop and web applications seem to be doing.
-    ///
-    /// [\[MS-ONE\] 2.2.2]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/269a3e7b-d85a-4ba8-8e1d-d85e1c840772
-    pub fn indents(&self) -> &[f32] {
-        &self.indents
-    }
-
-    /// The outline's alignment relative to the parent element (if present).
-    ///
-    /// See [\[MS-ONE\] 2.3.27].
-    ///
-    /// [\[MS-ONE\] 2.3.27]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/61fa50be-c355-4b8d-ac01-761a2f7f66c0
-    pub fn alignment_in_parent(&self) -> Option<LayoutAlignment> {
-        self.alignment_in_parent
-    }
-
-    /// The outline's alignment.
-    ///
-    /// See [\[MS-ONE\] 2.3.33].
-    ///
-    /// [\[MS-ONE\] 2.3.33]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/4e7fe9db-2fdb-4239-b291-dc4b909c94ad
-    pub fn alignment_self(&self) -> Option<LayoutAlignment> {
-        self.alignment_self
-    }
-
-    /// The outline's max height in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.24].
-    ///
-    /// [\[MS-ONE\] 2.3.24]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/76ab7015-2c74-4783-8435-c68b17dd6882
-    pub fn layout_max_height(&self) -> Option<f32> {
-        self.layout_max_height
-    }
-
     /// The outline's max width in half-inch increments.
     ///
     /// See [\[MS-ONE\] 2.3.22].
@@ -102,24 +37,6 @@ impl Outline {
     /// [\[MS-ONE\] 2.3.22]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/a770ac4b-2225-4aa6-ba92-d3a51f97c405
     pub fn layout_max_width(&self) -> Option<f32> {
         self.layout_max_width
-    }
-
-    /// The outline's minimum width before the text wraps in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.46].
-    ///
-    /// [\[MS-ONE\] 2.3.46]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/e65a3ebc-da8b-4909-a423-b309e2457b36
-    pub fn layout_reserved_width(&self) -> Option<f32> {
-        self.layout_reserved_width
-    }
-
-    /// The outline's minimum width in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.49].
-    ///
-    /// [\[MS-ONE\] 2.3.49]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/ebeff222-f4e5-4c58-861c-e28b816d01ce
-    pub fn layout_minimum_outline_width(&self) -> Option<f32> {
-        self.layout_minimum_outline_width
     }
 
     /// Whether the [`layout_max_width()`](Self::layout_max_width()) value is set by the user.
@@ -212,7 +129,6 @@ pub struct OutlineElement {
     pub(crate) contents: Vec<Content>,
 
     pub(crate) list_contents: Vec<List>,
-    pub(crate) list_spacing: Option<f32>,
 
     pub(crate) child_level: u8,
     pub(crate) children: Vec<OutlineItem>,
@@ -240,15 +156,6 @@ impl OutlineElement {
     /// [\[MS-ONE\] 2.2.57]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/4c32f819-5885-4a53-bd2d-d020484c92ed
     pub fn list_contents(&self) -> &[List] {
         &self.list_contents
-    }
-
-    /// The horizontal distance between a list index number or bullet and the outline content.
-    ///
-    /// See [\[MS-ONE\] 2.3.45].
-    ///
-    /// [\[MS-ONE\] 2.3.45]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/3139a52f-fc22-48a3-9765-cebc6774d109
-    pub fn list_spacing(&self) -> Option<f32> {
-        self.list_spacing
     }
 
     /// The nesting level of this outline element's contents.
@@ -285,15 +192,7 @@ pub(crate) fn parse_outline(
 
     let outline = Outline {
         items,
-        child_level: data.child_level,
-        list_spacing: data.list_spacing,
-        indents: data.outline_indent_distance.into_value(),
-        alignment_in_parent: data.layout_alignment_in_parent,
-        alignment_self: data.layout_alignment_self,
-        layout_max_height: data.layout_max_height,
         layout_max_width: data.layout_max_width,
-        layout_reserved_width: data.layout_reserved_width,
-        layout_minimum_outline_width: data.layout_minimum_outline_width,
         is_layout_size_set_by_user: data.is_layout_size_set_by_user,
         offset_horizontal: data.offset_from_parent_horiz,
         offset_vertical: data.offset_from_parent_vert,
@@ -404,7 +303,6 @@ pub(crate) fn parse_outline_element(
     let element = OutlineElement {
         id: element_id,
         child_level: data.child_level,
-        list_spacing: data.list_spacing,
         children,
         contents,
         list_contents,

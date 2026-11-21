@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P1).
+// Modified by fortress-onenote (vendor/PATCHES.md: P1, P15).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::PropertyType;
@@ -14,10 +14,8 @@ use crate::onestore::Object;
 ///
 /// [\[MS-ONE\] 2.2.88]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/a9938236-87f8-41b1-81f3-5f760e1247b8
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct Data {
     pub(crate) definition: Option<ExGuid>,
-    pub(crate) created_at: Time,
     pub(crate) completed_at: Option<Time>,
     pub(crate) item_status: ActionItemStatus,
 }
@@ -45,10 +43,6 @@ impl Data {
     fn parse_data(object: Object) -> Result<Data> {
         let definition = ObjectReference::parse(PropertyType::NoteTagDefinitionOid, &object)?;
 
-        let created_at = Time::parse(PropertyType::NoteTagCreated, &object)?.ok_or_else(|| {
-            ErrorKind::MalformedOneNoteFileData("note tag has no created at time".into())
-        })?;
-
         let completed_at = Time::parse(PropertyType::NoteTagCompleted, &object)?;
 
         let item_status = ActionItemStatus::parse(&object)?.ok_or_else(|| {
@@ -57,7 +51,6 @@ impl Data {
 
         Ok(Data {
             definition,
-            created_at,
             completed_at,
             item_status,
         })

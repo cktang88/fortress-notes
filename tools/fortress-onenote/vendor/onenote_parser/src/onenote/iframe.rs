@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P15).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property_set::iframe_node;
@@ -6,16 +7,10 @@ use crate::onestore::ObjectSpace;
 /// An embedded iframe.
 #[derive(Clone, PartialEq, PartialOrd, Debug)]
 pub struct IFrame {
-    pub(crate) embed_type: Option<u32>,
     pub(crate) source_url: String,
 }
 
 impl IFrame {
-    /// The iframe's embed type, if provided.
-    pub fn embed_type(&self) -> Option<u32> {
-        self.embed_type
-    }
-
     /// The iframe's source URL.
     pub fn source_url(&self) -> &str {
         &self.source_url
@@ -32,7 +27,6 @@ pub(crate) fn parse_iframe(
     let data = iframe_node::parse(object)?;
 
     Ok(IFrame {
-        embed_type: data.embed_type,
         source_url: data.source_url,
     })
 }

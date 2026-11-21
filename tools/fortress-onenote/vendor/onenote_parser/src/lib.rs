@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P3, P9, P10, P11, P12, P14).
+// Modified by fortress-onenote (vendor/PATCHES.md: P3, P9, P10, P11, P12, P14, P15).
 //! A OneNote file parser.
 //!
 //! `onenote_parser` provides a high-level API to parse OneNote notebooks and
@@ -128,7 +128,7 @@ pub mod section {
 
 /// The data that represents a OneNote page.
 pub mod page {
-    pub use crate::onenote::page::{Page, Title};
+    pub use crate::onenote::page::Page;
     pub use crate::onenote::page_content::PageContent;
     pub use crate::onenote::page_series::PageSeries;
 }
@@ -166,8 +166,7 @@ pub mod property {
 
     /// Properties related to note tags.
     pub mod note_tag {
-        pub use crate::one::property::note_tag::{ActionItemStatus, ActionItemType};
-        pub use crate::one::property::note_tag_property_status::NoteTagPropertyStatus;
+        pub use crate::one::property::note_tag::ActionItemStatus;
         pub use crate::one::property::note_tag_shape::NoteTagShape;
         pub use crate::onenote::note_tag::NoteTagDefinition;
     }

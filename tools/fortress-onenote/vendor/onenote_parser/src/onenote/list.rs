@@ -1,6 +1,6 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P15).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
-use crate::one::property::color_ref::ColorRef;
 use crate::one::property_set::number_list_node;
 use crate::onestore::ObjectSpace;
 
@@ -14,12 +14,7 @@ pub struct List {
     pub(crate) list_font: Option<String>,
     pub(crate) list_restart: Option<i32>,
     pub(crate) list_format: Vec<char>,
-    pub(crate) bold: bool,
-    pub(crate) italic: bool,
-    // pub(crate) language_code: Option<u32>,
     pub(crate) font: Option<String>,
-    pub(crate) font_size: Option<u16>,
-    pub(crate) font_color: Option<ColorRef>,
 }
 
 impl List {
@@ -50,37 +45,9 @@ impl List {
         &self.list_format
     }
 
-    /// Whether to apply bold formatting to the list index number.
-    pub fn bold(&self) -> bool {
-        self.bold
-    }
-
-    /// Whether to apply italic formatting to the list index number.
-    pub fn italic(&self) -> bool {
-        self.italic
-    }
-
     /// The font to use for the list index number.
     pub fn font(&self) -> Option<&str> {
         self.font.as_deref()
-    }
-
-    /// The font size in half-point increments used for the list index number or bullet.
-    ///
-    /// See [\[MS-ONE\] 2.3.16].
-    ///
-    /// [\[MS-ONE\] 2.3.16]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/f209fd9c-9042-4df2-b90c-1be20ac9c2d3
-    pub fn font_size(&self) -> Option<u16> {
-        self.font_size
-    }
-
-    /// The font color used for the list index number or bullet.
-    ///
-    /// See [\[MS-ONE\] 2.2.45].
-    ///
-    /// [\[MS-ONE\] 2.2.45]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/17a7e6a7-7fa9-456f-a3fe-b2d8fef31be3
-    pub fn font_color(&self) -> Option<ColorRef> {
-        self.font_color
     }
 }
 
@@ -94,11 +61,7 @@ pub(crate) fn parse_list(list_id: ExGuid, space: &(impl ObjectSpace + ?Sized)) -
         list_font: data.list_font,
         list_restart: data.list_restart,
         list_format: data.list_format,
-        bold: data.bold,
-        italic: data.italic,
         font: data.font,
-        font_size: data.font_size,
-        font_color: data.font_color,
     };
 
     Ok(list)

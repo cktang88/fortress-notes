@@ -1,12 +1,11 @@
-use crate::errors::{ErrorKind, Result};
+// Modified by fortress-onenote (vendor/PATCHES.md: P15).
+use crate::errors::Result;
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::object_reference::ObjectReference;
-use crate::one::property::time::Timestamp;
 use crate::one::property::{PropertyType, simple};
 use crate::one::property_set::{PropertySetId, assert_property_set};
 use crate::onenote::ParserContext;
 use crate::onestore::Object;
-use crate::shared::guid::Guid;
 
 /// A section.
 ///
@@ -14,38 +13,20 @@ use crate::shared::guid::Guid;
 ///
 /// [\[MS-ONE\] 2.2.23]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/980fae36-b5dd-4581-bf1e-5ab54177153d
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct Data {
-    pub(crate) context_id: ExGuid,
-    pub(crate) entity_guid: Guid,
     pub(crate) page_series: Vec<ExGuid>,
-    pub(crate) created_at: Timestamp,
 }
 
 pub(crate) fn parse(object: &Object, ctx: &mut ParserContext) -> Result<Data> {
     assert_property_set(object, PropertySetId::SectionNode)?;
 
-    let context_id = object.context_id;
-
-    let entity_guid = simple::parse_guid(PropertyType::NotebookManagementEntityGuid, object)?
-        .unwrap_or_else(|| {
-            warn!(ctx, "Section has no GUID");
-
-            Guid::nil()
-        });
+    // PATCH(fortress-onenote, P15): the GUID and creation time are not
+    // kept; a missing GUID is still reported.
+    if simple::parse_guid(PropertyType::NotebookManagementEntityGuid, object)?.is_none() {
+        warn!(ctx, "Section has no GUID");
+    }
     let page_series =
         ObjectReference::parse_vec(PropertyType::ElementChildNodes, object)?.unwrap_or_default();
-    let created_at = Timestamp::parse(PropertyType::TopologyCreationTimeStamp, object)?
-        .ok_or_else(|| {
-            ErrorKind::MalformedOneNoteFileData("section has no creation timestamp".into())
-        })?;
 
-    let data = Data {
-        context_id,
-        entity_guid,
-        page_series,
-        created_at,
-    };
-
-    Ok(data)
+    Ok(Data { page_series })
 }

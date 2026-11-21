@@ -172,6 +172,29 @@ a last-modified time is no longer rejected. Removed file:
 `one/property/mod.rs`,
 `one/property_set/{rich_text_node,paragraph_style_object,embedded_ink_container}.rs`.
 
+**P15 — pages, outlines, tables, images, files, lists and tags: only what
+the converter reads.** The same trim as P14 for the other objects. No longer
+parsed or exposed: page titles' layout (`Page::title`, `page::Title`; the
+title's outlines are still read for `Page::title_text`), page size, margins,
+orientation, cached titles and other page / page-series / section metadata;
+outlines' child level, indents, list spacing, alignment, height and
+reserved/minimum widths (`OutlineIndentDistance` removed); outline elements'
+list spacing, authors and flags; tables' locked columns and alignment, cells'
+max width and indents; images' size, alignment and text language; embedded
+files' text, source path, picture size and layout flags; lists' bold, italic,
+font size and colour; iframes' embed type; pictures' size; note-tag
+definitions' status and action item type (`NoteTagPropertyStatus`,
+`ActionItemType` removed; a definition without them is still rejected, as
+before) and `ActionItemStatus::{disabled, task_tag}`; the `Content` /
+`PageContent` accessors `table`, `image`, `embedded_file`, `ink` (match on
+the enums instead). Last-modified and creation times, GUIDs and schema
+revisions that nothing reads are not parsed, so their absence no longer
+rejects an object (a section without a GUID still gets its warning). Removed
+files: `one/property/{layout_alignment,note_tag_property_status,outline_indent_distance,page_size}.rs`.
+Files: `lib.rs`, `onenote/{content,embedded_file,iframe,image,list,note_tag,outline,page,page_content,picture,table}.rs`,
+`one/property/{mod,note_tag}.rs`, `one/property_set/*_node.rs`,
+`one/property_set/{page_metadata,note_tag_container,note_tag_shared_definition_container}.rs`.
+
 ## cab 0.6.0
 
 **C1 — no panic on corrupt cabinets.** In `folder.rs`, a file offset beyond

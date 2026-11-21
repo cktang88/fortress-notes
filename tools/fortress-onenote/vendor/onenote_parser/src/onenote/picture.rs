@@ -1,3 +1,4 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P15).
 use crate::onestore::shared::file_blob::{FileBlob, FileDataStatus};
 
 /// A stored picture representation associated with a OneNote object.
@@ -23,11 +24,6 @@ impl Picture {
     /// A [`std::io::Read`] over the picture's binary data.
     pub fn read(&self) -> Box<dyn std::io::Read> {
         self.data.read()
-    }
-
-    /// The size of the picture in bytes.
-    pub fn size(&self) -> u64 {
-        self.data.size()
     }
 
     /// Availability of the picture's binary data.

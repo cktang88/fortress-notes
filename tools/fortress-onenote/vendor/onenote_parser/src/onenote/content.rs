@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P10).
+// Modified by fortress-onenote (vendor/PATCHES.md: P10, P15).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property_set::PropertySetId;
@@ -37,42 +37,6 @@ impl Content {
     pub fn rich_text(&self) -> Option<&RichText> {
         if let Content::RichText(rich_text) = self {
             Some(rich_text)
-        } else {
-            None
-        }
-    }
-
-    /// Return the table data if it's a table content block.
-    pub fn table(&self) -> Option<&Table> {
-        if let Content::Table(table) = self {
-            Some(table)
-        } else {
-            None
-        }
-    }
-
-    /// Return the image data if it's an image content block.
-    pub fn image(&self) -> Option<&Image> {
-        if let Content::Image(image) = self {
-            Some(image)
-        } else {
-            None
-        }
-    }
-
-    /// Return the embedded file data if it's an embedded file content block.
-    pub fn embedded_file(&self) -> Option<&EmbeddedFile> {
-        if let Content::EmbeddedFile(file) = self {
-            Some(file)
-        } else {
-            None
-        }
-    }
-
-    /// Return the ink marker if it's an ink content (PATCH(fortress-onenote, P10): not parsed).
-    pub fn ink(&self) -> Option<&Ink> {
-        if let Content::Ink(ink) = self {
-            Some(ink)
         } else {
             None
         }

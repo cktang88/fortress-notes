@@ -1,8 +1,7 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P2, P7, P10).
+// Modified by fortress-onenote (vendor/PATCHES.md: P2, P7, P10, P15).
 use crate::contents::RichText;
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
-use crate::one::property::layout_alignment::LayoutAlignment;
 use crate::one::property_set::{page_manifest_node, page_metadata, page_node, title_node};
 use crate::onenote::{ParserContext, skip_damaged};
 use crate::onenote::outline::{Outline, parse_outline};
@@ -19,7 +18,6 @@ use time::macros::utc_datetime;
 #[derive(Clone, Debug)]
 pub struct Page {
     link_target_id: String,
-    title: Option<Title>,
     title_text: Option<String>,
     level: i32,
     created_at: time::UtcDateTime,
@@ -34,15 +32,6 @@ impl Page {
     /// Ref: [ONESTORE 2.2.58](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-one/34ea5601-f060-4a69-b5f9-5843a1f14098)
     pub fn link_target_id(&self) -> &str {
         &self.link_target_id
-    }
-
-    /// The page's title element.
-    ///
-    /// See [\[MS-ONE\] 2.2.64].
-    ///
-    /// [\[MS-ONE\] 2.2.64]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/00f0b68b-db49-4aea-9ad9-7c8e68e5c95d
-    pub fn title(&self) -> Option<&Title> {
-        self.title.as_ref()
     }
 
     /// The time at which the page was created.
@@ -92,64 +81,6 @@ impl Page {
     }
 }
 
-/// A page title.
-///
-/// See [\[MS-ONE\] 2.2.29].
-///
-/// [\[MS-ONE\] 2.2.29]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/08bd4fd5-59fb-4568-9c82-d2d5280eced8
-
-#[derive(Clone, Debug)]
-pub struct Title {
-    pub(crate) contents: Vec<Outline>,
-    pub(crate) offset_horizontal: f32,
-    pub(crate) offset_vertical: f32,
-    pub(crate) layout_alignment_in_parent: Option<LayoutAlignment>,
-    pub(crate) layout_alignment_self: Option<LayoutAlignment>,
-}
-
-impl Title {
-    /// The title contents.
-    pub fn contents(&self) -> &[Outline] {
-        &self.contents
-    }
-
-    /// The horizontal offset from the page origin in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.18].
-    ///
-    /// [\[MS-ONE\] 2.3.18]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/5fb9e84a-c9e9-4537-ab14-e5512f24669a
-    pub fn offset_horizontal(&self) -> f32 {
-        self.offset_horizontal
-    }
-
-    /// The vertical offset from the page origin in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.19].
-    ///
-    /// [\[MS-ONE\] 2.3.19]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/5c4992ba-1db5-43e9-83dd-7299c562104d
-    pub fn offset_vertical(&self) -> f32 {
-        self.offset_vertical
-    }
-
-    /// The title's alignment relative to the containing outline element (if present).
-    ///
-    /// See [\[MS-ONE\] 2.3.27].
-    ///
-    /// [\[MS-ONE\] 2.3.27]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/61fa50be-c355-4b8d-ac01-761a2f7f66c0
-    pub fn layout_alignment_in_parent(&self) -> Option<LayoutAlignment> {
-        self.layout_alignment_in_parent
-    }
-
-    /// The title's alignment.
-    ///
-    /// See [\[MS-ONE\] 2.3.33].
-    ///
-    /// [\[MS-ONE\] 2.3.33]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/4e7fe9db-2fdb-4239-b291-dc4b909c94ad
-    pub fn layout_alignment_self(&self) -> Option<LayoutAlignment> {
-        self.layout_alignment_self
-    }
-}
-
 pub(crate) fn parse_page(
     page_space: &(impl ObjectSpace + ?Sized),
     ctx: &mut ParserContext,
@@ -173,7 +104,7 @@ pub(crate) fn parse_page(
 
     let title_text = title
         .as_ref()
-        .and_then(|title| title.contents.first())
+        .and_then(|contents| contents.first())
         .and_then(outline_text);
 
     ctx.page = Some((
@@ -205,7 +136,6 @@ pub(crate) fn parse_page(
 
     Ok(Page {
         link_target_id,
-        title,
         title_text: title_text.as_deref().map(remove_hyperlink).or_else(|| {
             contents
                 .iter()
@@ -226,24 +156,18 @@ fn parse_title(
     title_id: ExGuid,
     space: &(impl ObjectSpace + ?Sized),
     ctx: &mut ParserContext,
-) -> Result<Title> {
+) -> Result<Vec<Outline>> {
     let title_object = space
         .get_object(title_id)
         .ok_or_else(|| ErrorKind::MalformedOneNoteData("title object is missing".into()))?;
     let title = title_node::parse(title_object)?;
-    let contents = title
+    // PATCH(fortress-onenote, P15): only the title's outlines are kept
+    // (for `Page::title_text`).
+    title
         .children
         .into_iter()
         .map(|outline_id| parse_outline(outline_id, space, ctx))
-        .collect::<Result<_>>()?;
-
-    Ok(Title {
-        contents,
-        offset_horizontal: title.offset_horizontal,
-        offset_vertical: title.offset_vertical,
-        layout_alignment_in_parent: title.layout_alignment_in_parent,
-        layout_alignment_self: title.layout_alignment_self,
-    })
+        .collect()
 }
 
 fn parse_data(

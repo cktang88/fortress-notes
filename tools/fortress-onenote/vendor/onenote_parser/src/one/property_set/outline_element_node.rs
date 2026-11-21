@@ -1,5 +1,5 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P6).
-use crate::errors::{ErrorKind, Result};
+// Modified by fortress-onenote (vendor/PATCHES.md: P6, P15).
+use crate::errors::Result;
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::object_reference::ObjectReference;
 use crate::one::property::time::Time;
@@ -13,32 +13,20 @@ use crate::onestore::Object;
 ///
 /// [\[MS-ONE\] 2.2.21]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/d47760a6-6f1f-4fd5-b2ad-a51fe5a72c21
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct Data {
     pub(crate) created_at: Option<Time>,
-    pub(crate) last_modified: Time,
     pub(crate) children: Vec<ExGuid>,
     pub(crate) child_level: u8,
     pub(crate) contents: Vec<ExGuid>,
     pub(crate) list_contents: Vec<ExGuid>,
-    pub(crate) list_spacing: Option<f32>,
-    // PATCH(fortress-onenote, P6): authors are optional (third-party
-    // writers omit them; nothing reads them).
-    pub(crate) author_original: Option<ExGuid>,
-    pub(crate) author_most_recent: Option<ExGuid>,
-    pub(crate) rtl: bool,
-    pub(crate) is_deletable: bool,
-    pub(crate) is_selectable: bool,
-    pub(crate) is_title_text: bool,
+    // PATCH(fortress-onenote, P15): authors, last-modified time, list
+    // spacing and flags are not read.
 }
 
 pub(crate) fn parse(object: &Object) -> Result<Data> {
     assert_property_set(object, PropertySetId::OutlineElementNode)?;
 
     let created_at = Time::parse(PropertyType::CreationTimeStamp, object)?;
-    let last_modified = Time::parse(PropertyType::LastModifiedTime, object)?.ok_or_else(|| {
-        ErrorKind::MalformedOneNoteFileData("outline element has no last modified time".into())
-    })?;
     let children =
         ObjectReference::parse_vec(PropertyType::ElementChildNodes, object)?.unwrap_or_default();
     // PATCH(fortress-onenote, P6): default level 1 when a writer omits it.
@@ -48,30 +36,13 @@ pub(crate) fn parse(object: &Object) -> Result<Data> {
         ObjectReference::parse_vec(PropertyType::ContentChildNodes, object)?.unwrap_or_default();
     let list_contents =
         ObjectReference::parse_vec(PropertyType::ListNodes, object)?.unwrap_or_default();
-    let list_spacing = simple::parse_f32(PropertyType::ListSpacingMu, object)?;
-    let author_original = ObjectReference::parse(PropertyType::AuthorOriginal, object)?;
-    let author_most_recent = ObjectReference::parse(PropertyType::AuthorMostRecent, object)?;
-    let rtl = simple::parse_bool(PropertyType::OutlineElementRtl, object)?.unwrap_or_default();
-    let is_deletable = simple::parse_bool(PropertyType::Deletable, object)?.unwrap_or_default();
-    let is_selectable = simple::parse_bool(PropertyType::CannotBeSelected, object)?
-        .map(|value| !value)
-        .unwrap_or_default();
-    let is_title_text = simple::parse_bool(PropertyType::IsTitleText, object)?.unwrap_or_default();
 
     let data = Data {
         created_at,
-        last_modified,
         children,
         child_level,
         contents,
         list_contents,
-        list_spacing,
-        author_original,
-        author_most_recent,
-        rtl,
-        is_deletable,
-        is_selectable,
-        is_title_text,
     };
 
     Ok(data)

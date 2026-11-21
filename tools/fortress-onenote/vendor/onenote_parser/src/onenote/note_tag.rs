@@ -1,8 +1,8 @@
+// Modified by fortress-onenote (vendor/PATCHES.md: P15).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
 use crate::one::property::color_ref::ColorRef;
-use crate::one::property::note_tag::{ActionItemStatus, ActionItemType};
-use crate::one::property::note_tag_property_status::NoteTagPropertyStatus;
+use crate::one::property::note_tag::ActionItemStatus;
 use crate::one::property::note_tag_shape::NoteTagShape;
 use crate::one::property::time::Time;
 use crate::one::property_set::note_tag_container::Data;
@@ -52,22 +52,15 @@ impl NoteTag {
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct NoteTagDefinition {
     label: String,
-    status: NoteTagPropertyStatus,
     shape: NoteTagShape,
     highlight_color: Option<ColorRef>,
     text_color: Option<ColorRef>,
-    action_item_type: ActionItemType,
 }
 
 impl NoteTagDefinition {
     /// The note tag's name.
     pub fn label(&self) -> &str {
         &self.label
-    }
-
-    /// The note tag's status
-    pub fn status(&self) -> &NoteTagPropertyStatus {
-        &self.status
     }
 
     /// The note tag icon shape.
@@ -83,11 +76,6 @@ impl NoteTagDefinition {
     /// The note tag's text color.
     pub fn text_color(&self) -> Option<ColorRef> {
         self.text_color
-    }
-
-    /// The note tag's action item type.
-    pub fn action_item_type(&self) -> ActionItemType {
-        self.action_item_type
     }
 }
 
@@ -122,11 +110,9 @@ pub(crate) fn parse_note_tag_definition(
 
     let definition = NoteTagDefinition {
         label: data.label,
-        status: data.status,
         shape: data.shape,
         highlight_color: data.highlight_color,
         text_color: data.text_color,
-        action_item_type: data.action_item_type,
     };
 
     Ok(definition)

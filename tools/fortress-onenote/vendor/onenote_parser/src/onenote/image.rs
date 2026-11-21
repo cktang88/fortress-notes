@@ -1,7 +1,6 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P11).
+// Modified by fortress-onenote (vendor/PATCHES.md: P11, P15).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
-use crate::one::property::layout_alignment::LayoutAlignment;
 use crate::one::property_set::{image_node, picture_container};
 use crate::onenote::ParserContext;
 use crate::onenote::iframe::{IFrame, parse_iframe};
@@ -26,18 +25,13 @@ pub struct Image {
     pub(crate) layout_max_width: Option<f32>,
     pub(crate) layout_max_height: Option<f32>,
 
-    // pub(crate) language_code: Option<u32>,
     pub(crate) alt_text: Option<String>,
-
-    pub(crate) layout_alignment_in_parent: Option<LayoutAlignment>,
-    pub(crate) layout_alignment_self: Option<LayoutAlignment>,
 
     pub(crate) image_filename: Option<String>,
 
     pub(crate) displayed_page_number: Option<u32>,
 
     pub(crate) text: Option<String>,
-    pub(crate) text_language_code: Option<u32>,
 
     pub(crate) picture_width: Option<f32>,
     pub(crate) picture_height: Option<f32>,
@@ -69,11 +63,6 @@ impl Image {
     /// invalid data from a valid zero-byte payload.
     pub fn read(&self) -> Option<Box<dyn std::io::Read>> {
         self.data.as_ref().map(FileBlob::read)
-    }
-
-    /// The size of the image in bytes, or `None` if not yet uploaded.
-    pub fn size(&self) -> Option<u64> {
-        self.data.as_ref().map(FileBlob::size)
     }
 
     /// Availability of the image's binary data.
@@ -129,24 +118,6 @@ impl Image {
         self.alt_text.as_deref()
     }
 
-    /// The image's alignment relative to the containing outline element (if present).
-    ///
-    /// See [\[MS-ONE\] 2.3.27].
-    ///
-    /// [\[MS-ONE\] 2.3.27]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/61fa50be-c355-4b8d-ac01-761a2f7f66c0
-    pub fn layout_alignment_in_parent(&self) -> Option<LayoutAlignment> {
-        self.layout_alignment_in_parent
-    }
-
-    /// The image's alignment.
-    ///
-    /// See [\[MS-ONE\] 2.3.33].
-    ///
-    /// [\[MS-ONE\] 2.3.33]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/4e7fe9db-2fdb-4239-b291-dc4b909c94ad
-    pub fn layout_alignment_self(&self) -> Option<LayoutAlignment> {
-        self.layout_alignment_self
-    }
-
     /// The image's original file name.
     ///
     /// See [\[MS-ONE\] 2.2.75].
@@ -180,11 +151,6 @@ impl Image {
     /// The text for the image.
     pub fn text(&self) -> Option<&str> {
         self.text.as_deref()
-    }
-
-    /// The text's language code (MS-LCID)
-    pub fn text_language_code(&self) -> Option<u32> {
-        self.text_language_code
     }
 
     /// The image's width in half-inch increments.
@@ -306,12 +272,9 @@ pub(crate) fn parse_image(
         layout_max_width: node.layout_max_width,
         layout_max_height: node.layout_max_height,
         alt_text: node.alt_text,
-        layout_alignment_in_parent: node.layout_alignment_in_parent,
-        layout_alignment_self: node.layout_alignment_self,
         image_filename: node.image_filename,
         displayed_page_number: node.displayed_page_number,
         text: node.text,
-        text_language_code: node.text_language_code,
         picture_width: node.picture_width,
         picture_height: node.picture_height,
         hyperlink_url: node.hyperlink_url,
