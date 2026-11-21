@@ -7,7 +7,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from . import block_store, document_service
+from . import block_store
+from .config import get_settings
 
 router = APIRouter()
 
@@ -37,7 +38,7 @@ def batch_move(request: MoveBatchRequest) -> dict:
     that fails stops the batch with its status, and the moves before it stay applied.
     """
 
-    path = document_service.db_path()
+    path = get_settings().block_db_path
     moved_folders = 0
     moved_documents = 0
     for folder in request.folders:

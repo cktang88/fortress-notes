@@ -123,9 +123,8 @@ with **422**.
 - `ocr.py`, `images.py`, `assets.py` — text in pictures and PDFs (§6), uploaded files.
 - `sources.py` — imported notes and re-imports (§7a).
 - `main.py` — FastAPI app and routes.
-- `document_service.py` — rendered note bodies and the one document ETag, shared by
-  the GET and the writes that answer with a tree.
-- `http_cache.py` — ETags, `If-None-Match` → 304, JSON responses.
+- `http_cache.py` — ETags, `If-None-Match` → 304, JSON responses, and every
+  response with a note's tree (the GET and the writes), under its one ETag.
 - `media.py` — `/media` file serving (immutable caching, ranges, content types).
 - `batch.py` — batch moves for the native app.
 - `onenote_import.py` — OneNote importer: runs `fortress-onenote`, imports its manifest (re-imports refresh changed pages), import jobs (§7b).
