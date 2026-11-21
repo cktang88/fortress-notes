@@ -168,6 +168,7 @@ public final class OneNoteImporter {
         if let job = status.job, !job.status.isFinished, case .choosing = phase, task == nil {
             origin = .microsoft
             source = .microsoft
+            phase = .downloading(job)
             task = Task { [weak self] in await self?.followDownload(job, api: api) }
         }
     }
