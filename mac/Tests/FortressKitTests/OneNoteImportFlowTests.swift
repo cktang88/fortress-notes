@@ -136,7 +136,7 @@ private func exportFile(_ name: String = "Work.zip") throws -> URL {
 // MARK: Gallery
 
 @MainActor
-@Suite(.serialized) struct OneNoteGalleryTests {
+@Suite(.serialized) struct OneNoteGallerySnapshotTests {
     private func both<V: View>(_ name: String, height: CGFloat, _ view: () -> V) throws {
         let size = CGSize(width: 560, height: height)
         try snapshot(view(), named: "onenote-\(name)-light", size: size)
@@ -151,7 +151,9 @@ private func exportFile(_ name: String = "Work.zip") throws -> URL {
         let model = ShellFixtures.model()
         let work = URL(fileURLWithPath: "/tmp/Work.zip")
 
-        try both("choose", height: 540) { OneNoteImportSheet(importer: OneNoteImporter()).environment(model) }
+        try both("choose-file", height: 560) {
+            OneNoteImportSheet(importer: OneNoteImporter(source: .file, defaults: GraphFixtures.defaults())).environment(model)
+        }
 
         let chosen = OneNoteImporter(file: work, fileSize: 48_213_504)
         chosen.folderId = "work"

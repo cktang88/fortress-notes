@@ -168,6 +168,11 @@ with **422**.
 | `GET` | `/api/import/onenote/{job_id}` | — | import job (§7b) |
 | `GET` | `/api/import/onenote` | `?limit=20` | recent import jobs, newest first |
 | `POST` | `/api/import/onenote/{job_id}/cancel` | — | `202` the job |
+| `GET` | `/api/import/onenote-graph` | — | `{available, problem, job}`: can the download from Microsoft run, and the latest download job |
+| `POST` | `/api/import/onenote-graph` | JSON `{client_id, account: personal\|work, notebooks?, folder_id?}` | `202` download job; when `done` its `import_job_id` is an import job (§7b) |
+| `POST` | `/api/import/onenote-graph/notebooks` | JSON `{client_id, account}` | `202` job whose `notebooks` lists the account's notebooks when `done` |
+| `GET` | `/api/import/onenote-graph/{job_id}` | — | download job (§7b) |
+| `POST` | `/api/import/onenote-graph/{job_id}/cancel` | — | `202` the job; the tool's child processes are ended |
 
 ### HTTP caching, compression, errors
 
@@ -463,6 +468,25 @@ of `onenote:` links, and when a page's key is not that GUID it is stored as
 `extra.onenote.link_target_id` so links to it resolve on later imports. What
 Graph cannot give (ink, custom tags, equations as math, TOC order): the tool's
 README.
+
+**In the app (`app/onenote_graph.py`).** The import sheet's *Download from
+Microsoft* runs the tool from the backend, on the `downloads` lane, one job at a
+time: `<tool>/fortress-onenote-graph download --progress json --account … [--notebook
+…] --out <NOTES_DIR>/.fortress-imports/<job>-graph/OneNote` (or `notebooks --json`)
+in its own process group, with the user's app id in `FORTRESS_ONENOTE_CLIENT_ID` and
+uv's usual folders added to `PATH`. The tool is `tools/fortress-onenote-graph` in the
+repository (or `FORTRESS_ONENOTE_GRAPH_DIR`); without it or without uv the status
+endpoint says so with the fix and starting a job answers 503. Its progress lines
+become the job record: `status` (`queued`, `starting`, `signing_in`, `downloading`,
+`converting`, `importing`, `done`, `failed`, `cancelled`), `progress {phase, done,
+total, current}`, `device_code {user_code, verification_uri, expires_at}` while the
+browser sign-in fell back to a code, `wait {seconds, reason, until}` during a
+throttling pause of 10 s or more, `eta_seconds` (from the page rate once 10 pages and
+a minute are behind), warnings, and `error`/`resumable` (exit code 3). On success the
+manifest folder is submitted to the import job (which removes it afterwards) and the
+record gets `import_job_id`. Cancel and shutdown end the process group (SIGTERM, then
+SIGKILL); the tool's cache keeps what was downloaded, so the next run resumes. Records
+are in memory only.
 
 **Mapping** (all through `sources.upsert_document_from_source`, source
 `onenote_import`, §7a — a re-import refreshes changed pages in place, leaves

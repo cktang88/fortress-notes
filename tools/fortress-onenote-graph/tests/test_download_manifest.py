@@ -224,6 +224,25 @@ class CliTests(_Base):
         self.assertEqual(summary["pages"], 3)
         self.assertTrue((self.root / "o.zip").is_file())
 
+    def test_notebooks_as_json(self):
+        class FakeSession:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def token(self, force_refresh=False):
+                return "t"
+
+        def client(token, _throttle, log=None):
+            return GraphClient(token, Throttle(clock=self.clock), transport=self.graph, log=log)
+
+        stdout = io.StringIO()
+        with patch("fortress_onenote_graph.auth.Session", FakeSession), patch.object(cli, "GraphClient", client), \
+                redirect_stdout(stdout), patch("sys.stderr", io.StringIO()):
+            code = cli.main(["notebooks", "--json", "--progress", "json", "--client-id", "c",
+                             "--cache-dir", str(self.root / "c"), "--config-dir", str(self.root / "cfg")])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout.getvalue()), {"notebooks": [{"name": "Work", "sections": 3}]})
+
     def test_missing_client_id_is_a_clear_error(self):
         stderr = io.StringIO()
         with patch.dict("os.environ", {"FORTRESS_ONENOTE_CLIENT_ID": ""}), patch("sys.stderr", stderr):
