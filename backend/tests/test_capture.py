@@ -2,7 +2,6 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -11,7 +10,7 @@ from support import make_settings, use_settings, mirror_file
 
 class QuickCaptureTests(unittest.TestCase):
     def setUp(self) -> None:
-        from app import documents, main
+        from app import main
 
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)

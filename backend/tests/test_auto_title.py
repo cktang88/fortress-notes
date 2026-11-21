@@ -10,7 +10,7 @@ from support import make_settings, use_settings
 
 class AutoTitleTests(unittest.TestCase):
     def setUp(self) -> None:
-        from app import documents, main, search
+        from app import main
 
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)

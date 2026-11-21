@@ -23,7 +23,7 @@ def streaming(fake):
 
 class AskYourNotesTests(unittest.TestCase):
     def setUp(self) -> None:
-        from app import ask, documents, embeddings, main, search
+        from app import embeddings, main
 
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)

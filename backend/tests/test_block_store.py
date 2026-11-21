@@ -1,4 +1,3 @@
-import json
 import hashlib
 import tempfile
 import unittest
@@ -8,7 +7,6 @@ from app.block_store import (
     SCHEMA_VERSION,
     DocumentRevisionConflict,
     apply_transaction,
-    backup_database,
     block_link_targets,
     connection_scope,
     create_folder,

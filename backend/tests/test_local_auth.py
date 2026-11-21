@@ -26,7 +26,7 @@ class _BackendTestCase(unittest.TestCase):
     token: str | None = None
 
     def setUp(self) -> None:
-        from app import documents, main
+        from app import main
 
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

@@ -1,7 +1,6 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -10,7 +9,7 @@ from support import make_settings, use_settings
 
 class FocusedRelatedTests(unittest.TestCase):
     def test_focus_changes_query_and_rejects_other_documents_blocks(self) -> None:
-        from app import documents, embeddings, main, search
+        from app import main
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)

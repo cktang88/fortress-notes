@@ -10,7 +10,7 @@ from support import make_settings, use_settings
 
 class UploadLimitTests(unittest.TestCase):
     def setUp(self) -> None:
-        from app import assets, documents, main, search
+        from app import main
 
         self.main = main
         self._directory = tempfile.TemporaryDirectory()

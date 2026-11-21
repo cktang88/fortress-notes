@@ -13,7 +13,6 @@ import hashlib
 import json
 import re
 import os
-import shutil
 import tempfile
 import threading
 import unittest

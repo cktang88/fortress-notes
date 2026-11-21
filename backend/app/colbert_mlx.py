@@ -84,7 +84,7 @@ class MlxColBERT:
     # PyLate's interface (what app/embeddings.py calls) ------------------------------
 
     def encode(self, texts, *, is_query: bool, batch_size: int = 16, **_kwargs) -> list:
-        import torch
+        import torch  # noqa: F401  (intentional)
 
         if isinstance(texts, str):
             texts = [texts]

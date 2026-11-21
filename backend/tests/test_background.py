@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app import background, block_store, documents, portability
+from app import background, documents, portability
 from app.config import BACKEND_DIR, Settings
 from app.models import NoteCreate
 from support import make_settings, mirror_file, use_settings

@@ -17,6 +17,11 @@ jobs:
         with:
           # uv itself is pinned too (docs/dependencies.md): a release at least 7 days old.
           version: "0.13.7"
+      - name: Lint (unused imports and variables)
+        working-directory: backend
+        # ruff pinned to a release at least 7 days old (docs/dependencies.md); run with
+        # uvx so it stays out of the app's lockfile.
+        run: uvx ruff@0.17.5 check --select F401,F841 .
       - name: Install
         working-directory: backend
         run: uv sync --frozen --python 3.13

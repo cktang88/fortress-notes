@@ -1,7 +1,6 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -25,7 +24,6 @@ class BlockApiFlowTests(unittest.TestCase):
             settings = make_settings(notes, reindex_interval_s=5.0)
             add_markdown_notes(notes, settings.block_db_path)
 
-            from app import documents
 
             with use_settings(settings), use_settings(settings):
                 with TestClient(main.app) as client:

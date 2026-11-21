@@ -3,7 +3,6 @@ from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -12,7 +11,7 @@ from support import make_settings, use_settings
 
 class NoteFolderCreationTests(unittest.TestCase):
     def test_nested_note_creation_persists_and_missing_folder_leaves_no_note(self) -> None:
-        from app import documents, main
+        from app import main
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)

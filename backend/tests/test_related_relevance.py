@@ -41,7 +41,7 @@ class _FakeColBERT:
 
 class RelatedRelevanceApiTests(unittest.TestCase):
     def _related(self, model, notes_to_create, source_body):
-        from app import documents, embeddings, main, search
+        from app import embeddings, main
 
         with tempfile.TemporaryDirectory() as directory:
             settings = make_settings(Path(directory), embeddings_enabled=model is not None)
@@ -95,7 +95,7 @@ class RelatedRelevanceApiTests(unittest.TestCase):
         self.assertEqual(by_block, ["Garden"])
 
     def test_cached_related_lists_take_in_edits_to_other_notes_without_a_full_pass(self) -> None:
-        from app import documents, embeddings, main, search
+        from app import embeddings, main, search
 
         scored: list[int] = []
         real_score_note = embeddings.score_note

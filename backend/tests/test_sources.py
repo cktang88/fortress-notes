@@ -376,7 +376,7 @@ class SourceStoreTests(unittest.TestCase):
 
 class SourceApiTests(unittest.TestCase):
     def setUp(self) -> None:
-        from app import documents, main
+        from app import main
 
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
@@ -404,7 +404,6 @@ class SourceApiTests(unittest.TestCase):
 
 
     def test_a_client_cannot_claim_an_imported_pages_source_key(self) -> None:
-        from app import documents
 
         page = upsert_document_from_source(
             get_settings().block_db_path,

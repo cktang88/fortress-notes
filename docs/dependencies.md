@@ -17,6 +17,7 @@ The rule is enforced by tooling, not by memory:
 | Rust crates | `tools/fortress-onenote/Cargo.lock`, built with `--locked` everywhere | CI checks every crate version's publish time (crates.io index `pubtime`) and checksum |
 | Rust toolchain | `tools/fortress-onenote/rust-toolchain.toml` (exact version) | CI checks the release date |
 | uv | `version:` of `astral-sh/setup-uv` in the workflows; `required-version` in `pyproject.toml` is only a floor | CI checks the release date |
+| Tools run with `uvx` in CI (ruff) | the exact version in the workflow (`uvx ruff@X.Y.Z`) | CI checks the PyPI release date |
 | GitHub Actions | every `uses:` is a full commit SHA with a `# vX.Y.Z` comment | CI checks the tag points to that SHA and the release date |
 | Swift packages | none: `mac/Package.swift` has no dependencies | CI fails if one is added before this policy covers it |
 

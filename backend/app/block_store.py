@@ -34,7 +34,6 @@ from ulid import ULID
 
 from . import order_keys, textutil
 from . import block_schema as schema
-from . import vault
 from .block_markdown import BlockSpec, parse_markdown
 from .block_markdown import render_markdown as _render_markdown
 from .block_schema import BlockShapeError

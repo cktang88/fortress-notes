@@ -404,7 +404,7 @@ class OcrTextIsSearchableTests(unittest.TestCase):
     def setUp(self) -> None:
         from fastapi.testclient import TestClient
 
-        from app import ask, documents, embeddings, main, search
+        from app import embeddings, main
 
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
@@ -603,7 +603,7 @@ class EndToEndTests(unittest.TestCase):
     def test_uploaded_screenshot_becomes_searchable(self) -> None:
         from fastapi.testclient import TestClient
 
-        from app import ask, documents, embeddings, main, search
+        from app import ask, embeddings, main
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)

@@ -3,7 +3,6 @@
 import hashlib
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -30,7 +29,6 @@ from app.block_store import (
 )
 from app.corpus import embedding_documents
 from app.models import BlockOperation
-from support import mirror_file
 
 _T = "2026-01-01T00:00:00+00:00"
 

@@ -263,6 +263,19 @@ def check_actions() -> None:
                 fail(f"{name}: uv {version} released {uploaded:%Y-%m-%d}, after {cutoff:%Y-%m-%d}")
             else:
                 print(f"ok   {name}: uv {version} (released {uploaded:%Y-%m-%d})")
+        # Tools run with uvx (ruff): an exact version, old enough.
+        commands = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        for match in re.finditer(r"\buvx\s+(?P<tool>[A-Za-z0-9_.-]+)(?P<pin>@\S+)?", commands):
+            tool, pin = match["tool"], (match["pin"] or "")[1:]
+            if not re.fullmatch(r"\d+(\.\d+)*", pin):
+                fail(f"{name}: uvx {tool}: pin an exact version (uvx {tool}@X.Y.Z)")
+                continue
+            files = fetch_json(f"https://pypi.org/pypi/{tool}/{pin}/json")["urls"]
+            uploaded = min(parse_time(f["upload_time_iso_8601"]) for f in files)
+            if uploaded > cutoff:
+                fail(f"{name}: {tool} {pin} released {uploaded:%Y-%m-%d}, after {cutoff:%Y-%m-%d}")
+            else:
+                print(f"ok   {name}: {tool} {pin} (released {uploaded:%Y-%m-%d})")
         if re.search(r"astral-sh/setup-uv@", text) and not SETUP_UV_VERSION.search(text):
             fail(f"{name}: setup-uv without an exact `version:` installs the newest uv")
 

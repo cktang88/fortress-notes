@@ -6,7 +6,6 @@ import random
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from app import block_schema as schema
 from app import order_keys
@@ -97,7 +96,7 @@ class RegistryTests(unittest.TestCase):
     def test_the_api_refuses_illegal_nesting(self) -> None:
         from fastapi.testclient import TestClient
 
-        from app import documents, main
+        from app import main
 
         with tempfile.TemporaryDirectory() as directory:
             notes = Path(directory)

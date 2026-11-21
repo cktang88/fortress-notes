@@ -2,7 +2,6 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -11,7 +10,7 @@ from support import make_settings, use_settings, mirror_file
 
 class WorkspaceFeatureTests(unittest.TestCase):
     def setUp(self) -> None:
-        from app import documents, main, search
+        from app import main
 
         self.main = main
         self._directory = tempfile.TemporaryDirectory()
