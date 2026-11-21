@@ -9,14 +9,16 @@ note; later calls find that same note again:
 * **Edited here since the last import** (the note's revision moved on): the note
   is left alone and reported (``skipped_edited``), never overwritten.
 * **Otherwise the note is refreshed**: its blocks are replaced by the source's,
-  and its title follows the source. The note keeps its id and folder, and a
+  and its title follows the source unless the user renamed the note (a rename
+  does not move the revision, so it is told apart by the imported title). The note keeps its id and folder, and a
   block whose source id matches a block of the last import keeps its Fortress
   id, so links and references into it survive.
 * A note the user **trashed** is left alone (``skipped_deleted``); a purged one
   is imported afresh.
 
 What a refresh needs lives in ``documents.sync_json``: the note's revision
-after the last import, a hash of what the source had, and which block each
+after the last import, a hash of what the source had, the title it was given
+(``title``), and which block each
 source id (and each extra ``anchors`` id, such as an id links use) became.
 """
 
@@ -430,15 +432,16 @@ def _write_blocks(
 
 
 def _new_sync(planned: list[_Planned], source_hash: str, revision: int, now: str,
-              imported_at: str | None) -> dict[str, Any]:
+              imported_at: str | None, title: str) -> dict[str, Any]:
     blocks: dict[str, str] = {}
     anchors: dict[str, str] = {}
     for block in _flatten(planned):
         blocks.setdefault(block.external_id, block.id)
         for anchor in block.anchors:
             anchors.setdefault(anchor, block.id)
-    return {"hash": source_hash, "revision": revision, "imported_at": imported_at or now,
-            "synced_at": now, "blocks": blocks, "anchors": anchors}
+    return {"hash": source_hash, "revision": revision, "title": title,
+            "imported_at": imported_at or now, "synced_at": now,
+            "blocks": blocks, "anchors": anchors}
 
 
 def _dumps(value: object) -> str:
@@ -483,7 +486,7 @@ def _create(
     )
     result = UpsertResult(document_id, "created", 0)
     _write_blocks(connection, document_id, planned, None, created, None, {}, result)
-    _save_sync(connection, document_id, _new_sync(planned, source_hash, 0, now, None))
+    _save_sync(connection, document_id, _new_sync(planned, source_hash, 0, now, None, title))
     rebuild_document_derived(connection, document_id)
     return result
 
@@ -535,6 +538,11 @@ def _refresh(
     result = UpsertResult(document_id, "updated", revision, blocks_deleted=len(removed))
     _write_blocks(connection, document_id, planned, None, now, revision, stored, result)
 
+    imported_title = title
+    # The title the last import gave; one the user chose since then stays.
+    # (Notes imported before this was recorded follow the source, as they did.)
+    if sync.get("title", document["title"]) != document["title"]:
+        title = document["title"]
     old_provenance = _provenance.loads(document["provenance_json"])
     new_provenance = {
         **{key: value for key, value in old_provenance.items() if key != "backfilled"},
@@ -553,7 +561,8 @@ def _refresh(
         ),
     )
     _save_sync(connection, document_id,
-               _new_sync(planned, source_hash, revision, now, sync.get("imported_at")))
+               _new_sync(planned, source_hash, revision, now, sync.get("imported_at"),
+                         imported_title))
     rebuild_document_derived(connection, document_id)
     if removed:
         # Text elsewhere that showed a removed block reads as broken now.

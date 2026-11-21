@@ -266,6 +266,25 @@ class SourceStoreTests(unittest.TestCase):
         self.assertEqual(_texts(tree["children"]), ["Shared", "Other", "Mine"])
         self.assertEqual(tree["revision"], 1)
 
+    def test_a_rename_here_survives_a_refresh(self) -> None:
+        first = self.page([SourceBlock("One", external_id="{A}")])
+        # A rename does not move the revision, so the page is still refreshed...
+        block_store.update_document_metadata(self.db, first.document_id, title="My name")
+        result = self.page([SourceBlock("One, edited", external_id="{A}")], title="Meeting v2")
+        self.assertEqual(result.status, "updated")
+        tree = document_tree(self.db, first.document_id)
+        self.assertEqual(_texts(tree["children"]), ["One, edited"])
+        # ...but keeps the user's title, also on later refreshes.
+        self.assertEqual(tree["title"], "My name")
+        self.page([SourceBlock("One, again", external_id="{A}")], title="Meeting v3")
+        self.assertEqual(document_tree(self.db, first.document_id)["title"], "My name")
+
+    def test_an_unrenamed_page_follows_the_source_title(self) -> None:
+        first = self.page([SourceBlock("One", external_id="{A}")])
+        self.page([SourceBlock("One", external_id="{A}")], title="Meeting v2")
+        self.page([SourceBlock("One", external_id="{A}")], title="Meeting v3")
+        self.assertEqual(document_tree(self.db, first.document_id)["title"], "Meeting v3")
+
     def test_nested_source_blocks_and_markdown_bodies(self) -> None:
         result = self.page("# Title\n\n- Parent\n  - Child\n\nTail")
         tree = document_tree(self.db, result.document_id)
