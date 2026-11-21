@@ -114,10 +114,12 @@ Synthetic versions of the package, crash and failure-reason checks
 
 - This tool's code: part of Fortress Notes.
 - [`onenote_parser`](https://github.com/msiemens/onenote.rs) 2.1.0 — MPL-2.0,
-  vendored with fixes in `vendor/onenote_parser/` (statically linked). The
-  modified files stay under MPL-2.0 and are published in this repository;
+  vendored with fixes in `vendor/onenote_parser/` (statically linked) and
+  trimmed to what the converter reads (no ink, math or notebook parsing).
+  The modified files stay under MPL-2.0 and are published in this repository;
   every change is listed in `vendor/PATCHES.md`.
 - [`cab`](https://github.com/mdsteele/rust-cab) 0.6.0 — MIT, vendored with
-  hardening fixes in `vendor/cab/` (see `vendor/PATCHES.md`); reads `.onepkg`.
+  hardening fixes in `vendor/cab/`, read-only (see `vendor/PATCHES.md`); reads
+  `.onepkg`.
 - Other dependencies are permissive (MIT / Apache-2.0 / BSD / Zlib /
   Unicode); see `LICENSES/THIRD-PARTY.md`.

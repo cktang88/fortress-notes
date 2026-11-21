@@ -48,8 +48,9 @@ original string with an offset into the cleaned one) no longer panic.
 **P3 — `Parser::parse_toc`.** Reads a `.onetoc2` without parsing any
 section and returns its entries as stored (`onenote::notebook::TableOfContents`,
 exported as `onenote_parser::notebook::TableOfContents`).
-`Parser::parse_notebook` silently skips entries whose file is missing; the
-converter resolves entries itself and reports missing ones.
+`Parser::parse_notebook` (removed by P12) silently skipped entries whose
+file is missing; the converter resolves entries itself and reports missing
+ones.
 Files: `lib.rs`, `onenote/mod.rs`, `onenote/notebook.rs`.
 
 **P4 — lenient revision-store structure.** A file-node-list reference that
