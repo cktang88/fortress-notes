@@ -241,7 +241,6 @@ relative to `backend/`. See [`backend/.env.example`](backend/.env.example).
 | `OPENROUTER_API_KEY` | — | Needed for Ask |
 | `ASK_MODEL` | `anthropic/claude-haiku-5.5` | OpenRouter model Ask uses |
 | `ASK_REASONING_EFFORT` | `none` | OpenRouter reasoning effort for `ASK_MODEL` (empty: the model's default) |
-| `OPENROUTER_MODEL` | `anthropic/claude-haiku-5.5` | Fallback model for LLM calls that name none (Ask always names `ASK_MODEL`) |
 | `EMBEDDINGS_ENABLED` | `true` | ColBERT search and related notes (off: keyword matching) |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
 | `COLBERT_REVISION` | pinned commit | Commit of the model's Hugging Face repository (default: the one in `app/config.py` for the default model; see [docs/dependencies.md](docs/dependencies.md)) |

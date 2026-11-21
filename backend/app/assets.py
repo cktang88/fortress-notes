@@ -42,21 +42,6 @@ def is_supported_image_type(content_type: str | None) -> bool:
     return media_type in _IMAGE_TYPES
 
 
-def save_upload(
-    data: bytes, filename: str | None, content_type: str | None
-) -> tuple[str, str, Path]:
-    """Store bytes under a generated name and return (URL, display name, path)."""
-
-    name = safe_filename(filename)
-    media_type = (content_type or "").split(";", 1)[0].strip().lower()
-    extension = _EXTENSIONS_BY_TYPE.get(media_type, ".bin")
-
-    asset_id = str(ULID())
-    path = get_settings().assets_path / f"{asset_id}{extension}"
-    path.write_bytes(data)
-    return f"/media/{path.name}", name, path
-
-
 def upload_path(content_type: str | None, extension: str | None = None) -> Path:
     """Where a new upload of this type goes: a fresh ULID name, never reused."""
 

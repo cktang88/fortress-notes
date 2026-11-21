@@ -373,13 +373,13 @@ def _fall_back_to_cpu(error: BaseException) -> None:
     _cache.gpu = None
 
 
-def device_info() -> dict[str, str] | None:
-    """Where queries and documents are encoded (None until the model is loaded)."""
+def device_info() -> str | None:
+    """Where queries and documents are encoded, "cpu" or "mlx" (None until the model
+    is loaded)."""
 
     if not _cache.loaded:
         return None
-    device = "cpu" if _cache.gpu is None else "mlx"
-    return {"query": device, "documents": device}
+    return "cpu" if _cache.gpu is None else "mlx"
 
 
 def _get_model(wait: bool = False):
@@ -432,12 +432,6 @@ def load_model():
     """Load the model (blocking). For the background indexer and scripts only."""
 
     return _get_model(wait=True)
-
-
-def model_if_ready():
-    """The model if it is loaded, else None (never blocks)."""
-
-    return _get_model()
 
 
 def available() -> bool:

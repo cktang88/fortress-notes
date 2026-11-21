@@ -12,7 +12,7 @@ from app.block_store import (
     document_tree,
     move_document,
     new_change_epoch,
-    rename_document,
+    update_document_metadata,
 )
 from app.corpus import embedding_documents
 from app.models import BlockOperation
@@ -103,7 +103,7 @@ class IncrementalCorpusTests(unittest.TestCase):
 
     def test_title_changes_trash_and_hard_deletes_are_seen(self) -> None:
         first = corpus.snapshot(self.database)
-        rename_document(self.database, "a", "Renamed")
+        update_document_metadata(self.database, "a", title="Renamed")
         delete_document(self.database, "b")
         with connection_scope(self.database) as connection:
             connection.execute("DELETE FROM documents WHERE id = 'c'")

@@ -305,13 +305,13 @@ class RealModelTests(unittest.TestCase):
         health = self.auto["health"]
         self.assertTrue(health["model_loaded"])
         expected = EXPECTED_DEVICE or "cpu"
-        self.assertEqual(health["embeddings_device"], {"query": expected, "documents": expected})
+        self.assertEqual(health["embeddings_device"], expected)
         if expected == "mlx":
             self.assertEqual(self.auto["gpu_encoder"], "MlxColBERT")
 
     def test_the_cpu_setting_and_the_cpu_model_stay_on_the_cpu(self) -> None:
         # EMBEDDINGS_DEVICE=cpu: no GPU encoder at all.
-        self.assertEqual(self.cpu["health"]["embeddings_device"], {"query": "cpu", "documents": "cpu"})
+        self.assertEqual(self.cpu["health"]["embeddings_device"], "cpu")
         self.assertIsNone(self.cpu["gpu_encoder"])
         # The CPU model is pinned to the CPU whatever PyLate would pick (MPS when the
         # Mac has it), also beside a GPU encoder.
@@ -392,7 +392,7 @@ class RealModelTests(unittest.TestCase):
     @unittest.skipIf(EXPECTED_DEVICE in ("", "cpu"), "no GPU encoder here")
     def test_a_real_gpu_error_moves_the_backend_to_the_cpu(self) -> None:
         self.assertEqual(self.auto["late_health"]["embeddings_device"],
-                         {"query": "cpu", "documents": "cpu"})
+                         "cpu")
         self.assertTrue(
             any("ColBERT on the GPU failed" in message for message in self.auto["warnings"]),
             self.auto["warnings"],
@@ -404,7 +404,7 @@ class RealModelTests(unittest.TestCase):
         self.assertFalse(
             any("ColBERT on the GPU failed" in message for message in self.cpu["warnings"])
         )
-        self.assertEqual(self.cpu["late_health"]["embeddings_device"], {"query": "cpu", "documents": "cpu"})
+        self.assertEqual(self.cpu["late_health"]["embeddings_device"], "cpu")
 
 
 if __name__ == "__main__":

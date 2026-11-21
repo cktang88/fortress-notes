@@ -13,7 +13,7 @@ from app.block_store import (
     connection_scope,
     create_document,
     document_tree,
-    rename_document,
+    update_document_metadata,
 )
 from app.models import BlockOperation
 from app.portability import export_document_markdown
@@ -147,7 +147,7 @@ class SourceStoreTests(unittest.TestCase):
                 content=[{"type": "text", "text": "Plain "}, {"type": "docLink", "id": "target"}],
             ),
         ], 0)
-        rename_document(self.db, "target", "New | title")
+        update_document_metadata(self.db, "target", title="New | title")
         apply_transaction(self.db, "target", [
             BlockOperation(operation="update", block_id=target_block, content=_runs("Edited target")),
         ], 0)

@@ -16,7 +16,7 @@ from app.block_store import (
     rebuild_fts,
 )
 
-from support import make_settings, use_settings
+from support import make_settings, mirror_file, use_settings
 
 
 def _document(database: Path, document_id: str, blocks: int) -> None:
@@ -208,7 +208,7 @@ class ApiWorkTests(unittest.TestCase):
         # Only the mirrors lane writes mirrors, never the request.
         self.assertEqual(set(writers) - {"fortress-mirrors"}, set())
         self.documents.flush_mirrors()
-        mirror = self.documents.mirror_path(self.note["id"], self.notes)
+        mirror = mirror_file(self.notes, self.note["id"])
         self.assertIn("Background", mirror.read_text(encoding="utf-8"))
 
     def test_transaction_response_is_the_get_under_its_etag(self) -> None:

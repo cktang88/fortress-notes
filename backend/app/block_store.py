@@ -218,7 +218,6 @@ CREATE INDEX IF NOT EXISTS transaction_receipts_document ON transaction_receipts
 # trigger is dropped and only the current ones are created again.
 _RETIRED: tuple[str, ...] = ()
 
-_ready_paths: set[Path] = set()
 # Databases whose schema is current, keyed by the path as given, with the file
 # identity checked (a deleted or replaced file is initialized again).
 _ready_files: dict[Path, tuple[Path, tuple[int, int], int]] = {}
@@ -362,7 +361,6 @@ def initialize(path: Path, force: bool = False) -> None:
     identity = _file_identity(path)
     if identity is not None:
         _ready_files[path] = (path.resolve(), identity, _schema_cookie(path))
-    _ready_paths.add(path.resolve())
 
 
 def _schema_cookie(path: Path) -> int:
@@ -583,10 +581,6 @@ def store_asset_text(path: Path, content_hash: str, text: str) -> None:
         ).fetchall()
         for row in rows:
             _refresh_fts(connection, row["id"], row["document_id"], row["text"])
-
-
-def is_ready(path: Path) -> bool:
-    return path.resolve() in _ready_paths
 
 
 def create_document(
@@ -823,22 +817,6 @@ def create_block_document(
         specs=specs,
         title_auto=title_auto,
     )
-    tree = document_tree(path, document_id)
-    assert tree is not None
-    return tree
-
-
-def rename_document(path: Path, document_id: str, title: str) -> dict:
-    initialize(path)
-    with connection_scope(path) as connection:
-        cursor = connection.execute(
-            """UPDATE documents SET title = ?, title_auto = 0, updated_at = ?
-                 WHERE id = ? AND deleted_at IS NULL""",
-            (title, utc_now(), document_id),
-        )
-        if cursor.rowcount == 0:
-            raise KeyError("document not found")
-        document_retitled(connection, document_id)
     tree = document_tree(path, document_id)
     assert tree is not None
     return tree

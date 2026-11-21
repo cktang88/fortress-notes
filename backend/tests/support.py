@@ -39,9 +39,16 @@ def mirror_file(notes: Path, document_id: str) -> Path:
     A note without one (never written, or trashed) gets a path that doesn't exist.
     """
 
-    from app.documents import MirrorWriter
+    import json
 
-    return MirrorWriter().path(Path(notes), document_id) or Path(notes) / f".no-mirror-{document_id}.md"
+    from app.documents import MIRROR_FILES
+
+    try:
+        files = json.loads((Path(notes) / MIRROR_FILES).read_text(encoding="utf-8"))["files"]
+    except (OSError, ValueError, KeyError):
+        files = {}
+    relative = files.get(document_id)
+    return Path(notes) / relative if relative else Path(notes) / f".no-mirror-{document_id}.md"
 
 
 def import_details(database: Path, document_id: str) -> dict:

@@ -418,12 +418,6 @@ class MirrorWriter(background.Service):
         self.sync(db_path, notes_path)
         return None
 
-    def path(self, notes_path: Path, document_id: str) -> Path | None:
-        """Where a note's mirror was last written."""
-
-        relative = self._state(notes_path).files.get(document_id)
-        return notes_path / relative if relative else None
-
     def sync(self, db_path: Path, notes_path: Path) -> int:
         """Bring every mirror up to date; returns how many were written."""
 
@@ -510,31 +504,6 @@ class MirrorWriter(background.Service):
         state.files = {key: value for key, value in state.files.items() if key in active}
         self._save(notes_path, state, None, files_changed=True)
         self.sync(db_path, notes_path)
-
-    def write_one(self, db_path: Path, notes_path: Path, document_id: str) -> None:
-        """Write (or remove) one note's mirror now."""
-
-        state = self._state(notes_path)
-        with block_store.read_scope(db_path) as connection:
-            rows = [dict(row) for row in connection.execute(
-                "SELECT id, title, folder_id, created_at FROM documents WHERE deleted_at IS NULL"
-            )]
-            folders = [dict(row) for row in connection.execute(
-                "SELECT id, parent_id, name, position FROM folders"
-            )]
-            anchors = vault.referenced_blocks(connection)
-        layout = self._layout(notes_path, state, rows, folders)
-        old = state.files.get(document_id)
-        if old and old != layout.paths.get(document_id):
-            _remove(notes_path, old)
-        if document_id in layout.paths:
-            _mirror_document(db_path, notes_path, document_id, layout,
-                             anchors.get(document_id, ()))
-            state.files[document_id] = layout.paths[document_id]
-            state.targets[document_id] = layout.targets[document_id]
-        else:
-            state.files.pop(document_id, None)
-        self._save(notes_path, state, state.position, files_changed=True)
 
     def _layout(self, notes_path: Path, state: _MirrorState, rows: list[dict],
                 folders: list[dict]) -> vault.Layout:
@@ -649,19 +618,6 @@ def rebuild_mirrors(stash: Path) -> None:
     db_path, notes_path = _paths()
     with background.exclusive(MirrorWriter.name):
         mirrors.rebuild(db_path, notes_path, stash)
-
-
-def mirror_document(db_path: Path, notes_path: Path, document_id: str) -> None:
-    """Write (or remove) one note's mirror now, serialized with the writer."""
-
-    with background.exclusive(MirrorWriter.name):
-        mirrors.write_one(db_path, notes_path, document_id)
-
-
-def mirror_path(document_id: str, notes_path: Path | None = None) -> Path | None:
-    """Where a note's mirror is (as last written)."""
-
-    return mirrors.path(notes_path or _paths()[1], document_id)
 
 
 def _mirror_document(db_path: Path, notes_path: Path, document_id: str, layout: vault.Layout,

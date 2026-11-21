@@ -67,7 +67,7 @@ async def chat_json_stream(
     user: str,
     *,
     timeout: float = 30,
-    model: str | None = None,
+    model: str,
     fast: bool = False,
     reasoning_effort: str = "",
 ):
@@ -81,7 +81,7 @@ async def chat_json_stream(
         raise LLMNotConfigured
 
     payload: dict = {
-        "model": model or settings.openrouter_model,
+        "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},

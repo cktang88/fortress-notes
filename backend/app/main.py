@@ -214,11 +214,9 @@ def health() -> dict:
         "status": "ok",
         "embeddings_enabled": get_settings().embeddings_enabled,
         "model_loaded": embeddings.model_loaded(),
-        # Where ColBERT encodes queries and documents ("cpu" or "mps"); null while loading.
+        # Where ColBERT encodes queries and documents ("cpu" or "mlx"); null while loading.
         "embeddings_device": embeddings.device_info(),
         "vision_enabled": get_settings().vision_enabled,
-        "vision_loaded": ocr.loaded(),
-        "block_db_ready": block_store.is_ready(_db()),
         # Whether Ask can write answers (OPENROUTER_API_KEY is set). Never the key itself.
         "ask_configured": bool(get_settings().openrouter_api_key),
     }

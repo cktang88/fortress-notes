@@ -109,10 +109,6 @@ def _get_engine():
         return _engine
 
 
-def loaded() -> bool:
-    return _engine is not None
-
-
 def ocr_image(image) -> str:
     """Text lines of a PIL image, top to bottom, words on one line joined by spaces."""
 

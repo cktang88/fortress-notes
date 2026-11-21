@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from app import background, block_store, documents, portability
 from app.config import BACKEND_DIR, Settings
 from app.models import NoteCreate
-from support import make_settings, use_settings
+from support import make_settings, mirror_file, use_settings
 
 
 class _Workspace(unittest.TestCase):
@@ -29,8 +29,8 @@ class _Workspace(unittest.TestCase):
 
         known = self.__dict__.setdefault("_mirrors", {})
         # (read from disk: a test may write with a writer of its own)
-        path = documents.MirrorWriter().path(self.notes, document_id)
-        if path is not None:
+        path = mirror_file(self.notes, document_id)
+        if path.exists():
             known[document_id] = path
         return known.get(document_id, self.notes / f"{document_id}.md")
 

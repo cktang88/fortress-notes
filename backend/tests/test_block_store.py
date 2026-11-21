@@ -25,7 +25,7 @@ from app.block_store import (
     move_folder,
     navigation,
     list_documents,
-    rename_document,
+    update_document_metadata,
     rename_folder,
     rebuild_fts,
     register_asset,
@@ -217,7 +217,7 @@ class BlockStoreTests(unittest.TestCase):
             child = updated["children"][0]["children"][0]
             self.assertEqual(child["parent_id"], parent["id"])
 
-            renamed = rename_document(database, created["id"], "Renamed")
+            renamed, _ = update_document_metadata(database, created["id"], title="Renamed")
             self.assertEqual(renamed["title"], "Renamed")
             delete_document(database, created["id"])
             self.assertEqual(list_documents(database), [])
@@ -732,7 +732,7 @@ class BlockStoreTests(unittest.TestCase):
             self.assertEqual(len(backlinks), 2)
             self.assertEqual({backlink["source_document_id"] for backlink in backlinks}, {"source"})
 
-            rename_document(database, "target", "Renamed")
+            update_document_metadata(database, "target", title="Renamed")
             self.assertEqual(
                 document_tree(database, "source")["children"][0]["text"], "Target block and Renamed"
             )

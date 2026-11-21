@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 from app import block_store, corpus, ocr
 from app.models import BlockOperation
-from support import make_settings, use_settings
+from support import make_settings, mirror_file, use_settings
 
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -247,7 +247,7 @@ class ExternalReaderTests(_Workspace):
         with patch.object(block_store, "store_asset_text", mirror_pass_first):
             self.cpu_reads("flamingo total 12")
         documents.flush_mirrors()
-        mirror = documents.mirrors.path(self.root, document_id)
+        mirror = mirror_file(self.root, document_id)
         self.assertIn("flamingo total 12", mirror.read_text(encoding="utf-8"))
 
     def test_vision_text_wins_whichever_reader_finishes_first(self) -> None:

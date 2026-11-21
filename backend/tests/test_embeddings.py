@@ -444,7 +444,7 @@ class ModelLoadingTests(unittest.TestCase):
             embeddings, "_cache", embeddings._Cache()
         ), use_settings(settings):
             # Nothing loads the model on a request's behalf.
-            self.assertIsNone(embeddings.model_if_ready())
+            self.assertIsNone(embeddings._get_model())
             self.assertFalse(loading.is_set())
             loader = threading.Thread(target=embeddings.load_model)
             loader.start()
@@ -662,7 +662,7 @@ class AcceleratorTests(unittest.TestCase):
 
     def test_apple_silicon_with_mlx_encodes_on_the_gpu(self) -> None:
         self._route()
-        self.assertEqual(embeddings.device_info(), {"query": "mlx", "documents": "mlx"})
+        self.assertEqual(embeddings.device_info(), "mlx")
         self.cpu.calls.clear(), self.gpu.calls.clear()
         embeddings._encode(self.cpu, ["paragraph text"], is_query=False)
         embeddings._encode(self.cpu, ["query"], is_query=True)
@@ -680,13 +680,13 @@ class AcceleratorTests(unittest.TestCase):
                 self.apple_silicon, self.mlx_available, self.loads = apple_silicon, available, 0
                 self._route(embeddings_device=device)
                 self.assertEqual(self.loads, 0)
-                self.assertEqual(embeddings.device_info(), {"query": "cpu", "documents": "cpu"})
+                self.assertEqual(embeddings.device_info(), "cpu")
 
     def test_a_load_failure_stays_on_the_cpu(self) -> None:
         self.gpu.fail = True
         with self.assertLogs("fortress", "WARNING"):
             self._route()
-        self.assertEqual(embeddings.device_info(), {"query": "cpu", "documents": "cpu"})
+        self.assertEqual(embeddings.device_info(), "cpu")
 
     def test_a_gpu_error_moves_everything_back_to_the_cpu(self) -> None:
         import torch
@@ -697,7 +697,7 @@ class AcceleratorTests(unittest.TestCase):
         with self.assertLogs("fortress", "WARNING"):
             got = embeddings._encode(self.cpu, ["kyoto temples"], is_query=False)
         self.assertTrue(torch.equal(got[0], expected[0]))
-        self.assertEqual(embeddings.device_info(), {"query": "cpu", "documents": "cpu"})
+        self.assertEqual(embeddings.device_info(), "cpu")
         # Later encodes go to the CPU model without trying the GPU again.
         self.gpu.calls.clear()
         embeddings._encode(self.cpu, ["more"], is_query=True)

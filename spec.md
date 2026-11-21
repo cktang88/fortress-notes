@@ -133,7 +133,7 @@ with **422**.
 
 | Method | Path | Body / Query | Returns |
 | --- | --- | --- | --- |
-| `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded, vision_enabled, vision_loaded, block_db_ready}` (open without the token) |
+| `GET` | `/api/health` | — | `{status, embeddings_enabled, model_loaded, embeddings_device ("cpu"/"mlx"/null), vision_enabled, ask_configured}` (open without the token) |
 | `GET` | `/api/navigation` | `?recent_limit=` | folder tree + recent notes |
 | `POST` · `PATCH` · `DELETE` | `/api/folders` · `/api/folders/{id}` | `{name, parent_id?, position?}` · `{name}` · — | folder (folders nest); `DELETE` answers 409 unless the folder is empty |
 | `POST` | `/api/folders/{id}/move` · `/api/block-documents/{id}/move` | `{parent_id, position?}` · `{folder_id, position?}` | the moved item |

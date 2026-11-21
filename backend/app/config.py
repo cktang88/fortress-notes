@@ -33,7 +33,6 @@ class Settings(BaseSettings):
 
     notes_dir: Path = Path("../notes")
     openrouter_api_key: str = ""
-    openrouter_model: str = "anthropic/claude-haiku-5.5"
     # Ask needs answers in well under 3 s. Measured end to end (scripts/bench.py, 18
     # questions, streamed): Mercury 3 p50 0.90 s / p95 1.08 s; Gemini 2.5 Flash Lite
     # 1.03 / 1.74 s; GPT-4.1 nano, Claude Haiku 5.5, Gemini 3.1 Flash Lite 1.3-1.5 s
