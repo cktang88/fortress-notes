@@ -1,36 +1,33 @@
 # Fortress Notes
 
-A fast, local notes app for the Mac. A native macOS app (`mac/`, SwiftUI + TextKit 2,
-Liquid Glass on macOS 26) over a local Python backend (`backend/`, FastAPI + SQLite).
-Your notes live in one SQLite database on your Mac; every note is also exported, one
-way, to a plain Markdown file, and the notes folder opens as an Obsidian vault. Fortress uses
-open standards (CommonMark, GFM, Obsidian Markdown, YAML front matter) rather than
-formats of its own: [docs/open-standards.md](docs/open-standards.md).
+A fast, local notes app for the Mac: a native macOS app (`mac/`, SwiftUI + TextKit 2,
+macOS 26) over a local Python backend (`backend/`, FastAPI + SQLite). Your notes live
+in one SQLite database on your Mac; every note is also written, one way, to a plain
+Markdown file, so the notes folder opens as an Obsidian vault.
 
 <p align="center">
   <img src="docs/screenshots/library.png" width="720" alt="The main window in dark mode: Library and nested folders in the sidebar, the note list grouped by date">
 </p>
 
-- **Native Mac UI.** Sidebar with nested folders, a date-grouped note list, a TextKit 2
-  block editor (checklists, lists, links, highlights, tables, columns, pictures,
-  files), an inspector and a global Quick Capture panel.
-- **One search box.** Exact words (SQLite FTS5), meaning (ColBERT late interaction) and
-  note titles in one ranked list. Each result shows the matching passage and opens the
-  note at that paragraph.
-- **Instant related notes.** The inspector shows notes related to the one you're reading
-  and "Seen before" passages like the paragraph you're writing.
-- **Ask your notes.** A question gets a short answer in about a second or two, with every
+- **A native block editor.** Headings, lists, checklists, quotes, callouts, code,
+  tables, columns, pictures and files, with Markdown shortcuts. Hover a block for its
+  ⠿ handle (drag to move; click for Turn Into, Duplicate, Delete, Copy Link to
+  Block), type `/` for the insert menu, press Esc to select blocks. Links to notes
+  (`[[`) and to single paragraphs always show the target's current title or text.
+- **One search box.** Exact words (SQLite FTS5), meaning (ColBERT) and titles in one
+  ranked list; each result opens the note at that paragraph.
+- **Related notes as you write.** The inspector shows notes like the one you're
+  reading and "Seen before" passages like the paragraph you're writing, plus
+  backlinks, info and the text read from the note's pictures.
+- **Ask your notes.** A question gets a short answer in a second or two, every
   sentence citing the paragraph it came from. Only the matching passages go to the
-  model.
-- **Text in every picture and PDF.** Pasted, imported and attached pictures and PDFs are
-  read in the background, locally, so search, related notes and Ask find their text.
-- **OneNote migration.** Exported notebooks become folders and notes, with
-  tables, columns, pictures, attachments, equations (as LaTeX code) and links between
-  pages. Fortress has no math or ink: ink drawings are skipped and counted in the
-  import report.
-  Every note records where it came from. Importing the same export again refreshes
-  the pages that changed (same notes, links into them kept) and leaves alone the ones
-  you edited here.
+  model (via OpenRouter).
+- **Text in every picture and PDF**, read locally in the background (RapidOCR in the
+  backend, Apple Vision in the app), so search and Ask find it.
+- **OneNote import**, by download from Microsoft or from a `.onepkg` file. Re-importing
+  refreshes changed pages in place and never overwrites pages you edited here.
+- **Quick Capture** (⇧⌘Space from any app), nested folders, Trash with Undo, daily
+  backups, Markdown import and export.
 
 ## Screenshots
 
@@ -41,346 +38,150 @@ formats of its own: [docs/open-standards.md](docs/open-standards.md).
   </tr>
   <tr>
     <td><img src="docs/screenshots/ask.png" width="400" alt="Ask: an answer with numbered citations and its sources"><br><sub>Ask: every sentence cites its source</sub></td>
-    <td><img src="docs/screenshots/picture-text.png" width="200" alt="Inspector listing the text read from pictures and a PDF, including Russian"><br><sub>Inspector › Text in pictures (Apple Vision, incl. Russian)</sub></td>
+    <td><img src="docs/screenshots/picture-text.png" width="200" alt="Inspector listing the text read from pictures and a PDF, including Russian"><br><sub>Inspector › Text in pictures</sub></td>
   </tr>
   <tr>
     <td colspan="2"><img src="docs/screenshots/onenote-import.png" width="300" alt="OneNote import report"><br><sub>OneNote import report</sub></td>
   </tr>
 </table>
 
-## Features
+## Quick start
 
-**Writing and organizing**
-- Block editor with Markdown shortcuts; headings, bulleted/numbered/check lists, quotes,
-  callouts, code, dividers, tables, columns, pictures and file attachments.
-  Paste or drop a picture or file to attach it.
-- Blocks you can see and move, Craft/Notion style, on a calm page: hover a block for its
-  **⠿ handle** (drag to move it with its children, between blocks, nested, into a column,
-  beside a block to make columns, into a table cell; click for **Turn Into**, Duplicate,
-  Delete, **Copy Link to Block** as `[[Note#^id]]`, Move Up/Down, Info) and a **+** that
-  adds a block. Type **`/`** at the start of a line for the insert menu (headings, lists,
-  quote, callout, code, divider, `table 4x5`, 2/3 columns, image, file, note link).
-  **Esc** selects blocks: ⇧↑/⇧↓ extend, ⌥⇧↑/⌥⇧↓ move, ⌘C/⌘X/⌫/Tab/⌘D act on them.
-  View ▸ **Show Blocks** (⌥⌘B) keeps faint outlines and handles on every block. Every
-  action is one named undo step and saves as ordinary block operations.
-- Links to notes (type `[[` to pick one) and references to individual paragraphs,
-  with backlinks in the inspector. Links always show the target's current title or text.
-- Nested folders (drag notes and folders to move them), and a title that follows the
-  first line until you set one.
-- **Quick Capture** (⇧⌘Space, from any app) saves a thought to the *Uncategorized*
-  folder; captures made while the backend is down wait on disk and are sent later.
-- **Trash** with Undo, and **backups**: one SQLite snapshot per day (last 7 kept),
-  manual snapshots, and restore from any of them (the current state is saved first).
-- Markdown in and out: import `.md` files (⇧⌘I), export a note as Markdown (⇧⌘E).
-
-**Finding**
-- Unified search: FTS5 words, ColBERT meaning (`lightonai/Agent-ModernColBERT` via
-  [PyLate](https://github.com/lightonai/pylate)) and titles fused with reciprocal rank
-  fusion. Without the model, search and related notes fall back to keyword matching.
-- Inspector: *Seen before*, *Related notes*, *Backlinks*, *Info* (how the note came
-  in, dates, counts) and *Text in pictures*.
-- Find a note by title: press ⌥⌘F (Edit › Search All Notes) and type part of its title;
-  title matches rank first. Every command is in the menu bar.
-
-**Ask your notes**
-
-How to ask:
-- Click **Ask** in the toolbar (next to the search field) or press **⇧⌘A**
-  (View › Ask Your Notes…), type your question, press Return. Any text already in the
-  search field is filled in.
-- Or type a question into the search field (placeholder "Search or ask a question") and
-  press Return. Text that ends in `?`, or starts with who / what / when / where / why /
-  how / which / is / are / can / do / does / did / should / could / would / will, puts
-  the "Ask your notes" row first, so Return asks; anything else searches, and Return
-  opens the top result.
-- ⌘↩ in the search field always asks.
-- Without `OPENROUTER_API_KEY` in `backend/.env`, Ask says how to add it (and shows the
-  closest passages) instead of failing; `GET /api/health` reports `ask_configured`.
-
-How it works:
-- Gathers candidate passages locally first (literal grep for the question's key words
-  plus unified search), then one streamed model call answers, or asks for one more grep
-  or a whole note within a 3-second budget. A sentence whose quote isn't really in the
-  cited passage is dropped.
-- Runs over [OpenRouter](https://openrouter.ai); default model `anthropic/claude-haiku-5.5`
-  (`ASK_MODEL`). Needs `OPENROUTER_API_KEY`.
-
-**Text in pictures and PDFs**
-- The backend reads every picture and PDF once per content hash with RapidOCR
-  (PaddleOCR PP-OCRv6 small, ONNX on the CPU; models ship in the wheel). PDFs use their
-  text layer; only pages without one are OCR'd.
-- The Mac app also reads them with Apple Vision (more scripts, handwriting) and sends
-  the text to the backend, which prefers it. Toggle it in Settings › General ›
-  *Text in Pictures*.
-
-## Getting started
-
-Requirements: macOS 26 with Xcode 26 (Swift 6.2 or later), [uv](https://docs.astral.sh/uv/)
-(Python 3.11+), and Rust (stable) if you want to import OneNote.
-
-**Notes database from before 20 Nov 2026?** If the app says the database is at an older
-schema version, quit Fortress and run `./upgrade-database.sh` once (it keeps a backup).
-
-**Quick start:** `./start.sh` installs the backend's dependencies, creates `backend/.env`
-if it's missing, builds the OneNote converter when Rust is installed, then builds and
-opens the Mac app, which starts and stops the backend itself. `./start.sh --backend`
-runs only the backend at `http://127.0.0.1:8000`, for development. The steps below are
-what it does.
-
-### 1. Backend
+Requirements: macOS 26 with Xcode 26, [uv](https://docs.astral.sh/uv/), and Rust
+(stable) only if you want to import `.onepkg` files.
 
 ```bash
-cd backend
-uv sync --frozen             # creates backend/.venv with exactly the locked dependencies
-cp .env.example .env         # then set OPENROUTER_API_KEY in backend/.env
+./start.sh             # set up the backend, build and open the Mac app
+./start.sh --backend   # only the backend, at http://127.0.0.1:8000 (development)
 ```
 
-Put your OpenRouter key in `backend/.env` (it is gitignored); never put it in a
-committed file. Without a key everything works except Ask.
+`start.sh` installs the backend's locked dependencies, creates `backend/.env` from
+`.env.example` if it's missing (put `OPENROUTER_API_KEY` there for Ask; never commit
+it), builds the OneNote converter when Rust is installed, then builds and opens the
+app. The app starts the backend itself with a fresh access token and stops it when you
+quit (Settings › General shows its status, command and log). On first start the
+ColBERT model is downloaded from Hugging Face; until it has loaded, search uses
+keyword matching.
 
-On first start the background indexer downloads `lightonai/Agent-ModernColBERT` (at the
-commit pinned in `backend/app/config.py`) from Hugging Face; until it has loaded, search and related notes use keyword matching. Set
-`EMBEDDINGS_ENABLED=false` to skip the model.
-
-### 2. Mac app
-
-```bash
-cd mac
-swift build
-swift run FortressNotes
-```
-
-You don't start the backend yourself. The app finds the repository it was built in
-(Settings › General › *Folder*; it walks up from the executable to the folder holding
-`backend/app/main.py`) and, with *Start the backend automatically* on (the default),
-starts it at launch and stops it when you quit:
-
-- command: `backend/.venv/bin/uvicorn app.main:app --port <port>` if the virtualenv
-  exists, otherwise `uv run --frozen uvicorn app.main:app --port <port>`, run in `backend/`;
-- port: the one in Settings (default `http://127.0.0.1:8000`), or a free one if that is
-  taken;
-- environment: a fresh random `FORTRESS_TOKEN` per launch (every request must carry it,
-  see `backend/app/auth.py`), `FORTRESS_PARENT_PID` (the backend exits if the app dies)
-  and `FORTRESS_ONENOTE_BIN` when the converter is built;
-- log: `~/Library/Logs/Fortress Notes/backend.log` (Settings › *Show Log*).
-
-To run the backend by hand instead, turn off *Start the backend automatically* and
-point Settings at its address:
-
-```bash
-cd backend
-uv run --frozen uvicorn app.main:app --port 8000
-```
-
-Without `FORTRESS_TOKEN` the backend accepts loopback requests only, and refuses
-browser requests either way.
-
-### 3. OneNote converter (optional)
-
-```bash
-cd tools/fortress-onenote
-cargo build --release --locked   # -> target/release/fortress-onenote
-```
-
-The app passes the built binary to the backend it starts. CI also builds a universal
-macOS binary (artifact `fortress-onenote-macos-universal`).
+**Older notes database?** If the app says the database is at an older schema
+version, quit Fortress and run `./upgrade-database.sh` once. It keeps a copy of the
+database next to it and upgrades it with the last release that still migrates.
 
 ## Importing from OneNote
 
-OneNote for the web no longer offers *Export notebook* (2026), OneDrive doesn't
-download notebooks, and OneNote for Mac only saves PDFs. **File › Import › From
-OneNote…** (or Settings › General) therefore offers two ways:
+**File › Import › From OneNote…** offers two ways (OneNote for the web no longer
+exports notebooks, and OneNote for Mac only saves PDFs):
 
-- **Download from Microsoft** (the default; no Terminal). The sheet asks for the
-  *Application (client) ID* of a free app you register once in Microsoft Entra (about
-  five minutes; the sheet lists the steps and opens <https://entra.microsoft.com>), and
-  whether it's a personal or a work/school account. Optionally sign in first with
-  *Choose…* to pick notebooks. **Download and Import** opens your browser to sign in
-  (read-only; if the browser can't be used, the sheet shows a code to enter at
-  microsoft.com/devicelogin), downloads with live progress, and imports the result
-  automatically. Microsoft limits reads to 400 requests an hour, so a large first
-  download takes a while (roughly an hour per 200–400 pages; the sheet shows when a
-  rate-limit pause ends). You can close the sheet, stop, or quit: running it again
-  continues where it stopped, and later runs fetch only changed pages.
+- **Download from Microsoft** (default, no Terminal). Enter the *Application (client)
+  ID* of a free app you register once in Microsoft Entra (about five minutes; the
+  sheet lists the steps), pick a personal or work account, optionally choose
+  notebooks, and press **Download and Import**. You sign in in your browser
+  (read-only), the sheet shows progress and imports the result. Microsoft allows
+  about 400 requests an hour, so a large first download takes a while; you can stop
+  or quit at any time and running it again continues, fetching only changed pages
+  later. The backend runs [`tools/fortress-onenote-graph`](tools/fortress-onenote-graph/README.md)
+  for this (it needs uv). Graph loses custom note tags and section order.
+- **Import a file** (most complete). On Windows, OneNote's *File › Export › Notebook
+  › OneNote Package (.onepkg)*, or a section as `.one`; unlock protected sections
+  first. Drop the file on the sheet. A `.zip` from an earlier download works too.
 
-  The backend runs the optional tool
-  [`tools/fortress-onenote-graph`](tools/fortress-onenote-graph/README.md) for this
-  (it needs [uv](https://docs.astral.sh/uv/), e.g. `brew install uv`; the sheet says
-  so if it's missing). The tool also works on its own from the command line. Graph loses
-  some things the `.one` route keeps: ink/handwriting, equations (kept as text in a code
-  block), custom note tags, section order and colours (full list in the tool's README).
-  Sign-in tokens stay with the tool (in the Keychain); the app id is remembered in the
-  app's settings.
-- **Import a file** (best fidelity): OneNote for Windows › *File › Export › Notebook ›
-  OneNote Package (.onepkg)* (or a section as `.one`). Unlock password-protected
-  sections first, copy the file to the Mac and drop it on the sheet (a `.zip` the
-  download tool wrote works too, imported as is without the converter).
-
-Either way you choose where the notebooks go.
-
-Notebooks, section groups and sections become folders; pages become notes (subpages
-stay next to their parent, which gets a *Subpages* list). The report lists counts per
-notebook, sections that failed, pages whose text coverage is below 98 %, links that
-couldn't be resolved, and pages removed in OneNote since the last import (never deleted
-here). Importing the same export again refreshes each page that changed in OneNote:
-the note keeps its place and id, and links to its paragraphs keep working. A page you
-edited in Fortress since the last import is not refreshed; the report lists it.
-
-Details: [spec.md §7b](spec.md#7b-onenote-import-onenote_importpy) and
+Notebooks, section groups and sections become folders and pages become notes. The
+report lists counts, failed sections, pages whose text coverage is below 98 %,
+unresolved links and pages removed in OneNote (never deleted here). Fortress has no
+math or ink: equations are kept as plain text, ink is skipped and counted. Decisions:
 [docs/onenote-import.md](docs/onenote-import.md).
 
 ## Configuration
 
-Settings are read once from the environment and `backend/.env` (always that file,
-whatever the current directory; environment variables win). Relative paths are
-relative to `backend/`. See [`backend/.env.example`](backend/.env.example).
+Read once from the environment and `backend/.env` (environment variables win;
+relative paths are relative to `backend/`). Template:
+[`backend/.env.example`](backend/.env.example).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `NOTES_DIR` | `../notes` | Folder for the database, Markdown mirrors, pictures, backups and the embedding index |
+| `NOTES_DIR` | `../notes` | Database, Markdown mirror, pictures, backups and embedding index |
 | `OPENROUTER_API_KEY` | — | Needed for Ask |
-| `ASK_MODEL` | `anthropic/claude-haiku-5.5` | OpenRouter model Ask uses |
-| `ASK_REASONING_EFFORT` | `none` | OpenRouter reasoning effort for `ASK_MODEL` (empty: the model's default) |
+| `ASK_MODEL` | `anthropic/claude-haiku-5.5` | OpenRouter model for Ask |
+| `ASK_REASONING_EFFORT` | `none` | Reasoning effort for `ASK_MODEL` (empty: the model's default) |
 | `EMBEDDINGS_ENABLED` | `true` | ColBERT search and related notes (off: keyword matching) |
 | `COLBERT_MODEL` | `lightonai/Agent-ModernColBERT` | Late-interaction model |
-| `COLBERT_REVISION` | pinned commit | Commit of the model's Hugging Face repository (default: the one in `app/config.py` for the default model; see [docs/dependencies.md](docs/dependencies.md)) |
-| `EMBEDDINGS_DEVICE` | `auto` | `auto` (MLX on the GPU on Apple Silicon when installed, else the CPU), `mlx` or `cpu` |
+| `COLBERT_REVISION` | pinned commit | Model repository commit ([docs/dependencies.md](docs/dependencies.md)) |
+| `EMBEDDINGS_DEVICE` | `auto` | `auto` (MLX on Apple Silicon when installed, else CPU), `mlx` or `cpu` |
 | `EMBEDDINGS_THREADS` | `0` | Torch threads (0 = half the cores, at most 4) |
+| `PRECOMPUTE_QUERY_EMBEDDINGS` | `true` | Precompute each paragraph's query encoding for "Seen before" |
 | `REINDEX_INTERVAL_S` | `5` | How often changed paragraphs are re-encoded |
 | `VISION_ENABLED` | `true` | The backend's own OCR of pictures and PDFs |
-| `OCR_THREADS` | `0` | ONNX Runtime threads for OCR (0 = half the cores, at most 4) |
-| `AUTO_BACKUP_ENABLED` | `true` | Daily snapshot in `NOTES_DIR/.fortress-backups` |
-| `FORTRESS_ONENOTE_BIN` | — | The converter binary (else the repository build, next to Python, `../Resources/bin`, or `PATH`) |
+| `OCR_THREADS` | `0` | OCR threads (0 = half the cores, at most 4) |
+| `WELCOME_NOTE` | `true` | A new workspace starts with the Welcome note |
+| `AUTO_BACKUP_ENABLED` | `true` | Daily snapshot in `NOTES_DIR/.fortress-backups` (last 7 kept) |
+| `FORTRESS_ONENOTE_BIN` | — | The converter binary (else the repository build, next to Python, or `PATH`) |
 | `FORTRESS_ONENOTE_TIMEOUT_S` | `3600` | Seconds before a conversion is stopped |
-| `FORTRESS_ONENOTE_GRAPH_DIR` | — | The OneNote download tool's folder (else `tools/fortress-onenote-graph` in the repository) |
+| `FORTRESS_ONENOTE_GRAPH_DIR` | — | The download tool's folder (else `tools/fortress-onenote-graph`) |
 
-Read from the process environment only (not from `.env`): `FORTRESS_TOKEN`,
-`FORTRESS_PARENT_PID` (both set by the app) and `FORTRESS_ALLOWED_HOSTS` (extra `Host`
-names accepted without a token).
+The app sets `FORTRESS_TOKEN` and `FORTRESS_PARENT_PID` in the backend's
+environment; `FORTRESS_ALLOWED_HOSTS` adds `Host` names accepted without a token.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  subgraph Mac["Mac app (mac/, SwiftUI + TextKit 2)"]
-    UI[Shell · Editor · Finding]
-    Vision[Apple Vision reader]
-  end
-  subgraph Backend["backend/ (FastAPI, 127.0.0.1)"]
-    API["REST API<br/>ETags · token auth"]
-    Store[("SQLite<br/>.fortress.sqlite3")]
-    BG["background lanes:<br/>mirrors · imports · backups · ocr · index"]
-    Corpus["search corpus<br/>FTS5 · ColBERT"]
-    Ask[Ask]
-  end
-  Conv["tools/fortress-onenote<br/>Rust converter"]
-  OR[(OpenRouter)]
-  UI -- "HTTP/JSON + X-Fortress-Token" --> API
-  Vision -- "OCR text: PUT /api/ocr" --> API
-  API --> Store
-  API --> Corpus
-  API --> Ask --> OR
-  BG --> Store
-  BG -- runs --> Conv
-  BG -- writes --> Files["NOTES_DIR: *.md mirrors,<br/>assets/, .fortress-backups/"]
+```
+Mac app ──HTTP + per-launch token──▶ backend (FastAPI on 127.0.0.1) ──▶ SQLite
+   └─ Apple Vision text ─▶ PUT /api/ocr     ├─ background lanes: mirror · imports · downloads · backups · OCR · index
+                                            ├─ Ask ──▶ OpenRouter (matching passages only)
+                                            └─ runs tools/fortress-onenote (Rust), tools/fortress-onenote-graph
 ```
 
-- **SQLite is the only source of truth** (`NOTES_DIR/.fortress.sqlite3`): folders,
-  documents, nested blocks with stable ids, links, assets, OCR text, FTS5. The
-  block model is the contract between backend and clients:
-  [docs/block-model.md](docs/block-model.md). Edits are revision-checked block
-  transactions; undo is the editor's own, per note, and saves as ordinary edits.
-- **Background work** runs in one manager (`backend/app/background.py`), one thread per
-  lane: Markdown mirrors (`NOTES_DIR/<folder>/<Title>.md`, an Obsidian vault, write-only), OneNote import jobs, daily
-  backups, OCR and ColBERT indexing. Low-priority lanes yield while a search is scoring.
-- **Search corpus** (`backend/app/corpus.py`): the searchable text of every paragraph,
-  updated by deltas from SQLite's change log; search, related notes, Ask's grep and the
-  indexer all read it. Embeddings persist in `NOTES_DIR/.fortress-embeddings.sqlite3`.
-- **Local auth** (`backend/app/auth.py`): browser requests are refused; with
-  `FORTRESS_TOKEN` set every request needs it.
-- **OneNote**: the Rust converter turns an export into `manifest.json` + content-addressed
-  assets; `backend/app/onenote_import.py` imports it (re-imports refresh changed pages).
+SQLite is the only source of truth; edits are revision-checked block transactions
+against the contract in [docs/block-model.md](docs/block-model.md). Undo is the
+editor's own, per note, and saves as ordinary edits. Background work (the Markdown
+mirror, imports, downloads, backups, OCR, indexing) runs on lanes that yield to
+search. The backend refuses browser requests and, with a token set, any request
+without it.
 
 ## FAQ
 
-### Why a block database instead of Markdown files auto-committed to git?
+### Why a block database instead of Markdown files in git?
 
-Markdown files with batched git commits is a sound design for a notes app (Obsidian
-works that way). Fortress stores notes as blocks in SQLite because its main features
-(related notes, block links, Ask citations) need every paragraph to have a stable
-identity. It still writes every note out as Markdown, so the files stay open.
+Markdown files with git commits is a sound design (Obsidian works that way).
+Fortress stores blocks in SQLite because related notes, block links and Ask citations
+need every paragraph to have a stable identity. It still writes every note out as
+Markdown, so you can always leave.
 
 | | Blocks in SQLite (Fortress) | Markdown + git as the source of truth |
 |---|---|---|
-| **Paragraph links and embeds** | Every block has a stable id; links survive edits, renames and moves | Ids must live in the text (`^abc123`); a paste, rename or edit in another editor can drop or duplicate them and break links silently |
-| **Related notes and search speed** | The ColBERT index updates only the paragraphs that changed (from SQLite's change log) | Each save means re-reading and re-parsing the file and guessing which paragraphs are the old ones before re-indexing |
-| **Concurrent edits** | Edits are block operations; two windows conflict only on the same paragraph | Git merges by line, and a prose paragraph is one line, so edits conflict or the last write wins |
-| **Undo** | Per note in the editor, named steps; an undo saves like any edit | Editor-local only; history is per commit |
-| **Rich content** | Tables whose cells hold blocks, columns, callouts and OneNote layout are kept without loss | No faithful Markdown form; each round trip loses some of it |
-| **Pictures** | Stored once by content hash, with cached OCR text | A git repo grows forever unless you add Git LFS |
-| **Open format, no lock-in** | ✅ via the Markdown mirror (an Obsidian vault in `NOTES_DIR`) | ✅ natively |
-| **Edit with any editor** | ⚠️ The mirror is a one-way export, overwritten when the note changes; edits made there are not read back | ✅ |
-| **History and diffs** | Undo/redo while editing; daily database snapshots (last 7 kept); no per-note version history yet | ✅ free with git, plus push to any remote |
-| **Sync** | Not built in (local-first, one Mac) | ✅ through any git remote |
+| **Paragraph links** | Every block has a stable id; links survive edits, renames, moves and re-imports | Ids live in the text (`^abc123`); an edit elsewhere can drop or duplicate them |
+| **Search and related notes** | The index re-encodes only the paragraphs that changed (SQLite's change log) | Each save re-parses the file and guesses which paragraphs are new |
+| **Concurrent edits** | Each save is checked against the note's revision; a stale one is refused and the editor offers to load the latest | Git merges by line; a paragraph is one line, so edits conflict or the last write wins |
+| **Undo** | Per note in the editor, named steps; no server history | Editor-local; history per commit |
+| **Rich content** | Tables whose cells hold blocks, columns, callouts and OneNote layout kept | No faithful Markdown form |
+| **Pictures** | Stored once by content hash, with cached OCR text | The repository grows unless you add Git LFS |
+| **Open format** | ✅ The Markdown mirror is an Obsidian vault | ✅ natively |
+| **Edit with any editor** | ⚠️ The mirror is write-only: overwritten when the note changes, never read back | ✅ |
+| **Where a note came from** | Per note (manual, capture, import); not per block | Whatever you write in front matter |
+| **History** | Daily database snapshots (last 7); no per-note history | ✅ free with git |
+| **Sync** | Not built in (one Mac) | ✅ any git remote |
 | **Simplicity** | A server process and a database | Just files |
 
-The block database gives up some simplicity to make related notes, block links and
-Ask fast and reliable. The Markdown mirror means you can always leave with your notes
-in an open format.
+## Tests
 
-| Component | Run tests | CI workflow |
+| Component | Run | CI |
 | --- | --- | --- |
-| Backend | `cd backend && uv run --frozen python -m unittest discover -s tests` | [`backend.yml`](.github/workflows/backend.yml): unit tests on Python 3.13, offline (no model download, no LLM key) |
-| Mac app | `cd mac && swift build && swift test` | [`mac.yml`](.github/workflows/mac.yml): build, tests and window snapshots (artifact `snapshots`), editor and finding performance, and integration tests against a real backend seeded by `mac/Scripts/seed_backend.py` |
-| OneNote converter | `cd tools/fortress-onenote && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked` | [`onenote-tool.yml`](.github/workflows/onenote-tool.yml): Linux tests, plus a universal macOS binary |
-| Dependency cooldown | `python3 .github/scripts/check_cooldown.py` | [`dependencies.yml`](.github/workflows/dependencies.yml): every pin released at least 7 days before it was pinned ([docs/dependencies.md](docs/dependencies.md)) |
-
-Mac test switches: `SNAPSHOT_DIR=<dir>` writes window snapshots there,
-`FINDING_PERF=1` enables the finding performance suite, and
-`FORTRESS_INTEGRATION_URL=http://127.0.0.1:8000` (with the backend's `FORTRESS_TOKEN`
-in the environment) runs `IntegrationTests`.
-
-Benchmarks and calibration scripts live in `backend/scripts/` (`bench.py` with its
-generated workspace `bench_workspace.py`, `calibrate_related.py`).
-
-## Project layout
-
-```
-backend/
-  app/                FastAPI app: main.py (routes), block_store.py, block_schema.py,
-                      documents.py, sources.py, search.py, corpus.py, embeddings.py,
-                      ask.py, llm.py, ocr.py, onenote_import.py, background.py, auth.py, ...
-  tests/              unittest suite
-  scripts/            benchmarks and calibration
-  .env.example        configuration template (copy to .env)
-mac/
-  Package.swift       SwiftPM: FortressKit library + FortressNotes executable (macOS 26)
-  Sources/FortressKit/
-    API/              client, auth token, caches
-    App/              AppModel
-    Shell/            window, sidebar, note list, settings, backend launcher, imports, backups, trash
-    Editor/           TextKit 2 block editor (Model/, Text/)
-    Finding/          search, Ask, inspector, Quick Capture, Apple Vision reader
-  Tests/              unit, snapshot, performance and integration tests
-  Scripts/            seed_backend.py (integration seeding), fixture regeneration
-tools/
-  fortress-onenote/   Rust OneNote converter (manifest format: SCHEMA.md)
-docs/                 block model, OneNote research, screenshots
-notes/                default NOTES_DIR (gitignored except the welcome note)
-spec.md               backend spec: data model, API, OCR, re-imports, OneNote import
-```
+| Backend | `cd backend && uv run --frozen python -m unittest discover -s tests` | [`backend.yml`](.github/workflows/backend.yml) |
+| Mac app | `cd mac && swift build && swift test` | [`mac.yml`](.github/workflows/mac.yml): tests, window snapshots, performance, integration against a real backend |
+| OneNote converter | `cd tools/fortress-onenote && cargo test --locked` | [`onenote-tool.yml`](.github/workflows/onenote-tool.yml) |
+| OneNote download tool | `cd tools/fortress-onenote-graph && uv run --frozen python -m unittest discover -s tests -t .` | [`onenote-graph.yml`](.github/workflows/onenote-graph.yml) |
+| Dependency cooldown | `python3 .github/scripts/check_cooldown.py` | [`dependencies.yml`](.github/workflows/dependencies.yml) |
 
 ## Documentation
 
-- [spec.md](spec.md): data model, API, caching, search, OCR, backups, provenance and
-  re-imports, OneNote import jobs.
-- [docs/block-model.md](docs/block-model.md): the block model contract (types, inline
-  content, transactions, Markdown form).
-- [docs/open-standards.md](docs/open-standards.md): the open-standards policy and the
-  decision for every format Fortress reads or writes.
-- [docs/dependencies.md](docs/dependencies.md): the dependency policy (exact pins,
-  7-day cooldown enforced in CI) and how to update each kind of dependency.
-- [mac/DESIGN.md](mac/DESIGN.md): the Mac app's design system and screen-by-screen spec.
-- [docs/onenote-import.md](docs/onenote-import.md): OneNote migration research and design.
+- [spec.md](spec.md): what the app does and the invariants it keeps.
+- [docs/block-model.md](docs/block-model.md): the block model contract (types,
+  inline content, transactions, Markdown form, schema policy).
+- [docs/open-standards.md](docs/open-standards.md): the open-standards policy and
+  every format decision.
+- [docs/onenote-import.md](docs/onenote-import.md): OneNote import decisions.
+- [docs/dependencies.md](docs/dependencies.md): exact pins, the 7-day cooldown, how
+  to update.
+- [mac/DESIGN.md](mac/DESIGN.md): the Mac app's design: principles, shortcuts,
+  interaction rules, theming.
 - [tools/fortress-onenote/README.md](tools/fortress-onenote/README.md) and
   [SCHEMA.md](tools/fortress-onenote/SCHEMA.md): the converter and its manifest.
