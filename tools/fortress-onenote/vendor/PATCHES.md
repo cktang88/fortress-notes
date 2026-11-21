@@ -155,6 +155,23 @@ paragraph. Removed files: `onenote/math_inline_object.rs`,
 types went. Files: `lib.rs`, `onenote/{mod,rich_text}.rs`,
 `one/property/mod.rs`, `one/property_set/mod.rs`.
 
+**P14 — rich text: only what the converter reads.** Paragraphs and
+paragraph styles no longer parse properties the converter never reads:
+`RichText::{paragraph_space_before, paragraph_space_after,
+paragraph_line_spacing_exact, layout_alignment_in_parent,
+layout_alignment_self}`, `ParagraphStyling::{charset, next_style,
+paragraph_alignment, paragraph_space_before, paragraph_space_after,
+paragraph_line_spacing_exact, language_code, hyperlink}` (the hyperlink flag
+itself stays for `RichText::hyperlinks`), and the rich-text node's
+last-modified time, title/boiler-text flags, language and reading order.
+`EmbeddedObject::InkSpace` no longer carries a size (`EmbeddedInkSpace`
+removed; a space without a size is still an error, as before), and of an
+embedded ink container only the space size is read. A rich-text node without
+a last-modified time is no longer rejected. Removed file:
+`one/property/charset.rs`. Files: `lib.rs`, `onenote/rich_text.rs`,
+`one/property/mod.rs`,
+`one/property_set/{rich_text_node,paragraph_style_object,embedded_ink_container}.rs`.
+
 ## cab 0.6.0
 
 **C1 — no panic on corrupt cabinets.** In `folder.rs`, a file offset beyond

@@ -1,4 +1,4 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P3, P9, P10, P11, P12).
+// Modified by fortress-onenote (vendor/PATCHES.md: P3, P9, P10, P11, P12, P14).
 //! A OneNote file parser.
 //!
 //! `onenote_parser` provides a high-level API to parse OneNote notebooks and
@@ -146,9 +146,7 @@ pub mod contents {
     pub use crate::onenote::note_tag::NoteTag;
     pub use crate::onenote::outline::{Outline, OutlineElement, OutlineGroup, OutlineItem};
     pub use crate::onenote::picture::Picture;
-    pub use crate::onenote::rich_text::{
-        EmbeddedInkSpace, EmbeddedObject, ParagraphStyling, RichText, TextHyperlink,
-    };
+    pub use crate::onenote::rich_text::{EmbeddedObject, ParagraphStyling, RichText, TextHyperlink};
     pub use crate::onenote::table::{Table, TableCell, TableRow};
     pub use crate::onestore::shared::file_blob::FileDataStatus;
 }
@@ -176,7 +174,6 @@ pub mod property {
 
     /// Properties related to rich-text content.
     pub mod rich_text {
-        pub use crate::one::property::charset::Charset;
         pub use crate::one::property::paragraph_alignment::ParagraphAlignment;
         pub use crate::onenote::rich_text::ParagraphStyling;
         // PATCH(fortress-onenote, P9)

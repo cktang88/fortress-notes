@@ -1,8 +1,6 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P9).
+// Modified by fortress-onenote (vendor/PATCHES.md: P9, P14).
 use crate::errors::Result;
-use crate::one::property::charset::Charset;
 use crate::one::property::color_ref::ColorRef;
-use crate::one::property::paragraph_alignment::ParagraphAlignment;
 use crate::one::property::{PropertyType, simple};
 use crate::one::property_set::PropertySetId;
 use crate::onenote::ParserContext;
@@ -16,9 +14,7 @@ use crate::onestore::Object;
 /// [\[MS-ONE\] 2.2.43]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/38eb9b74-cfaf-4df7-b061-a83968c7ff5b
 /// [\[MS-ONE\] 2.2.44]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/f0baabae-f42a-42e0-8cb2-869d420e865f
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct Data {
-    pub(crate) charset: Option<Charset>,
     pub(crate) bold: bool,
     pub(crate) italic: bool,
     pub(crate) underline: bool,
@@ -29,13 +25,7 @@ pub(crate) struct Data {
     pub(crate) font_size: Option<u16>,
     pub(crate) font_color: Option<ColorRef>,
     pub(crate) highlight: Option<ColorRef>,
-    pub(crate) next_style: Option<String>,
     pub(crate) style_id: Option<String>,
-    pub(crate) paragraph_alignment: Option<ParagraphAlignment>,
-    pub(crate) paragraph_space_before: Option<f32>,
-    pub(crate) paragraph_space_after: Option<f32>,
-    pub(crate) paragraph_line_spacing_exact: Option<f32>,
-    pub(crate) language_code: Option<u32>,
     pub(crate) math_formatting: bool,
     pub(crate) hyperlink: bool,
     pub(crate) hyperlink_protected: bool,
@@ -48,7 +38,6 @@ pub(crate) struct Data {
 }
 
 const FALLBACK: Data = Data {
-    charset: Some(Charset::Ansi),
     bold: false,
     italic: false,
     underline: false,
@@ -59,13 +48,7 @@ const FALLBACK: Data = Data {
     font_size: None,
     font_color: None,
     highlight: None,
-    next_style: None,
     style_id: None,
-    paragraph_alignment: None,
-    paragraph_space_before: None,
-    paragraph_space_after: None,
-    paragraph_line_spacing_exact: None,
-    language_code: Some(1033),
     math_formatting: false,
     hyperlink: false,
     hyperlink_protected: false,
@@ -93,7 +76,6 @@ pub(crate) fn parse(object: &Object, ctx: &mut ParserContext) -> Result<Data> {
         return Ok(FALLBACK);
     }
 
-    let charset = Charset::parse(PropertyType::Charset, object)?;
     // PATCH(fortress-onenote, P9): keep whether each flag is stored.
     let stored_flags = StoredFlags {
         bold: simple::parse_bool(PropertyType::Bold, object)?,
@@ -113,14 +95,7 @@ pub(crate) fn parse(object: &Object, ctx: &mut ParserContext) -> Result<Data> {
     let font_size = simple::parse_u16(PropertyType::FontSize, object)?;
     let font_color = ColorRef::parse(PropertyType::FontColor, object)?;
     let highlight = ColorRef::parse(PropertyType::Highlight, object)?;
-    let next_style = simple::parse_string(PropertyType::NextStyle, object)?;
     let style_id = simple::parse_string(PropertyType::ParagraphStyleId, object)?;
-    let paragraph_alignment = ParagraphAlignment::parse(object)?;
-    let paragraph_space_before = simple::parse_f32(PropertyType::ParagraphSpaceBefore, object)?;
-    let paragraph_space_after = simple::parse_f32(PropertyType::ParagraphSpaceAfter, object)?;
-    let paragraph_line_spacing_exact =
-        simple::parse_f32(PropertyType::ParagraphLineSpacingExact, object)?;
-    let language_code = simple::parse_u32(PropertyType::LanguageId, object)?;
     let math_formatting =
         simple::parse_bool(PropertyType::MathFormatting, object)?.unwrap_or_default();
     let hyperlink = simple::parse_bool(PropertyType::Hyperlink, object)?.unwrap_or_default();
@@ -132,7 +107,6 @@ pub(crate) fn parse(object: &Object, ctx: &mut ParserContext) -> Result<Data> {
     let text_run_object_type = simple::parse_u32(PropertyType::EmbeddedObjectType, object)?;
 
     let data = Data {
-        charset,
         bold,
         italic,
         underline,
@@ -143,13 +117,7 @@ pub(crate) fn parse(object: &Object, ctx: &mut ParserContext) -> Result<Data> {
         font_size,
         font_color,
         highlight,
-        next_style,
         style_id,
-        paragraph_alignment,
-        paragraph_space_before,
-        paragraph_space_after,
-        paragraph_line_spacing_exact,
-        language_code,
         math_formatting,
         hyperlink,
         hyperlink_protected,

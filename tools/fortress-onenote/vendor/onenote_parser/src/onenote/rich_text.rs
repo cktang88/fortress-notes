@@ -1,9 +1,7 @@
-// Modified by fortress-onenote (vendor/PATCHES.md: P6, P9, P10, P11, P13).
+// Modified by fortress-onenote (vendor/PATCHES.md: P6, P9, P10, P11, P13, P14).
 use crate::errors::{ErrorKind, Result};
 use crate::fsshttpb::data::exguid::ExGuid;
-use crate::one::property::charset::Charset;
 use crate::one::property::color_ref::ColorRef;
-use crate::one::property::layout_alignment::LayoutAlignment;
 use crate::one::property::paragraph_alignment::ParagraphAlignment;
 use crate::one::property_set::{
     embedded_ink_container, paragraph_style_object, rich_text_node, text_run_data,
@@ -39,13 +37,7 @@ pub struct RichText {
     pub(crate) text_run_indices: Vec<u32>,
 
     pub(crate) paragraph_style: ParagraphStyling,
-    pub(crate) paragraph_space_before: f32,
-    pub(crate) paragraph_space_after: f32,
-    pub(crate) paragraph_line_spacing_exact: Option<f32>,
     pub(crate) paragraph_alignment: ParagraphAlignment,
-
-    pub(crate) layout_alignment_in_parent: Option<LayoutAlignment>,
-    pub(crate) layout_alignment_self: Option<LayoutAlignment>,
 
     pub(crate) note_tags: Vec<NoteTag>,
     pub(crate) embedded_objects: Vec<EmbeddedObject>,
@@ -127,33 +119,6 @@ impl RichText {
         &self.paragraph_style
     }
 
-    /// The paragraph's top margin in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.81].
-    ///
-    /// [\[MS-ONE\] 2.3.81]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/1a2958bd-7512-419b-a8a5-eda200edb7cd
-    pub fn paragraph_space_before(&self) -> f32 {
-        self.paragraph_space_before
-    }
-
-    /// The paragraph's bottom margin in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.82].
-    ///
-    /// [\[MS-ONE\] 2.3.82]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/505393e2-c641-416f-be83-050da44d581d
-    pub fn paragraph_space_after(&self) -> f32 {
-        self.paragraph_space_after
-    }
-
-    /// The paragraph's line spacing in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.83].
-    ///
-    /// [\[MS-ONE\] 2.3.83]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/4474bd74-5407-4675-a9bb-a32f81eb799c
-    pub fn paragraph_line_spacing_exact(&self) -> Option<f32> {
-        self.paragraph_line_spacing_exact
-    }
-
     /// The paragraph's text alignment.
     ///
     /// See [\[MS-ONE\] 2.3.94].
@@ -161,24 +126,6 @@ impl RichText {
     /// [\[MS-ONE\] 2.3.94]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/36edb135-5e8e-400f-9394-82853d662d90
     pub fn paragraph_alignment(&self) -> ParagraphAlignment {
         self.paragraph_alignment
-    }
-
-    /// The paragraph's alignment relative to the containing outline element (if present).
-    ///
-    /// See [\[MS-ONE\] 2.3.27].
-    ///
-    /// [\[MS-ONE\] 2.3.27]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/61fa50be-c355-4b8d-ac01-761a2f7f66c0
-    pub fn layout_alignment_in_parent(&self) -> Option<LayoutAlignment> {
-        self.layout_alignment_in_parent
-    }
-
-    /// The paragraph's alignment.
-    ///
-    /// See [\[MS-ONE\] 2.3.33].
-    ///
-    /// [\[MS-ONE\] 2.3.33]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/4e7fe9db-2fdb-4239-b291-dc4b909c94ad
-    pub fn layout_alignment_self(&self) -> Option<LayoutAlignment> {
-        self.layout_alignment_self
     }
 
     /// Note tags for this paragraph.
@@ -198,30 +145,12 @@ pub enum EmbeddedObject {
     /// An ink handwriting object (PATCH(fortress-onenote, P10): not parsed).
     Ink(Ink),
 
-    /// A space in the ink handwriting.
-    InkSpace(EmbeddedInkSpace),
+    /// A space in the ink handwriting (PATCH(fortress-onenote, P14): its
+    /// size is not kept).
+    InkSpace,
 
     /// A line break in the ink handwriting.
     InkLineBreak,
-}
-
-/// A space in an embedded ink handwriting object.
-#[derive(Clone, Debug)]
-pub struct EmbeddedInkSpace {
-    height: f32,
-    width: f32,
-}
-
-impl EmbeddedInkSpace {
-    /// The space's height.
-    pub fn height(&self) -> f32 {
-        self.height
-    }
-
-    /// The space's width.
-    pub fn width(&self) -> f32 {
-        self.width
-    }
 }
 
 /// A paragraph's style.
@@ -232,7 +161,6 @@ impl EmbeddedInkSpace {
 /// [\[MS-ONE\] 2.2.44]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/f0baabae-f42a-42e0-8cb2-869d420e865f
 #[derive(Clone, Debug, Default)]
 pub struct ParagraphStyling {
-    pub(crate) charset: Option<Charset>,
     pub(crate) bold: bool,
     pub(crate) italic: bool,
     pub(crate) underline: bool,
@@ -243,13 +171,7 @@ pub struct ParagraphStyling {
     pub(crate) font_size: Option<u16>,
     pub(crate) font_color: Option<ColorRef>,
     pub(crate) highlight: Option<ColorRef>,
-    pub(crate) next_style: Option<String>,
     pub(crate) style_id: Option<String>,
-    pub(crate) paragraph_alignment: Option<ParagraphAlignment>,
-    pub(crate) paragraph_space_before: Option<f32>,
-    pub(crate) paragraph_space_after: Option<f32>,
-    pub(crate) paragraph_line_spacing_exact: Option<f32>,
-    pub(crate) language_code: Option<u32>,
     pub(crate) math_formatting: bool,
     pub(crate) hyperlink: bool,
     pub(crate) hyperlink_protected: bool,
@@ -286,11 +208,6 @@ impl ParagraphStyling {
     /// stores (see [`StoredFlags`]).
     pub fn stored_flags(&self) -> StoredFlags {
         self.stored_flags
-    }
-
-    /// The text's charset.
-    pub fn charset(&self) -> Option<Charset> {
-        self.charset
     }
 
     /// Whether the text is bold.
@@ -355,15 +272,6 @@ impl ParagraphStyling {
         self.highlight
     }
 
-    /// The name of the default style for the next paragraph.
-    ///
-    /// See [\[MS-ONE\] 2.2.92].
-    ///
-    /// [\[MS-ONE\] 2.2.92]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/fa70a53b-2661-4d33-aec7-948488e49fc3
-    pub fn next_style(&self) -> Option<&str> {
-        self.next_style.as_deref()
-    }
-
     /// The paragraph style's name.
     ///
     /// See [\[MS-ONE\] 2.2.83].
@@ -373,61 +281,9 @@ impl ParagraphStyling {
         self.style_id.as_deref()
     }
 
-    /// The paragraph alignment.
-    pub fn paragraph_alignment(&self) -> Option<ParagraphAlignment> {
-        self.paragraph_alignment
-    }
-
-    /// The paragraph's top margin in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.81].
-    ///
-    /// [\[MS-ONE\] 2.3.81]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/1a2958bd-7512-419b-a8a5-eda200edb7cd
-    pub fn paragraph_space_before(&self) -> Option<f32> {
-        self.paragraph_space_before
-    }
-
-    /// The paragraph's bottom margin in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.82].
-    ///
-    /// [\[MS-ONE\] 2.3.82]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/505393e2-c641-416f-be83-050da44d581d
-    pub fn paragraph_space_after(&self) -> Option<f32> {
-        self.paragraph_space_after
-    }
-
-    /// The paragraph's line spacing in half-inch increments.
-    ///
-    /// See [\[MS-ONE\] 2.3.83].
-    ///
-    /// [\[MS-ONE\] 2.3.83]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/4474bd74-5407-4675-a9bb-a32f81eb799c
-    pub fn paragraph_line_spacing_exact(&self) -> Option<f32> {
-        self.paragraph_line_spacing_exact
-    }
-
-    /// The LCID language code for the text.
-    ///
-    /// See [\[MS-ONE\] 2.3.26].
-    ///
-    /// [\[MS-ONE\] 2.3.26]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/f82cdbc0-d4e9-4cd0-bd0b-8c7734853d7f
-    pub fn language_code(&self) -> Option<u32> {
-        self.language_code
-    }
-
     /// Whether the text is formatted as a math expression
     pub fn math_formatting(&self) -> bool {
         self.math_formatting
-    }
-
-    /// Whether the text is part of a hyperlink (the `\u{fddf}HYPERLINK "URL"`
-    /// marker run carries this; the visible display text run also carries it
-    /// alongside [`hyperlink_protected`](Self::hyperlink_protected)).
-    ///
-    /// See [\[MS-ONE\] 2.3.75].
-    ///
-    /// [\[MS-ONE\] 2.3.75]: https://docs.microsoft.com/en-us/openspecs/office_file_formats/ms-one/0464fc15-edd2-4f80-9d8a-3e892eea6dad
-    pub fn hyperlink(&self) -> bool {
-        self.hyperlink
     }
 
     /// Whether the text run is the visible display text for a hyperlink
@@ -557,8 +413,8 @@ pub(crate) fn parse_rich_text(
 
             match object_type {
                 Some(INK_END_OF_LINE_BLOB) => Ok(Some(EmbeddedObject::InkLineBreak)),
-                Some(INK_SPACE_BLOB) => parse_embedded_ink_space(embedded_data)
-                    .map(|space_obj| Some(EmbeddedObject::InkSpace(space_obj))),
+                Some(INK_SPACE_BLOB) => check_embedded_ink_space(embedded_data)
+                    .map(|()| Some(EmbeddedObject::InkSpace)),
                 None => {
                     if let Some(object_ref) = object_ref {
                         return parse_ink(*object_ref, space).map(|ink| Some(EmbeddedObject::Ink(ink)));
@@ -597,28 +453,23 @@ pub(crate) fn parse_rich_text(
         text_run_formatting: styles,
         text_run_indices,
         paragraph_style,
-        paragraph_space_before: data.paragraph_space_before,
-        paragraph_space_after: data.paragraph_space_after,
-        paragraph_line_spacing_exact: data.paragraph_line_spacing_exact,
         paragraph_alignment: data.paragraph_alignment,
-        layout_alignment_in_parent: data.layout_alignment_in_parent,
-        layout_alignment_self: data.layout_alignment_self,
         note_tags: parse_note_tags(&data.note_tags, space)?,
     };
 
     Ok(text)
 }
 
-fn parse_embedded_ink_space(data: embedded_ink_container::Data) -> Result<EmbeddedInkSpace> {
-    let width = data.space_width.ok_or_else(|| {
+fn check_embedded_ink_space(data: embedded_ink_container::Data) -> Result<()> {
+    data.space_width.ok_or_else(|| {
         ErrorKind::MalformedOneNoteFileData("embedded ink space has no width".into())
     })?;
 
-    let height = data.space_height.ok_or_else(|| {
+    data.space_height.ok_or_else(|| {
         ErrorKind::MalformedOneNoteFileData("embedded ink space has no height".into())
     })?;
 
-    Ok(EmbeddedInkSpace { height, width })
+    Ok(())
 }
 
 // Workaround for an undiagnosed OneNote writer quirk: the paragraph text begins
@@ -771,7 +622,6 @@ fn byte_to_utf16(text: &str, byte: usize) -> u32 {
 
 fn parse_style(data: paragraph_style_object::Data) -> ParagraphStyling {
     ParagraphStyling {
-        charset: data.charset,
         bold: data.bold,
         italic: data.italic,
         underline: data.underline,
@@ -782,13 +632,7 @@ fn parse_style(data: paragraph_style_object::Data) -> ParagraphStyling {
         font_size: data.font_size,
         font_color: data.font_color,
         highlight: data.highlight,
-        next_style: data.next_style,
         style_id: data.style_id,
-        paragraph_alignment: data.paragraph_alignment,
-        paragraph_space_before: data.paragraph_space_before,
-        paragraph_space_after: data.paragraph_space_after,
-        paragraph_line_spacing_exact: data.paragraph_line_spacing_exact,
-        language_code: data.language_code,
         math_formatting: data.math_formatting,
         hyperlink: data.hyperlink,
         hyperlink_protected: data.hyperlink_protected,
