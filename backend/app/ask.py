@@ -295,7 +295,9 @@ def read_note(name: str) -> list[dict[str, object]]:
 
 def _semantic(question: str) -> list[dict[str, object]]:
     # unified_search already loaded each block's full row; reuse it.
-    return [hit["row"] for hit in search.unified_search(question, limit=PREFETCH_SEARCH, with_rows=True)]
+    return [hit["row"] for hit in search.unified_search(
+        question, limit=PREFETCH_SEARCH, with_rows=True, recall=True
+    )]
 
 
 async def _prefetch_parallel(question: str, sources: _Sources) -> list[str]:

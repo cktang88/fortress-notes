@@ -189,8 +189,13 @@ def unified_search(
     limit: int = 30,
     *,
     with_rows: bool = False,
+    recall: bool = False,
 ) -> list[dict[str, object]]:
     """One ranked list of blocks from exact words, meaning, and note titles.
+
+    ``recall`` takes meaning matches down to ``relevance.ASK_MIN_SCORE`` instead of
+    the search cutoffs: for Ask, whose model reads the sources and drops what
+    doesn't answer, a missed paragraph costs more than an extra one.
 
     Each source ranks blocks on its own; reciprocal rank fusion combines the
     ranks, so no score scales need to agree. Recent edits get a small boost and
@@ -217,8 +222,8 @@ def unified_search(
             scores = relevance.relevant_model_scores(
                 scores,
                 relevance.query_token_count(q),
-                relevance.SEARCH_MIN_SCORE,
-                relevance.SEARCH_RELATIVE_SCORE,
+                relevance.ASK_MIN_SCORE if recall else relevance.SEARCH_MIN_SCORE,
+                0.0 if recall else relevance.SEARCH_RELATIVE_SCORE,
             )
         best = heapq.nlargest(_MEANING_CANDIDATES, scores.items(), key=lambda item: item[1])
         return [block_id for block_id, score in best if score > 0]

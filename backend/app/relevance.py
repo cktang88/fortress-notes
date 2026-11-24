@@ -58,6 +58,11 @@ RELATED_MIN_SCORE = 0.18
 # matches are found by full-text search regardless.
 SEARCH_MIN_SCORE = 0.22
 SEARCH_RELATIVE_SCORE = 0.6
+# Ask's prefetch (search.unified_search(recall=True)): its model reads every source
+# and ignores what doesn't answer, so it takes meaning matches down to the old search
+# cutoff. Questions carry more function words than typed searches, which pulls true
+# answers down ("When does the airship take off?" -> the Zeppelin paragraph, 0.20).
+ASK_MIN_SCORE = 0.10
 _UNRELATED_RATIO = 0.70
 _MIN_CANDIDATES_FOR_MEDIAN = 5
 

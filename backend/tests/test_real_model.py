@@ -218,8 +218,9 @@ def _answers(client, ids: dict[str, str], queries: list[str], prompts: list[str]
         out["search"][query] = [hit["text"] for hit in response.json()]
     out["search_ms"] = sorted(timings)[len(timings) // 2] * 1000
     blocks = corpus.snapshot(get_settings().block_db_path)
-    docs = [(block_id, version, text) for block_id, _d, version, text in blocks]
-    texts = {block_id: text for block_id, _v, text in docs}
+    # As search scores them (each paragraph under its note's title); keyed by text.
+    docs = corpus.documents(blocks)
+    texts = {block_id: text for block_id, _d, _v, text in blocks}
     for query in [*queries, *(QUESTIONS if related else [])]:
         scores = embeddings.score_documents(query, docs)
         out["meaning"][query] = {texts[block_id]: score for block_id, score in scores.items()}

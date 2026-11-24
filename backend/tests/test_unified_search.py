@@ -117,6 +117,28 @@ class UnifiedSearchTests(unittest.TestCase):
         trip = self.create("Lisbon trip", "Pack sunscreen")
         self.assertEqual(self.find("Lisbon hotel")[0]["document_id"], trip)
 
+    def test_meaning_cutoffs_search_strict_ask_loose(self) -> None:
+        # Made-up MaxSim scores over 10 query tokens, median 7.0: "answer" normalizes
+        # to 0.15 (under the search cutoff, over Ask's), "close" to 0.5 and "near" to
+        # 0.25 (over the search cutoff but under 0.6 of the best).
+        from app import corpus, embeddings, relevance, search
+
+        ids = {
+            name: self.create(name.title(), f"zz {name} paragraph")
+            for name in ("answer", "close", "near", *(f"other{i}" for i in range(6)))
+        }
+        notes = corpus.snapshot(self.settings.block_db_path).notes
+        block = {name: notes[note].rows[0][0] for name, note in ids.items()}
+        normalized = {"answer": 0.15, "close": 0.5, "near": 0.25}
+        raw = {block[name]: 7.0 + 3.0 * normalized.get(name, 0.0) for name in block}
+        with patch.object(embeddings, "available", return_value=True), patch.object(
+            embeddings, "score_documents", return_value=raw
+        ), patch.object(relevance, "query_token_count", return_value=10):
+            shown = {r["document_id"] for r in search.unified_search("qqq")}
+            for_ask = {r["document_id"] for r in search.unified_search("qqq", recall=True)}
+        self.assertEqual(shown, {ids["close"]})
+        self.assertEqual(for_ask, {ids["close"], ids["near"], ids["answer"]})
+
     def test_a_title_naming_every_query_word_beats_one_that_shares_a_word(self) -> None:
         # Reported from the e2e suite: "Structured trip plan" matched "trip" in both its
         # title and its text, and outranked the note whose title has every word.
