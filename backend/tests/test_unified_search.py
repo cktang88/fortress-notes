@@ -108,6 +108,15 @@ class UnifiedSearchTests(unittest.TestCase):
         self.assertEqual(results[0]["document_id"], exact)
         self.assertIn(wordy, [r["document_id"] for r in results])
 
+    def test_a_title_sharing_under_half_the_query_is_not_a_match(self) -> None:
+        # "quantum computing lecture notes" used to list every note titled "... notes".
+        self.create("Standup notes", "Maya is blocked on credentials")
+        found = self.find("quantum computing lecture notes")
+        self.assertFalse([r for r in found if "title" in r["matched"]], found)
+        # Half the words is enough ("Lisbon hotel" -> "Lisbon trip").
+        trip = self.create("Lisbon trip", "Pack sunscreen")
+        self.assertEqual(self.find("Lisbon hotel")[0]["document_id"], trip)
+
     def test_a_title_naming_every_query_word_beats_one_that_shares_a_word(self) -> None:
         # Reported from the e2e suite: "Structured trip plan" matched "trip" in both its
         # title and its text, and outranked the note whose title has every word.

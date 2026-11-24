@@ -44,12 +44,19 @@ from functools import lru_cache
 from . import embeddings, textutil
 
 RELATED_MIN_SCORE = 0.18
-# Typed search queries are a few words, not a paragraph, so a looser cutoff keeps
-# topical matches ("bread baking" -> a sourdough paragraph scored 0.107) while still
-# dropping notes that don't match at all ("tax return deadline" -> best 0.066 over
-# travel and dentist notes). Checked with Agent-ModernColBERT on a small travel /
-# work / cooking set; exact word matches are found by full-text search regardless.
-SEARCH_MIN_SCORE = 0.10
+# Typed searches: a paragraph is shown by meaning when its relevance is at least
+# SEARCH_MIN_SCORE and at least SEARCH_RELATIVE_SCORE of the best paragraph's.
+# Measured on the labelled set (scripts/eval_search.py, tests/fixtures/search_eval:
+# 99 answerable and 10 no-answer queries; docs/search-eval.md). With the old 0.10
+# alone, 6 paragraphs per query were shown at 27% precision and 4 of the 10
+# no-answer queries showed something. 0.20 alone: 63% precision, the answer shown
+# for 88% of queries, nothing for every no-answer query (their best scores were
+# at most 0.199 and 0.185, for "how to file a patent application" and "mortgage
+# refinance rates"; true answers from 0.11 up). Adding the relative cut (keep only
+# what is close to the best match) raises precision to 75% at the same answer
+# recall. Exact word matches are found by full-text search regardless.
+SEARCH_MIN_SCORE = 0.20
+SEARCH_RELATIVE_SCORE = 0.6
 _UNRELATED_RATIO = 0.70
 _MIN_CANDIDATES_FOR_MEDIAN = 5
 
@@ -144,16 +151,24 @@ def query_token_count(query: str) -> int:
 
 
 def relevant_model_scores(
-    raw: dict[str, float], query_tokens: int, cutoff: float = RELATED_MIN_SCORE
+    raw: dict[str, float],
+    query_tokens: int,
+    cutoff: float = RELATED_MIN_SCORE,
+    relative: float = 0.0,
 ) -> dict[str, float]:
-    """Normalize one query's raw MaxSim scores and keep those at ``cutoff`` or above.
+    """Normalize one query's raw MaxSim scores and keep those at ``cutoff`` or above,
+    and (``relative`` > 0) at least ``relative`` times the best one.
 
     ``query_tokens`` is the ceiling: a perfect match has cosine 1 for every token.
     """
 
     if query_tokens <= 0 or not raw:
         return {}
-    return normalized_scores(raw, query_tokens, model_baseline(raw, query_tokens), cutoff)
+    kept = normalized_scores(raw, query_tokens, model_baseline(raw, query_tokens), cutoff)
+    if relative > 0 and kept:
+        floor = relative * max(kept.values())
+        kept = {doc_id: score for doc_id, score in kept.items() if score >= floor}
+    return kept
 
 
 def model_baseline(raw: dict[str, float], query_tokens: int) -> float:

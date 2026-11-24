@@ -215,7 +215,10 @@ def unified_search(
             # Only paragraphs that clear a relevance cutoff: the nearest paragraphs
             # to a query are not necessarily near it.
             scores = relevance.relevant_model_scores(
-                scores, relevance.query_token_count(q), relevance.SEARCH_MIN_SCORE
+                scores,
+                relevance.query_token_count(q),
+                relevance.SEARCH_MIN_SCORE,
+                relevance.SEARCH_RELATIVE_SCORE,
             )
         best = heapq.nlargest(_MEANING_CANDIDATES, scores.items(), key=lambda item: item[1])
         return [block_id for block_id, score in best if score > 0]
@@ -226,17 +229,20 @@ def unified_search(
     words = block_query.search_blocks(db_path, q, filters, limit=100)
     word_ranking = [str(hit["block_id"]) for hit in words]
 
+    terms = set(textutil.query_terms(q))
+    query_words = max(1, len(terms))
+    # A title sharing less than half of the query's words is no evidence on its own
+    # ("quantum computing lecture notes" matched every "... notes" title).
     title_hits = [
         match
         for match in block_query.title_matches(db_path, q)
-        if allowed is None or match["block_id"] in allowed
+        if (allowed is None or match["block_id"] in allowed)
+        and 2 * int(match["hits"]) >= query_words
     ]
     title_ranking = [str(match["block_id"]) for match in title_hits]
     # A title naming every query word is almost certainly the note being looked for;
     # one sharing a single word of several is weak evidence. Plain rank fusion would
     # count both the same, so weight title matches by how much of the query they cover.
-    terms = set(textutil.query_terms(q))
-    query_words = max(1, len(terms))
     title_weight = {
         str(match["block_id"]): _FULL_TITLE_WEIGHT
         if int(match["hits"]) >= query_words

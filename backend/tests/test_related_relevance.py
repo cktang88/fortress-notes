@@ -184,6 +184,35 @@ class RelevanceLayerTests(unittest.TestCase):
         kept = relevance.relevant_model_scores({"near": 9.0, "unrelated": 7.4}, query_tokens=10)
         self.assertEqual(set(kept), {"near"})
 
+    def test_relative_cut_keeps_only_what_is_close_to_the_best(self) -> None:
+        from app import relevance
+
+        # Median 7.5 of 10 tokens: best (9.5 -> 0.8), close (9.0 -> 0.6), far (8.2 -> 0.28).
+        raw = {f"u{i}": 7.5 for i in range(8)} | {"best": 9.5, "close": 9.0, "far": 8.2}
+        both = relevance.relevant_model_scores(raw, 10, cutoff=0.2)
+        self.assertEqual(set(both), {"best", "close", "far"})
+        kept = relevance.relevant_model_scores(raw, 10, cutoff=0.2, relative=0.6)
+        self.assertEqual(set(kept), {"best", "close"})
+        # Nothing over the absolute cutoff: the relative one adds nothing back.
+        self.assertEqual(relevance.relevant_model_scores(raw, 10, cutoff=0.9, relative=0.6), {})
+
+    def test_search_cutoffs_drop_the_no_answer_scores_measured_on_the_eval_set(self) -> None:
+        # docs/search-eval.md: the best paragraph for a no-answer query scored up to
+        # 0.199 ("how to file a patent application"); typed search must not show it.
+        from app import relevance
+
+        self.assertGreater(relevance.SEARCH_MIN_SCORE, 0.199)
+        self.assertLessEqual(relevance.SEARCH_MIN_SCORE, 0.25)
+        median, tokens = 7.0, 10
+        raw = {f"u{i}": median for i in range(8)} | {
+            "no-answer": median + 0.199 * (tokens - median),
+            "answer": median + 0.3 * (tokens - median),
+        }
+        kept = relevance.relevant_model_scores(
+            raw, tokens, relevance.SEARCH_MIN_SCORE, relevance.SEARCH_RELATIVE_SCORE
+        )
+        self.assertEqual(set(kept), {"answer"})
+
     def test_no_query_tokens_keeps_nothing(self) -> None:
         from app import relevance
 

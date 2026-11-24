@@ -561,11 +561,14 @@ def run_fortress(args) -> tuple[str, dict]:
             qid: ws.paras(sorted(raw, key=lambda b: -raw[b])) for qid, (raw, _n) in out.items()
         }
         scores_by["colbert"] = {qid: _para_scores(ws, norm) for qid, (_raw, norm) in out.items()}
-        shown_colbert = {
-            qid: ws.paras(sorted((b for b, s in norm.items() if s >= relevance.SEARCH_MIN_SCORE),
-                                 key=lambda b: -norm[b]))
-            for qid, (_raw, norm) in out.items()
-        }
+        def shown(norm: dict[str, float]) -> list[str]:
+            # What unified search takes from meaning (relevance.relevant_model_scores).
+            kept = {b: s for b, s in norm.items() if s >= relevance.SEARCH_MIN_SCORE}
+            floor = relevance.SEARCH_RELATIVE_SCORE * max(kept.values(), default=0.0)
+            return ws.paras(sorted((b for b, s in kept.items() if s >= floor), key=lambda b: -kept[b]))
+
+        shown_colbert = {qid: shown(norm) for qid, (_raw, norm) in out.items()}
+        runs["colbert, after cutoffs"] = shown_colbert
 
         keyword = Keyword([(block_id, text) for block_id, text in texts.items()])
         out, ms = _timed_runs(queries, lambda q: keyword.rank(q))
@@ -607,7 +610,7 @@ def run_fortress(args) -> tuple[str, dict]:
                 subset = {q["id"]: qrels[q["id"]] for q in queries if q["kind"] == kind}
                 if any(subset.values()):
                     results["per_kind"].setdefault(kind, {})[system] = summarize(run, subset)["nDCG@10"]
-        results["shown"]["colbert >= SEARCH_MIN_SCORE"] = shown_metrics(shown_colbert, queries)
+        results["shown"]["colbert, search cutoffs"] = shown_metrics(shown_colbert, queries)
         results["shown"]["unified (all shown)"] = shown_metrics(runs["unified"], queries)
         results["shown"]["unified top 5"] = shown_metrics(
             {qid: run[:5] for qid, run in runs["unified"].items()}, queries
