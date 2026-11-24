@@ -49,13 +49,14 @@ RELATED_MIN_SCORE = 0.18
 # Measured on the labelled set (scripts/eval_search.py, tests/fixtures/search_eval:
 # 99 answerable and 10 no-answer queries; docs/search-eval.md). With the old 0.10
 # alone, 6 paragraphs per query were shown at 27% precision and 4 of the 10
-# no-answer queries showed something. 0.20 alone: 63% precision, the answer shown
-# for 88% of queries, nothing for every no-answer query (their best scores were
-# at most 0.199 and 0.185, for "how to file a patent application" and "mortgage
-# refinance rates"; true answers from 0.11 up). Adding the relative cut (keep only
-# what is close to the best match) raises precision to 75% at the same answer
-# recall. Exact word matches are found by full-text search regardless.
-SEARCH_MIN_SCORE = 0.20
+# no-answer queries showed something. At 0.22 every no-answer query shows nothing
+# (their best scores reached 0.199 and 0.185, for "how to file a patent
+# application" and "mortgage refinance rates"; 0.22 leaves a margin for float16 on
+# the GPU) and the answer is still shown for 88% of queries (true answers score
+# from about 0.11). The relative cut (keep only what is close to the best match)
+# then lifts precision from 63% to 78% at the same answer recall. Exact word
+# matches are found by full-text search regardless.
+SEARCH_MIN_SCORE = 0.22
 SEARCH_RELATIVE_SCORE = 0.6
 _UNRELATED_RATIO = 0.70
 _MIN_CANDIDATES_FOR_MEDIAN = 5
