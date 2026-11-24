@@ -41,9 +41,11 @@ class _WordModel:
 
 
 def _docs(database):
+    """What search and related notes score: the paragraphs as the index sees them."""
+
     from app import corpus
 
-    return [(b, v, t) for b, _d, v, t in corpus.embedding_documents(database)]
+    return corpus.documents(corpus.snapshot(database))
 
 
 def _edit_block(database, block_id: str, text: str) -> None:
@@ -93,7 +95,8 @@ class BlockEmbeddingTests(unittest.TestCase):
                 self.assertEqual(embeddings.warm_index(), 2)
                 self.assertEqual(embeddings.warm_index(), 0)
 
-            self.assertEqual(model.documents, ["First block", "Second block"])
+            # Each paragraph is encoded under its note's title.
+            self.assertEqual(model.documents, ["One\nFirst block", "One\nSecond block"])
             self.assertEqual(len(embeddings._cache.index), 2)
 
     def test_restart_reuses_saved_embeddings_and_reencodes_only_edits(self) -> None:
@@ -123,7 +126,34 @@ class BlockEmbeddingTests(unittest.TestCase):
                 _trash(database, "doc")
                 embeddings.warm_index()
                 self.assertEqual(len(embeddings._cache.index), 0)
-            self.assertEqual(model.documents, ["Alpha beta", "Gamma delta", "Alpha epsilon"])
+            self.assertEqual(
+                model.documents, ["Doc\nAlpha beta", "Doc\nGamma delta", "Doc\nAlpha epsilon"]
+            )
+
+    def test_renaming_a_note_reencodes_its_paragraphs(self) -> None:
+        # The title is part of what the model reads, so a rename must reach the index.
+        from app import block_store
+
+        settings = _scratch_settings(self)
+        database = settings.block_db_path
+        block_store.create_document(
+            database, "doc", "Sourdough", "Fed the starter\n\nBulk 5h", "2025-01-01", "2025-01-01"
+        )
+        model = _WordModel()
+        with patch.object(embeddings, "_get_model", return_value=model), use_settings(
+            settings
+        ), patch.object(embeddings, "_cache", embeddings._Cache()):
+            self.assertEqual(embeddings.warm_index(), 2)
+            with block_store.connection_scope(database) as connection:
+                connection.execute(
+                    "UPDATE documents SET title = 'Rye bread', revision = revision + 1"
+                )
+            self.assertEqual(embeddings.warm_index(), 2)
+            self.assertEqual(embeddings.warm_index(), 0)
+            scores = embeddings.score_documents("rye", _docs(database))
+        self.assertEqual(sorted(model.documents[-2:]),
+                         ["Rye bread\nBulk 5h", "Rye bread\nFed the starter"])
+        self.assertTrue(all(score > 0.99 for score in scores.values()), scores)
 
     def test_paragraph_queries_use_precomputed_encodings(self) -> None:
         from app import block_store

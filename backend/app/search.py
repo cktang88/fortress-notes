@@ -83,10 +83,12 @@ def related_notes(note_id: str, k: int = 5, block_id: str | None = None) -> list
 def _related(corpus, note, block_id: str | None, query: str | None, state) -> _Related:
     """Score the note (or one of its paragraphs) against every other note's paragraphs."""
 
+    # Scored as the embedding index sees them (title + paragraph, see corpus.Note.documents).
     candidates = [
-        (bid, version, text)
-        for bid, document_id, version, text in corpus
+        doc
+        for document_id, other in sorted(corpus.notes.items())
         if document_id != note.document_id
+        for doc in other.documents()
     ]
     texts = None
     if block_id is None:
@@ -117,7 +119,10 @@ def _patched(cached: _Related, corpus, note_id: str) -> _Related | None:
         for row in corpus.notes[document_id].rows
     ]
     scores = relevance.rescore(
-        [(bid, version, text) for bid, _document_id, version, text in rows],
+        [
+            doc for document_id in sorted(changed) if document_id in corpus.notes
+            for doc in corpus.notes[document_id].documents()
+        ],
         cached.calibration,
         query=cached.query,
         texts=cached.texts,
@@ -201,13 +206,11 @@ def unified_search(
     allowed = block_query.allowed_block_ids(db_path, filters)
 
     def meaning() -> list[str]:
-        blocks = corpus_store.snapshot(db_path)
+        docs = corpus_store.documents(corpus_store.snapshot(db_path))
         if allowed is not None:
-            blocks = [block for block in blocks if block[0] in allowed]
+            docs = [doc for doc in docs if doc[0] in allowed]
         scored = embeddings.available()
-        scores = embeddings.score_documents(
-            q, [(block_id, version, text) for block_id, _, version, text in blocks]
-        )
+        scores = embeddings.score_documents(q, docs)
         if scored:
             # Only paragraphs that clear a relevance cutoff: the nearest paragraphs
             # to a query are not necessarily near it.
@@ -232,7 +235,8 @@ def unified_search(
     # A title naming every query word is almost certainly the note being looked for;
     # one sharing a single word of several is weak evidence. Plain rank fusion would
     # count both the same, so weight title matches by how much of the query they cover.
-    query_words = max(1, len(set(textutil.words(q))))
+    terms = set(textutil.query_terms(q))
+    query_words = max(1, len(terms))
     title_weight = {
         str(match["block_id"]): _FULL_TITLE_WEIGHT
         if int(match["hits"]) >= query_words
@@ -256,7 +260,9 @@ def unified_search(
     details = block_query.block_details(db_path, list(fused))
     now = datetime.now(timezone.utc)
     tokens = textutil.words(q)
-    wanted = set(tokens)
+    # Stopwords don't count: "is", "the", "a" are in nearly every paragraph, so
+    # counting them boosted wordy paragraphs over the ones meaning ranked first.
+    wanted = terms
     for block_id, row in details.items():
         fused[block_id] *= 1.0 + 0.15 * _recency(str(row["updated_at"]), now)
         # Each source ranks blocks on its own, so nothing above rewards a result whose

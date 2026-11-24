@@ -215,7 +215,8 @@ def title_matches(path: Path, query: str, limit: int = 20) -> list[dict[str, obj
     "a" doesn't match every title that merely contains the letter.
     """
 
-    tokens = sorted(set(query_tokens(query)))
+    # Stopwords left out: "a" starts "and", "to" is in "Books to read".
+    tokens = sorted(set(textutil.query_terms(query)))
     if not tokens:
         return []
     initialize(path)

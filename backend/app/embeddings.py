@@ -558,7 +558,9 @@ def tokenized_lengths(texts: list[str], *, is_query: bool = True) -> list[int] |
     return _encoder.run(run, _FOREGROUND)
 
 
+@lru_cache(maxsize=1 << 17)
 def _text_hash(text: str) -> str:
+    # Cached: precomputing query encodings hashes every paragraph after each edit.
     return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
 
@@ -751,18 +753,18 @@ def _sync(corpus) -> list[tuple[str, str, str]]:
     changed = None
     if isinstance(corpus, corpus_store.Corpus) and isinstance(synced, corpus_store.Corpus):
         changed = corpus_store.changed_between(synced, corpus)
+    # What the model encodes (title + paragraph); paragraphs too short to match by
+    # meaning are not among them, so they are dropped from the index below.
     if changed is None:
-        rows = corpus
+        rows = corpus_store.documents(corpus)
         candidates = None  # every indexed paragraph may be gone
     else:
-        rows = [row for note in changed if note in corpus.notes for row in corpus.notes[note].rows]
+        rows = [doc for note in changed if note in corpus.notes for doc in corpus.notes[note].documents()]
         candidates = [
             row[0] for note in changed if note in synced.notes for row in synced.notes[note].rows
         ]
     live: set[str] = set()
-    for block_id, _document_id, version, text in rows:
-        if not textutil.long_enough_to_compare(text):
-            continue  # too short to match by meaning; dropped from the index below
+    for block_id, version, text in rows:
         live.add(block_id)
         entry = index.where.get(block_id)
         if entry is not None and entry[3] == version:
@@ -887,17 +889,21 @@ def _warm_queries(model, time_limit: float | None = None) -> int:
     path = _cache.store_path
     if path is None:
         return 0
+    corpus = corpus_store.snapshot(get_settings().block_db_path)
     with _index_lock:
-        live = {entry[2] for entry in _cache.index.where.values()}
-        gone = _cache.query_hashes - live
-        todo: dict[str, str] = {}
-        if len(_cache.query_hashes) - len(gone) < len(live):
-            for _block_id, _document_id, _version, text in corpus_store.snapshot(
-                get_settings().block_db_path
-            ):
-                text_hash = _text_hash(text)
-                if text_hash in live and text_hash not in _cache.query_hashes and text.strip():
-                    todo[text_hash] = text
+        # Keyed by the paragraph's own text (what related-to-a-paragraph queries
+        # with), not the indexed text, which starts with the note's title.
+        where = _cache.index.where
+        texts = {
+            _text_hash(text): text
+            for block_id, _document_id, _version, text in corpus
+            if block_id in where and text.strip()
+        }
+        gone = _cache.query_hashes - texts.keys()
+        todo = {
+            text_hash: text for text_hash, text in texts.items()
+            if text_hash not in _cache.query_hashes
+        }
     if gone:
         try:
             with closing(_connect(path)) as connection, connection:
@@ -952,7 +958,8 @@ def score_documents(
     docs = [doc for doc in docs if textutil.long_enough_to_compare(doc[2])]
     model = _get_model()
     if model is None:
-        query_words = _tokens(query)
+        # Stopwords left out: "the" or "to" is in nearly every paragraph (and title).
+        query_words = set(textutil.query_terms(query))
         return {d[0]: _keyword_score(query_words, d[2]) for d in docs}
     if not docs:
         return {}

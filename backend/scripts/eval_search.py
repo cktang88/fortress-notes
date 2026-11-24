@@ -437,7 +437,8 @@ class Workspace:
                    if f"{n['id']}.{i}" not in mapped]
         if missing:
             raise AssertionError(f"paragraphs without a block: {missing}")
-        self.docs = [(block_id, version, text) for block_id, _d, version, text in self.corpus]
+        # As the app scores them (note title + paragraph); every system gets this text.
+        self.docs = corpus.documents(self.corpus)
         self.first_block = {
             document_id: entry.rows[0][0] for document_id, entry in self.corpus.notes.items()
         }

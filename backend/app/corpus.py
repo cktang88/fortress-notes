@@ -32,6 +32,8 @@ from pathlib import Path
 from . import block_store, textutil
 
 Row = tuple[str, str, str, str]  # (block_id, document_id, version, text)
+# What the embedding index scores: (block_id, version, text as the model sees it).
+Document = tuple[str, str, str]
 
 # Snapshots remember which notes changed for this many generations back.
 _HISTORY = 512
@@ -48,6 +50,24 @@ class Note:
     title: str
     rows: tuple[Row, ...]
     _titled: list | None = field(default=None, repr=False)
+    _documents: list | None = field(default=None, repr=False)
+
+    def documents(self) -> list[Document]:
+        """The rows as the embedding index scores them (built once).
+
+        The text is ``textutil.embedding_text`` (the title, then the paragraph), and
+        the version carries the title too, so renaming a note re-encodes its
+        paragraphs. Paragraphs too short to compare by meaning are left out (by
+        their own text: the title would make "ok" long enough).
+        """
+
+        if self._documents is None:
+            self._documents = [
+                (block_id, f"{version}\x1f{self.title}", textutil.embedding_text(self.title, text))
+                for block_id, _document_id, version, text in self.rows
+                if textutil.long_enough_to_compare(text)
+            ]
+        return self._documents
 
     def titled(self) -> list[tuple[str, str, str, str]]:
         """(block_id, title, text, folded "title\\ntext") per row (built once).
@@ -73,6 +93,16 @@ class Corpus(list):
         self.notes = notes
         super().__init__(chain.from_iterable(notes[key].rows for key in sorted(notes)))
         self._titled: list | None = None
+        self._documents: list | None = None
+
+    def documents(self) -> list[Document]:
+        """Every note's ``Note.documents``, in corpus order."""
+
+        if self._documents is None:
+            self._documents = list(
+                chain.from_iterable(self.notes[key].documents() for key in sorted(self.notes))
+            )
+        return self._documents
 
     def titled(self) -> list[tuple[str, str, str, str]]:
         """Every row as (block_id, note title, text, folded "title\\ntext")."""
@@ -157,6 +187,18 @@ def embedding_documents(path: Path) -> list[Row]:
     """Active blocks as (block_id, document_id, version, text), current as of now."""
 
     return snapshot(path)
+
+
+def documents(corpus) -> list[Document]:
+    """``Corpus.documents`` of a snapshot; a plain list of rows (tests) as it is."""
+
+    if isinstance(corpus, Corpus):
+        return corpus.documents()
+    return [
+        (block_id, version, text)
+        for block_id, _document_id, version, text in corpus
+        if textutil.long_enough_to_compare(text)
+    ]
 
 
 def changed_between(old: Corpus, new: Corpus) -> frozenset[str] | None:

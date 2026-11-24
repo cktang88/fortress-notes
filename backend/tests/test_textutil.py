@@ -31,6 +31,22 @@ class TextRulesTests(unittest.TestCase):
         )
         self.assertEqual(textutil.content_words("Room 14 in 2024", numbers=False), ["room"])
 
+    def test_query_terms_drop_stopwords_unless_nothing_else_is_left(self) -> None:
+        self.assertEqual(textutil.query_terms("organising a party for my Mother"),
+                         ["organising", "party", "mother"])
+        # Short words that aren't stopwords stay (abbreviations, codes).
+        self.assertEqual(textutil.query_terms("q3 okrs"), ["q3", "okrs"])
+        self.assertEqual(textutil.query_terms("to be or not to be"),
+                         ["to", "be", "or", "not", "to", "be"])
+
+    def test_embedding_text_puts_the_note_title_first(self) -> None:
+        self.assertEqual(textutil.embedding_text("Sourdough log", "Fed the starter at 8am."),
+                         "Sourdough log\nFed the starter at 8am.")
+        self.assertEqual(textutil.embedding_text("  ", "Text"), "Text")
+        # A title taken from the paragraph's own first line is not repeated.
+        self.assertEqual(textutil.embedding_text("Buy  milk", "Buy milk and eggs"),
+                         "Buy milk and eggs")
+
     def test_window_is_a_slice_around_the_match_starting_on_a_word(self) -> None:
         text = ("lorem ipsum " * 50) + "TARGET" + (" dolor sit" * 50)
         first = text.index("TARGET")
@@ -100,3 +116,14 @@ class SimilarityLengthTests(unittest.TestCase):
         with patch.object(embeddings, "_get_model", return_value=None):
             self.assertEqual(set(embeddings.score_documents("ok", docs)), {"b"})
             self.assertEqual(relevance.related(docs, query="ok"), ({}, None))
+
+    def test_a_short_paragraph_stays_out_even_under_a_long_title(self) -> None:
+        # The index sees "title\nparagraph", but the rule is about the paragraph.
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / ".fortress.sqlite3"
+            block_store.create_document(
+                database, "doc", "A long title", "ok\n\nThe ryokan is booked", "2025-01-01", "2025-01-01"
+            )
+            documents = corpus.documents(corpus.snapshot(database))
+        self.assertEqual([text for _id, _version, text in documents],
+                         ["A long title\nThe ryokan is booked"])

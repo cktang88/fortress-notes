@@ -91,6 +91,23 @@ class UnifiedSearchTests(unittest.TestCase):
         # "a" is inside both title words but no title word starts with it.
         self.assertEqual(self.find("a"), [])
 
+    def test_stopwords_make_no_title_matches(self) -> None:
+        # "a" starts "and", "to" is a word of "Books to read": neither says anything
+        # about what the query is after (found by scripts/eval_search.py).
+        self.create("Sam and Lee's wedding", "Wedding in June in the Cotswolds")
+        self.create("Books to read", "The Overstory")
+        self.assertEqual(self.find("how to file a patent"), [])
+
+    def test_stopwords_dont_count_towards_covering_the_query(self) -> None:
+        # Both share "zqmarl"; only the second also has the other content word.
+        # The first is full of the query's stopwords, which used to count as
+        # covering it and put it first.
+        wordy = self.create("Wordy", "is it the zqmarl for my a the in it")
+        exact = self.create("Exact", "zqmarl budget")
+        results = self.find("what is the zqmarl budget for my trip")
+        self.assertEqual(results[0]["document_id"], exact)
+        self.assertIn(wordy, [r["document_id"] for r in results])
+
     def test_a_title_naming_every_query_word_beats_one_that_shares_a_word(self) -> None:
         # Reported from the e2e suite: "Structured trip plan" matched "trip" in both its
         # title and its text, and outranked the note whose title has every word.

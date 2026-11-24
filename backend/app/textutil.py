@@ -96,6 +96,20 @@ def word_spans(text: str) -> list[tuple[int, int, str]]:
     return [(match.start(), match.end(), match.group()) for match in WORD.finditer(fold(text))]
 
 
+def query_terms(text: str) -> list[str]:
+    """The words of a typed query that say what it is about: its words without
+    stopwords, or all of them when it has nothing else ("to be or not to be").
+
+    Matching titles and counting how much of a query a note covers use these: a
+    stopword ("a", "for", "the") prefixes or appears in almost every note, so it
+    used to make unrelated notes look like title matches and reorder results.
+    """
+
+    found = words(text)
+    meaningful = [word for word in found if word not in STOPWORDS]
+    return meaningful or found
+
+
 def content_words(text: str, *, numbers: bool = True) -> list[str]:
     """The distinctive words of ``text``, folded, unique, in order of appearance.
 
@@ -129,6 +143,21 @@ def long_enough_to_compare(text: str) -> bool:
     """Whether ``text`` has enough to it for similarity matching (see above)."""
 
     return len("".join(text.split())) >= MIN_SIMILARITY_CHARS
+
+
+def embedding_text(title: str, text: str) -> str:
+    """What the model encodes for a paragraph: its note's title, then its text.
+
+    A paragraph often only makes sense under its title ("Bake: 500g flour..." in
+    "Sourdough log"): on the labelled set (scripts/eval_search.py) the title
+    lifted ColBERT's nDCG@10 from 86 to 94. Left out when there is none, or when
+    the paragraph starts with it (a title taken from the first line).
+    """
+
+    title = " ".join(title.split())
+    if not title or " ".join(text[: len(title) + 64].split()).startswith(title):
+        return text
+    return f"{title}\n{text}"
 
 
 def searchable_text(text: str, asset_text: str | Iterable[str] = "") -> str:
