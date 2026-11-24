@@ -1,0 +1,857 @@
+{
+ "about": "Labelled personal notes for search evaluation (scripts/eval_search.py, tests/test_search_eval_real.py). Paragraph ids are '<note id>.<index>' (0-based, in order). 'topic' groups notes that are genuinely related; a note whose topic no other note shares should get no related notes. Invented content: names, numbers and passwords are fake.",
+ "notes": [
+  {
+   "id": "japan-itin",
+   "title": "Japan trip itinerary",
+   "topic": "japan",
+   "paras": [
+    "Day 1-3 Tokyo: Shibuya, teamLab Planets, day trip to Kamakura for the big Buddha.",
+    "Day 4-6 Kyoto: Fushimi Inari at dawn before the crowds, Kiyomizu-dera, Arashiyama bamboo grove.",
+    "Day 7 Osaka: Dotonbori street food, takoyaki and okonomiyaki, then fly home from KIX.",
+    "Flight booked: ANA NH7 SFO to Narita, departs 11:40, confirmation code QX7P2L."
+   ]
+  },
+  {
+   "id": "japan-rail",
+   "title": "JR pass and trains",
+   "topic": "japan",
+   "paras": [
+    "The 7-day JR Pass now costs 50,000 yen and only pays off if we do Tokyo-Kyoto-Hiroshima.",
+    "Shinkansen Tokyo to Kyoto takes 2h15 on the Nozomi; reserve seats on the right side for Mt Fuji views.",
+    "Get a Suica card on the phone for subways and convenience stores."
+   ]
+  },
+  {
+   "id": "japan-food",
+   "title": "Kyoto restaurants",
+   "topic": "japan",
+   "paras": [
+    "Pontocho alley for dinner, book the kaiseki place at least two weeks ahead.",
+    "Nishiki market for lunch: pickles, tamagoyaki, grilled eel skewers.",
+    "Vegetarian shojin ryori near Tenryu-ji, around 4000 yen per person."
+   ]
+  },
+  {
+   "id": "lisbon",
+   "title": "Lisbon weekend",
+   "topic": "portugal",
+   "paras": [
+    "Tram 28 is packed with tourists, walk up to the Alfama instead and take the elevator back.",
+    "Pasteis de nata at Manteigaria are better than Belem, and the queue is shorter.",
+    "Weekend cost about 600 euros incl. flights; stayed near Bairro Alto, noisy at night."
+   ]
+  },
+  {
+   "id": "porto",
+   "title": "Porto day trip",
+   "topic": "portugal",
+   "paras": [
+    "Train from Lisbon Santa Apolonia to Porto Campanha, about 3 hours, buy tickets on the CP app.",
+    "Port wine tasting in Vila Nova de Gaia across the river; Taylor's tour was worth it."
+   ]
+  },
+  {
+   "id": "camping-gear",
+   "title": "Camping gear checklist",
+   "topic": "camping",
+   "paras": [
+    "Tent, footprint, two sleeping bags rated to 0C, inflatable pads, headlamps + spare batteries.",
+    "Kitchen: stove, two gas canisters, pot, sporks, biodegradable soap, bear canister for food.",
+    "Water filter (Sawyer squeeze) and purification tablets as backup."
+   ]
+  },
+  {
+   "id": "yosemite",
+   "title": "Yosemite booking",
+   "topic": "camping",
+   "paras": [
+    "Upper Pines campsite reservations open on recreation.gov five months ahead at 7am PT exactly.",
+    "Half Dome permits are a lottery in March; apply for the cables for a weekday in June."
+   ]
+  },
+  {
+   "id": "sourdough-log",
+   "title": "Sourdough starter log",
+   "topic": "sourdough",
+   "paras": [
+    "Fed the starter 1:1:1 at 8am with 20% rye, it doubled by noon. Smells like yogurt, good sign.",
+    "Starter went sluggish in the cold kitchen; moved it on top of the fridge where it's warmer.",
+    "Bake: 500g flour, 375g water, 100g levain, 10g salt. Bulk 5h, cold retard overnight, 250C in the dutch oven 20 min lid on, 25 min lid off."
+   ]
+  },
+  {
+   "id": "sourdough-fix",
+   "title": "Bread troubleshooting",
+   "topic": "sourdough",
+   "paras": [
+    "Loaf came out dense with big holes on top only: under-proofed, the levain wasnt bubbly enough.",
+    "Gummy crumb means I cut it too soon, wait at least an hour after baking.",
+    "Flat loaf spreading sideways - shape tighter and use the banneton overnight in the fridge."
+   ]
+  },
+  {
+   "id": "curry-chickpea",
+   "title": "Chickpea curry",
+   "topic": "curry",
+   "paras": [
+    "Onions, garlic, ginger, 2 tsp garam masala, a can of coconut milk, 2 cans chickpeas, simmer 20 min.",
+    "Next time more ginger and a squeeze of lime at the end; serve with basmati and naan."
+   ]
+  },
+  {
+   "id": "curry-dal",
+   "title": "Red lentil dal (no coconut)",
+   "topic": "curry",
+   "paras": [
+    "Red lentil dal without coconut milk: lentils, turmeric, cumin seeds, tomatoes, finish with a ghee tadka.",
+    "Freezes well in portions; good for lunches during the week."
+   ]
+  },
+  {
+   "id": "thai-curry",
+   "title": "Thai green curry",
+   "topic": "curry",
+   "paras": [
+    "Green curry paste fried in coconut cream, then chicken thighs, bamboo shoots, Thai basil, fish sauce, palm sugar.",
+    "Too spicy last time with 4 tbsp paste - use 2 tbsp for the kids."
+   ]
+  },
+  {
+   "id": "cookies",
+   "title": "Grandma's oatmeal cookies",
+   "topic": "cookies",
+   "paras": [
+    "225g butter, 200g brown sugar, 1 egg, 1 tsp vanilla, 150g flour, 250g rolled oats, raisins.",
+    "Bake at 180C for 12 min, they look underdone but firm up on the tray."
+   ],
+   "also": [
+    "sourdough-log",
+    "sourdough-fix",
+    "crepes"
+   ]
+  },
+  {
+   "id": "marathon",
+   "title": "Half marathon training",
+   "topic": "running",
+   "paras": [
+    "Plan: three easy runs, one tempo and one long run per week; increase the long run by 1 km each week.",
+    "Race on 12 Oct, goal time sub 1:50, that is about 5:12 per km.",
+    "Ran 8 km in 44 min today, felt easy, heart rate stayed under 150."
+   ],
+   "also": [
+    "climbing"
+   ]
+  },
+  {
+   "id": "knee",
+   "title": "Knee pain physio",
+   "topic": "running",
+   "paras": [
+    "Physio thinks it's IT band syndrome, not the meniscus. Pain on the outside of the knee after 6 km.",
+    "Exercises: clamshells 3x15, side planks, foam roller on the outer thigh, glute bridges daily.",
+    "No downhill running for two weeks, then retest with an easy 5k."
+   ],
+   "also": [
+    "climbing"
+   ]
+  },
+  {
+   "id": "sleep",
+   "title": "Sleep hygiene",
+   "topic": "sleep",
+   "paras": [
+    "Sleep has been terrible: no screens after 10pm, no coffee after 2pm, keep the bedroom at 18C.",
+    "Tried magnesium glycinate 200mg before bed, fell asleep faster for a week, unsure if placebo."
+   ],
+   "also": [
+    "checkup",
+    "allergy"
+   ]
+  },
+  {
+   "id": "checkup",
+   "title": "Annual checkup",
+   "topic": "doctor",
+   "paras": [
+    "Dr. Alvarez: LDL cholesterol 152 mg/dL, slightly high. Retest in 6 months, eat more fiber, less cheese.",
+    "Blood pressure 128/82, vitamin D low at 18 ng/mL - take 2000 IU daily over the winter.",
+    "Next tetanus booster due 2029."
+   ]
+  },
+  {
+   "id": "allergy",
+   "title": "Allergy meds",
+   "topic": "doctor",
+   "paras": [
+    "Hay fever season: cetirizine 10mg in the morning, fluticasone nasal spray from April.",
+    "Allergist appointment on 3 March at 9:15, bring the list of foods that make my mouth itch."
+   ]
+  },
+  {
+   "id": "budget",
+   "title": "Monthly budget",
+   "topic": "budget",
+   "paras": [
+    "Rent 1450, groceries 400, transport 90, utilities 120, savings 600, fun money 200.",
+    "Overspent on groceries again: 520 instead of the 400 budgeted, mostly takeaway on weekdays.",
+    "Cancel the streaming services we don't watch: Paramount+ and the second Netflix screen."
+   ],
+   "also": [
+    "investing",
+    "taxes"
+   ]
+  },
+  {
+   "id": "taxes",
+   "title": "Tax return 2025",
+   "topic": "taxes",
+   "paras": [
+    "Gather the P60, charitable donation receipts and the freelance invoices before 31 January.",
+    "Self assessment UTR is in the HMRC letter in the blue folder; payment on account due in July too.",
+    "Home office: claim the flat rate of 6 pounds a week rather than working out actual costs."
+   ],
+   "also": [
+    "budget"
+   ]
+  },
+  {
+   "id": "invoices",
+   "title": "Freelance invoices",
+   "topic": "taxes",
+   "paras": [
+    "INV-2231 to Brightwave Ltd, 3,200 GBP for the website audit - still unpaid after 45 days, chase them.",
+    "INV-2213 to Brightwave Ltd, 1,150 GBP for the logo refresh - paid on 2 June.",
+    "Payment terms are 30 days; add a late fee clause to the next contract."
+   ],
+   "also": [
+    "budget"
+   ]
+  },
+  {
+   "id": "investing",
+   "title": "Index funds",
+   "topic": "investing",
+   "paras": [
+    "Monthly 300 into the global all-cap index fund, fees 0.23%; don't check it more than once a quarter.",
+    "Emergency fund moved to a high-interest savings account at 4.1%, covers six months of expenses."
+   ],
+   "also": [
+    "budget"
+   ]
+  },
+  {
+   "id": "api-standup",
+   "title": "Standup notes - API migration",
+   "topic": "api-migration",
+   "paras": [
+    "Maya blocked on the v2 API migration, waiting on OAuth client credentials from the platform team.",
+    "Cutover planned for Thursday after the credentials arrived; rollback plan is the feature flag api_v2_enabled.",
+    "Deprecation notice for v1 endpoints goes out to partners on the 15th."
+   ],
+   "also": [
+    "standup-misc",
+    "incident"
+   ]
+  },
+  {
+   "id": "api-design",
+   "title": "API v2 design",
+   "topic": "api-migration",
+   "paras": [
+    "Pagination switches from offset to cursor tokens; clients pass next_cursor back unchanged.",
+    "Rate limit is 600 requests per minute per key, return HTTP 429 with a Retry-After header."
+   ]
+  },
+  {
+   "id": "incident",
+   "title": "Postmortem: payments outage",
+   "topic": "incident",
+   "paras": [
+    "On 14 May checkout failed for 47 minutes. Root cause: the connection pool to the payments DB was exhausted after a deploy doubled the worker count.",
+    "Stripe webhooks were retried and nothing was double charged, but 312 orders were stuck in pending.",
+    "Action items: alert on pool saturation, cap workers per pod, add a runbook for manually replaying webhooks."
+   ],
+   "also": [
+    "api-standup",
+    "standup-misc"
+   ]
+  },
+  {
+   "id": "okrs",
+   "title": "Q3 OKRs",
+   "topic": "planning",
+   "paras": [
+    "Objective: improve onboarding conversion from 31% to 40%. Drop the dashboard redesign for now.",
+    "KR: time to first value under 5 minutes; KR: activation email open rate above 50%."
+   ],
+   "also": [
+    "board",
+    "hiring"
+   ]
+  },
+  {
+   "id": "hiring",
+   "title": "Hiring plan",
+   "topic": "planning",
+   "paras": [
+    "Open roles: one senior backend engineer, one product designer for onboarding. Budget approved for both.",
+    "Interview loop: recruiter screen, take-home (max 3h), system design, team fit. Decide within a week."
+   ],
+   "also": [
+    "okrs"
+   ]
+  },
+  {
+   "id": "oneonone",
+   "title": "1:1 with Priya",
+   "topic": "people",
+   "paras": [
+    "Priya wants more ownership; suggested she leads the incident review process next quarter.",
+    "She's frustrated by context switching between two teams. Agreed to protect her Wednesdays from meetings."
+   ]
+  },
+  {
+   "id": "selfreview",
+   "title": "Performance review self-assessment",
+   "topic": "people",
+   "paras": [
+    "Wins: shipped the search rewrite, mentored two juniors, cut cloud costs by 18%.",
+    "Growth areas: delegate more, write design docs earlier instead of after the fact."
+   ]
+  },
+  {
+   "id": "postgres",
+   "title": "Postgres tips",
+   "topic": "databases",
+   "paras": [
+    "EXPLAIN (ANALYZE, BUFFERS) shows real timings; a Seq Scan on a big table usually means a missing index.",
+    "CREATE INDEX CONCURRENTLY idx_orders_customer ON orders (customer_id); - doesn't lock writes.",
+    "VACUUM FULL rewrites the table and takes an exclusive lock, never run it on prod during the day."
+   ],
+   "also": [
+    "incident"
+   ]
+  },
+  {
+   "id": "oracle",
+   "title": "Oracle errors at the client",
+   "topic": "databases",
+   "paras": [
+    "ORA-00942: table or view does not exist - usually the schema prefix is missing or the grant was never given.",
+    "ORA-01017 invalid username/password: their service account password expired again after 90 days."
+   ]
+  },
+  {
+   "id": "git",
+   "title": "git cheatsheet",
+   "topic": "git",
+   "paras": [
+    "```bash\ngit rebase -i HEAD~3\n```",
+    "Undo the last commit but keep changes: git reset --soft HEAD~1",
+    "Find which commit broke it: git bisect start, git bisect bad, git bisect good v1.4.0"
+   ],
+   "also": [
+    "asyncio",
+    "rust"
+   ]
+  },
+  {
+   "id": "asyncio",
+   "title": "Python asyncio gotcha",
+   "topic": "python",
+   "paras": [
+    "asyncio.gather swallows nothing but cancels nothing either: if one task raises, the others keep running unless you use a TaskGroup.",
+    "Never call time.sleep inside a coroutine, it blocks the whole event loop. Use await asyncio.sleep.",
+    "```python\nasync with asyncio.TaskGroup() as tg:\n    tg.create_task(fetch(url))\n```"
+   ],
+   "also": [
+    "rust",
+    "git"
+   ]
+  },
+  {
+   "id": "docker",
+   "title": "Docker disk cleanup",
+   "topic": "docker",
+   "paras": [
+    "Disk full on the build server again: docker system prune -a --volumes freed 41 GB.",
+    "Set up a weekly cron for docker image prune --filter until=168h so it doesn't happen again."
+   ],
+   "also": [
+    "nginx",
+    "certs",
+    "standup-misc"
+   ]
+  },
+  {
+   "id": "nginx",
+   "title": "nginx 502 debugging",
+   "topic": "webserver",
+   "paras": [
+    "502 Bad Gateway from nginx = upstream not answering. Check the gunicorn socket path matches proxy_pass.",
+    "Fixed: gunicorn was bound to 127.0.0.1:8001 but nginx pointed at 8000. Also raised proxy_read_timeout to 60s."
+   ],
+   "also": [
+    "docker"
+   ]
+  },
+  {
+   "id": "rust",
+   "title": "Rust borrow checker notes",
+   "topic": "rust",
+   "paras": [
+    "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable - clone the value or end the first borrow before pushing.",
+    "Prefer iter().map().collect() over manual loops with push, the compiler can elide bounds checks."
+   ],
+   "also": [
+    "asyncio",
+    "git"
+   ]
+  },
+  {
+   "id": "certs",
+   "title": "SSL certificate renewal",
+   "topic": "webserver",
+   "paras": [
+    "Chrome shows NET::ERR_CERT_DATE_INVALID on the staging site - the Let's Encrypt cert expired because certbot's timer was disabled.",
+    "Renewed with certbot renew --force-renewal and enabled certbot.timer; added an uptime check that warns 14 days before expiry."
+   ],
+   "also": [
+    "docker"
+   ]
+  },
+  {
+   "id": "bathroom",
+   "title": "Bathroom renovation",
+   "topic": "renovation",
+   "paras": [
+    "Tiler quote: 4,200 for walls and floor, two weeks of work, starts after the plumber moves the drain.",
+    "Chose matte grey 60x60 floor tiles and white subway tiles for the shower wall; grout in light grey.",
+    "Extractor fan must be ducted outside, not into the loft - building regs."
+   ]
+  },
+  {
+   "id": "faucet",
+   "title": "Leaky kitchen tap",
+   "topic": "renovation",
+   "paras": [
+    "Kitchen tap drips from the spout: replace the ceramic cartridge (35mm, 20 teeth), turn off the isolation valve under the sink first."
+   ],
+   "also": [
+    "hardware"
+   ]
+  },
+  {
+   "id": "wifi",
+   "title": "Home network",
+   "topic": "network",
+   "paras": [
+    "Wi-Fi drops in the bedroom; moved the router off the floor, still bad. Bought a mesh system, now 300 Mbps upstairs.",
+    "Guest network SSID: Fortress-Guest, password: lemon-tree-42 (rotate every few months).",
+    "Router admin is at 192.168.1.1; firmware updated in March."
+   ],
+   "also": []
+  },
+  {
+   "id": "car-service",
+   "title": "Car service",
+   "topic": "car",
+   "paras": [
+    "Service due at 60,000 km: oil change, front brake pads, replace the wiper blades and cabin filter.",
+    "Tyre pressure 2.4 bar front, 2.2 rear; winter tyres stored at the garage, swap in November."
+   ]
+  },
+  {
+   "id": "car-insurance",
+   "title": "Car insurance renewal",
+   "topic": "car",
+   "paras": [
+    "Renewal quote went up to 780 from 610. Compare quotes before 28 Feb; policy number MTR-558201.",
+    "No claims discount is 6 years - make sure the new insurer protects it."
+   ]
+  },
+  {
+   "id": "cat",
+   "title": "Cat vet visit",
+   "topic": "pets",
+   "paras": [
+    "Took Miso to the vet for her yearly vaccines; she weighs 4.3 kg, slightly overweight, cut the dry food a bit.",
+    "She keeps scratching the sofa. Try a taller scratching post and double-sided tape on the armrest."
+   ],
+   "also": [
+    "groceries"
+   ]
+  },
+  {
+   "id": "dog",
+   "title": "Puppy training",
+   "topic": "pets",
+   "paras": [
+    "Biscuit pulls on the lead - stop walking every time it goes tight, reward when he comes back to heel.",
+    "Recall training with liver treats in the park, long line for now, no off-lead near the road."
+   ]
+  },
+  {
+   "id": "dune",
+   "title": "Dune reading notes",
+   "topic": "books",
+   "paras": [
+    "Finished Dune. The ecology of Arrakis and the spice economy were more interesting than Paul himself.",
+    "Dune Messiah is darker; Paul sees the jihad coming and cannot stop it."
+   ]
+  },
+  {
+   "id": "habits",
+   "title": "Atomic Habits notes",
+   "topic": "books",
+   "paras": [
+    "Make it obvious, attractive, easy and satisfying. Habit stacking: after I pour coffee, I write for 10 minutes.",
+    "Identity based habits - focus on who you want to become, not on the outcome."
+   ]
+  },
+  {
+   "id": "birthday",
+   "title": "Mum's 70th birthday",
+   "topic": "family-events",
+   "paras": [
+    "Book the restaurant for 12 people on Saturday 8 Nov, the Italian place she likes on Elm Street.",
+    "Order the lemon drizzle cake from the bakery a week ahead; Tom brings the photo album slideshow."
+   ],
+   "also": [
+    "gifts"
+   ]
+  },
+  {
+   "id": "school",
+   "title": "Kids school schedule",
+   "topic": "family-events",
+   "paras": [
+    "Swimming lessons Tuesdays 4:30, football Saturday mornings 9am, piano Thursday after school.",
+    "Parent-teacher evening 21 Nov 6pm; ask about the reading level and the maths homework load."
+   ]
+  },
+  {
+   "id": "groceries",
+   "title": "Groceries",
+   "topic": "shopping",
+   "paras": [
+    "- oat milk\n- eggs (12)\n- spinach\n- greek yogurt\n- coffee beans\n- toilet paper",
+    "dont forget the cat food (the salmon one, not chicken)"
+   ],
+   "also": [
+    "cat",
+    "hardware"
+   ]
+  },
+  {
+   "id": "hardware",
+   "title": "Hardware store",
+   "topic": "shopping",
+   "paras": [
+    "Picture hooks, 6mm wall plugs, silicone sealant (white), a 35mm tap cartridge, AA batteries."
+   ],
+   "also": [
+    "faucet",
+    "groceries"
+   ]
+  },
+  {
+   "id": "gifts",
+   "title": "Gift ideas",
+   "topic": "gifts",
+   "paras": [
+    "Dad: a good pair of secateurs for the garden or the new Le Carre biography.",
+    "Anna: pottery class voucher, she mentioned it twice. Budget around 80."
+   ],
+   "also": [
+    "wedding-gift",
+    "birthday"
+   ]
+  },
+  {
+   "id": "garden",
+   "title": "Garden",
+   "topic": "garden",
+   "paras": [
+    "Planted tomatoes and basil in the raised bed; water every other morning in July.",
+    "The tomato plants have blight on the lower leaves. Remove them and stop watering from above.",
+    "Compost: turn it weekly, more brown material (cardboard, leaves) because it smells."
+   ]
+  },
+  {
+   "id": "design-review",
+   "title": "Design review: search UI",
+   "topic": "search-ui",
+   "paras": [
+    "Show the matched paragraph under each note title with the query words highlighted.",
+    "Results should appear while typing (debounce 150 ms), keyboard: up/down to move, enter to open.",
+    "Open question: should semantic matches be marked differently from exact keyword hits?"
+   ],
+   "also": [
+    "conference"
+   ]
+  },
+  {
+   "id": "board",
+   "title": "Board meeting 2 Oct",
+   "topic": "board",
+   "paras": [
+    "Revenue 1.2M ARR, up 22% QoQ; churn steady at 2.1% monthly.",
+    "Board asked for a plan to reach break-even by Q2 next year without another round.",
+    "Next board meeting: 15 Jan, send the deck a week before."
+   ],
+   "also": [
+    "okrs"
+   ]
+  },
+  {
+   "id": "app-ideas",
+   "title": "App ideas",
+   "topic": "ideas",
+   "paras": [
+    "A habit tracker that only asks one question a day by notification and never shows streaks.",
+    "Plant watering reminder that uses the weather forecast to skip rainy days."
+   ]
+  },
+  {
+   "id": "berlin",
+   "title": "Wohnungssuche Berlin",
+   "topic": "berlin-flat",
+   "paras": [
+    "Besichtigung am Dienstag um 18 Uhr: 2-Zimmer-Wohnung in Kreuzberg, 68 qm, Kaltmiete 1.150 Euro.",
+    "Unterlagen mitbringen: SCHUFA-Auskunft, Gehaltsnachweise der letzten drei Monate, Mietschuldenfreiheitsbescheinigung."
+   ],
+   "also": [
+    "moving"
+   ]
+  },
+  {
+   "id": "crepes",
+   "title": "Recette de crêpes",
+   "topic": "crepes",
+   "paras": [
+    "250 g de farine, 4 oeufs, 50 cl de lait, une pincée de sel, 50 g de beurre fondu. Laisser reposer la pâte une heure.",
+    "Pour la Chandeleur : crêpes au sucre et citron, ou caramel au beurre salé."
+   ],
+   "also": [
+    "cookies"
+   ]
+  },
+  {
+   "id": "spanish",
+   "title": "Clases de español",
+   "topic": "spanish",
+   "paras": [
+    "Vocabulario de la cocina: la sartén, el cuchillo, la olla, el horno, la nevera.",
+    "Subjuntivo después de 'ojalá' y 'espero que': espero que llegues a tiempo."
+   ]
+  },
+  {
+   "id": "tokyo-shopping",
+   "title": "東京で買うもの",
+   "topic": "japan",
+   "paras": [
+    "抹茶のお菓子、包丁（堺の三徳包丁）、文房具は伊東屋で。"
+   ],
+   "also": []
+  },
+  {
+   "id": "passwords",
+   "title": "Accounts to sort out",
+   "topic": "accounts",
+   "paras": [
+    "Turn on 2FA for the bank and email; move the recovery codes into the password manager.",
+    "Close the old PayPal account linked to the uni email address."
+   ]
+  },
+  {
+   "id": "movies",
+   "title": "Movies to watch",
+   "topic": "movies",
+   "paras": [
+    "Past Lives, Perfect Days (Wim Wenders, Tokyo toilet cleaner), The Zone of Interest, Anatomy of a Fall."
+   ]
+  },
+  {
+   "id": "podcast",
+   "title": "Podcast episode ideas",
+   "topic": "podcast",
+   "paras": [
+    "Interview a local beekeeper about colony collapse and urban hives.",
+    "Episode on why bus timetables are so hard to design: frequency vs coverage."
+   ]
+  },
+  {
+   "id": "moving",
+   "title": "Moving house checklist",
+   "topic": "moving",
+   "paras": [
+    "Redirect post via Royal Mail for 12 months, update the address with the bank, GP, DVLA and the electoral roll.",
+    "Book the removal van for the 28th; measure the sofa, it might not fit up the new stairs.",
+    "Take meter readings (gas, electricity, water) with photos on moving day."
+   ],
+   "also": [
+    "berlin"
+   ]
+  },
+  {
+   "id": "conference",
+   "title": "PyCon talk prep",
+   "topic": "conference",
+   "paras": [
+    "Talk: 'Late interaction search on a laptop' - 25 min slot, Friday afternoon, room B.",
+    "Demo: index 10k notes live, then show a query with no keyword overlap still finding the right paragraph.",
+    "Rehearse with a timer twice; cut the PLAID section if it runs long."
+   ],
+   "also": [
+    "design-review"
+   ]
+  },
+  {
+   "id": "standup-misc",
+   "title": "Standup 12 Sept",
+   "topic": "standup-misc",
+   "paras": [
+    "Leo: flaky test in the checkout suite again, quarantined it. Sara: on call, two pages overnight, both disk alerts.",
+    "Reminder: code freeze starts Monday for the release."
+   ],
+   "also": [
+    "api-standup",
+    "incident",
+    "docker",
+    "standup-2"
+   ]
+  },
+  {
+   "id": "random",
+   "title": "Misc",
+   "topic": "misc",
+   "paras": [
+    "ok",
+    "Call the dentist back re: crown, 020 7946 0321.",
+    "Borrowed the ladder from Jim next door - give it back!"
+   ],
+   "also": [
+    "dentist"
+   ]
+  },
+  {
+   "id": "dentist",
+   "title": "Dentist",
+   "topic": "dentist",
+   "paras": [
+    "Crown on the lower left molar: two appointments, temporary crown in between, 650 total, insurance covers half."
+   ],
+   "also": [
+    "random"
+   ]
+  },
+  {
+   "id": "wedding-gift",
+   "title": "Sam and Lee's wedding",
+   "topic": "wedding",
+   "paras": [
+    "Wedding 14 June in the Cotswolds; RSVP done, staying at the pub B&B, bring a jacket for the evening.",
+    "Gift from their list: the cast iron casserole, or chip in for the honeymoon in Sicily."
+   ],
+   "also": [
+    "gifts"
+   ]
+  },
+  {
+   "id": "climbing",
+   "title": "Bouldering",
+   "topic": "climbing",
+   "paras": [
+    "Sent my first V4 at the Arch, the overhang with the crimpy start. Finger skin is shredded.",
+    "Hangboard: 7s on, 3s off, 6 reps, 3 sets, twice a week max. Warm up properly."
+   ],
+   "also": [
+    "marathon",
+    "knee"
+   ]
+  },
+  {
+   "id": "electricity",
+   "title": "Energy bills",
+   "topic": "budget",
+   "paras": [
+    "Switched energy supplier to a fixed tariff at 24.5p/kWh until next October; the old one was 28p.",
+    "Smart meter readings look wrong in winter - submit manual readings monthly."
+   ]
+  },
+  {
+   "id": "osaka-2019",
+   "title": "Osaka trip 2019",
+   "topic": "japan",
+   "paras": [
+    "Old trip: flew JL61 LAX to Kansai, four days in Osaka, stayed in Namba near the station.",
+    "Universal Studios day was way too crowded, skip it next time; Nara deer park was the highlight."
+   ]
+  },
+  {
+   "id": "banana-bread",
+   "title": "Banana bread",
+   "topic": "banana-bread",
+   "also": [
+    "cookies",
+    "sourdough-log"
+   ],
+   "paras": [
+    "3 very ripe bananas, 100g melted butter, 150g sugar, 1 egg, 190g flour, 1 tsp baking soda, pinch of salt.",
+    "175C for 55-60 min, tent with foil after 40 min so the top doesn't burn."
+   ]
+  },
+  {
+   "id": "offsite",
+   "title": "Berlin offsite",
+   "topic": "offsite",
+   "paras": [
+    "Hotel in Mitte for the team offsite, 3 nights, book under travel code T-114 and keep receipts for expenses.",
+    "Agenda: day 1 roadmap, day 2 hackathon, dinner at the Vietnamese place on Kastanienallee."
+   ]
+  },
+  {
+   "id": "kids-meds",
+   "title": "Kids medicine",
+   "topic": "kids-meds",
+   "also": [
+    "allergy",
+    "checkup"
+   ],
+   "paras": [
+    "Calpol for under 6s: 5ml every 4-6 hours, max 4 doses in 24 hours. Ibuprofen can be alternated if the fever stays up."
+   ]
+  },
+  {
+   "id": "standup-2",
+   "title": "Standup 19 Sept",
+   "topic": "api-migration",
+   "also": [
+    "standup-misc"
+   ],
+   "paras": [
+    "v2 migration done for 80% of partners; Maya is on the remaining webhook consumers.",
+    "Leo fixed the flaky checkout test - it was a timezone bug around midnight UTC."
+   ]
+  },
+  {
+   "id": "reading-list",
+   "title": "Books to read",
+   "topic": "books",
+   "paras": [
+    "Project Hail Mary, The Overstory, Children of Time, and something by Ursula Le Guin."
+   ]
+  },
+  {
+   "id": "old-router",
+   "title": "Old flat network",
+   "topic": "network",
+   "paras": [
+    "Old flat: router admin at 192.168.0.1, ISP was Virgin, wifi password on the sticker underneath."
+   ]
+  }
+ ]
+}
