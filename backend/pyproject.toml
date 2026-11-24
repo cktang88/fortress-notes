@@ -49,5 +49,16 @@ override-dependencies = [
     "mpmath",
 ]
 
+# Linux (CI, servers) gets the CPU-only torch build: the default Linux wheel carries
+# ~4 GB of NVIDIA CUDA libraries that Fortress never uses (it runs ColBERT on the CPU,
+# or on Apple Silicon through MLX; macOS torch wheels have no CUDA either).
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
 [tool.ruff]
 line-length = 100
