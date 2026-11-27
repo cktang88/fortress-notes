@@ -6,6 +6,8 @@ import SwiftUI
 /// whenever it connects (`PUT /api/descriptions`).
 public enum PictureDescriptions {
     public static let enabledKey = "describesPictures"
+
+    @MainActor static func isEnabled() -> Bool { UserDefaults.standard.bool(forKey: enabledKey) }
 }
 
 /// `GET`/`PUT /api/descriptions`.

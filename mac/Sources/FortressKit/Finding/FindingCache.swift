@@ -42,6 +42,10 @@ struct LRUCache<Key: Hashable, Value> {
         order.removeAll { $0 == key }
     }
 
+    mutating func removeAll(where shouldRemove: (Value) -> Bool) {
+        for key in order where values[key].map(shouldRemove) == true { remove(key) }
+    }
+
     mutating func removeAll() {
         values = [:]
         order = []

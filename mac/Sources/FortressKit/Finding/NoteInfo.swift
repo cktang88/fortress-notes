@@ -36,6 +36,10 @@ struct NoteInfo: Hashable, Sendable {
     /// Whether a picture is still to be read (the inspector then checks back).
     var isReadingPictures: Bool { pictures.contains { !$0.isFinished } }
 
+    /// Whether a picture (not a PDF) has no generated description yet: one may arrive
+    /// while picture descriptions are on.
+    var awaitsDescription: Bool { pictures.contains { !$0.isPDF && ($0.generatedDescription ?? "").isEmpty } }
+
     /// What the sidebar tree already knows.
     static func from(navigation: NavigationResponse, documentId: String) -> NoteInfo {
         var info = NoteInfo()

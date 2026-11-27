@@ -47,6 +47,9 @@ final class InspectorModel {
     @ObservationIgnored private var seenTask: Task<Void, Never>?
     @ObservationIgnored private var revision: String?
     @ObservationIgnored private var seenKey: SeenKey?
+    /// Pictures described or given up on so far (`GET /api/descriptions`), while
+    /// picture descriptions are on; a change means a description may have arrived.
+    @ObservationIgnored private var descriptionsSettled: Int?
     @ObservationIgnored private(set) var notes = LRUCache<String, NoteEntry>(capacity: 48)
     @ObservationIgnored private(set) var seen = LRUCache<SeenKey, [RelatedResult]>(capacity: 256)
 
@@ -176,14 +179,34 @@ final class InspectorModel {
     /// While the inspector is shown: how far the workspace's picture reading is, and the
     /// open note's pictures while any is still to be read (their reading isn't an edit, so
     /// nothing else would reload them). Every `busy` while there's work, else every `idle`.
-    func watchPictureReading(api: APIClient, busy: Duration = .seconds(5), idle: Duration = .seconds(30)) async {
+    /// While picture descriptions are on (`describes`), new descriptions are shown too.
+    func watchPictureReading(api: APIClient, busy: Duration = .seconds(5), idle: Duration = .seconds(30),
+                             describes: @MainActor () -> Bool = PictureDescriptions.isEnabled) async {
         while !Task.isCancelled {
             if let status = try? await api.ocrStatus(), status != ocrStatus { ocrStatus = status }
             if Task.isCancelled { return }
             if info.isReadingPictures { reloadInfo(api: api) }
-            let working = (ocrStatus?.remaining ?? 0) > 0 || info.isReadingPictures
+            var describing = false
+            if describes(), let status = try? await api.pictureDescriptions(), status.enabled {
+                if Task.isCancelled { return }
+                descriptionsChanged(status, api: api)
+                describing = status.queued > 0 || status.isBusy
+            } else {
+                descriptionsSettled = nil
+            }
+            let working = (ocrStatus?.remaining ?? 0) > 0 || info.isReadingPictures || describing
             try? await Task.sleep(for: working ? busy : idle)
         }
+    }
+
+    /// The backend's description count moved: forget cached Info of notes whose pictures
+    /// had none yet, and reload the open note's if it is one of them.
+    func descriptionsChanged(_ status: PictureDescriptionStatus, api: APIClient) {
+        let settled = (status.done ?? 0) + (status.failed ?? 0)
+        defer { descriptionsSettled = settled }
+        guard let previous = descriptionsSettled, previous != settled else { return }
+        notes.removeAll { $0.info.awaitsDescription }
+        if info.awaitsDescription { reloadInfo(api: api) }
     }
 
     // MARK: Seen before
