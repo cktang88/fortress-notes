@@ -99,6 +99,7 @@ public struct MainWindow: View {
             if model.connectsOnAppear { await model.connect() }
         }
         .modifier(PictureTextReading())
+        .modifier(PictureDescribing())
         .onAppear {
             visibility = ColumnLayout(rawValue: storedColumns)?.visibility ?? .all
             if visibility == .detailOnly { model.isFocusMode = true }

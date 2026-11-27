@@ -111,6 +111,8 @@ struct BackendSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            PictureDescriptionSettings()
+
             Section {
                 LabeledContent("Converter") {
                     if let converter = backend.launch?.onenoteConverter {

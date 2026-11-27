@@ -96,6 +96,9 @@ struct PictureTextCard: View {
                 status
             }
             content
+            if let described = picture.generatedDescription, !described.isEmpty {
+                GeneratedDescription(text: described)
+            }
             if let source = sourceLine {
                 Text(source)
                     .font(.subheadline.monospacedDigit())
@@ -220,6 +223,26 @@ struct PictureTextCard: View {
             return rest.isEmpty ? error : rest.prefix(1).uppercased() + rest.dropFirst()
         }
         return error
+    }
+}
+
+/// A picture's generated description, labelled as such (it can be wrong; the text read
+/// from the picture above is what it says).
+struct GeneratedDescription: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label("Generated description", systemImage: "sparkles")
+                .labelStyle(StatusLabelStyle())
+            Text(verbatim: text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .accessibilityElement(children: .combine)
+        .help("Written by the picture-description model on your Mac so search finds pictures by what they show. It can be wrong.")
     }
 }
 

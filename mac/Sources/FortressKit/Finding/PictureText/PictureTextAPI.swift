@@ -20,6 +20,10 @@ public struct PictureText: Decodable, Hashable, Sendable, Identifiable {
     public var text: String
     /// The length of the whole text.
     public var textChars: Int?
+    /// What a picture shows, in a sentence the backend's optional local model wrote
+    /// (Settings › General › Picture Descriptions; backend/app/captions.py). Searchable
+    /// like the text, never part of the note; nil until described.
+    public var generatedDescription: String?
 
     public var id: String { "\(blockId)/\(mediaName)" }
     public var isPDF: Bool { mimeType == "application/pdf" || mediaName.lowercased().hasSuffix(".pdf") }
@@ -29,7 +33,8 @@ public struct PictureText: Decodable, Hashable, Sendable, Identifiable {
 
     public init(blockId: String, mediaName: String, contentHash: String? = nil, mimeType: String? = nil,
                 status: String, method: String? = nil, pages: Int? = nil, error: String? = nil,
-                model: String? = nil, readAt: String? = nil, text: String = "", textChars: Int? = nil) {
+                model: String? = nil, readAt: String? = nil, text: String = "", textChars: Int? = nil,
+                generatedDescription: String? = nil) {
         self.blockId = blockId
         self.mediaName = mediaName
         self.contentHash = contentHash
@@ -42,6 +47,7 @@ public struct PictureText: Decodable, Hashable, Sendable, Identifiable {
         self.readAt = readAt
         self.text = text
         self.textChars = textChars ?? text.unicodeScalars.count
+        self.generatedDescription = generatedDescription
     }
 
     enum CodingKeys: String, CodingKey {
@@ -52,6 +58,7 @@ public struct PictureText: Decodable, Hashable, Sendable, Identifiable {
         case mimeType = "mime_type"
         case readAt = "read_at"
         case textChars = "text_chars"
+        case generatedDescription = "description"
     }
 }
 
