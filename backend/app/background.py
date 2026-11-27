@@ -13,13 +13,14 @@ downloads  normal   OneNote downloads from Microsoft (``onenote_graph.downloads`
 backups    normal   the daily snapshot (``backups.DailyBackup``)
 ocr        low      text in pictures and PDFs (``ocr.OcrQueue``)
 index      low      ColBERT embeddings (``embeddings.Reindexer``)
+captions   idle     picture descriptions, when turned on (``captions.Describer``)
 ========== ======== ===========================================================
 
 A lane runs its service's :meth:`Service.step` (one small unit of work) until
 the service says there is nothing left, then sleeps until :func:`wake` or its
 poll interval. Low-priority lanes wait (briefly) while a search is scoring
 (:func:`foreground`), so a search never competes with OCR or indexing for the
-cores.
+cores. An idle lane runs only while no search scores and no other lane works.
 
 :func:`paused` stops every lane between units (the database restore swaps the
 database with no background writer active); :func:`run_inline` runs a lane's
@@ -39,7 +40,9 @@ from contextlib import contextmanager
 
 log = logging.getLogger("fortress.background")
 
-HIGH, NORMAL, LOW = 0, 1, 2
+HIGH, NORMAL, LOW, IDLE = 0, 1, 2, 3
+# How often an idle lane looks whether the others are done.
+IDLE_CHECK_S = 0.2
 # How long a low-priority unit waits for running searches to finish.
 FOREGROUND_YIELD_S = 1.0
 ERROR_BACKOFF_S = 5.0
@@ -93,6 +96,8 @@ class _Lane:
     def _run(self) -> None:
         runner = self.runner
         while True:
+            if self.service.priority >= IDLE:
+                runner.wait_until_quiet(self)
             with runner.changed:
                 while runner.pauses and not self.stopping:
                     runner.changed.wait()
@@ -101,7 +106,7 @@ class _Lane:
                 self.working = True
             delay: float | None
             try:
-                if self.service.priority >= LOW:
+                if self.service.priority == LOW:
                     runner.yield_to_foreground()
                 with self.step_lock:
                     delay = self.service.step()
@@ -274,6 +279,19 @@ class Runner:
 
     def foreground_active(self) -> bool:
         return self._foreground > 0
+
+    def wait_until_quiet(self, lane: _Lane) -> None:
+        """Hold an idle lane while a search scores or any other lane has work."""
+
+        def busy() -> bool:
+            return self._foreground > 0 or any(
+                other is not lane and (other.working or other.wakeup.is_set())
+                and other.thread is not None and other.thread.is_alive()
+                for other in list(self.lanes.values())
+            )
+
+        while busy() and not lane.stopping:
+            time.sleep(IDLE_CHECK_S)
 
     def yield_to_foreground(self, limit: float = FOREGROUND_YIELD_S) -> None:
         deadline = time.monotonic() + limit

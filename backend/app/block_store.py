@@ -337,6 +337,19 @@ def read_scope(path: Path):
         yield connection
 
 
+# Tables of optional modules (app/captions.py), created with the schema if missing.
+# They never change SCHEMA_VERSION: a database with or without them opens either way.
+SCHEMA_EXTENSIONS: list[str] = []
+
+
+def extend_schema(sql: str) -> None:
+    """Add a module's ``CREATE ... IF NOT EXISTS`` statements to every database."""
+
+    if sql not in SCHEMA_EXTENSIONS:
+        SCHEMA_EXTENSIONS.append(sql)
+        _ready_files.clear()  # databases already checked get the new tables too
+
+
 def initialize(path: Path, force: bool = False) -> None:
     """Create the schema or check its version; a cheap check once a file is known.
 
@@ -429,7 +442,7 @@ def _initialize(path: Path) -> None:
             raise RuntimeError(
                 f"Unsupported block database version {version} (expected {SCHEMA_VERSION})"
             )
-        connection.executescript(_SCHEMA)
+        connection.executescript(_SCHEMA + "".join(SCHEMA_EXTENSIONS))
         # Schema policy (docs/block-model.md §9): tables and indexes are created
         # if missing; objects a release retires are dropped here, idempotently;
         # triggers are always dropped and created again, so a changed (or retired)
@@ -563,17 +576,36 @@ def store_asset_text(path: Path, content_hash: str, text: str) -> None:
             "WHERE content_hash = ? AND text <> ?",
             (text, utc_now(), content_hash, text),
         )
-        if cursor.rowcount == 0:
-            return
-        rows = connection.execute(
-            """SELECT DISTINCT blocks.id, blocks.document_id, blocks.text
-                 FROM blocks JOIN block_assets ON block_assets.block_id = blocks.id
-                 JOIN documents ON documents.id = blocks.document_id
-                WHERE block_assets.content_hash = ? AND documents.deleted_at IS NULL""",
-            (content_hash,),
-        ).fetchall()
-        for row in rows:
-            _refresh_fts(connection, row["id"], row["document_id"], row["text"])
+        if cursor.rowcount:
+            _reindex_asset(connection, content_hash)
+
+
+def asset_text_changed(path: Path, content_hash: str) -> None:
+    """Other searchable text about an asset changed (``textutil.ASSET_TEXT_EXTRAS``):
+    re-index the blocks showing it, as a change of ``assets.text`` does."""
+
+    initialize(path)
+    with connection_scope(path) as connection:
+        connection.execute(
+            "UPDATE assets SET text_updated_at = ? WHERE content_hash = ?",
+            (utc_now(), content_hash),
+        )
+        _reindex_asset(connection, content_hash)
+
+
+def _reindex_asset(connection: sqlite3.Connection, content_hash: str) -> None:
+    """Refresh the full-text rows of the active blocks showing an asset (the corpus,
+    hence ColBERT and Ask, follows ``assets.text_updated_at``)."""
+
+    rows = connection.execute(
+        """SELECT DISTINCT blocks.id, blocks.document_id, blocks.text
+             FROM blocks JOIN block_assets ON block_assets.block_id = blocks.id
+             JOIN documents ON documents.id = blocks.document_id
+            WHERE block_assets.content_hash = ? AND documents.deleted_at IS NULL""",
+        (content_hash,),
+    ).fetchall()
+    for row in rows:
+        _refresh_fts(connection, row["id"], row["document_id"], row["text"])
 
 
 def create_document(
@@ -1208,19 +1240,10 @@ def rebuild_fts(path: Path) -> None:
 def rebuild_fts_rows(connection: sqlite3.Connection) -> None:
     connection.execute("DELETE FROM blocks_fts")
     connection.execute(
-        """INSERT INTO blocks_fts(rowid, block_id, document_id, text)
+        f"""INSERT INTO blocks_fts(rowid, block_id, document_id, text)
              SELECT blocks.rowid, blocks.id, blocks.document_id,
-                    blocks.text || CASE WHEN COALESCE((
-                        SELECT group_concat(assets.text, char(10))
-                          FROM block_assets
-                          JOIN assets USING (content_hash, media_name)
-                         WHERE block_assets.block_id = blocks.id
-                    ), '') = '' THEN '' ELSE char(10) || (
-                        SELECT group_concat(assets.text, char(10))
-                          FROM block_assets
-                          JOIN assets USING (content_hash, media_name)
-                         WHERE block_assets.block_id = blocks.id
-                    ) END
+                    blocks.text || COALESCE(
+                        char(10) || {textutil.asset_text_sql("blocks.id")}, '')
                FROM blocks
                JOIN documents ON documents.id = blocks.document_id
               WHERE documents.deleted_at IS NULL"""

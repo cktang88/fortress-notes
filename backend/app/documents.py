@@ -22,7 +22,7 @@ from typing import Any
 
 import frontmatter
 
-from . import background, block_store, ocr as _ocr, vault
+from . import background, block_store, ocr as _ocr, textutil, vault
 from .config import get_settings
 from .portability import note_markdown
 from .models import NoteCreate, NoteUpdate
@@ -92,9 +92,13 @@ def document_info(path: Path, document_id: str) -> dict[str, Any]:
                      AND source_doc.deleted_at IS NULL)""",
             (document_id, document_id, document_id, document_id),
         ).fetchone()[0]
+        # Other text about each picture (its generated description), by name.
+        extras = "".join(
+            f", {sql} AS extra_{name}" for name, sql in textutil.ASSET_TEXT_EXTRAS.items()
+        )
         pictures = connection.execute(
             f"""SELECT block_assets.block_id, assets.media_name, assets.mime_type,
-                       assets.content_hash, assets.text
+                       assets.content_hash, assets.text{extras}
                   FROM block_assets
                   JOIN blocks ON blocks.id = block_assets.block_id
                   JOIN assets USING (content_hash, media_name)
@@ -157,6 +161,8 @@ def _picture_text(path: Path, rows: list) -> list[dict[str, Any]]:
                 # The text in use; it can predate the current model while that is queued.
                 "text": text[:PICTURE_TEXT_CHARS],
                 "text_chars": len(text),
+                # e.g. "description": what the picture shows, generated (app/captions.py)
+                **{name: row[f"extra_{name}"] for name in textutil.ASSET_TEXT_EXTRAS},
             }
         )
     return result

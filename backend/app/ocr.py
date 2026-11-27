@@ -143,7 +143,7 @@ def _lines(boxes, texts) -> str:
     )
 
 
-def _open_image(path: Path):
+def open_image(path: Path):
     from PIL import Image, ImageOps
 
     image = Image.open(path)
@@ -214,7 +214,7 @@ def read_asset(path: Path, mime_type: str) -> Result:
 
     if mime_type == PDF_TYPE:
         return read_pdf(path)
-    return Result(ocr_image(_open_image(path)), "ocr")
+    return Result(ocr_image(open_image(path)), "ocr")
 
 
 # --- Which reading wins -------------------------------------------------------------------

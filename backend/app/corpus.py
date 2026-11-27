@@ -313,11 +313,8 @@ def _load_notes(connection, document_ids: set[str] | None) -> dict[str, Note]:
               FROM blocks
               JOIN documents ON documents.id = blocks.document_id
              WHERE documents.deleted_at IS NULL{where}
-               AND (trim(blocks.text) <> '' OR EXISTS (
-                   SELECT 1 FROM block_assets
-                   JOIN assets USING (content_hash, media_name)
-                   WHERE block_assets.block_id = blocks.id AND trim(assets.text) <> ''
-               ))
+               AND (trim(blocks.text) <> ''
+                    OR {textutil.asset_text_sql("blocks.id")} IS NOT NULL)
              ORDER BY blocks.document_id, blocks.order_key, blocks.id""",
         params,
     ):

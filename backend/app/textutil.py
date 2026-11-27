@@ -173,17 +173,30 @@ def searchable_text(text: str, asset_text: str | Iterable[str] = "") -> str:
     return "\n\n".join(part for part in (text, extracted) if part)
 
 
+# More searchable text about an asset than the text read from it, by name: SQL
+# expressions over the ``assets`` row, each NULL or text (app/captions.py adds a
+# picture's generated "description"). Kept apart from ``assets.text`` so either can be
+# recomputed alone; the note's info shows each under its name.
+ASSET_TEXT_EXTRAS: dict[str, str] = {}
+
+
 def asset_text_sql(block_id: str) -> str:
     """SQL for one block's extracted asset text, ``block_id`` being an SQL expression.
 
-    The non-empty texts joined with newlines, in media-name order, or NULL.
+    The non-empty texts joined with newlines, in media-name order, or NULL. Each
+    asset's text is what was read from it, then its :data:`ASSET_TEXT_EXTRAS`.
     """
 
+    text = "assets.text"
+    for extra in ASSET_TEXT_EXTRAS.values():
+        text = f"{text} || COALESCE(char(10) || {extra}, '')"
+    if ASSET_TEXT_EXTRAS:
+        text = f"trim({text}, char(10))"
     return f"""(SELECT group_concat(text, char(10)) FROM (
-                  SELECT assets.text FROM block_assets
+                  SELECT {text} AS text FROM block_assets
                     JOIN assets USING (content_hash, media_name)
-                   WHERE block_assets.block_id = {block_id} AND trim(assets.text) <> ''
-                   ORDER BY block_assets.media_name))"""
+                   WHERE block_assets.block_id = {block_id}
+                   ORDER BY block_assets.media_name) WHERE trim(text) <> '')"""
 
 
 # --- Passages around a match -------------------------------------------------
