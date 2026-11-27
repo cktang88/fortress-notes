@@ -24,6 +24,9 @@ Markdown file, so the notes folder opens as an Obsidian vault.
   model (via OpenRouter).
 - **Text in every picture and PDF**, read locally in the background (RapidOCR in the
   backend, Apple Vision in the app), so search and Ask find it.
+- **Pictures found by what they show** (optional, Settings › General): a small local
+  model describes each picture in a few words, so "dog on the beach" finds the photo
+  ([docs/picture-descriptions.md](docs/picture-descriptions.md)).
 - **OneNote import**, by download from Microsoft or from a `.onepkg` file. Re-importing
   refreshes changed pages in place and never overwrites pages you edited here.
 - **Quick Capture** (⇧⌘Space from any app), nested folders, Trash with Undo, daily
@@ -112,6 +115,7 @@ relative paths are relative to `backend/`). Template:
 | `REINDEX_INTERVAL_S` | `5` | How often changed paragraphs are re-encoded |
 | `VISION_ENABLED` | `true` | The backend's own OCR of pictures and PDFs |
 | `OCR_THREADS` | `0` | OCR threads (0 = half the cores, at most 4) |
+| `PICTURE_DESCRIPTIONS` | `false` | Describe pictures with a local model (the Mac app's Settings switch turns it on too) |
 | `WELCOME_NOTE` | `true` | A new workspace starts with the Welcome note |
 | `AUTO_BACKUP_ENABLED` | `true` | Daily snapshot in `NOTES_DIR/.fortress-backups` (last 7 kept) |
 | `FORTRESS_ONENOTE_BIN` | — | The converter binary (else the repository build, next to Python, or `PATH`) |
@@ -125,7 +129,7 @@ environment; `FORTRESS_ALLOWED_HOSTS` adds `Host` names accepted without a token
 
 ```
 Mac app ──HTTP + per-launch token──▶ backend (FastAPI on 127.0.0.1) ──▶ SQLite
-   └─ Apple Vision text ─▶ PUT /api/ocr     ├─ background lanes: mirror · imports · downloads · backups · OCR · index
+   └─ Apple Vision text ─▶ PUT /api/ocr     ├─ background lanes: mirror · imports · downloads · backups · OCR · index · captions
                                             ├─ Ask ──▶ OpenRouter (matching passages only)
                                             └─ runs tools/fortress-onenote (Rust), tools/fortress-onenote-graph
 ```
@@ -181,6 +185,8 @@ Markdown, so you can always leave.
 - [docs/onenote-import.md](docs/onenote-import.md): OneNote import decisions.
 - [docs/dependencies.md](docs/dependencies.md): exact pins, the 7-day cooldown, how
   to update.
+- [docs/picture-descriptions.md](docs/picture-descriptions.md): the optional picture
+  descriptions: the models compared, the numbers, the choice.
 - [mac/DESIGN.md](mac/DESIGN.md): the Mac app's design: principles, shortcuts,
   interaction rules, theming.
 - [tools/fortress-onenote/README.md](tools/fortress-onenote/README.md) and

@@ -161,5 +161,5 @@ struct PictureDescriptionSettings: View {
     }
 
     /// The pinned model's size, shown before the backend has answered.
-    static let knownDownloadBytes: Int64 = 1_000_000_000
+    static let knownDownloadBytes: Int64 = 1_020_000_000
 }

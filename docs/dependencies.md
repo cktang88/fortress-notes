@@ -14,6 +14,7 @@ The rule is enforced by tooling, not by memory:
 | Python packages | `backend/uv.lock` and `tools/fortress-onenote-graph/uv.lock` (hashes, upload times), installed with `uv sync --frozen` / `uv run --frozen` everywhere (CI, `start.sh`, the Mac app's `uv run --frozen` fallback) | `[tool.uv] exclude-newer = "7 days"` in each `pyproject.toml`: `uv lock` never considers a file uploaded in the last 7 days. CI re-checks every sdist and wheel. |
 | OCR models (PP-OCRv6) | inside the `rapidocr` wheel, whose hash is in `uv.lock`; rapidocr checks each model file's SHA-256 | as Python packages |
 | ColBERT model | `COLBERT_REVISION` (a commit of `lightonai/Agent-ModernColBERT`) in `backend/app/config.py`; PyLate, the tokenizer and the MLX encoder load that commit | CI checks the commit exists and its date |
+| Picture-description model (optional) | `MODEL_REVISION` (a commit of `HuggingFaceTB/SmolVLM-500M-Instruct`) in `backend/app/captions.py`; downloaded at that commit when the feature is turned on | CI checks the commit exists and its date |
 | Rust crates | `tools/fortress-onenote/Cargo.lock`, built with `--locked` everywhere | CI checks every crate version's publish time (crates.io index `pubtime`) and checksum |
 | Rust toolchain | `tools/fortress-onenote/rust-toolchain.toml` (exact version) | CI checks the release date |
 | uv | `version:` of `astral-sh/setup-uv` in the workflows; `required-version` in `pyproject.toml` is only a floor | CI checks the release date |
@@ -88,6 +89,11 @@ model and revision, so a new revision re-indexes every note in the background.
 Switching to another model also needs `app/relevance.py`'s calibration
 (`scripts/calibrate_related.py`). A different `COLBERT_MODEL` set in the
 environment is pinned only if `COLBERT_REVISION` is set with it.
+
+**Picture-description model.** The same: a commit at least 7 days old for
+`MODEL_REVISION` in `backend/app/captions.py`, then the real-model test
+(`FORTRESS_REAL_CAPTIONS=1`, and the macOS CI job); bump `MODEL` there so pictures are
+described again ([picture-descriptions.md](picture-descriptions.md)).
 
 **Exceptions.** A security fix needed sooner than 7 days goes in on purpose: for
 uv, `exclude-newer-package = { name = "<RFC 3339 time after the fix>" }` in

@@ -1,7 +1,7 @@
-"""Picture descriptions: a short sentence about what each picture shows, made locally
-by a small vision-language model, so search finds photos by their content ("dog on
-the beach", "receipt from the café"). OCR (app/ocr.py) still reads the words in them;
-this adds what they show. Findings and numbers: docs/picture-descriptions.md.
+"""Picture descriptions: a few words about what each picture shows, made locally by a
+small vision-language model (SmolVLM-500M), so search finds photos by their content
+("dog on the beach", "receipt from the café"). OCR (app/ocr.py) still reads the words
+in them; this adds what they show. Findings and numbers: docs/picture-descriptions.md.
 
 Optional and off by default. The Mac app turns it on in Settings
 (``PUT /api/descriptions``, :func:`set_enabled`); ``PICTURE_DESCRIPTIONS=true`` turns it
@@ -9,7 +9,9 @@ on for a backend run without the app. On: the pinned model is downloaded once (i
 child process, so turning it off stops a download too), then the ``captions`` lane of
 app/background.py describes pictures one by one, newest first, on the idle lane: it
 runs only while no search scores and no other lane (OCR, indexing, mirrors) has work.
-Off: the work stops and the model leaves memory; descriptions already made stay
+On Apple Silicon the model runs on the GPU with MLX (app/captions_mlx.py), elsewhere
+(or after any MLX error) with transformers on the CPU. Off: the work stops after the
+picture in progress and the model leaves memory; descriptions already made stay
 searchable.
 
 Each picture is described once per content hash and :data:`MODEL`, like OCR's queue:
@@ -24,8 +26,9 @@ full-text search, ColBERT and Ask the way OCR text does, and either can be
 recomputed alone. It is never part of a note's body or its Markdown mirror. The note's
 info shows it next to the picture's text (``description``), labelled as generated.
 
-To remove the feature: delete this module, its line in app/main.py and the Mac app's
-PictureDescriptions.swift (and its two uses).
+To remove the feature: delete this module and captions_mlx.py, its lines in
+app/main.py, and the Mac app's PictureDescriptions.swift and its two uses (MainWindow,
+SettingsView).
 """
 
 from __future__ import annotations
@@ -429,12 +432,6 @@ def set_enabled(on: bool) -> None:
         background.halt(Describer.name)
         _describer.state = "off"
         unload()
-
-
-def wake(_paths: object = None) -> None:
-    """New pictures were registered: describe them when the lane is next idle."""
-
-    background.wake(Describer.name)
 
 
 def wait_idle(timeout: float = 30.0) -> bool:
