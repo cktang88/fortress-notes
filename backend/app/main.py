@@ -22,6 +22,7 @@ from . import (
     backups,
     block_query,
     block_store,
+    captions,
     embeddings,
     documents,
     http_cache,
@@ -99,6 +100,7 @@ def _start_background(settings) -> None:
     if settings.vision_enabled:
         # Reads text in pictures and PDFs, starting with whatever an earlier run left.
         ocr.start(settings.block_db_path)
+    captions.start(settings.block_db_path)  # picture descriptions, when turned on
     background.start(*lanes)
 
 
@@ -134,6 +136,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Fortress Notes", lifespan=lifespan)
+app.include_router(captions.router)  # /api/descriptions (app/captions.py)
 
 class ResponseHeadersMiddleware:
     """Headers every response of a kind needs (plain ASGI: no body buffering).

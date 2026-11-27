@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     # content) so it is searchable. OCR_THREADS 0 = half the cores, at most 4.
     vision_enabled: bool = True
     ocr_threads: int = 0
+    # Describe each picture with a small local model so search finds photos by what they
+    # show (app/captions.py). Off by default; the Mac app turns it on in Settings.
+    picture_descriptions: bool = False
     # A new workspace (no database yet) starts with the Welcome note (app/welcome.md).
     welcome_note: bool = True
     # Keep a daily SQLite snapshot in NOTES_DIR/.fortress-backups (last 7 kept).
