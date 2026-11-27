@@ -1,7 +1,7 @@
 name: Dependency cooldown
 
-# Everything pinned (the uv.lock files, Cargo.lock, the Rust toolchain, actions, uv, the ColBERT
-# model revision) was released at least 7 days before the commit that pinned it.
+# Everything pinned (the uv.lock files, Cargo.lock, the Rust toolchain, actions, uv, the model
+# revisions) was released at least 7 days before the commit that pinned it.
 # See docs/dependencies.md.
 on:
   push:
@@ -9,6 +9,7 @@ on:
       - "backend/pyproject.toml"
       - "backend/uv.lock"
       - "backend/app/config.py"
+      - "backend/app/captions.py"
       - "tools/fortress-onenote-graph/pyproject.toml"
       - "tools/fortress-onenote-graph/uv.lock"
       - "tools/fortress-onenote/Cargo.toml"

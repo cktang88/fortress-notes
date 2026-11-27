@@ -10,7 +10,8 @@ released at least MIN_AGE_DAYS before the commit that pinned it.
 * .github/workflows/*.yml: every ``uses:`` is a full commit SHA with a ``# vX.Y.Z``
   comment, that tag points to that SHA, and its release is old enough; the uv
   version setup-uv installs too.
-* The ColBERT model revision in backend/app/config.py: the commit's date on the Hub.
+* The model revisions (ColBERT in backend/app/config.py, the picture describer in
+  backend/app/captions.py): each commit's date on the Hub.
 * mac/Package.swift: no package dependencies (add them to this check first).
 
 "Pinned" is the last commit that changed the file (now, for uncommitted changes),
@@ -42,7 +43,11 @@ UV_PROJECTS = [
 ]
 CARGO_LOCK = ROOT / "tools/fortress-onenote/Cargo.lock"
 RUST_TOOLCHAIN = ROOT / "tools/fortress-onenote/rust-toolchain.toml"
-MODEL_CONFIG = ROOT / "backend/app/config.py"
+# Hugging Face models: (file, the variable naming the repository, the one pinning its commit).
+MODELS = [
+    (ROOT / "backend/app/config.py", "COLBERT_MODEL", "COLBERT_REVISION"),
+    (ROOT / "backend/app/captions.py", "MODEL_REPO", "MODEL_REVISION"),
+]
 PACKAGE_SWIFT = ROOT / "mac/Package.swift"
 WORKFLOWS = ROOT / ".github/workflows"
 USER_AGENT = "fortress-notes-cooldown-check"
@@ -284,22 +289,26 @@ def check_actions() -> None:
 
 
 def check_model() -> None:
-    text = MODEL_CONFIG.read_text()
-    model = re.search(r'^COLBERT_MODEL = "([^"]+)"', text, re.MULTILINE)
-    revision = re.search(r'^COLBERT_REVISION = "([0-9a-f]{40})"', text, re.MULTILINE)
-    if not model or not revision:
-        fail("backend/app/config.py: COLBERT_MODEL and a 40-hex COLBERT_REVISION are required")
-        return
-    info = fetch_json(f"https://huggingface.co/api/models/{model[1]}/revision/{revision[1]}")
-    if info.get("sha") != revision[1]:
-        fail(f"{model[1]}: revision {revision[1]} not found on the Hub")
-        return
-    cutoff = cutoff_for(MODEL_CONFIG)
-    committed = parse_time(info["lastModified"])
-    if committed > cutoff:
-        fail(f"{model[1]}@{revision[1][:12]}: committed {committed:%Y-%m-%d}, after {cutoff:%Y-%m-%d}")
-    else:
-        print(f"ok   {model[1]}@{revision[1][:12]} (committed {committed:%Y-%m-%d})")
+    for path, name_var, revision_var in MODELS:
+        if not path.exists():
+            continue  # an optional module that was removed
+        text = path.read_text()
+        model = re.search(rf'^{name_var} = "([^"]+)"', text, re.MULTILINE)
+        revision = re.search(rf'^{revision_var} = "([0-9a-f]{{40}})"', text, re.MULTILINE)
+        where = path.relative_to(ROOT)
+        if not model or not revision:
+            fail(f"{where}: {name_var} and a 40-hex {revision_var} are required")
+            continue
+        info = fetch_json(f"https://huggingface.co/api/models/{model[1]}/revision/{revision[1]}")
+        if info.get("sha") != revision[1]:
+            fail(f"{model[1]}: revision {revision[1]} not found on the Hub")
+            continue
+        cutoff = cutoff_for(path)
+        committed = parse_time(info["lastModified"])
+        if committed > cutoff:
+            fail(f"{model[1]}@{revision[1][:12]}: committed {committed:%Y-%m-%d}, after {cutoff:%Y-%m-%d}")
+        else:
+            print(f"ok   {model[1]}@{revision[1][:12]} (committed {committed:%Y-%m-%d})")
 
 
 def check_swift() -> None:
