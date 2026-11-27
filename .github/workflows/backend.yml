@@ -39,6 +39,8 @@ jobs:
   # RealColbertTests), tests/test_real_model.py runs encode, index, related, unified
   # search and Ask's prefetch on the CPU and on auto, checks the device chosen and
   # the rankings, and breaks the real MLX encoder to see the backend fall back.
+  # tests/test_captions.py's RealModelTests runs the picture-description model over
+  # tests/fixtures/captions (quality, hallucination and search floors).
   # The LLM stays a fake (no key).
   test-macos:
     runs-on: macos-26
@@ -62,6 +64,7 @@ jobs:
         working-directory: backend
         run: |
           uv run --frozen python -c "from app.config import COLBERT_MODEL as m, COLBERT_REVISION as r; print(f'name={m}'); print(f'revision={r}'); print('dir=models--' + m.replace('/', '--'))" >> "$GITHUB_OUTPUT"
+          uv run --frozen python -c "from app.captions import MODEL_REVISION as r; print(f'captions_revision={r}')" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
       # All of .hf/hub: huggingface_hub 2 keeps large files in a shared hub/blobs/ store
       # that the model's own folder only links to.
@@ -70,14 +73,16 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .hf/hub
-          key: hf-hub-${{ steps.model.outputs.dir }}-${{ steps.model.outputs.revision }}
+          key: hf-hub-${{ steps.model.outputs.dir }}-${{ steps.model.outputs.revision }}-captions-${{ steps.model.outputs.captions_revision }}
       - name: Download the model
         if: steps.model-cache.outputs.cache-hit != 'true'
         working-directory: backend
         env:
           MODEL: ${{ steps.model.outputs.name }}
           REVISION: ${{ steps.model.outputs.revision }}
-        run: uv run --frozen python -c "import os; from huggingface_hub import snapshot_download; print(snapshot_download(os.environ['MODEL'], revision=os.environ['REVISION']))"
+        run: |
+          uv run --frozen python -c "import os; from huggingface_hub import snapshot_download; print(snapshot_download(os.environ['MODEL'], revision=os.environ['REVISION']))"
+          uv run --frozen python -c "from huggingface_hub import snapshot_download; from app.captions import MODEL_REPO, MODEL_REVISION, MODEL_FILES; print(snapshot_download(MODEL_REPO, revision=MODEL_REVISION, allow_patterns=list(MODEL_FILES)))"
       - name: Check the model is complete (offline)
         working-directory: backend
         env:
@@ -100,6 +105,7 @@ jobs:
           OPENROUTER_API_KEY: ""
           FORTRESS_REAL_MODEL: "1"
           FORTRESS_REAL_COLBERT: "1"
+          FORTRESS_REAL_CAPTIONS: "1"
           FORTRESS_EXPECT_EMBEDDINGS_DEVICE: mlx
         run: |
           set -o pipefail

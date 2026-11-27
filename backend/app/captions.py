@@ -57,8 +57,8 @@ DOWNLOAD_BYTES = 1_020_000_000
 # Bump the suffix when the output changes (model, prompt, length, image size):
 # every picture is then described again, lazily, in the background.
 MODEL = "smolvlm-500m/1"
-PROMPT = "Describe this image in one sentence."
-MAX_NEW_TOKENS = 40
+PROMPT = "Caption this image in a few words."
+MAX_NEW_TOKENS = 24
 IMAGE_SIDE = 512
 MIN_IMAGE_SIDE = 64
 MAX_ATTEMPTS = 3

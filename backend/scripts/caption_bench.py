@@ -40,17 +40,18 @@ def peak_rss_mb() -> float:
 
 
 class TorchCaptioner:
-    def __init__(self, repo: str, device: str) -> None:
+    def __init__(self, repo: str, device: str, dtype: str = "float32") -> None:
         import torch
         from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
         self.torch, self.device, self.repo = torch, device, repo
+        self.dtype = getattr(torch, dtype)
         self.kind = "florence" if "Florence" in repo else "qwen" if "Qwen" in repo else "smol"
         if self.kind == "florence":
             from transformers import Florence2ForConditionalGeneration as Model
         else:
             Model = AutoModelForImageTextToText
-        self.model = Model.from_pretrained(repo, dtype=torch.float32).to(device).eval()
+        self.model = Model.from_pretrained(repo, dtype=self.dtype).to(device).eval()
         if "SmolVLM2" in repo:
             # SmolVLM2's processor wants torchvision (video) and num2words: SmolVLM's
             # Idefics3 processor makes the same image prompt.
@@ -79,7 +80,8 @@ class TorchCaptioner:
             extra = {"enable_thinking": False} if self.kind == "qwen" else {}
             text = self.processor.apply_chat_template(messages, add_generation_prompt=True, **extra)
             inputs = self.processor(text=text, images=[image], return_tensors="pt")
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        inputs = {k: v.to(self.device, self.dtype) if v.is_floating_point() else v.to(self.device)
+                  for k, v in inputs.items()}
         with torch.inference_mode():
             out = self.model.generate(**inputs, max_new_tokens=max_new, do_sample=False)
         if self.device == "mps":
@@ -144,6 +146,7 @@ def main() -> None:
     parser.add_argument("--images", default=str(caption_eval.FIXTURES))
     parser.add_argument("--out")
     parser.add_argument("--threads", type=int, default=0)
+    parser.add_argument("--dtype", default="float32", choices=["float32", "bfloat16", "float16"])
     args = parser.parse_args()
 
     from PIL import Image
@@ -153,7 +156,7 @@ def main() -> None:
 
         torch.set_num_threads(args.threads)
     started = time.perf_counter()
-    captioner = MlxCaptioner(args.model) if args.runtime == "mlx" else TorchCaptioner(args.model, args.device)
+    captioner = MlxCaptioner(args.model) if args.runtime == "mlx" else TorchCaptioner(args.model, args.device, args.dtype)
     load_s = time.perf_counter() - started
     paths = sorted(p for p in Path(args.images).iterdir() if p.suffix in {".jpg", ".png"})
     pictures = {}
@@ -164,7 +167,7 @@ def main() -> None:
     keys = args.prompt or ["one"]
     first = next(iter(pictures.values()))
     captioner(first, *PROMPTS[keys[0]])  # warm-up
-    result = {"model": args.model, "runtime": args.runtime, "device": args.device,
+    result = {"model": args.model, "runtime": args.runtime, "device": args.device, "dtype": args.dtype,
               "load_s": round(load_s, 2), "runs": {}}
     for key in keys:
         rows = {}
@@ -186,11 +189,11 @@ def main() -> None:
             "hallucination_rate": round(score["hallucination_rate"], 3),
             "rows": rows,
         }
-        print(f"RESULT {args.model} {args.runtime}/{args.device} {key}: median "
+        print(f"RESULT {args.model} {args.runtime}/{args.device}/{args.dtype} {key}: median "
               f"{statistics.median(seconds):.2f}s subject {score['subject_rate']:.2f} "
               f"hallucination {score['hallucination_rate']:.2f}", flush=True)
     result["peak_rss_mb"] = round(peak_rss_mb())
-    print(f"RESULT {args.model} {args.runtime}/{args.device} load {load_s:.1f}s peak {result['peak_rss_mb']} MB")
+    print(f"RESULT {args.model} {args.runtime}/{args.device}/{args.dtype} load {load_s:.1f}s peak {result['peak_rss_mb']} MB")
     if args.out:
         Path(args.out).write_text(json.dumps(result, indent=1))
 

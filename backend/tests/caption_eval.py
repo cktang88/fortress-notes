@@ -37,7 +37,7 @@ laptop computer keyboard monitor screen phone television tv clock vase plant cup
 bottle plate bowl fork knife spoon kitchen sink oven refrigerator fridge microwave
 stove counter cabinet curtain carpet rug mirror painting poster whiteboard
 blackboard chalkboard board paper pen pencil marker bag backpack suitcase umbrella hat
-shoe toy ball guitar piano camera candle lighter flame fire cake pizza bread sandwich
+shoe toy ball guitar piano camera candle flame fire cake pizza bread sandwich
 salad fruit apple banana vegetable tomato cheese coffee tea wine beer food
 receipt ticket chart graph map flag kite skateboard surfboard ski snowboard racket
 basket box envelope letter newspaper magazine notebook document email card menu
@@ -64,7 +64,8 @@ def _singular(word: str) -> str:
 
 # Phrases whose object word is no object in the picture.
 _PHRASES = (("mountain bike", "bike"), ("at the camera", ""), ("into the camera", ""),
-            ("toward the camera", ""), ("from the camera", ""), ("body of water", "water"))
+            ("toward the camera", ""), ("from the camera", ""), ("body of water", "water"),
+            ("cat tree", "cat tower"), ("whiteboard marker", "marker"))
 
 
 def words(text: str) -> set[str]:

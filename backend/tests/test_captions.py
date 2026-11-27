@@ -20,15 +20,7 @@ from app import background, block_store, captions, corpus
 from app.models import BlockOperation
 from support import make_settings, use_settings
 
-
-
-def fake_describer(descriptions: dict[bytes, str]):
-    """describe_file reading the picture's bytes and answering from ``descriptions``."""
-
-    def describe(path: Path) -> str:
-        return descriptions[Path(path).read_bytes()]
-
-    return describe
+import caption_eval
 
 
 class _Workspace(unittest.TestCase):
@@ -359,14 +351,115 @@ class DescriptionIsSearchableTests(unittest.TestCase):
 
 
 REAL = os.environ.get("FORTRESS_REAL_CAPTIONS") == "1"
+REAL_COLBERT = os.environ.get("FORTRESS_REAL_COLBERT") == "1"
+
+# Floors a little below what the pinned model measured on tests/fixtures/captions
+# (docs/picture-descriptions.md): a new model, prompt or runtime must not do worse.
+MIN_SUBJECT_RATE = 0.85
+MAX_HALLUCINATION_RATE = 0.20
+MIN_QUERY_HITS = 0.80  # descriptive queries finding an expected picture in the top 3
+MAX_ABSENT_HITS = 0  # queries for things in no picture that return a picture
+
+
+def _say(message: str) -> None:
+    import sys
+
+    print(f"REALMODEL captions {message}", file=sys.stderr, flush=True)
 
 
 @unittest.skipUnless(REAL, "set FORTRESS_REAL_CAPTIONS=1 (needs the picture-description model)")
 class RealModelTests(unittest.TestCase):
-    """The pinned model over tests/fixtures/captions (macOS CI)."""
+    """The pinned model over tests/fixtures/captions (macOS CI): description quality,
+    hallucinations, and finding the pictures through unified search (with ColBERT when
+    FORTRESS_REAL_COLBERT=1, else full-text search only)."""
 
-    def test_quality_hallucinations_and_search(self) -> None:
-        self.skipTest("floors set once the model is chosen")
+    @classmethod
+    def setUpClass(cls) -> None:
+        if not captions.downloaded():
+            raise AssertionError(f"{captions.MODEL_REPO}@{captions.MODEL_REVISION} is not downloaded")
+        cls.descriptions: dict[str, str] = {}
+        seconds = []
+        for path in sorted(caption_eval.FIXTURES.glob("img*")):
+            started = time.perf_counter()
+            cls.descriptions[path.name] = captions.describe_file(path)
+            seconds.append(time.perf_counter() - started)
+            _say(f"{path.name} {seconds[-1]:.2f}s {cls.descriptions[path.name]!r}")
+        seconds.sort()
+        _say(f"seconds per picture: median {seconds[len(seconds) // 2]:.2f} "
+             f"max {seconds[-1]:.2f} (first includes loading)")
+        captions.unload()
+
+    def test_quality_and_hallucinations(self) -> None:
+        score = caption_eval.score(self.descriptions)
+        for name, row in score["rows"].items():
+            if row["wrong"] or not row["subject"]:
+                _say(f"{name}: subject={row['subject']} wrong={row['wrong']} {row['caption']!r}")
+        _say(f"subject {score['subject_rate']:.2f} hallucination {score['hallucination_rate']:.2f} "
+             f"wrong objects {score['wrong_object_share']:.2f} over {score['images']} pictures")
+        self.assertEqual(self.descriptions["img28.png"], "")  # an icon: not described
+        self.assertGreaterEqual(score["subject_rate"], MIN_SUBJECT_RATE)
+        self.assertLessEqual(score["hallucination_rate"], MAX_HALLUCINATION_RATE)
+
+    def test_search_finds_pictures_by_what_they_show(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from app import config, embeddings, main
+
+        labels = caption_eval.labels()
+        with tempfile.TemporaryDirectory() as directory:
+            settings = make_settings(
+                Path(directory), embeddings_enabled=REAL_COLBERT, colbert_model=config.COLBERT_MODEL)
+            with use_settings(settings), patch.object(embeddings, "_cache", embeddings._Cache()), \
+                    TestClient(main.app) as client:
+                picture_of: dict[str, str] = {}
+                by_bytes: dict[bytes, str] = {}
+                for name in sorted(self.descriptions):
+                    data = (caption_eval.FIXTURES / name).read_bytes()
+                    by_bytes[data] = self.descriptions[name]
+                    mime = "image/png" if name.endswith(".png") else "image/jpeg"
+                    url = client.post("/api/files", files={"file": (name, data, mime)}).json()["props"]["url"]
+                    document_id = client.post("/api/block-documents", json={
+                        "title": f"Album {len(picture_of) + 1}", "body": ""}).json()["id"]
+                    revision = client.get(f"/api/block-documents/{document_id}").json()["revision"]
+                    tree = client.post(
+                        f"/api/block-documents/{document_id}/transactions?response=document",
+                        json={"base_revision": revision, "operations": [
+                            {"operation": "insert", "type": "image", "attrs": {"url": url}}]},
+                    ).json()
+                    block = next(b["id"] for b in tree["children"] if b["type"] == "image")
+                    picture_of[block] = name
+                # The descriptions made above, through the queue (as the lane stores them).
+                with patch.object(captions, "describe_file",
+                                  side_effect=lambda path: by_bytes[Path(path).read_bytes()]):
+                    while captions.process_one(settings.block_db_path):
+                        pass
+                if REAL_COLBERT:
+                    self.assertIsNotNone(embeddings.load_model())
+                    while embeddings.warm_index():
+                        pass
+
+                def pictures(query: str) -> list[str]:
+                    results = client.get("/api/unified-search", params={"q": query}).json()
+                    return [picture_of[r["block_id"]] for r in results if r["block_id"] in picture_of]
+
+                hits = 0
+                for item in labels["queries"]:
+                    found = pictures(item["q"])
+                    hit = bool(set(found[:3]) & set(item["expect"]))
+                    hits += hit
+                    _say(f"query {item['q']!r}: {'hit' if hit else 'MISS'} {found[:3]}")
+                absent = 0
+                for query in labels["absent_queries"]:
+                    found = pictures(query)
+                    absent += bool(found)
+                    if found:
+                        _say(f"absent query {query!r} returned {found[:3]}")
+                rate = hits / len(labels["queries"])
+                _say(f"search ({'words + ColBERT' if REAL_COLBERT else 'words'}): "
+                     f"{hits}/{len(labels['queries'])} queries hit, "
+                     f"{absent}/{len(labels['absent_queries'])} absent queries returned a picture")
+                self.assertGreaterEqual(rate, MIN_QUERY_HITS)
+                self.assertLessEqual(absent, MAX_ABSENT_HITS)
 
 
 if __name__ == "__main__":

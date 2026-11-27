@@ -1,8 +1,8 @@
 name: Picture description benchmark
 
 # Research for docs/picture-descriptions.md: candidate models on Apple Silicon, with
-# torch on the CPU, torch on the GPU (MPS) and MLX (mlx-vlm, in its own environment:
-# it is not a dependency).
+# torch on the CPU (float32 and bfloat16) and MLX (mlx-vlm, in its own environment: it
+# is not a dependency). The runners' VMs have no MPS device.
 on:
   push:
     branches: [captions]
@@ -16,7 +16,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [cpu, mps, mlx]
+        include:
+          - runtime: cpu
+            dtype: bfloat16
+            models: HuggingFaceTB/SmolVLM-500M-Instruct HuggingFaceTB/SmolVLM-256M-Instruct
+          - runtime: cpu
+            dtype: float32
+            models: HuggingFaceTB/SmolVLM-500M-Instruct
     env:
       HF_HOME: ${{ github.workspace }}/.hf
       TOKENIZERS_PARALLELISM: "false"
@@ -35,12 +41,13 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/mlx/bin/python" "mlx-vlm==0.8.0"
       - name: Download the models
         working-directory: backend
+        env:
+          MODELS: ${{ matrix.models }}
         run: |
           uv run --frozen python -c "
+          import os
           from huggingface_hub import snapshot_download
-          for m in ['HuggingFaceTB/SmolVLM-256M-Instruct', 'HuggingFaceTB/SmolVLM-500M-Instruct',
-                    'HuggingFaceTB/SmolVLM2-500M-Video-Instruct', 'florence-community/Florence-2-base',
-                    'Qwen/Qwen3.5-0.8B']:
+          for m in os.environ['MODELS'].split():
               print(snapshot_download(m, ignore_patterns=['onnx/*', '*.onnx', '*.gguf']))
           "
       - name: Benchmark
@@ -48,21 +55,23 @@ jobs:
         env:
           HF_HUB_OFFLINE: "1"
           RUNTIME: ${{ matrix.runtime }}
+          DTYPE: ${{ matrix.dtype }}
+          MODELS: ${{ matrix.models }}
         run: |
           mkdir -p "$RUNNER_TEMP/out"
-          for m in HuggingFaceTB/SmolVLM-256M-Instruct HuggingFaceTB/SmolVLM-500M-Instruct \
-                   HuggingFaceTB/SmolVLM2-500M-Video-Instruct florence-community/Florence-2-base Qwen/Qwen3.5-0.8B; do
-            case $m in *Florence*) prompts="--prompt cap";; *) prompts="--prompt one --prompt short";; esac
-            out="$RUNNER_TEMP/out/$(basename $m)-$RUNTIME.json"
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize | tee -a "$RUNNER_TEMP/bench.log"
+          for m in $MODELS; do
+            case $m in *Florence*) prompts="--prompt cap";; *) prompts="--prompt short --prompt one";; esac
+            out="$RUNNER_TEMP/out/$(basename $m)-$RUNTIME-$DTYPE.json"
             if [ "$RUNTIME" = mlx ]; then
               "$RUNNER_TEMP/mlx/bin/python" scripts/caption_bench.py "$m" --runtime mlx $prompts --out "$out" 2>&1 | tee -a "$RUNNER_TEMP/bench.log" || true
             else
-              uv run --frozen python scripts/caption_bench.py "$m" --device "$RUNTIME" $prompts --out "$out" 2>&1 | tee -a "$RUNNER_TEMP/bench.log" || true
+              uv run --frozen python scripts/caption_bench.py "$m" --device "$RUNTIME" --dtype "$DTYPE" $prompts --out "$out" 2>&1 | tee -a "$RUNNER_TEMP/bench.log" || true
             fi
           done
-          { echo '```'; grep -E "^RESULT|Error" "$RUNNER_TEMP/bench.log" || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; grep -E "^RESULT|Error|Apple" "$RUNNER_TEMP/bench.log" || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: caption-bench-${{ matrix.runtime }}
+          name: caption-bench-${{ matrix.runtime }}-${{ matrix.dtype }}
           path: ${{ runner.temp }}/out
