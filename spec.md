@@ -131,8 +131,10 @@ serves search and Ask:
 | `backups` | normal | the daily snapshot (`AUTO_BACKUP_ENABLED`) |
 | `ocr` | low | text in pictures and PDFs (§6) |
 | `index` | low | ColBERT embeddings (`EMBEDDINGS_ENABLED`) |
+| `captions` | idle | picture descriptions, when turned on (§6) |
 
-Low-priority lanes wait while a search is scoring. A restore pauses every lane;
+Low-priority lanes wait while a search is scoring; the idle lane runs only while no
+search scores and no other lane has work. A restore pauses every lane;
 shutdown stops them and any child process (converter, download tool).
 
 ### Search, related notes and Ask
@@ -180,6 +182,11 @@ with `FORTRESS_TOKEN`, `FORTRESS_PARENT_PID` and, when built,
   backlog to it.
 - The text is **searchable, not shown**: it feeds search, related notes and Ask, and
   the inspector lists it; it never becomes part of the note's content.
+- **Picture descriptions** (`captions.py`, off by default; Settings turns them on):
+  a small local model writes a few words about what each picture shows, once per
+  content hash and model, on the idle lane. The description is searchable like the
+  text, kept apart from it, shown in the inspector as generated, and never in the
+  note or its Markdown mirror ([docs/picture-descriptions.md](docs/picture-descriptions.md)).
 
 ## 7. Workspace safety
 

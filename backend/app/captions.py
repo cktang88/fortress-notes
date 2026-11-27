@@ -30,6 +30,7 @@ PictureDescriptions.swift (and its two uses).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -41,7 +42,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from . import background, block_store, textutil
+from . import background, block_store, colbert_mlx, textutil
 from .config import Settings, get_settings
 from .ocr import IMAGE_TYPES, open_image
 
@@ -179,29 +180,81 @@ def counts(db_path: Path) -> dict[str, int]:
 
 # --- The model ----------------------------------------------------------------------------
 
-_model = None
+class _Loaded:
+    """The processor (both runtimes use transformers' prompt and pixels) and the model:
+    MLX on Apple Silicon's GPU when it works, else torch on the CPU."""
+
+    def __init__(self, path: Path) -> None:
+        from transformers import AutoProcessor
+
+        self.path = path
+        self.processor = AutoProcessor.from_pretrained(path)
+        # One tile at IMAGE_SIDE: SmolVLM's default splits a picture into up to 16
+        # tiles of 512 px, which is 5-10x slower and described no better here.
+        self.processor.image_processor.do_image_splitting = False
+        self.processor.image_processor.size = {"longest_edge": IMAGE_SIDE}
+        eos = json.loads((path / "generation_config.json").read_text()).get("eos_token_id")
+        self.eos = set(eos if isinstance(eos, list) else [eos])
+        self.gpu = self._mlx()
+        self.cpu = None if self.gpu is not None else self._torch()
+
+    def _mlx(self):
+        if get_settings().embeddings_device.strip().lower() == "cpu" or not colbert_mlx.available():
+            return None
+        try:
+            from .captions_mlx import MlxSmolVLM
+
+            return MlxSmolVLM(self.path)
+        except Exception:  # noqa: BLE001 - the CPU describes instead
+            log.warning("MLX picture describer unavailable; using the CPU", exc_info=True)
+            return None
+
+    def _torch(self):
+        import torch
+        from transformers import AutoModelForImageTextToText
+
+        torch.set_num_threads(Settings.default_threads(get_settings().embeddings_threads))
+        # float32: bfloat16 halves the memory and is faster on CPUs with bf16 units, but
+        # was several times slower on GitHub's M1 (docs/picture-descriptions.md).
+        return AutoModelForImageTextToText.from_pretrained(self.path, dtype=torch.float32).eval()
+
+    @property
+    def device(self) -> str:
+        return "mlx" if self.gpu is not None else "cpu"
+
+    def describe(self, image) -> str:
+        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": PROMPT}]}]
+        prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
+        if self.gpu is not None:
+            try:
+                inputs = self.processor(text=prompt, images=[image], return_tensors="np")
+                tokens = self.gpu.generate(inputs["input_ids"], inputs["pixel_values"],
+                                           MAX_NEW_TOKENS, self.eos)
+                return self.processor.decode(tokens, skip_special_tokens=True)
+            except Exception:  # noqa: BLE001 - any MLX error: the CPU from now on
+                log.warning("MLX picture describer failed; using the CPU from now on", exc_info=True)
+                self.gpu = None
+        if self.cpu is None:
+            self.cpu = self._torch()
+        import torch
+
+        inputs = self.processor(text=prompt, images=[image], return_tensors="pt")
+        with torch.inference_mode():
+            output = self.cpu.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False)
+        return self.processor.decode(output[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+
+
+_model: _Loaded | None = None
 _model_lock = threading.Lock()
 
 
-def _load():
-    """The model and its processor, loaded once (≈2 s)."""
+def _load() -> _Loaded:
+    """The model, loaded once (a few seconds)."""
 
     global _model
     with _model_lock:
         if _model is None:
-            import torch
-            from transformers import AutoModelForImageTextToText, AutoProcessor
-
-            torch.set_num_threads(Settings.default_threads(get_settings().embeddings_threads))
-            path = snapshot_path()
-            processor = AutoProcessor.from_pretrained(path)
-            # One tile at IMAGE_SIDE: SmolVLM's default splits a picture into up to 16
-            # tiles of 512 px, which is 5-10x slower and described no better here.
-            processor.image_processor.do_image_splitting = False
-            processor.image_processor.size = {"longest_edge": IMAGE_SIDE}
-            model = AutoModelForImageTextToText.from_pretrained(path, dtype=torch.float32)
-            model.eval()
-            _model = (model, processor)
+            _model = _Loaded(snapshot_path())
         return _model
 
 
@@ -212,18 +265,9 @@ def unload() -> None:
 
 
 def describe_image(image) -> str:
-    """One sentence about a PIL image (slow: never on a request path)."""
+    """A few words about a PIL image (slow: never on a request path)."""
 
-    import torch
-
-    model, processor = _load()
-    messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": PROMPT}]}]
-    prompt = processor.apply_chat_template(messages, add_generation_prompt=True)
-    inputs = processor(text=prompt, images=[image], return_tensors="pt")
-    with torch.inference_mode():
-        output = model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False)
-    new = output[0][inputs["input_ids"].shape[1]:]
-    return _tidy(processor.decode(new, skip_special_tokens=True))
+    return _tidy(_load().describe(image))
 
 
 def _tidy(text: str) -> str:
@@ -411,6 +455,7 @@ def status() -> dict[str, object]:
         "model": MODEL,
         "repository": MODEL_REPO,
         "revision": MODEL_REVISION,
+        "device": _model.device if _model is not None else None,  # mlx or cpu, once loaded
         "download_bytes": DOWNLOAD_BYTES,
         "downloaded_bytes": DOWNLOAD_BYTES if downloaded() else downloaded_bytes(),
         "error": _describer.error if state == "failed" else None,

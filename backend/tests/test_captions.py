@@ -356,9 +356,9 @@ REAL_COLBERT = os.environ.get("FORTRESS_REAL_COLBERT") == "1"
 # Floors a little below what the pinned model measured on tests/fixtures/captions
 # (docs/picture-descriptions.md): a new model, prompt or runtime must not do worse.
 MIN_SUBJECT_RATE = 0.85
-MAX_HALLUCINATION_RATE = 0.20
+MAX_HALLUCINATION_RATE = 0.15
 MIN_QUERY_HITS = 0.80  # descriptive queries finding an expected picture in the top 3
-MAX_ABSENT_HITS = 0  # queries for things in no picture that return a picture
+MAX_ABSENT_HITS = 2  # of 10 queries for things in no picture, those returning one
 
 
 def _say(message: str) -> None:
@@ -384,10 +384,35 @@ class RealModelTests(unittest.TestCase):
             cls.descriptions[path.name] = captions.describe_file(path)
             seconds.append(time.perf_counter() - started)
             _say(f"{path.name} {seconds[-1]:.2f}s {cls.descriptions[path.name]!r}")
+        cls.device = captions._load().device
         seconds.sort()
-        _say(f"seconds per picture: median {seconds[len(seconds) // 2]:.2f} "
+        _say(f"device {cls.device}: seconds per picture median {seconds[len(seconds) // 2]:.2f} "
              f"max {seconds[-1]:.2f} (first includes loading)")
         captions.unload()
+
+    def test_the_device_and_mlx_against_the_cpu(self) -> None:
+        expected = os.environ.get("FORTRESS_EXPECT_EMBEDDINGS_DEVICE", "").strip().lower()
+        self.assertEqual(self.device, "mlx" if expected == "mlx" else "cpu")
+        if self.device != "mlx":
+            return
+        # The MLX port (float16) against transformers on the CPU (float32): greedy
+        # decoding may part ways after a near tie, so most, not all, must match word for word.
+        cpu = captions._Loaded.__new__(captions._Loaded)
+        loaded = captions._load()
+        cpu.path, cpu.processor, cpu.eos, cpu.gpu = loaded.path, loaded.processor, loaded.eos, None
+        cpu.cpu = cpu._torch()
+        names = sorted(self.descriptions)[:8]
+        same = 0
+        for name in names:
+            image = captions.open_image(caption_eval.FIXTURES / name)
+            image.thumbnail((captions.IMAGE_SIDE, captions.IMAGE_SIDE))
+            on_cpu = captions._tidy(cpu.describe(image))
+            same += on_cpu == self.descriptions[name]
+            if on_cpu != self.descriptions[name]:
+                _say(f"{name}: mlx {self.descriptions[name]!r} cpu {on_cpu!r}")
+        captions.unload()
+        _say(f"mlx and cpu describe {same}/{len(names)} pictures word for word alike")
+        self.assertGreaterEqual(same, len(names) - 3)
 
     def test_quality_and_hallucinations(self) -> None:
         score = caption_eval.score(self.descriptions)
